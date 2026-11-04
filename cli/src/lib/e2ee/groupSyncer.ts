@@ -46,8 +46,10 @@ const PERIODIC_MS = 10 * 60_000
 /** A machine synced this recently is not synced again just because a session to it opened. */
 const RECONTACT_MS = 5 * 60_000
 /** After a round where a member could not be reached (or refused, having not heard of this machine yet),
- *  try again this soon — then less often. The periodic round takes over after the last. */
-const RETRY_MS = [15_000, 60_000, 4 * 60_000]
+ *  try again this soon — then less often. The periodic round takes over after the last. The first is 30 s, the backend's
+ *  retry-after for an offline machine and the relay's longest hold: at 15 s the retry asked an offline machine again
+ *  through the background pools before that was up (socket churn e2e, 2026-10-29). */
+const RETRY_MS = [30_000, 60_000, 4 * 60_000]
 
 export interface GroupSyncerDeps {
   store: TrustGroupStore
@@ -92,6 +94,8 @@ export class GroupSyncer {
   private readonly lastSynced = new Map<string, number>()
   private readonly inFlight = new Map<string, Promise<boolean>>()
   private fanOutTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the pending fan-out runs. */
+  private fanOutAt = 0
   private periodic: ReturnType<typeof setInterval> | null = null
   private retryRound = 0
   /** Bumped when the account changes: an exchange started before is not merged into the new roster. */
@@ -266,6 +270,7 @@ export class GroupSyncer {
     for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
     for (const p of this.deps.peers.list()) if (!suspended.has(p.pub) && !p.shared) targets.add(p.machineId)
     if (self) targets.delete(self)
+    for (const machineId of this.deps.peers.gone()) targets.delete(machineId)
     // A team machine, or one the account's list cannot place, is not dialed: not a member that missed this round.
     for (const machineId of targets) if (!this.ordinary(machineId)) targets.delete(machineId)
     // All at once: one machine that never answers (offline, or too old to know the frame) must not
@@ -326,7 +331,13 @@ export class GroupSyncer {
    *  retry schedule over. */
   private scheduleFanOut(delayMs: number, retry = false): void {
     if (!retry) this.retryRound = 0
-    if (this.fanOutTimer) return
+    if (this.fanOutTimer) {
+      // News does not wait behind a retry for a missed member (review of #2104): a link made during a 30 s retry went
+      // out at the retry, not at once. A retry never moves a fan-out that is already due sooner.
+      if (retry || Date.now() + delayMs >= this.fanOutAt) return
+      clearTimeout(this.fanOutTimer)
+    }
+    this.fanOutAt = Date.now() + delayMs
     this.fanOutTimer = setTimeout(() => {
       this.fanOutTimer = null
       // What changed reaches every member, not just the recently-contacted ones.
@@ -400,10 +411,13 @@ export class GroupSyncer {
     const selfMachine = this.deps.self().machineId
     const blocked = this.deps.store.blocked()
     const suspended = this.deps.suspended?.() ?? new Set<string>()
+    // A machine the backend said was deleted (remoteRelay.ts) stays in other members' rosters; pinning it again is what made
+    // the relay dial it for good. It is trusted as before: a deleted machine's identity is spent (gateway/start.ts).
+    const gone = this.deps.peers.gone()
     for (const m of result.upserted) {
       if (blocked.has(m.pub) || suspended.has(m.pub)) continue
       try {
-        if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine) {
+        if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine && !gone.has(m.machineId)) {
           const pin = this.deps.peers.get(m.machineId)
           if (!pin || pin.pub !== m.pub) this.deps.peers.pin(m.machineId, m.pub, m.label, m.at)
         }

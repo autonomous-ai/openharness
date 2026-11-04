@@ -1,12 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { CODEX_RELAY_ACCOUNT, startSubscriptionRelay, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher,
-  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
+  publishTeamRelay, publishWindowsTeamRelay, readRememberedGrant, readTeamRelay, writeRememberedGrant, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
+  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
+  CODEX_CLIENT_VERSION_FALLBACK, settleCodexModel, offeredCodexModels, codexModelNotOffered,
+  type TeamRelayGrant, type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
 const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
@@ -15,7 +20,7 @@ const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 function relay(): SubscriptionRelay {
-  return { port: 9, url: 'http://127.0.0.1:9', mintToken: vi.fn(() => TOKEN), revoke: vi.fn(), close: vi.fn(async () => {}) }
+  return { port: 9, url: 'http://127.0.0.1:9', mintToken: vi.fn(() => TOKEN), adoptToken: vi.fn(), revoke: vi.fn(), close: vi.fn(async () => {}) }
 }
 
 function publisher(over: Partial<TeamRelayPublisherDeps> = {}) {
@@ -70,6 +75,181 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
     await f.p.tick()
     await f.p.stop()
     expect(f.deps.withdraw).toHaveBeenCalledTimes(2)
+  })
+
+  // Task #2125: a running Team agent keeps the address and token it launched with, so a restart of this daemon stranded it.
+  describe('across a restart of this daemon', () => {
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43), mintedAt: 1_000 }
+    const taken = () => Object.assign(new Error('taken'), { code: 'EADDRINUSE' })
+
+    it('comes back on the same port, takes the same token back and publishes the same grant', async () => {
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), now: () => 2_000 })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(61375)
+      expect(f.running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
+      expect(f.running.mintToken).not.toHaveBeenCalled()
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: KEPT.url, token: KEPT.token })
+    })
+
+    it('remembers a new grant before it publishes it', async () => {
+      const remember = vi.fn()
+      const f = publisher({ remembered: () => null, remember, forget: vi.fn(), now: () => 5_000 })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(undefined)
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN, mintedAt: 5_000 })
+    })
+
+    it('waits for a port the old daemon is still closing', async () => {
+      const running = relay(), wait = vi.fn(async () => {})
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>().mockRejectedValueOnce(taken()).mockRejectedValueOnce(taken()).mockResolvedValue(running)
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, wait, now: () => 2_000 })
+      await f.p.tick()
+      expect(wait).toHaveBeenCalledTimes(2)
+      expect(running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: KEPT.url, token: KEPT.token })
+    })
+
+    it('gives up a port held for good: a new port and a new token, so what its holder heard is dead', async () => {
+      const running = relay(), remember = vi.fn()
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw taken(); return running })
+      const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), startRelay, wait: async () => {}, now: () => 2_000 })
+      await f.p.tick()
+      expect(startRelay).toHaveBeenLastCalledWith(undefined)
+      expect(startRelay.mock.calls.filter(([port]) => port === 61375)).toHaveLength(10)
+      expect(running.adoptToken).not.toHaveBeenCalled()
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN, mintedAt: 2_000 })
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: 'http://127.0.0.1:9', token: TOKEN })
+    })
+
+    it('gives the token an end: at a restart past 30 days it starts with a new port and token, and says running agents need a restart', async () => {
+      const DAY = 86_400_000
+      for (const [age, kept] of [[29 * DAY, true], [31 * DAY, false]] as const) {
+        const remember = vi.fn()
+        const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), now: () => KEPT.mintedAt + age })
+        await f.p.tick()
+        expect(f.deps.startRelay, String(age)).toHaveBeenCalledWith(kept ? 61375 : undefined)
+        expect(remember).toHaveBeenCalledTimes(kept ? 0 : 1)
+        if (!kept) expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('restart')
+      }
+    })
+
+    it('never takes a grant dated in the future as young', async () => {
+      const f = publisher({ remembered: () => ({ ...KEPT, mintedAt: 9_000 }), remember: vi.fn(), forget: vi.fn(), now: () => 2_000 })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(undefined)
+    })
+
+    it('drops the old grant before anything else when it gives way: a failed save never revives the old token on the old port', async () => {
+      for (const over of [
+        { now: () => KEPT.mintedAt + 31 * 86_400_000 },
+        { now: () => 2_000, wait: async () => {}, startRelay: vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw taken(); return relay() }) },
+      ] as Array<Partial<TeamRelayPublisherDeps>>) {
+        const order: string[] = []
+        const f = publisher({ remembered: () => KEPT, forget: () => order.push('forget'), remember: () => { order.push('remember'); throw new Error('disk full') }, ...over })
+        await f.p.tick()
+        expect(order).toEqual(['forget', 'remember'])
+      }
+    })
+
+    it('falls through to a new port on any other failure to listen there, and says why', async () => {
+      const running = relay()
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw new Error('bad port'); return running })
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, now: () => 2_000 })
+      await f.p.tick()
+      expect(startRelay).toHaveBeenCalledTimes(2)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: 'http://127.0.0.1:9', token: TOKEN })
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('bad port')
+    })
+
+    it('does not swallow another failure to start', async () => {
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay: vi.fn(async () => { throw new Error('no sockets') }), now: () => 2_000 })
+      await f.p.tick()
+      expect(f.deps.publish).not.toHaveBeenCalled()
+      expect(f.deps.log).toHaveBeenCalledWith('team relay: no sockets')
+    })
+
+    it('still publishes when the grant cannot be remembered, and says so without the token', async () => {
+      const f = publisher({ remembered: () => null, remember: () => { throw new Error('disk full') }, forget: vi.fn() })
+      await f.p.tick()
+      expect(f.deps.publish).toHaveBeenCalled()
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('disk full')
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).not.toContain(TOKEN)
+    })
+
+    it('keeps the grant when it stops, and forgets it once the team account is gone', async () => {
+      let present: TeamConfig | null = config
+      const forget = vi.fn()
+      const f = publisher({ config: () => present, remembered: () => null, remember: vi.fn(), forget })
+      await f.p.tick()
+      await f.p.stop()
+      expect(f.deps.withdraw).toHaveBeenCalledWith('owner')
+      expect(forget).not.toHaveBeenCalled()
+      present = null
+      await f.p.tick()
+      expect(forget).toHaveBeenCalled()
+    })
+
+    it('reaches the model through a real relay before and after: what a running agent holds keeps working', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'team-relay-restart-')); cleanup.push(dir)
+      const file = join(dir, 'team-relay-grant.json')
+      const owner = { read: async () => ({ provider: 'claude' as const, accessToken: 'owner-fixture', expiresAt: null, accountId: null }), refresh: async () => null }
+      const upstream = createServer((_req, res) => { res.writeHead(200); res.end('{}') })
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+      onTestFinished(() => { upstream.closeAllConnections(); upstream.close() })
+      const claude = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`
+      const run = () => {
+        let present = false
+        const published: TeamRelayGrant[] = []
+        const p = new TeamRelayPublisher({ config: () => config, user: () => 'owner', team: () => false,
+          startRelay: port => startSubscriptionRelay({ owner, upstream: { claude }, ...(port ? { port } : {}) }),
+          publish: async (_c, grant) => { present = true; published.push(grant) }, published: () => present, withdraw: () => { present = false }, log: () => {},
+          remembered: () => readRememberedGrant(file), remember: grant => writeRememberedGrant(file, grant), forget: () => rmSync(file, { force: true }), wait: async () => {} })
+        return { p, published }
+      }
+      const first = run()
+      await first.p.tick()
+      const agent = first.published[0]!
+      const ask = async () => (await fetch(`${agent.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${agent.token}` }, body: '{}' })).status
+      expect(await ask()).toBe(200)
+      await first.p.stop()
+      await expect(ask()).rejects.toThrow()
+      const second = run()
+      await second.p.tick()
+      expect(second.published[0]).toEqual(agent)
+      expect(Object.keys(agent).sort()).toEqual(['token', 'url'])
+      expect(await ask()).toBe(200)
+      await second.p.stop()
+    })
+  })
+
+  describe('the kept grant on disk', () => {
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43), mintedAt: 1_000 }
+    const folder = () => { const dir = mkdtempSync(join(tmpdir(), 'team-relay-grant-')); cleanup.push(dir); return dir }
+
+    it('round-trips, closed to everyone else', () => {
+      const file = join(folder(), 'grant.json')
+      writeRememberedGrant(file, KEPT)
+      expect(readRememberedGrant(file)).toEqual(KEPT)
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      writeRememberedGrant(file, { ...KEPT, url: 'http://127.0.0.1:61376' })
+      expect(readRememberedGrant(file)?.url).toBe('http://127.0.0.1:61376')
+    })
+
+    it.each([
+      ['missing', () => {}],
+      ['corrupt', (file: string) => writeFileSync(file, 'not json', { mode: 0o600 })],
+      ['open to others', (file: string) => writeFileSync(file, JSON.stringify(KEPT), { mode: 0o644 })],
+      ['another address', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://evil.example:1' }), { mode: 0o600 })],
+      ['a bad token', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, token: 'short' }), { mode: 0o600 })],
+      ['a port past the last', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://127.0.0.1:70000' }), { mode: 0o600 })],
+      ['port zero', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://127.0.0.1:0' }), { mode: 0o600 })],
+      ['undated', (file: string) => { const { mintedAt: _m, ...rest } = KEPT; writeFileSync(file, JSON.stringify(rest), { mode: 0o600 }) }],
+      ['a link', (file: string) => { const real = `${file}.real`; writeFileSync(real, JSON.stringify(KEPT), { mode: 0o600 }); symlinkSync(real, file) }],
+    ])('ignores a file that is %s', (_name, make) => {
+      const file = join(folder(), 'grant.json')
+      make(file)
+      expect(readRememberedGrant(file)).toBeNull()
+    })
   })
 
   it('starts a relay that failed again on the next look, and says why', async () => {
@@ -145,22 +325,147 @@ describe('the team daemon, reading its owner\'s relay', () => {
   })
 })
 
+describe('on Linux', () => {
+  const linuxConfig = { user: 'harnessteam', owner: 'owner', ownerHome: '/home/owner' } as TeamConfig
+
+  it('names the owner\'s folder setup made under /var/lib/harness', () => {
+    expect(teamRelayDir('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner')
+    expect(teamRelayFile('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner/relay.json')
+    expect(teamRelayPublished(linuxConfig, (path) => path === '/var/lib/harness/team-relay-owner/relay.json', 'linux')).toBe(true)
+  })
+
+  it('sets the folder\'s and the file\'s whole ACL with setfacl: the owner, and harnessteam reading, nobody else', async () => {
+    const calls: string[][] = []
+    const grant = setfaclGrant(async (file, args) => { calls.push([file, ...args]) })
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-relay-')), 'relay')
+    cleanup.push(dir)
+    await publishTeamRelay(linuxConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, process.getuid!(), grant, dir)
+    expect(calls).toEqual([
+      ['setfacl', '--set', 'u::rwx,g::---,o::---,u:harnessteam:r-x', dir],
+      ['setfacl', '--set', 'u::rw-,g::---,o::---,u:harnessteam:r--', expect.stringMatching(/\.next$/)],
+    ])
+    await expect(setfaclGrant(async () => { throw new Error('exit 1') })(dir, 'harnessteam', 'read,readattr')).rejects.toThrow('could not let harnessteam read')
+  })
+
+  it('the team side reads it only from the configured owner, allowing the group bits an ACL shows', () => {
+    const entry = (uid: number, mode: number, dir: boolean) => ({ uid, mode, isDirectory: () => dir, isFile: () => !dir })
+    const reader = (over: { dir?: ReturnType<typeof entry>; file?: ReturnType<typeof entry> } = {}): TeamRelayReadDeps => ({
+      platform: 'linux', ownerUid: () => 1001,
+      // With an ACL entry, the group bits are the ACL's mask: r-x on the folder, r-- on the file.
+      lstat: (path) => path.endsWith('relay.json') ? over.file ?? entry(1001, 0o100640, false) : over.dir ?? entry(1001, 0o40750, true),
+      read: (path) => { expect(path).toBe('/var/lib/harness/team-relay-owner/relay.json'); return JSON.stringify({ url: 'http://127.0.0.1:9', token: TOKEN }) },
+    })
+    expect(readTeamRelay(linuxConfig, reader())).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    for (const over of [
+      { dir: entry(1002, 0o40750, true) }, { file: entry(1002, 0o100640, false) }, { dir: entry(0, 0o40750, true) },
+      { dir: entry(1001, 0o40770, true) }, { file: entry(1001, 0o100660, false) }, { file: entry(1001, 0o100644, false) },
+    ]) expect(readTeamRelay(linuxConfig, reader(over)), JSON.stringify(over)).toBeNull()
+  })
+})
+
+describe('on Windows', () => {
+  const OWNER_SID = 'S-1-5-21-1-2-3-1001'
+  const DIR = 'C:\\ProgramData\\Harness\\team-relay-DELL'
+  const winConfig = { user: 'harnessteam', owner: 'DELL', ownerSid: OWNER_SID, ownerHome: 'C:\\Users\\DELL' } as TeamConfig
+  const entry = (kind: 'file' | 'dir' | 'link') => ({ isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link' })
+  function windowsFs(over: Partial<WindowsRelayFs> = {}, owners: Record<string, string> = { [DIR]: OWNER_SID, [`${DIR}\\relay.json`]: OWNER_SID }) {
+    const files: Record<string, string> = {}
+    const fs: WindowsRelayFs = {
+      lstat: (path) => path === DIR ? entry('dir') : path in files ? entry('file') : (() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })(),
+      ownerSid: (path) => owners[path] ?? null,
+      setAcl: vi.fn(async () => {}),
+      write: (path, text) => { files[path] = text },
+      rename: (from, to) => { files[to] = files[from]!; delete files[from] },
+      read: (path) => files[path] ?? '',
+      ...over,
+    }
+    return { fs, files }
+  }
+
+  it('names the owner\'s folder setup made under C:\\ProgramData\\Harness', () => {
+    expect(teamRelayDir('DELL', 'win32')).toBe(DIR)
+  })
+
+  it('the owner\'s daemon sets the folder\'s ACL with icacls and writes the grant, only in a folder that is the owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(f.fs.setAcl).toHaveBeenCalledWith(DIR, OWNER_SID, 'harnessteam')
+    expect(JSON.parse(f.files[`${DIR}\\relay.json`]!)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({}, { [DIR]: 'S-1-5-21-9-9-9-1002' }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({ lstat: () => entry('link') }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+  })
+
+  it('the team side reads it only when the folder and the file are the configured owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(readWindowsTeamRelay(winConfig, f.fs, DIR)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, ownerSid: (path) => path === DIR ? OWNER_SID : 'S-1-5-21-9-9-9-1002' }, DIR)).toBeNull()
+    expect(readWindowsTeamRelay({ ...winConfig, ownerSid: undefined }, f.fs, DIR)).toBeNull()
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, read: () => '{"url":"http://evil.example","token":"x"}' }, DIR)).toBeNull()
+  })
+})
+
 describe('a launch in the team account', () => {
   const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
   const launchDeps = (over: Partial<TeamRelayLaunchDeps> = {}): TeamRelayLaunchDeps => ({
-    team: () => true, config: () => config, signedIn: async () => false, read: () => grant, onboarded: vi.fn(), ...over,
+    team: () => true, config: () => config, signedIn: async () => false, read: () => grant, onboarded: vi.fn(), codexHome: vi.fn(async () => {}), ...over,
   })
 
   it('spends the owner\'s subscription for an engine it has not signed in itself', async () => {
     const deps = launchDeps()
     expect(await teamRelayLaunch('claude', deps)).toEqual({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: TOKEN }, args: [] })
     expect(deps.onboarded).toHaveBeenCalledWith('claude')
-    const codex = await teamRelayLaunch('codex', deps)
+    const codex = await teamRelayLaunch('codex', deps) as OwnerRelayLaunch | null
     expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
     expect(codex?.args).toContain('model_provider="harness_owner"')
+    // Its home is made ready first (the owner's model list), and Codex stays an API-key provider of the relay.
+    expect(deps.codexHome).toHaveBeenCalledWith(grant)
+    expect(codex?.args).toContain('model_providers.harness_owner.env_key="HARNESS_RELAY_TOKEN"')
+    expect(codex?.args.join(' ')).not.toContain('requires_openai_auth')
+    // A home that could not be made ready still launches, as before.
+    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })) as OwnerRelayLaunch | null)?.args).toContain('model_provider="harness_owner"')
     // A first-run screen that cannot be recorded is left for the engine to ask.
     expect(await teamRelayLaunch('claude', launchDeps({ onboarded: () => { throw new Error('read-only') } }))).not.toBeNull()
     expect(await teamRelayLaunch('codex', launchDeps({ signedIn: async () => { throw new Error('keychain') } }))).not.toBeNull()
+  })
+
+  // Security re-check of #2089: a Codex Product Manager in a Team account runs in an engine home of its own (superTabs/
+  // teamDaemon.ts pmEngineHome). Whether it is signed in, and the owner's model list, are that home's, not the daemon's: it
+  // started signed out when the Team user had a Codex sign-in of its own, and without the owner's models.
+  it('for a launch in a Codex home of its own, asks that home whether it is signed in and readies that home', async () => {
+    const signedIn = vi.fn(async (_engine: 'claude' | 'codex', home?: string) => home === undefined)
+    const deps = launchDeps({ signedIn })
+    const codex = await teamRelayLaunch('codex', deps, '/Users/team/.harness-pm-homes/super-1/codex') as OwnerRelayLaunch | null
+    expect(signedIn).toHaveBeenCalledWith('codex', '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(deps.codexHome).toHaveBeenCalledWith(grant, '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
+    // The daemon's own Codex home, signed in itself, still launches on its own sign-in.
+    expect(await teamRelayLaunch('codex', deps)).toBeNull()
+  })
+
+  // Security re-check 2 of 9e49723b8: a launch in a Codex home of its own holds no sign-in there, so with no relay it is refused
+  // with why (create.ts and launchOverrides.ts honour it), never started signed out.
+  it('refuses a launch in a Codex home of its own that no relay and no sign-in there can sign in', async () => {
+    const home = '/Users/team/.harness-pm-homes/super-1/codex'
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(await teamRelayLaunch('codex', launchDeps({ config: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(NO_PM_RELAY).toBe('The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.')
+    // Signed in in that home, or not a Team daemon, or no home of its own: nothing to refuse.
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => true }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, team: () => false }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }))).toBeNull()
+  })
+
+  it('readies a Product Manager\'s own Codex home with the owner\'s models, and leaves the daemon\'s alone', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'team-pm-')), pm = join(root, '.harness-pm-homes', 'super-1', 'codex'), own = join(root, '.codex')
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), { status: 200 }))
+    const codex = await teamRelayLaunch('codex', launchDeps({ codexHome: (g, home) => prepareCodexHome(home ?? own, g, { fetch: fetch as never, version: () => '0.165.0', now: () => 0 }) }), pm) as OwnerRelayLaunch | null
+    expect(codex?.args).toContain('model_provider="harness_owner"')
+    expect(JSON.parse(readFileSync(join(pm, 'models_cache.json'), 'utf8')).models).toEqual([{ slug: 'gpt-6.1-sol', visibility: 'list' }])
+    expect(existsSync(own)).toBe(false)
   })
 
   it('adds nothing elsewhere: another engine, the owner\'s own daemon, no team account, its own sign-in, no relay', async () => {
@@ -169,5 +474,137 @@ describe('a launch in the team account', () => {
     expect(await teamRelayLaunch('claude', launchDeps({ config: () => null }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toBeNull()
+  })
+})
+
+describe('Codex\'s home for the relay', () => {
+  const home = () => { const dir = mkdtempSync(join(tmpdir(), 'team-codex-')); onTestFinished(() => rmSync(dir, { recursive: true, force: true })); return dir }
+  const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
+  const models = [{ slug: 'gpt-6.1-sol', visibility: 'list' }, { slug: 'gpt-6-astra', visibility: 'list' }]
+  const answer = (status = 200, body: unknown = { models }) => vi.fn(async () => new Response(JSON.stringify(body), { status }))
+
+  // 2026-10-29: Codex on the relay knew only its built-in models, so a start's gpt-6.1-sol could not be chosen and it ran
+  // gpt-5.5, which ChatGPT refuses for the owner's account.
+  it('keeps the owner\'s model list where Codex reads it, asked through the relay with the relay token', async () => {
+    const dir = join(home(), '.codex'), fetch = answer()
+    await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => '0.165.0', now: () => Date.parse('2026-10-29T05:00:00Z') })
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:9/codex/models?client_version=0.165.0', expect.objectContaining({
+      headers: { authorization: `Bearer ${TOKEN}`, accept: 'application/json' } }))
+    const cache = JSON.parse(readFileSync(join(dir, 'models_cache.json'), 'utf8'))
+    expect(cache).toEqual({ fetched_at: '2026-10-29T05:00:00.000Z', client_version: '0.165.0', models })
+    expect(statSync(join(dir, 'models_cache.json')).mode & 0o777).toBe(0o600)
+    // An answer that is not a list, a refusal or no answer leaves the list there was.
+    for (const fetch of [answer(503), answer(200, { models: [] }), answer(200, { nope: 1 }), vi.fn(async () => { throw new Error('down') })]) {
+      await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => null, now: () => 0 })
+      expect(JSON.parse(readFileSync(join(dir, 'models_cache.json'), 'utf8')).client_version).toBe('0.165.0')
+    }
+  })
+
+  it('removes the relay sign-in CLI 0.5.1 wrote, which Codex\'s screen could not start with, and never the account\'s own', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: TOKEN, account_id: CODEX_RELAY_ACCOUNT } }))
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(existsSync(join(dir, 'auth.json'))).toBe(false)
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: 'own', account_id: 'acct-1' } }))
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(JSON.parse(readFileSync(join(dir, 'auth.json'), 'utf8')).tokens.account_id).toBe('acct-1')
+  })
+
+  it('asks for the version of the Codex the account installed, or a known one', async () => {
+    const root = home()
+    expect(installedCodexVersion(root)).toBeNull()
+    mkdirSync(join(root, '.local', 'lib', 'node_modules', '@openai', 'codex'), { recursive: true })
+    writeFileSync(join(root, '.local', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), JSON.stringify({ version: '0.165.0' }))
+    expect(installedCodexVersion(root)).toBe('0.165.0')
+    const fetch = answer()
+    await prepareCodexHome(join(root, '.codex'), grant, { fetch: fetch as never, version: () => null, now: () => 0 })
+    expect(String((fetch.mock.calls[0] as unknown[])[0])).toContain(`client_version=${CODEX_CLIENT_VERSION_FALLBACK}`)
+  })
+
+  // 2026-10-29: a /model switch saved gpt-5.5 in Mac Auto's Team account, and Codex 0.164 then opened on "Meet GPT-6 Sol"
+  // before its session started, so every Codex start there failed at 3 minutes.
+  it('sets the owner\'s first listed model where a saved one is not offered, once the owner\'s list is read', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    const config = join(dir, 'config.toml')
+    writeFileSync(config, 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
+    await prepareCodexHome(dir, grant, { fetch: answer() as never, version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
+    // An offered one stays; nothing is touched without a list, or in a table.
+    writeFileSync(config, "model = 'gpt-6-astra' # chosen\n")
+    expect(settleCodexModel(config, new Set(['gpt-6-astra']), 'gpt-6.1-sol')).toBe(false)
+    writeFileSync(config, 'model = "gpt-5.5"\n')
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-5.5"\n')
+    expect(settleCodexModel(config, new Set(), 'gpt-6.1-sol')).toBe(false)
+    // No listed model to fall back on: the unoffered one is taken out, as before.
+    expect(settleCodexModel(config, new Set(['gpt-reserve']), null)).toBe(true)
+    expect(readFileSync(config, 'utf8')).toBe('')
+    expect(statSync(config).mode & 0o777).toBe(0o600)
+  })
+
+  // 2026-10-29: with no model saved, Codex opened on its own default, gpt-6.1-sol, which Mac Auto's owner is not offered, and
+  // the agent's first message was refused before the start's model was switched in.
+  it('pins a model the owner is offered where none is saved, and writes the file when there is none', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    const config = join(dir, 'config.toml')
+    await prepareCodexHome(dir, grant, { fetch: answer(200, { models: [{ slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-6-luna', visibility: 'list' }] }) as never,
+      version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6-luna"\n')
+    writeFileSync(config, '[tui]\nscreen_reader_detection_done = true\n[profiles.x]\nmodel = "gpt-5.5"\n')
+    expect(settleCodexModel(config, new Set(['gpt-6-luna']), 'gpt-6-luna')).toBe(true)
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6-luna"\n[tui]\nscreen_reader_detection_done = true\n[profiles.x]\nmodel = "gpt-5.5"\n')
+    // A model name that could break the file is never written: the unoffered line is only taken out.
+    expect(settleCodexModel(join(dir, 'config.toml'), new Set(['x']), 'bad"name')).toBe(true)
+    expect(readFileSync(config, 'utf8')).not.toContain('bad')
+    // Nothing is written into a folder that is not there.
+    expect(settleCodexModel(join(dir, 'no', 'config.toml'), new Set(['x']), 'gpt-6-luna')).toBe(false)
+  })
+
+  it('reads the relay\'s left-over sign-in as Codex not signed in', async () => {
+    const root = home()
+    mkdirSync(join(root, '.codex'))
+    writeFileSync(join(root, '.codex', 'auth.json'), JSON.stringify({ tokens: { access_token: TOKEN, account_id: CODEX_RELAY_ACCOUNT } }))
+    expect((await engineAccount('codex', { home: root, env: {}, lastUsed: false })).signedIn).toBe(false)
+  })
+})
+
+// Mac Auto, 2026-10-29: its owner's ChatGPT account is offered GPT-6-Luna and the GPT-5.6 models, a start asked gpt-6.1-sol,
+// and the agent launched only to fail every request.
+describe('the Codex models a Team account\'s owner is offered', () => {
+  const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
+  const rows = [{ slug: 'gpt-6-luna', visibility: 'list' }, { slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-5.6-terra', visibility: 'list' }, 'not a model']
+  const deps = (over: Partial<Parameters<typeof offeredCodexModels>[0] & object> = {}) => ({
+    team: () => true, config: () => config, read: () => grant, prepare: vi.fn(async () => rows as unknown[]), ...over,
+  })
+
+  it('reads them fresh through the relay: every slug, and the ones Codex lists, in its order', async () => {
+    const d = deps()
+    expect(await offeredCodexModels(d)).toEqual({ slugs: ['gpt-6-luna', 'gpt-reserve', 'gpt-5.6-terra'], listed: ['gpt-6-luna', 'gpt-5.6-terra'] })
+    expect(d.prepare).toHaveBeenCalledWith(grant)
+    expect(codexModelNotOffered('gpt-6.1-sol', { slugs: [], listed: ['gpt-6-luna', 'gpt-5.6-terra'] }))
+      .toBe('This machine\'s ChatGPT account (its owner\'s subscription, used through the owner\'s relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra.')
+    expect(codexModelNotOffered('gpt-6.1-sol', { slugs: ['x'], listed: [] })).toContain('it lists no model to choose.')
+  })
+
+  it('says nothing outside a Team account on its relay, or when the list cannot be read', async () => {
+    expect(await offeredCodexModels(deps({ team: () => false }))).toBeNull()
+    expect(await offeredCodexModels(deps({ config: () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ read: () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => { throw new Error('relay down') } }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => ['not a model'] }))).toBeNull()
+  })
+
+  it('is what prepareCodexHome kept, or null when it kept none', async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-offered-')), '.codex')
+    onTestFinished(() => rmSync(dirname(dir), { recursive: true, force: true }))
+    const models = [{ slug: 'gpt-6-luna', visibility: 'list' }]
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ models }), { status: 200 }))
+    expect(await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => null, now: () => 0 })).toEqual(models)
+    expect(await prepareCodexHome(dir, grant, { fetch: (async () => new Response('{}', { status: 503 })) as never, version: () => null, now: () => 0 })).toBeNull()
+    expect(await prepareCodexHome(dir, grant, { fetch: (async () => { throw new Error('down') }) as never, version: () => null, now: () => 0 })).toBeNull()
   })
 })

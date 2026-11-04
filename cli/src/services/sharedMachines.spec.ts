@@ -191,6 +191,9 @@ describe('shared machines', () => {
       expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
       notices[0]({ type: 'desk_changed', revision: 1 } as BackendNotice)
       expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
+      // A harness shared or taken back changes no machine's sharing: every member's daemon read it again a second after each.
+      notices[0]({ type: 'machines_changed', reason: 'harness_shares' })
+      expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
       notices[0]({ type: 'machines_changed', reason: 'updated' })
       expect(live().map((t) => t.ms)).toEqual([1_000])
       port.shared.mockResolvedValue([studio])
@@ -211,6 +214,27 @@ describe('shared machines', () => {
       await fire()
       expect(port.publish).not.toHaveBeenCalled()
       expect(port.trust).toHaveBeenLastCalledWith({ pins: [], keys: [{ ...ann.machines[0], label: 'Machine · ann@gmail.com', email: 'ann@gmail.com' }] })
+    })
+
+    it('keeps what the backend holds after telling it again, so an address it drops is written once and then left alone', async () => {
+      // The backend never holds the owner's own address. Kept here, it read back as a different policy at every
+      // read, so the daemon wrote it again every two minutes and each write told every member's apps to re-read.
+      writeFileSync(file, JSON.stringify({ emails: ['dee@acme.io', 'ann@gmail.com'], sameDomain: false }))
+      let held: string[] = []
+      const port = fakePort({
+        policy: vi.fn(async () => policy({ emails: held })),
+        publish: vi.fn(async (emails: string[], sameDomain: boolean) => {
+          held = emails.filter((e) => e !== 'dee@acme.io')
+          return policy({ emails: held, sameDomain })
+        }),
+      })
+      start(port)
+      await fire()
+      expect(port.publish).toHaveBeenCalledExactlyOnceWith(['dee@acme.io', 'ann@gmail.com'], false)
+      expect(readPolicy(file).emails).toEqual(['ann@gmail.com'])
+      await fire()
+      await fire()
+      expect(port.publish).toHaveBeenCalledOnce()
     })
 
     it('changes only what it could read, and nothing when it read nothing', async () => {

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { env } from '../config/env.js'
+import { openLocalWs } from './localTransport.js'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
@@ -341,7 +343,8 @@ export interface NewCommandDeps {
   /** What to say when the daemon cannot be reached: stopped, or kept out by a sandbox (lib/unreachable.ts). */
   unreachable?: () => string
   listMachines: () => Promise<NewMachine[]>
-  connect: (url: string) => NewSocket
+  /** A WebSocket to [url] with [headers]; on Windows the daemon's pipe is opened instead (lib/localTransport.ts). */
+  connect: (url: string, headers: Record<string, string>) => NewSocket
   output: (line: string) => void
   error: (line: string) => void
   timeoutMs?: number
@@ -386,7 +389,7 @@ const ERRORS: Record<string, string> = {
   INVALID_ENGINE: 'That agent is not one this machine knows.',
   INVALID_DSH: 'That harness is not in the machine\'s catalog, or does not run on that engine.',
   PROJECT_EXISTS: 'A project with that name already exists. Choose another name, or name its folder to start in it.',
-  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message.',
+  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message. Run it again without --task.',
   PROMPT_TOO_LONG: 'A first message holds at most 2,000 characters. Put the rest in a file and name the file in it.',
   SPAWN_FAILED: 'The agent could not be started.',
   // Recorded as a refusal only where a launch cannot be held (a new project's folder): its detail says what it waited for.
@@ -483,7 +486,7 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
   close: () => void
 }> {
   return new Promise((resolveSession, rejectSession) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`)
+    const socket = openLocalWs(env.ADAPTER_DATA_DIR, deps.port, deps.connect)
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false
     const failAll = (error: Error): void => {

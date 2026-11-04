@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -42,7 +43,9 @@ void main() {
   Future<void> openDelete(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Delete Project'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete Project'));
     await tester.pumpAndSettle();
   }
 
@@ -223,6 +226,8 @@ void main() {
     });
     await mount(tester, server: server, account: 'peer');
     await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
     expect(find.text('Delete Project'), findsNothing);
     expect(server.posts, isEmpty);

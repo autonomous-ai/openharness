@@ -16,6 +16,8 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
+import { isCodexRelayAuth } from './subscriptionRelay.js'
+import { readApiConnectionStore } from './apiConnectionMetadata.js'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -86,11 +88,19 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // process (loginShellEnv.ts), with the daemon's own on top.
   const env = deps.env ?? { ...await warmLoginShellEnvironment(), ...process.env }
   const platform = deps.platform ?? process.platform
+  // A model API saved on this computer (Models ▸ APIs, or `harness team model set`) serves Claude Code without a
+  // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
+  // and the account read "not signed in").
+  const savedApi = (() => {
+    try { return readApiConnectionStore(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data')).connections }
+    catch { return [] }
+  })().some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
   if (engine === 'claude') {
     const custom = env.CLAUDE_CONFIG_DIR
     const dir = custom || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))
     if (CLAUDE_ENV.some(name => Boolean(env[name]))) return { signedIn: true, lastUsedAt }
+    if (savedApi) return { signedIn: true, lastUsedAt }
     if (await exists(join(dir, '.credentials.json'))) return { signedIn: true, lastUsedAt }
     if (typeof (await readJson(join(dir, 'settings.json')))?.apiKeyHelper === 'string') return { signedIn: true, lastUsedAt }
     if (platform === 'darwin') {
@@ -107,6 +117,8 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
     const lastUsedAt = deps.lastUsed === false ? null : await newestDay(join(dir, 'sessions'))
     if (env.OPENAI_API_KEY) return { signedIn: true, lastUsedAt }
     const auth = await readJson(join(dir, 'auth.json'))
+    // The owner relay's sign-in (lib/subscriptionRelay.ts codexRelayAuth) is the relay's, not this account's own.
+    if (isCodexRelayAuth(auth)) return { signedIn: false, lastUsedAt }
     const tokens = auth?.tokens as Record<string, unknown> | null | undefined
     if (auth && (auth.OPENAI_API_KEY || (tokens && (tokens.access_token || tokens.refresh_token)))) {
       return { signedIn: true, lastUsedAt }

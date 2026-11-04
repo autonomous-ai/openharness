@@ -112,7 +112,10 @@ void main() {
       addTearDown(app.dispose);
       await tester.pumpWidget(_host(app));
       expect(find.text('Continue with Google'), findsOneWidget);
-      expect(find.text('Continue with email'), findsOneWidget);
+      expect(find.text('Email, GitHub or passkey'), findsOneWidget);
+      // The phone's scan is the page's own button, beside a code for another device.
+      expect(find.byKey(const Key('sign-in-step-scan')), findsOneWidget);
+      expect(find.byKey(const Key('sign-in-step-code')), findsOneWidget);
       expect(find.byKey(const Key('login-scan-with-phone')), findsNothing);
     },
   );

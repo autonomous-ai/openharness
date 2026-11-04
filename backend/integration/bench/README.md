@@ -43,6 +43,43 @@ NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/pollDatabaseBytes.ts
 ```
 
+To see what a migrated Swarm's kept old state (`SuperTab.legacyState`, about 1 MB in production) costs each read, run
+the old state diagnostic. It gives the benchmark's Swarm a 1 MB old state, then times the Lead's status, a host's delivery
+poll with nothing waiting (the empty read) and one post, 30 times each, with the old state kept and once it is removed,
+and prints the median time and what MongoDB sent the backend per read. It takes the same options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/oldStateReads.ts
+```
+
+To see what one machine's report (`observeMachine`, every 15 s per machine) costs alone, its median time and what MongoDB
+sent the backend for it, with and without the time checks, run the report diagnostic. It takes the same options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/observeReads.ts
+```
+
+To see what one `GET changes` poll costs MongoDB with many pollers on one backend process (task #2783): every person's
+windows and every worker agent poll together after nothing, one machine reading, every machine reading and one post, and
+it prints per poll the operations, part reads, bytes MongoDB sent, database and wall time, and by collection per round.
+`--windows N` (3), `--rounds N` (5), `--light` (`machines=light`), and the benchmark's options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/changesPollCost.ts
+```
+
+To see what each hot call costs MongoDB once a Swarm has grown (task #2839): the benchmark's Swarm gets `--starts` finished
+starts (3000) and `--dormant` quiet Lead conversations (1500) as rows, then each call runs once after a post, and the
+profiler counts its commands and getMores by collection. `GROWN_SHAPES=1` prints each large part read and its plan:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/grownFeedOps.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash

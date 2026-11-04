@@ -4,12 +4,17 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/launch_setup.dart';
+import 'package:harness/notify/system_notifications.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/state/lead_placement.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
@@ -51,12 +56,45 @@ class SuperTabFixtureConnection extends WsConn {
   /// again (`cli/src/superTabs/contribution.ts`), so a client that gives up
   /// after one answer never sees anything ready.
   final prepared = <Object?>{};
+
+  /// Preparation never finishes: every ask is answered `preparing`, as a setup
+  /// still running on the machine answers.
+  bool keepPreparing = false;
+
+  /// The most agents preparation says this machine may run; null for a Harness
+  /// from before setup reported it.
+  int? maxAvailableAgents = 16;
+
+  /// What this Mac's daemon remembers of its Harness Team account setup
+  /// (`teamSetupStatus`); null answers as a daemon too old to say.
+  Map<String, dynamic>? teamSetup;
+
+  /// What this Mac's daemon answers whether its Harness Team account is wanted
+  /// (`teamSetupCheck`); null answers as a daemon too old to say.
+  Map<String, dynamic>? teamCheck;
+
+  /// What starting the account's setup answers (`teamSetup`, `manual`).
+  Map<String, dynamic> teamRun = {'state': 'started'};
   bool loseCreate = false, loseJoin = false;
+
+  /// Refuses the next join as the backend would, before anything is written.
+  SuperTabFailure? failJoin;
   bool failNative = false;
   WsRequestFailure? backendFailure;
+
+  /// [backendFailure] refuses only commands: an older backend still answers
+  /// reads and rejects the command it does not know.
+  bool backendFailureOnCommandsOnly = false;
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
+
+  /// The code a [failCreation] failure names, as a daemon's refusal does.
+  String? failCreationCode;
+
+  /// The machine's Claude Code takes no model or effort flags: refused before
+  /// any receipt, as the daemon does (`LAUNCH_MODEL_UNSUPPORTED`).
+  bool refuseLaunchModel = false;
   bool changeAccountOnProjectRead = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
@@ -156,12 +194,23 @@ class SuperTabFixtureConnection extends WsConn {
           email: 'different@example.com',
         );
       }
-      if (payload['action'] == 'backend' && backendFailure != null) {
+      if (payload['action'] == 'backend' &&
+          backendFailure != null &&
+          !(backendFailureOnCommandsOnly && payload['method'] == 'GET')) {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
+      if (payload['action'] == 'teamSetupStatus') {
+        if (teamSetup case final setup?) return {'ok': true, ...setup};
+        throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
+      }
+      if (payload['action'] == 'teamSetup') return {'ok': true, ...teamRun};
+      if (payload['action'] == 'teamSetupCheck') {
+        if (teamCheck case final check?) return {'ok': true, ...check};
+        throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
+      }
       if (payload['action'] == 'prepareContribution') {
-        if (prepared.add(payload['operationId'])) {
+        if (prepared.add(payload['operationId']) || keepPreparing) {
           return {'ok': true, 'state': 'preparing'};
         }
         return {
@@ -171,7 +220,8 @@ class SuperTabFixtureConnection extends WsConn {
           'scope': 'swarm',
           'engines': ['claude', 'codex', 'pi'],
           'maxAgents': 8,
-          'maxAvailableAgents': 16,
+          if (maxAvailableAgents != null)
+            'maxAvailableAgents': maxAvailableAgents,
         };
       }
       if (payload['action'] == 'prepareNative' ||
@@ -218,6 +268,10 @@ class SuperTabFixtureConnection extends WsConn {
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
+        if (failJoin case final failure?) {
+          failJoin = null;
+          throw failure;
+        }
         // As the backend: a deleted project's conversation is not found.
         if (!(server.state['conversations'] as List).cast<Map>().any(
           (g) => g['id'] == command['conversationId'],
@@ -292,6 +346,16 @@ class SuperTabFixtureConnection extends WsConn {
         'agent': native,
       };
     }
+    if (type == 'agent_create' &&
+        refuseLaunchModel &&
+        (payload['model'] != null || payload['effort'] != null)) {
+      throw const WsRequestFailure(
+        responseType: 'agent_create_result',
+        code: 'LAUNCH_MODEL_UNSUPPORTED',
+        detail: 'The claude on this machine does not support --effort.',
+        payload: {},
+      );
+    }
     if (type == 'agent_create') {
       // Match the native daemon: this refusal happens before a receipt or pane.
       if ((payload['prompt'] as String? ?? '').trim().length >
@@ -329,7 +393,10 @@ class SuperTabFixtureConnection extends WsConn {
         return {
           'creationId': payload['creationId'],
           'state': 'failed',
-          'failure': {'detail': 'Fixture engine unavailable'},
+          'failure': {
+            'detail': 'Fixture engine unavailable',
+            'code': ?failCreationCode,
+          },
         };
       }
       return {
@@ -360,11 +427,32 @@ class SuperTabFixtureConnection extends WsConn {
   }
 }
 
+/// Gives the fixture Swarm's project chat a Product Manager, as a project that
+/// has one: New Harness there then joins a worker (#2458).
+void withCoordinator(SuperTabLaunchFixture f) {
+  (f.connection.server.state['agents'] as List).add({
+    'id': 'pm',
+    'machineId': 'pm-host',
+    'harnessId': 'pm-harness',
+    'name': 'Lead',
+    'contributorId': 'owner',
+    'projectId': 'lead',
+    'configuration': {'engine': 'claude', 'model': 'opus', 'effort': 'high'},
+  });
+  final chat = (f.connection.server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>()
+      .firstWhere((c) => c['id'] == 'lead');
+  chat['leadId'] = 'pm';
+  (chat['agentIds'] as List).add('pm');
+}
+
 class SuperTabLaunchFixture {
   SuperTabLaunchFixture({
     bool local = false,
     SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
     LocalCliDiscovery? discovery,
+    SystemNotifications? systemNotifications,
+    Future<String> Function(ProjectFolderRequest request)? prepareFolder,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -374,6 +462,8 @@ class SuperTabLaunchFixture {
       connectionForTest: (_) => connection,
       connected: true,
       localCliDiscovery: discovery,
+      systemNotifications: systemNotifications,
+      prepareFolder: prepareFolder,
     );
     app.machineStates['m']!
       ..localOnly = true
@@ -411,6 +501,9 @@ class SuperTabLaunchFixture {
     bool newProject = false,
     String? task = 'Discuss the architecture.',
     String? harnessId,
+    // The machine its person chooses for New Project's Product Manager, when
+    // the list can start it there.
+    String? lead = 'm',
   }) async {
     final integration = await SuperTabLaunch.open(
       app,
@@ -430,6 +523,10 @@ class SuperTabLaunchFixture {
     );
     addTearDown(box.dispose);
     await Future<void>.delayed(Duration.zero);
+    if (integration.leadMachines?.any((m) => m.id == lead && m.startable) ??
+        false) {
+      box.chooseLeadMachine(lead!);
+    }
     return box;
   }
 }
@@ -442,6 +539,7 @@ void main() {
       for (final engine in ['opencode', 'hermes']) {
         final f = SuperTabLaunchFixture();
         f.connection.extraEngines.add(engine);
+        withCoordinator(f);
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
         final box = await f.box(engine: engine);
         expect(
@@ -473,6 +571,7 @@ void main() {
             engine,
             setup: LaunchSetup(engine: engine, permissionMode: 'ask'),
           );
+          if (kind == 'member') withCoordinator(f);
           if (kind != 'new Swarm') {
             f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
           }
@@ -538,7 +637,7 @@ void main() {
         ),
       );
       await expectLater(
-        box.integration!.prepare('m', 'Start work'),
+        box.integration!.prepare('m', 'Start work', box.engine),
         throwsA(
           isA<SuperTabFailure>().having(
             (e) => e.code,
@@ -604,11 +703,1437 @@ void main() {
   );
 
   test(
+    'New Project lists the Swarm machines for its Product Manager, best first',
+    () async {
+      final f = SuperTabLaunchFixture();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      Map<String, dynamic> pool(
+        String id,
+        String name, {
+        String contributor = 'owner',
+        String device = 'Mac Studio',
+        int max = 8,
+        int running = 0,
+        int age = 0,
+        String? host,
+        List<String> repositories = const [],
+      }) => {
+        'machineId': id,
+        'name': name,
+        'cwd': '/swarm/$id',
+        'contributorId': contributor,
+        'maxAgents': max,
+        'paused': false,
+        'hostMachineId': ?host,
+        'observation': {
+          'receivedAt': now - age,
+          'resources': {'deviceType': device},
+          'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
+          'readiness': {
+            'checkouts': [
+              for (final repository in repositories)
+                {'folder': 'p1', 'repository': repository, 'git': true},
+            ],
+          },
+        },
+      };
+      (f.connection.server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@example.com',
+        'role': 'collaborator',
+      });
+      f.connection.server.state['machines'] = [
+        pool(
+          'm',
+          'Mac Studio',
+          max: 32,
+          running: 2,
+          repositories: ['github.com/autonomous-ai/autonomous-os'],
+        ),
+        pool('laptop', 'Ken MacBook', device: 'MacBook Pro'),
+        pool('rig', '2x 4090 Rig', contributor: 'diego', max: 16),
+        pool('rig-team', 'Rig team', contributor: 'diego', host: 'rig'),
+        pool('old', 'Old Mac', age: 10 * 60 * 1000),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final machines = box.integration!.leadMachines!;
+      // Your own first, the unavailable ones included.
+      expect(machines.map((m) => m.id), ['m', 'laptop', 'rig', 'old']);
+      final studio = machines.first;
+      expect(studio.name, 'Mac Studio');
+      expect(studio.startable, isTrue);
+      expect(studio.freeAgents, 30);
+      expect(
+        studio.has('git@github.com:autonomous-ai/autonomous-os.git'),
+        isTrue,
+      );
+      expect(studio.maySleep, isFalse);
+      expect(studio.folders, {
+        'github.com/autonomous-ai/autonomous-os': '/swarm/m/p1',
+      });
+      expect(machines[1].maySleep, isTrue);
+      expect(machines[1].unavailable, 'Not connected to this computer');
+      // Its Team account's host has not said it can start a PM.
+      expect(
+        machines[2].unavailable,
+        'Update Harness on 2x 4090 Rig to run a Product Manager there.',
+      );
+      expect(machines[3].online, isFalse);
+    },
+  );
+
+  test(
+    'with its only machine full, New Project starts nothing and says so',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Mac Studio',
+          'contributorId': 'owner',
+          'maxAgents': 2,
+          'paused': false,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'runningHarnessIds': ['a', 'b'],
+          },
+        },
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      expect(box.integration!.leadMachines!.single.startable, isFalse);
+      // The full machine cannot be chosen, and nothing is chosen for them:
+      // New Project says no machine can run it now (its list says why).
+      expect(box.leadNone, isTrue);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, 'No machine can run the Product Manager now.');
+      box.chooseLeadMachine('m');
+      expect(box.leadPicked, isFalse);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(f.connection.server.posts, isEmpty);
+    },
+  );
+
+  Map<String, dynamic> studioPool({
+    int available = 3,
+    int max = 8,
+    int running = 2,
+    int age = 0,
+  }) => {
+    'machineId': 'm',
+    'name': 'Mac Studio',
+    'cwd': '/swarm/m',
+    'contributorId': 'owner',
+    'maxAgents': max,
+    'availableSlots': available,
+    'paused': false,
+    'observation': {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch - age,
+      'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
+    },
+  };
+
+  /// A machine row as the Swarm read sends it, with its derived figures.
+  Map<String, dynamic> machineRow(
+    String id,
+    String name, {
+    String contributor = 'diego',
+    String? host,
+    String kind = 'computer',
+    int available = 4,
+    bool lead = false,
+    Map<String, dynamic> teamWork = const {'allowed': true},
+  }) => {
+    'machineId': id,
+    'name': name,
+    'cwd': '/swarm/$id',
+    'contributorId': contributor,
+    'maxAgents': 8,
+    'availableSlots': available,
+    'paused': false,
+    'hostMachineId': ?host,
+    'teamWork': teamWork,
+    'observation': {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch,
+      'sessionKind': kind,
+      'runningHarnessIds': <String>[],
+      if (lead) 'capabilities': ['leadStart'],
+    },
+  };
+
+  void addDiego(SuperTabLaunchFixture f) =>
+      (f.connection.server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@example.com',
+        'role': 'collaborator',
+      });
+
+  test('a teammate’s Mac takes the PM in its Team account', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 3,
+        lead: true,
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final diego = box.integration!.leadMachines!
+        .where((m) => m.id == 'diego-mac')
+        .single;
+    expect(diego.unavailable, isNull);
+    expect(diego.startable, isTrue);
+    expect(diego.freeAgents, 3);
+    expect(diego.own, isFalse);
+    expect(diego.native, isFalse);
+    expect(diego.team, isTrue);
+  });
+
+  for (final (what, rows) in [
+    ('has no Team account', [machineRow('rig', '2x 4090 Rig', lead: true)]),
+    (
+      'has an offline Team account',
+      [
+        machineRow('rig', '2x 4090 Rig', lead: true),
+        {
+          ...machineRow(
+            'rig-team',
+            '2x 4090 Rig',
+            host: 'rig',
+            kind: 'team',
+            available: 1,
+            lead: true,
+          ),
+          'observation': {
+            'receivedAt': 0,
+            'sessionKind': 'team',
+            'runningHarnessIds': <String>[],
+            'capabilities': ['leadStart'],
+          },
+        },
+      ],
+    ),
+    (
+      'has a Team account that cannot take it now',
+      [
+        machineRow('rig', '2x 4090 Rig', lead: true),
+        machineRow(
+          'rig-team',
+          '2x 4090 Rig',
+          host: 'rig',
+          kind: 'team',
+          available: 1,
+          lead: true,
+          teamWork: {
+            'allowed': false,
+            'code': 'PRIVACY_CHECK_FAILED',
+            'reason': 'The Harness Team account on 2x 4090 Rig is not private (sharing), so it runs only its owner’s projects.',
+          },
+        ),
+      ],
+    ),
+  ]) {
+    test('a teammate’s Mac that $what takes the PM itself', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final rig = box.integration!.leadMachines!.where((m) => !m.own).single;
+      expect(rig.unavailable, isNull);
+      expect(rig.startable, isTrue);
+      // The Mac's own room, not its Team account's.
+      expect(rig.freeAgents, 4);
+      expect((rig.team, rig.native), (false, false));
+    });
+  }
+
+  for (final (what, rows, reason) in [
+    (
+      'has no Team account and runs an older Harness',
+      [machineRow('rig', '2x 4090 Rig')],
+      'Update Harness on 2x 4090 Rig to run a Product Manager there.',
+    ),
+    (
+      'fails its Team account’s privacy check',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+          teamWork: {
+            'allowed': false,
+            'code': 'PRIVACY_CHECK_FAILED',
+            'reason': 'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+          },
+        ),
+      ],
+      'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+    ),
+    (
+      'was added as its person joined and has no Team account',
+      [
+        {
+          ...machineRow(
+            'rig',
+            '2x 4090 Rig',
+            lead: true,
+            teamWork: {
+              'allowed': false,
+              'code': 'TEAM_ACCOUNT_REQUIRED',
+              'reason': '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+            },
+          ),
+          'teamAccountOnly': true,
+        },
+      ],
+      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+    ),
+    (
+      'is paused',
+      [
+        {...machineRow('rig', '2x 4090 Rig', lead: true), 'paused': true},
+      ],
+      'Paused in this Swarm',
+    ),
+    (
+      'runs an older Harness',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+        ),
+      ],
+      'Update Harness on Diego MacBook to run a Product Manager there.',
+    ),
+  ]) {
+    test('a teammate’s machine that $what says why', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final row = box.integration!.leadMachines!.where((m) => !m.own).single;
+      expect(row.unavailable, reason);
+      expect(row.startable, isFalse);
+    });
+  }
+
+  test('your own machines come before a teammate’s with more room', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 30,
+        lead: true,
+      ),
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 2),
+      // Yours, but this Desktop has no connection to it: the Swarm starts it.
+      machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
+      machineRow('old', 'Old Mini', contributor: 'owner'),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final machines = box.integration!.leadMachines!;
+    expect(machines.map((m) => m.id).take(3), ['m', 'far', 'diego-mac']);
+    expect(machines.first.native, isTrue);
+    final far = machines[1];
+    expect((far.native, far.startable, far.team), (false, true, false));
+    final old = machines.where((m) => m.id == 'old').single;
+    expect(old.unavailable, 'Not connected to this computer');
+  });
+
+  /// Your machine knows the project folder's remote: an agent ran there.
+  void knownRepo(SuperTabLaunchFixture f) =>
+      f.app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'earlier',
+          name: 'Earlier',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'project',
+            cwd: '/work/project',
+            root: '/work/project',
+            remote: 'git@github.com:autonomous-ai/lamp-os.git',
+          ),
+        ),
+      ];
+
+  List<Map> commandsOf(SuperTabLaunchFixture f, String type) => [
+    for (final post in f.connection.server.posts)
+      if ((post['command'] as Map)['type'] == type) post['command'] as Map,
+  ];
+
+  /// This computer, outside the Swarm, has neither engine installed.
+  void noLocalEngines(SuperTabLaunchFixture f) =>
+      f.app.machineStates['m']!.engines.replace(const [
+        EngineAvailability(engine: 'claude', installed: false),
+        EngineAvailability(engine: 'codex', installed: false),
+      ]);
+
+  /// [row] offering the Swarm only [engines], with what its host reported
+  /// about each engine's install and sign-in.
+  Map<String, dynamic> offering(
+    Map<String, dynamic> row,
+    List<String> engines, {
+    List<Map<String, dynamic>> readiness = const [],
+    List<Map<String, dynamic>> quotas = const [],
+    Map<String, String>? suspended,
+  }) => {
+    ...row,
+    'engines': engines,
+    'suspendedEngines': ?suspended,
+    'observation': {
+      ...row['observation'] as Map<String, dynamic>,
+      'readiness': {'engines': readiness},
+      'quotas': quotas,
+    },
+  };
+
+  // Combination review of batch #2239: New Project names computers as Add
+  // machine and the Buddy picker do (superTabMachineName), so "Studio.local"
+  // is "Studio" in the chip and in every menu row.
+  testWidgets('New Project names a machine without its .local suffix, in the '
+      'chip and the menu', (tester) async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Studio.local', contributor: 'owner'),
+      machineRow('diego-mac', 'Diego-MacBook.local', lead: true),
+    ];
+    // This computer's other machine, not in the Swarm's list: its name comes
+    // from this Desktop, not the Swarm (re-check of #2237).
+    const laptop = Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken-MacBook.local',
+    );
+    f.app.machines = [...f.app.machines, laptop];
+    f.app.machineStates['laptop'] = MachineState(laptop)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    final unlisted = box.integration!.leadMachines!.singleWhere(
+      (m) => m.id == 'laptop',
+    );
+    expect(unlisted.inSwarm, isFalse);
+    expect(
+      box.integration!.leadMachines!.map((m) => m.name),
+      containsAll(['Studio', 'Diego-MacBook', 'Ken-MacBook']),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final chip = find.byKey(const ValueKey('new-harness-field-machine'));
+    expect(
+      find.descendant(of: chip, matching: find.text('Studio')),
+      findsOneWidget,
+    );
+    await tester.tap(chip);
+    await tester.pump();
+    for (final (id, name) in [
+      ('m', 'Studio'),
+      ('diego-mac', 'Diego-MacBook'),
+      ('laptop', 'Ken-MacBook'),
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('new-harness-lead-machine-$id')),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+        reason: id,
+      );
+    }
+    expect(find.textContaining('.local'), findsNothing);
+  });
+
+  // #2308: Dee renamed his Mac Studio 2 to 'Mac 3' in Machines and New
+  // Project still listed it by its computer name. The Swarm's machine record
+  // carries the name its owner gave it (backend machines.ts
+  // accountMachineName); the menu shows that, never the computer's own name.
+  testWidgets('New Project lists a renamed machine by the name its owner '
+      'gave it, not its computer name', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [
+      machineRow('studio-2', 'Mac 3', contributor: 'owner', lead: true),
+    ];
+    // This computer knows the machine by its hostname too.
+    const studio = Machine(
+      machineId: 'studio-2',
+      authMode: MachineAuthMode.remote,
+      name: 'Macs-Mac-Studio-2.local',
+    );
+    f.app.machines = [...f.app.machines, studio];
+    f.app.machineStates['studio-2'] = MachineState(studio)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    expect(
+      box.integration!.leadMachines!.singleWhere((m) => m.id == 'studio-2'),
+      isA<LeadMachine>()
+          .having((m) => m.name, 'name', 'Mac 3')
+          .having((m) => m.inSwarm, 'inSwarm', isTrue),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-machine')));
+    await tester.pump();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('new-harness-lead-machine-studio-2')),
+        matching: find.text('Mac 3'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Macs-Mac-Studio-2'), findsNothing);
+  });
+
+  // Security reviews 1 and 2 of #2228: the server decides where a teammate's
+  // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
+  // Project shows that rather than working it out from the readings.
+  group('the server’s decision of where the PM runs', () {
+    // Diego's Mac runs Claude Code; its Team account, fresh and private,
+    // offers only Codex.
+    List<Map<String, dynamic>> rows(Map<String, dynamic> lead) => [
+      {
+        ...offering(machineRow('diego-mac', 'Diego MacBook', lead: true), [
+          'claude',
+        ]),
+        'lead': lead,
+      },
+      offering(
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+        ['codex'],
+      ),
+    ];
+
+    test('a busy Team account: Codex is refused and Claude Code runs on the '
+        'Mac itself, so New Project starts it there', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'machineId': 'diego-mac'},
+        'codex': {'refused': 'Codex isn’t offered on Diego MacBook.'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, engine: 'codex', lead: null);
+      final mac = box.integration!.leadMachines!.singleWhere(
+        (m) => m.id == 'diego-mac',
+      );
+      expect(mac.engineRefusals, {
+        'codex': 'Codex isn’t offered on Diego MacBook',
+      });
+      expect((mac.startable, mac.inTeam('claude')), (true, false));
+      box.chooseLeadMachine('diego-mac');
+      // The engine it can run there, on the Mac itself, as the server said.
+      expect(box.engine, 'claude');
+      expect(box.leadBlocked, isNull);
+      expect(box.leadLine, startsWith('Product Manager on Diego MacBook · '));
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(
+        commandsOf(f, 'lead.start').single,
+        containsPair('engine', 'claude'),
+      );
+      expect(
+        commandsOf(f, 'lead.start').single,
+        containsPair('machineId', 'diego-mac'),
+      );
+    });
+
+    test('each engine runs where the server says: Codex in the Team account, '
+        'Claude Code on the Mac whose account signed it out', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'machineId': 'diego-mac'},
+        'codex': {'machineId': 'diego-team'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, engine: 'codex', lead: null);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.engine, 'codex');
+      expect(
+        box.leadLine,
+        startsWith('Product Manager on Diego MacBook’s Team account · Codex'),
+      );
+      box.focusField(NewHarnessField.agent);
+      box.accept(box.options.where((o) => o.id == 'claude').single);
+      expect(
+        box.leadLine,
+        startsWith('Product Manager on Diego MacBook · Claude Code'),
+      );
+      expect(box.leadBlocked, isNull);
+    });
+
+    test('with every engine refused, the Mac cannot be chosen and says why '
+        'once', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'refused': 'New work is paused on this machine.'},
+        'codex': {'refused': 'New work is paused on this machine.'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, lead: null);
+      final mac = box.integration!.leadMachines!.singleWhere(
+        (m) => m.id == 'diego-mac',
+      );
+      expect(mac.startable, isFalse);
+      expect(
+        leadMachineDetail(mac, null),
+        'Can’t run a Product Manager: New work is paused on this machine',
+      );
+    });
+  });
+
+  test('each machine says which Product Manager engines it cannot run, and '
+      'why', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [
+      offering(
+        machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+        ['codex'],
+        readiness: [
+          {'engine': 'claude', 'installed': null, 'signedIn': null},
+          {'engine': 'codex', 'installed': true, 'signedIn': false},
+        ],
+      ),
+      offering(
+        machineRow('mini', 'Office Mini', contributor: 'owner', lead: true),
+        ['claude', 'codex'],
+        readiness: [
+          {'engine': 'claude', 'installed': false, 'signedIn': null},
+        ],
+        quotas: [
+          {
+            'engine': 'codex',
+            'known': true,
+            'windows': [
+              {'name': 'weekly', 'usedPercent': 100},
+            ],
+          },
+        ],
+      ),
+      offering(
+        machineRow('m', 'Mac Studio', contributor: 'owner'),
+        ['claude', 'codex'],
+        quotas: [
+          {'engine': 'codex', 'known': false, 'windows': <Map>[]},
+        ],
+        suspended: {'claude': 'Claude Code failed to start 3 times here.'},
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    LeadMachine row(String id) =>
+        box.integration!.leadMachines!.where((m) => m.id == id).single;
+    expect(row('rig').engineRefusals, {
+      'claude': 'Claude Code isn’t offered here',
+      'codex': 'Codex isn’t signed in',
+    });
+    expect(row('rig').startable, isFalse);
+    // Quota is information: an engine at 100% stays startable, and the
+    // server's own refusal, if any, shows as the start's error.
+    expect(row('mini').engineRefusals, {
+      'claude': 'Claude Code isn’t installed',
+    });
+    expect(row('mini').startable, isTrue);
+    // An unread allowance does not rule Codex out: the route takes it too.
+    expect(row('m').engineRefusals, {
+      'claude': 'Claude Code failed to start 3 times here.',
+    });
+    expect(row('m').startable, isTrue);
+  });
+
+  test(
+    'choosing a machine that offers only Codex switches the PM to Codex',
+    () async {
+      Future<NewHarnessController> choose(
+        List<Map<String, dynamic>> rows,
+        String machine,
+      ) async {
+        final f = SuperTabLaunchFixture();
+        noLocalEngines(f);
+        knownRepo(f);
+        f.connection.server.state['machines'] = rows;
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true, engine: 'claude', lead: null);
+        expect(box.leadMachine, isNull);
+        box.chooseLeadMachine(machine);
+        return box;
+      }
+
+      final rig = offering(
+        machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+        ['codex'],
+      );
+      final studio = offering(
+        machineRow('m', 'Mac Studio', contributor: 'owner'),
+        ['claude', 'codex'],
+      );
+      // The rig takes the PM with Codex, the engine it runs.
+      var box = await choose([rig, studio], 'rig');
+      expect((box.leadMachine?.id, box.engine), ('rig', 'codex'));
+      expect(box.leadBlocked, isNull);
+      // The Mac Studio runs Claude Code: Claude Code stays.
+      box = await choose([rig, studio], 'm');
+      expect((box.leadMachine?.id, box.engine), ('m', 'claude'));
+      expect(box.leadBlocked, isNull);
+    },
+  );
+
+  test('with no machine able to run a PM, New Project says why and how to '
+      'fix it', () async {
+    final f = SuperTabLaunchFixture();
+    noLocalEngines(f);
+    f.connection.server.state['machines'] = [
+      offering(
+        machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+        ['codex'],
+        readiness: [
+          {'engine': 'codex', 'installed': true, 'signedIn': false},
+        ],
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true, engine: 'claude');
+    expect(box.leadNone, isTrue);
+    expect(box.leadBlocked, 'No machine can run the Product Manager now.');
+    expect(await box.create(), NewHarnessOutcome.failed);
+  });
+
+  test('an engine chosen that the chosen machine cannot run '
+      'says why, and the machine stays', () async {
+    final f = SuperTabLaunchFixture();
+    noLocalEngines(f);
+    f.connection.server.state['machines'] = [
+      offering(
+        machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+        ['codex'],
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    knownRepo(f);
+    final box = await f.box(newProject: true, engine: 'codex');
+    box.chooseLeadMachine('rig');
+    expect(box.leadMachine?.id, 'rig');
+    box.focusField(NewHarnessField.agent);
+    box.accept(box.options.where((o) => o.id == 'claude').single);
+    expect(box.engine, 'claude');
+    expect(box.leadMachine?.id, 'rig');
+    expect(
+      box.leadBlocked,
+      '2x 4090 Rig can’t run Claude Code: Claude Code isn’t offered here. '
+      'Choose another engine.',
+    );
+  });
+
+  for (final (what, engines, readiness, error) in [
+    (
+      'its engine signed out',
+      ['codex'],
+      [
+        {'engine': 'codex', 'installed': true, 'signedIn': false},
+      ],
+      '2x 4090 Rig: Can’t run a Product Manager: Claude Code isn’t offered '
+          'here, Codex isn’t signed in. Choose another machine.',
+    ),
+    (
+      'stopped offering its engine',
+      ['claude'],
+      <Map<String, dynamic>>[],
+      '2x 4090 Rig can’t run Codex: Codex isn’t offered here. Choose another '
+          'engine.',
+    ),
+  ]) {
+    test(
+      'New Project refuses a machine that has $what since the box opened',
+      () async {
+        final f = SuperTabLaunchFixture();
+        noLocalEngines(f);
+        knownRepo(f);
+        Map<String, dynamic> rig(
+          List<String> engines,
+          List<Map<String, dynamic>> readiness,
+        ) => offering(
+          machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+          engines,
+          readiness: readiness,
+        );
+        f.connection.server.state['machines'] = [
+          rig(['codex'], const []),
+        ];
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true, engine: 'codex');
+        box.chooseLeadMachine('rig');
+        expect((box.leadMachine?.id, box.leadBlocked), ('rig', null));
+        f.connection.server.state['machines'] = [rig(engines, readiness)];
+        expect(await box.create(), NewHarnessOutcome.failed);
+        expect(box.error, error);
+        expect(commandsOf(f, 'project.create'), isEmpty);
+      },
+    );
+  }
+
+  test('New Project started by this computer refuses its machine when the '
+      'chosen engine signed out since the box opened', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    // Your Mac Studio, connected to this Desktop: it starts the PM itself.
+    Map<String, dynamic> studio(List<Map<String, dynamic>> readiness) =>
+        offering(machineRow('m', 'Mac Studio', contributor: 'owner'), [
+          'claude',
+          'codex',
+        ], readiness: readiness);
+    f.connection.server.state['machines'] = [studio(const [])];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true, engine: 'codex');
+    box.chooseLeadMachine('m');
+    expect((box.leadMachine?.id, box.engine), ('m', 'codex'));
+    expect(box.leadMachine?.native, isTrue);
+    expect(box.leadThroughSwarm, isFalse);
+    expect(box.leadBlocked, isNull);
+    // Codex signs out there; Claude Code still runs.
+    f.connection.server.state['machines'] = [
+      studio([
+        {'engine': 'codex', 'installed': true, 'signedIn': false},
+      ]),
+    ];
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(
+      box.error,
+      'Mac Studio can’t run Codex: Codex isn’t signed in. Choose another '
+      'engine.',
+    );
+    expect(commandsOf(f, 'project.create'), isEmpty);
+    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
+
+  // Scholes's roadmap, piece 1: the Product Manager runs Claude Opus 5.5 at xhigh.
+  group('The Product Manager’s model', () {
+    Future<List<Map<String, dynamic>>> creates(
+      SuperTabLaunchFixture f, {
+      required String engine,
+      required bool newProject,
+    }) async {
+      if (newProject) f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: engine, newProject: newProject);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      return [
+        for (final call in f.connection.calls)
+          if (call.$1 == 'agent_create') call.$2,
+      ];
+    }
+
+    test(
+      'on its person’s own Mac, a Claude PM launches on Opus 5.5 at xhigh',
+      () async {
+        for (final newProject in [false, true]) {
+          final f = SuperTabLaunchFixture();
+          final sent = await creates(
+            f,
+            engine: 'claude',
+            newProject: newProject,
+          );
+          expect(sent.single['swarmRole'], 'lead');
+          expect(sent.single['model'], 'opus');
+          expect(sent.single['effort'], 'xhigh');
+        }
+      },
+    );
+
+    test('a Codex PM keeps its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      final sent = await creates(f, engine: 'codex', newProject: true);
+      expect(sent.single.containsKey('model'), isFalse);
+      expect(sent.single.containsKey('effort'), isFalse);
+    });
+
+    test('a machine that cannot launch with them starts the PM on the engine’s own model, never failing', () async {
+      final f = SuperTabLaunchFixture()..connection.refuseLaunchModel = true;
+      final sent = await creates(f, engine: 'claude', newProject: true);
+      expect(sent, hasLength(2));
+      expect(sent.first['model'], 'opus');
+      expect(sent.last.containsKey('model'), isFalse);
+      expect(sent.last.containsKey('effort'), isFalse);
+      // The same request, so the same harness: nothing launched the first time.
+      expect(sent.last['creationId'], sent.first['creationId']);
+      // Its project chat is told, as for a PM the Swarm starts.
+      expect(commandsOf(f, 'agent.add').single['launchRefused'], {
+        'model': 'opus',
+        'effort': 'xhigh',
+      });
+    });
+
+    test(
+      'a PM that launched on Opus 5.5 at xhigh joins without a note',
+      () async {
+        final f = SuperTabLaunchFixture();
+        await creates(f, engine: 'claude', newProject: true);
+        expect(
+          commandsOf(f, 'agent.add').single.containsKey('launchRefused'),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'a backend from before the note still joins the PM, without it',
+      () async {
+        final f = SuperTabLaunchFixture()..connection.refuseLaunchModel = true;
+        f.connection.server.unknownCommand = (command) =>
+            command['type'] == 'agent.add' &&
+            command.containsKey('launchRefused');
+        await creates(f, engine: 'claude', newProject: true);
+        final joins = commandsOf(f, 'agent.add');
+        expect(joins, hasLength(2));
+        expect(joins.first['launchRefused'], isNotNull);
+        expect(joins.last.containsKey('launchRefused'), isFalse);
+      },
+    );
+
+    test('a Claude PM the Swarm starts leaves its model to the Swarm, which fills its role’s default', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.leadThroughSwarm, isTrue);
+      expect(box.leadModelLabel, 'Opus 5.5 · xhigh');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      // The server fills it, so the owner's model list and rules decide
+      // (review of #2274: a default the client named read as its person's).
+      final start = commandsOf(f, 'lead.start').single;
+      expect(start.containsKey('model'), isFalse);
+      expect(start.containsKey('effort'), isFalse);
+    });
+
+    test('with Opus at xhigh off and at high on in the Swarm’s model list, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String effort, bool on) => {
+        'engine': 'claude',
+        'model': 'opus',
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [row('high', true), row('xhigh', false)],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+    });
+
+    test('with every Opus row of the Swarm’s model list off, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String model, String effort, bool on) => {
+        'engine': 'claude',
+        'model': model,
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [
+            row('opus', 'high', false),
+            row('opus', 'xhigh', false),
+            row('sonnet', 'medium', true),
+          ],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+      // As the server judges it (backend commands.ts): the xhigh row
+      // decides, and any Opus row only when the list has none at xhigh
+      // (re-review of #2274).
+      LeadModelList list(List<(String, bool)> opus) => LeadModelList.of({
+        'policy': {
+          'models': [for (final (effort, on) in opus) row('opus', effort, on)],
+        },
+      });
+      expect(
+        list([('high', true), ('xhigh', false)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(
+        list([('high', false), ('xhigh', true)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isTrue,
+      );
+      expect(list([('high', true)]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(
+        list([('high', false)]).modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(list([]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final sent = [
+        for (final call in f.connection.calls)
+          if (call.$1 == 'agent_create') call.$2,
+      ];
+      expect(sent.single.containsKey('model'), isFalse);
+      expect(sent.single.containsKey('effort'), isFalse);
+    });
+  });
+
+  test(
+    'New Project asks the Swarm to start the PM in a teammate’s Team account',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.leadThroughSwarm, isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final project = commandsOf(f, 'project.create').single;
+      expect(project['brief'], 'Discuss the architecture.');
+      final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+      // The PM the Swarm starts reads its request in its project's chat.
+      final task = commandsOf(f, 'message.send').single;
+      expect(task['conversationId'], created.leadConversationId);
+      expect(task['text'], 'Discuss the architecture.');
+      final start = commandsOf(f, 'lead.start').single;
+      expect(start, {
+        'type': 'lead.start',
+        'projectId': created.id,
+        'machineId': 'diego-mac',
+        'engine': 'codex',
+        'repositoryUrl': 'git@github.com:autonomous-ai/lamp-os.git',
+      });
+      expect(created.name, 'project');
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(
+        f.app.superTabs.peek(tabId)!.selectedId,
+        created.leadConversationId,
+      );
+    },
+  );
+
+  test(
+    'New Project starts the PM only once its person chose the machine',
+    () async {
+      final f = SuperTabLaunchFixture();
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('m', 'Mac Studio', contributor: 'owner', available: 3),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, lead: null);
+      expect(box.leadPicked, isFalse);
+      expect(box.leadMachine, isNull);
+      expect(
+        box.leadBlocked,
+        'Choose the machine the Product Manager runs on.',
+      );
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(f.connection.server.posts, isEmpty);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    },
+  );
+
+  test(
+    'a refused Swarm start says why, and a retry posts the task once',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.connection.server.leadRefusal = {
+        'code': 'TEAM_ACCOUNT_REQUIRED',
+        'message': 'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      );
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(commandsOf(f, 'project.create'), hasLength(1));
+      expect(commandsOf(f, 'message.send'), hasLength(1));
+      final starts = [
+        for (final post in f.connection.server.posts)
+          if ((post['command'] as Map)['type'] == 'lead.start')
+            post['operationId'],
+      ];
+      expect(starts, hasLength(2));
+      expect(starts.toSet(), hasLength(2), reason: 'a refusal wrote nothing');
+    },
+  );
+
+  test('files go to the PM’s chat with the task', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+      // Yours, but this Desktop has no connection to it: the Swarm starts it.
+      machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
+    ];
+    SuperTabLaunch.uploadForTest = f.connection.server.upload;
+    addTearDown(() => SuperTabLaunch.uploadForTest = null);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('plan.md', Uint8List.fromList([1, 2, 3])),
+      ]);
+    final box = await f.box(newProject: true, attachments: files, lead: 'far');
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+    expect(
+      f.connection.server.uploads.single['conversationId'],
+      created.leadConversationId,
+    );
+    expect(commandsOf(f, 'message.send').single['attachmentIds'], [
+      'attachment-1',
+    ]);
+  });
+
+  test('free agents are the server’s count, not slots minus running', () async {
+    final f = SuperTabLaunchFixture();
+    // Eight slots and two running, but the server counts one free: its count
+    // includes starts still pending and the Team account sharing the Mac.
+    f.connection.server.state['machines'] = [studioPool(available: 1)];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.integration!.leadMachines!.single.freeAgents, 1);
+  });
+
+  test('a server without availableSlots reads slots minus running', () async {
+    final f = SuperTabLaunchFixture();
+    // Eight slots, three harnesses running (a Buddy among them still holds
+    // its slot): five can start, which is what the person is told.
+    final pool = studioPool(running: 3)..remove('availableSlots');
+    f.connection.server.state['machines'] = [pool];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.integration!.leadMachines!.single.freeAgents, 5);
+  });
+
+  for (final (change, message) in [
+    ('fills up', 'Mac Studio has no free agents. Choose another machine.'),
+    ('goes offline', 'Mac Studio is offline. Choose another machine.'),
+  ]) {
+    test(
+      'a machine that $change after the form opened is refused at submit',
+      () async {
+        final f = SuperTabLaunchFixture();
+        f.connection.server.state['machines'] = [studioPool()];
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true);
+        expect(box.integration!.leadMachines!.single.startable, isTrue);
+        f.connection.server.state['machines'] = [
+          change == 'fills up'
+              ? studioPool(available: 0)
+              : studioPool(age: 10 * 60 * 1000),
+        ];
+        expect(await box.create(), NewHarnessOutcome.failed);
+        expect(box.error, message);
+        expect(
+          f.connection.calls.where((c) => c.$1 == 'agent_create'),
+          isEmpty,
+        );
+      },
+    );
+  }
+
+  test('a paused Swarm lists no machine as taking work', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [studioPool()];
+    f.connection.server.state['paused'] = true;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    for (final machine in box.integration!.leadMachines!) {
+      expect(machine.startable, isFalse, reason: machine.id);
+      expect(machine.unavailable, 'New work is paused in this Swarm');
+    }
+  });
+
+  test(
+    'New Project reads the open Swarm instead of loading it again',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [studioPool()];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      await (await f.app.superTabs.open(tabId)).refresh();
+      int partsReads() => f.connection.calls
+          .where((c) => '${c.$2['path']}'.endsWith('/parts'))
+          .length;
+      final before = partsReads();
+      final box = await f.box(newProject: true);
+      expect(box.integration!.leadMachines!.first.id, 'm');
+      expect(partsReads(), before);
+    },
+  );
+
+  test('the Swarm’s model list rules out what it turns off', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [studioPool()];
+    // As GET .../routing-policy answers (backend store.ts tabPolicy).
+    f.connection.server.routingPolicy = {
+      'policy': {
+        'version': 1,
+        'models': [
+          {
+            'engine': 'claude',
+            'model': 'opus',
+            'effort': 'high',
+            'quality': 3,
+            'cost': 3,
+            'enabled': true,
+          },
+          {
+            'engine': 'codex',
+            'model': 'default',
+            'effort': 'default',
+            'quality': 3,
+            'cost': 2,
+            'enabled': false,
+          },
+          {
+            'engine': 'claude',
+            'model': 'sonnet',
+            'effort': 'medium',
+            'quality': 2,
+            'cost': 2,
+            'enabled': true,
+          },
+          {
+            'engine': 'claude',
+            'model': 'haiku',
+            'effort': 'auto',
+            'quality': 1,
+            'cost': 1,
+            'enabled': false,
+          },
+        ],
+        'floor': {'low': 1, 'medium': 2, 'high': 3},
+        'quotaReserve': 10,
+        'notes': '',
+        'localModels': {'quality': 1, 'enabled': false},
+      },
+      'warnings': <String>[],
+      'overridden': <String>[],
+      'override': null,
+    };
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final list = box.integration!.leadModels!;
+    expect(list.refusal('claude', null), isNull);
+    expect(list.refusal('claude', 'opus'), isNull);
+    expect(
+      list.refusal('claude', 'haiku'),
+      'The Swarm’s model list turns off Claude haiku.',
+    );
+    expect(
+      list.refusal('codex', null),
+      'The Swarm’s model list has no enabled Codex model.',
+    );
+    expect(list.gridModels, isFalse);
+  });
+
+  test('without a model list nothing is ruled out', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final list = box.integration!.leadModels!;
+    expect(list.refusal('codex', null), isNull);
+    expect(list.gridModels, isTrue);
+  });
+
+  test(
+    'a Swarm that cannot be read at submit creates nothing and says so',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [studioPool()];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      f.connection.backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'UNAVAILABLE',
+        detail: 'The Swarm service is unavailable.',
+        payload: {'status': 503},
+      );
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Couldn’t check Mac Studio for the Product Manager: The Swarm service is unavailable. Try again.',
+      );
+      expect(
+        f.connection.calls.where(
+          (c) =>
+              '${(c.$2['body'] as Map?)?['command']?['type']}' ==
+              'project.create',
+        ),
+        isEmpty,
+      );
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    },
+  );
+
+  test('a PM’s forced worktree is not saved as the person’s setting', () async {
+    final prepared = <ProjectFolderRequest>[];
+    final f = SuperTabLaunchFixture(
+      prepareFolder: (request) async {
+        prepared.add(request);
+        return '/work/project-pm';
+      },
+    );
+    f.app.gitProjectReaderForTest = (_, _) async => {
+      'isGit': true,
+      'refreshed': true,
+      'branch': 'main',
+      'branches': [
+        {'ref': 'refs/heads/main', 'name': 'main'},
+      ],
+    };
+    f.app.agentPreference.successfulWorktree = false;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    // What the form does when it opens: Desktop choices read Git there.
+    box.useDesktopChoices(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(box.isGitProject, isTrue);
+    expect(box.worktree, isTrue);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(prepared.single.createsWorktree, isTrue);
+    // Their next New Harness keeps their own setting.
+    expect(f.app.agentPreference.successfulWorktree, isFalse);
+  });
+
+  test('a new Swarm keeps choosing among the person’s own machines', () async {
+    final f = SuperTabLaunchFixture();
+    final box = await f.box();
+    expect(box.integration!.leadMachines, isNull);
+  });
+
+  test(
     'an unsupported project request keeps its draft and unlocks visibility',
     () async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
+      f.connection.backendFailureOnCommandsOnly = true;
       f.connection.backendFailure = const WsRequestFailure(
         responseType: 'super_tabs_result',
         code: 'VALIDATION_ERROR',
@@ -908,6 +2433,7 @@ void main() {
   for (final engine in ['claude', 'codex']) {
     test('a Desktop $engine Swarm worker gets the DEV role', () async {
       final f = SuperTabLaunchFixture();
+      withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(engine: engine);
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -915,7 +2441,8 @@ void main() {
           .firstWhere((c) => c.$1 == 'agent_create')
           .$2;
       expect(create['swarmRole'], 'dev');
-      expect(create['prompt'], contains('swarm-dev'));
+      expect(create['prompt'], contains('instructions'));
+      expect(create['prompt'], isNot(contains('swarm-dev')));
     });
   }
 
@@ -926,6 +2453,7 @@ void main() {
       f.connection.server.state['projects'] = [
         {...projectFixture('lead', 'Company', 'lead'), 'skillMode': 'default'},
       ];
+      withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box();
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -937,264 +2465,312 @@ void main() {
     },
   );
 
-  test(
-    'a Desktop agent joining a custom project sends its chosen role id',
-    () async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.state['projects'] = [
-        {
-          ...projectFixture('lead', 'Company', 'lead'),
-          'skillSet': 'custom',
-          'skillMode': 'default',
-          'roles': [
-            {
-              'id': 'lead',
-              'name': 'Product Manager',
-              'kind': 'lead',
-              'version': 'v1',
-            },
-            {
-              'id': 'dev',
-              'name': 'Engineer',
-              'kind': 'builder',
-              'version': 'v1',
-            },
-            {
-              'id': 'review',
-              'name': 'Reviewer',
-              'kind': 'reviewer',
-              'version': 'v1',
-            },
-          ],
-        },
-      ];
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+  // The document's role headings, in the template's shape.
+  const roleDocument =
+      '# Instructions\n\n## Roles\n\n### PM\n\n- Talks with people.\n\n'
+      '### Engineer\n\n- Does one task.\n\n### Reviewer\n\n- Reads code.\n\n'
+      '### Tester\n\n- Runs it.\n\n## Workflow\n\n### Not a role\n';
+
+  // A Swarm whose project has instructions (a backend from phase 2 on).
+  SuperTabLaunchFixture withInstructions({bool coordinator = true}) {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['projects'] = [
+      {
+        ...projectFixture('lead', 'Company', 'lead'),
+        'skillMode': 'default',
+        if (coordinator) 'coordinatorName': 'Product Manager',
+      },
+    ];
+    f.connection.server.instructions['lead'] = {
+      'projectId': 'lead',
+      'revision': 1,
+      'text': roleDocument,
+      'template': false,
+      'coordinatorName': 'Product Manager',
+      'notesRevision': 0,
+      'notes': <dynamic>[],
+    };
+    withCoordinator(f);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    return f;
+  }
+
+  Widget formOf(NewHarnessController box) => MaterialApp(
+    home: Scaffold(
+      body: SizedBox(
+        width: 1200,
+        height: 800,
+        child: NewHarnessForm(
+          controller: box,
+          desktop: true,
+          onClose: () {},
+          onCreated: () {},
+        ),
+      ),
+    ),
+  );
+
+  test('an agent joining a project takes the role typed', () async {
+    final f = withInstructions();
+    final box = await f.box();
+    expect(box.integration!.roleSuggestions, [
+      'Engineer',
+      'Reviewer',
+      'Tester',
+    ]);
+    box.integration!.roleName = '  Tester ';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(f.connection.joins.single['command']['roleName'], 'Tester');
+    final create = f.connection.calls
+        .firstWhere((c) => c.$1 == 'agent_create')
+        .$2;
+    expect(create['swarmRole'], 'dev');
+    expect(create['swarmSkillMode'], 'default');
+    expect(create, isNot(contains('roleName')));
+    expect(create, isNot(contains('roleId')));
+    expect(create.keys.toList()..sort(), [
+      'bypassPermission',
+      'creationId',
+      'cwd',
+      'engine',
+      'name',
+      'permissionMode',
+      'prompt',
+      'swarmRole',
+      'swarmSkillMode',
+    ]);
+  });
+
+  test('an empty role sends none', () async {
+    final f = withInstructions();
+    final box = await f.box();
+    box.integration!.roleName = '   ';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(f.connection.joins.single['command'], isNot(contains('roleName')));
+  });
+
+  test('an older Swarm gets no role field and no roleName', () async {
+    final f = withInstructions(coordinator: false);
+    final box = await f.box();
+    expect(box.integration!.roleSuggestions, isNull);
+    expect(f.connection.server.instructionReads, isEmpty);
+    box.integration!.roleName = 'Tester';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(f.connection.joins.single['command'], isNot(contains('roleName')));
+  });
+
+  test('a failed instructions read leaves the field free', () async {
+    final f = withInstructions();
+    f.connection.server.instructionsRoute = false;
+    final box = await f.box();
+    expect(box.integration!.roleSuggestions, isEmpty);
+    box.integration!.roleName = 'Designer';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(f.connection.joins.single['command']['roleName'], 'Designer');
+  });
+
+  testWidgets(
+    'the role field offers the document\'s roles and takes any text',
+    (tester) async {
+      final f = withInstructions();
+      final box = (await tester.runAsync(() => f.box()))!;
+      await tester.pumpWidget(formOf(box));
+      await tester.pump();
+      final field = find.byKey(const ValueKey('new-harness-role'));
+      expect(field, findsOneWidget);
+      // Start does not wait for a role.
+      expect(box.integration!.roleName, isNull);
+      await tester.tap(field);
+      await tester.pump();
+      for (final name in ['Engineer', 'Reviewer', 'Tester']) {
+        expect(find.widgetWithText(AppMenuItem, name), findsOneWidget);
+      }
+      await tester.enterText(field, 'Te');
+      await tester.pump();
+      expect(find.widgetWithText(AppMenuItem, 'Tester'), findsOneWidget);
+      expect(find.widgetWithText(AppMenuItem, 'Engineer'), findsNothing);
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Tester'));
+      await tester.pump();
+      expect(box.integration!.roleName, 'Tester');
+      await tester.enterText(field, 'Designer');
+      await tester.pump();
+      expect(box.integration!.roleName, 'Designer');
+      final input = tester.widget<TextField>(
+        find.descendant(of: field, matching: find.byType(TextField)),
+      );
+      // The server counts UTF-16 units (40), not characters: 20 emoji fill it.
+      expect(input.maxLength, isNull);
+      final emoji = '\u{1F600}' * 20;
+      await tester.enterText(field, '${emoji}x');
+      await tester.pump();
+      expect(box.integration!.roleName, emoji);
+      await tester.enterText(field, 'a' * 41);
+      await tester.pump();
+      expect(box.integration!.roleName, 'a' * 40);
+    },
+  );
+
+  testWidgets('an older Swarm\'s form shows no role field', (tester) async {
+    final f = withInstructions(coordinator: false);
+    final box = (await tester.runAsync(() => f.box()))!;
+    await tester.pumpWidget(formOf(box));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('new-harness-role')), findsNothing);
+  });
+
+  group('a recovered launch', () {
+    Map<String, dynamic> journal(Map<String, dynamic> extra) => {
+      'operationId': 'saved-operation',
+      'joinId': 'saved-join',
+      'tabId': tabId,
+      'conversationId': 'lead',
+      'lead': false,
+      'newSwarm': false,
+      'newProject': false,
+      'visibility': 'public',
+      'projectId': 'lead',
+      ...extra,
+    };
+
+    void keep(SuperTabLaunchFixture f, Map<String, dynamic> extra) {
+      f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
+          jsonEncode(journal(extra));
+    }
+
+    testWidgets('keeps its role', (tester) async {
+      final f = withInstructions();
+      keep(f, {'roleName': 'Tester', 'phase': 'joining'});
+      final box = (await tester.runAsync(() => f.box()))!;
+      expect(box.integration!.roleName, 'Tester');
+      await tester.pumpWidget(formOf(box));
+      await tester.pump();
+      expect(find.text('Tester'), findsOneWidget);
+    });
+
+    test('sends the role it kept', () async {
+      final f = withInstructions();
+      keep(f, {'roleName': 'Tester'});
       final box = await f.box();
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-      expect(f.connection.joins.single['command']['roleId'], 'dev');
-    },
-  );
+      expect(f.connection.joins.single['command']['roleName'], 'Tester');
+    });
 
-  testWidgets('new agent form lets a custom project choose a reviewer role', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.state['projects'] = [
-      {
-        ...projectFixture('lead', 'Company', 'lead'),
-        'skillSet': 'custom',
-        'skillMode': 'default',
-        'roles': [
-          {
-            'id': 'lead',
-            'name': 'Product Manager',
-            'kind': 'lead',
-            'version': 'v1',
-          },
-          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
-          {
-            'id': 'review',
-            'name': 'Security Reviewer',
-            'kind': 'reviewer',
-            'version': 'v1',
-          },
-        ],
-      },
-    ];
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    final box = (await tester.runAsync(() => f.box()))!;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 1200,
-            height: 800,
-            child: NewHarnessForm(
-              controller: box,
-              desktop: true,
-              onClose: () {},
-              onCreated: () {},
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-    expect(find.byKey(const ValueKey('new-harness-role')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('new-harness-role')));
-    await tester.pump();
-    await tester.tap(find.text('Security Reviewer').last);
-    await tester.pump();
-    expect(box.integration!.roleId, 'review');
-    expect(box.integration!.swarmRole, 'review');
-    expect(
-      await tester.runAsync(() => box.create()),
-      NewHarnessOutcome.created,
-      reason: box.error,
-    );
-    final create = f.connection.calls
-        .firstWhere((entry) => entry.$1 == 'agent_create')
-        .$2;
-    expect(create['swarmRole'], 'review');
-    expect(f.connection.joins.single['command']['roleId'], 'review');
+    test('sends no role to a Swarm without instructions', () async {
+      final f = withInstructions(coordinator: false);
+      keep(f, {'roleName': 'Tester'});
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins.single['command'], isNot(contains('roleName')));
+    });
+
+    test('from an older Desktop still sends its roleId', () async {
+      final f = withInstructions();
+      keep(f, {'roleId': 'dev', 'roleKind': 'builder'});
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final command = f.connection.joins.single['command'];
+      expect(command['roleId'], 'dev');
+      expect(command, isNot(contains('roleName')));
+    });
   });
 
-  test('switching away from Custom resets a pending Reviewer launch', () async {
+  test('the coordinator\'s start is lead and has no role field', () async {
     final f = SuperTabLaunchFixture();
-    final project = {
-      ...projectFixture('lead', 'Company', 'lead'),
-      'skillSet': 'custom',
-      'skillMode': 'default',
-      'roles': [
-        {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
-        {
-          'id': 'review',
-          'name': 'Reviewer',
-          'kind': 'reviewer',
-          'version': 'v1',
-        },
-      ],
-    };
-    f.connection.server.state['projects'] = [project];
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    final box = await f.box();
-    box.integration!.chooseRole('review');
-    project['skillSet'] = 'default';
+    final box = await f.box(newProject: true);
+    expect(box.integration!.roleSuggestions, isNull);
+    expect(box.integration!.swarmRole, 'lead');
+  });
+
+  // Tony, 11-03 (#2458): his Personal project had no Product Manager, and New
+  // Harness in its chat joined a worker. River: a project with no coordinator
+  // gets its PM from New Harness in its chat, the first message going to it.
+  test('New Harness in a project chat with no coordinator starts its '
+      'Product Manager, keeping the project and Swarm names', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+    final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+    expect(box.integration!.swarmRole, 'lead');
+    expect(box.integration!.roleSuggestions, isNull);
+    // The project and its visibility exist already.
+    expect(box.integration!.projectVisibility, isNull);
+    expect(box.integration!.actionLabel, 'New Harness');
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
     final create = f.connection.calls
-        .firstWhere((entry) => entry.$1 == 'agent_create')
+        .firstWhere((c) => c.$1 == 'agent_create')
         .$2;
-    expect(create['swarmSkillMode'], 'default');
-    expect(create['swarmRole'], 'dev');
-    expect(f.connection.joins.single['command'], isNot(contains('roleId')));
-  });
-
-  testWidgets('recovering a removed role keeps the form readable', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.state['projects'] = [
-      {
-        ...projectFixture('lead', 'Company', 'lead'),
-        'skillSet': 'custom',
-        'skillMode': 'default',
-        'roles': [
-          {
-            'id': 'lead',
-            'name': 'Product Manager',
-            'kind': 'lead',
-            'version': 'v1',
-          },
-          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
-        ],
-      },
-    ];
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
-        jsonEncode({
-          'operationId': 'saved-operation',
-          'joinId': 'saved-join',
-          'tabId': tabId,
-          'conversationId': 'lead',
-          'lead': false,
-          'roleId': 'removed',
-          'roleKind': 'builder',
-          'phase': 'starting',
-        });
-    final box = (await tester.runAsync(() => f.box()))!;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: NewHarnessForm(
-            controller: box,
-            desktop: true,
-            onClose: () {},
-            onCreated: () {},
-          ),
-        ),
-      ),
+    expect(create['swarmRole'], 'lead');
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join['lead'], isTrue);
+    expect(join['conversationId'], 'lead');
+    expect(join['initialMessage'], 'Hi New PM Personal');
+    expect(
+      f.connection.server.posts.map((p) => (p['command'] as Map)['type']),
+      isNot(anyOf(contains('project.rename'), contains('tab.rename'))),
     );
-    await tester.pump();
-    expect(tester.takeException(), isNull);
-    expect(find.byKey(const ValueKey('new-harness-role')), findsOneWidget);
   });
 
+  // Hollis's review of #2803: a PM start decided when the box opened, retried
+  // after another PM joined, must not take the project from that one.
   test(
-    'a role changed before launch is rejected before native creation',
+    'a PM start retried after another PM joined leaves that one the PM',
     () async {
       final f = SuperTabLaunchFixture();
-      final project = {
-        ...projectFixture('lead', 'Company', 'lead'),
-        'skillSet': 'custom',
-        'skillMode': 'default',
-        'roles': [
-          {
-            'id': 'lead',
-            'name': 'Product Manager',
-            'kind': 'lead',
-            'version': 'v1',
-          },
-          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
-        ],
-      };
-      f.connection.server.state['projects'] = [project];
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      final box = await f.box();
-      project['roles'] = [
-        {
-          'id': 'lead',
-          'name': 'Product Manager',
-          'kind': 'lead',
-          'version': 'v2',
-        },
-        {'id': 'dev', 'name': 'Reviewer', 'kind': 'reviewer', 'version': 'v2'},
-      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(box.integration!.swarmRole, 'lead');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      // Meanwhile the project got its Product Manager.
+      withCoordinator(f);
       expect(await box.create(), NewHarnessOutcome.failed);
       expect(
-        f.connection.calls.where((call) => call.$1 == 'agent_create'),
-        isEmpty,
+        box.error,
+        'Another Product Manager joined this project while this one was '
+        'starting. This one keeps running on Test host: Discard request to '
+        'leave it out of the project.',
       );
+      expect(f.connection.joins, hasLength(1));
+      final chat = (f.connection.server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((c) => c['id'] == 'lead');
+      expect(chat['leadId'], 'pm');
+      expect(box.canDiscardPending, isTrue);
     },
   );
 
   test(
-    'reopened unfinished form replaces a removed role with an available one',
+    'a PM start retried while the project still has none joins as its PM',
     () async {
       final f = SuperTabLaunchFixture();
-      f.connection.server.state['projects'] = [
-        {
-          ...projectFixture('lead', 'Company', 'lead'),
-          'skillSet': 'custom',
-          'skillMode': 'default',
-          'roles': [
-            {
-              'id': 'lead',
-              'name': 'Product Manager',
-              'kind': 'lead',
-              'version': 'v1',
-            },
-            {
-              'id': 'dev',
-              'name': 'Engineer',
-              'kind': 'builder',
-              'version': 'v1',
-            },
-          ],
-        },
-      ];
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
-          jsonEncode({
-            'operationId': 'saved-operation',
-            'joinId': 'saved-join',
-            'tabId': tabId,
-            'conversationId': 'lead',
-            'lead': false,
-            'roleId': 'removed',
-            'roleKind': 'builder',
-          });
-      final box = await f.box();
-      expect(box.integration!.roleId, 'dev');
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins, hasLength(2));
+      expect((f.connection.joins.last['command'] as Map)['lead'], isTrue);
+    },
+  );
+
+  test(
+    'New Harness in a project chat with a coordinator joins a worker',
+    () async {
+      final f = SuperTabLaunchFixture();
+      withCoordinator(f);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      final box = await f.box(engine: 'claude');
+      expect(box.integration!.swarmRole, 'dev');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect((f.connection.joins.single['command'] as Map)['lead'], isFalse);
     },
   );
 
@@ -1214,7 +2790,7 @@ void main() {
     );
   });
 
-  test('the lead prompt routes before starting or assigning work', () async {
+  test('the lead prompt points to the project instructions', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
     final box = await f.box(engine: 'claude');
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -1223,17 +2799,16 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
-    expect(
-      prompt,
-      contains('Route only to start an agent or assign work, never your own'),
-    );
-    expect(prompt, contains('route GROUP'));
-    expect(prompt, contains('size (small, medium or large)'));
-    expect(prompt, contains('routeDecisionId'));
-    expect(prompt, contains('overrideReason'));
-    expect(prompt, contains('NO_CANDIDATE'));
-    expect(prompt, contains('reuse, keep or stop'));
-    expect(prompt, contains('prefer stop'));
+    expect(prompt, contains('harness super-tab --tab '));
+    expect(prompt, contains(' instructions'));
+    for (final gone in [
+      'swarm-lead',
+      'swarm-dev',
+      'Route only',
+      'route GROUP',
+    ]) {
+      expect(prompt, isNot(contains(gone)), reason: gone);
+    }
     expect(prompt.length, lessThanOrEqualTo(2000));
   });
 
@@ -1252,6 +2827,7 @@ void main() {
     );
     expect(inherited.engine, isIn(['claude', 'codex']));
 
+    withCoordinator(f);
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final member = NewHarnessController(
       f.app,

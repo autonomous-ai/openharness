@@ -11,6 +11,10 @@ let source = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])
 let fixture = try JSONSerialization.jsonObject(with: source) as! [String: [String: Any]]
 let defaults = HarnessNativeKeymap(fixture["defaults"]!)!
 let changed = HarnessNativeKeymap(fixture["changed"]!)!
+try checkKeymap(defaults.match([stroke("cmd+k")], context: "swarmChat").binding?.command == "swarm.quick_switcher",
+  "Command-K switches conversations in Swarm chat")
+try checkKeymap(defaults.match([stroke("cmd+k")], context: "terminal").binding?.command == "pane.focus_above",
+  "Command-K retains the existing terminal shortcut")
 for key in ["n", "o", "g", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {
   try checkKeymap(defaults.match([stroke(key)], context: "project").binding?.command.hasPrefix("creation.project_") != true,
     "Project search does not bind action or recent shortcuts to \(key)")
@@ -158,7 +162,7 @@ try checkKeymap(stroke("cmd+shift+left").menuEquivalent == "\u{f702}" && stroke(
   "Native menu equivalents preserve function keys")
 
 func payload(_ rows: [[String: Any]]) -> [String: Any] {
-  ["version": 1, "contexts": ["workspace": rows, "terminal": rows, "picker": rows, "project": rows]]
+  ["version": 1, "contexts": Dictionary(uniqueKeysWithValues: HarnessNativeKeymap.contexts.map { ($0, rows) })]
 }
 let prefix: [String: Any] = ["keys": ["cmd+k"], "command": "example", "hint": "⌘K", "repeatable": false]
 let remappedOrchestrator = HarnessNativeKeymap(payload([

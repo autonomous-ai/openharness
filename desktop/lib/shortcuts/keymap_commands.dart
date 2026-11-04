@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../logging/debug_surface.dart';
-import '../super_tabs/pm_chat.dart' show kChatWithPm;
+import '../super_tabs/buddy_chat.dart' show kBuddyChat;
 import 'app_shortcuts.dart';
 import 'keymap.dart';
 import 'keymap_keyboard.dart';
@@ -30,6 +30,16 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
+    // The Swarm chat's own letters are Cmd's on a Mac and Ctrl's elsewhere,
+    // as in a browser: no terminal is there to take Ctrl.
+    if (const {'swarm.quick_switcher': 'k', 'swarm.find_in_chat': 'f'}[id]
+        case final letter?) {
+      return [
+        defaultTargetPlatform == TargetPlatform.macOS
+            ? 'cmd+$letter'
+            : 'ctrl+$letter',
+      ];
+    }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
     // Use the companion chord already used by the other Alt-prefix platform.
     if (kIsWeb && id == 'app.daemon_talk') return const ['alt+shift+a'];
@@ -220,14 +230,53 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
   ),
-  // The current project's Chat with PM, in a Swarm tab. K for "talk": free on
-  // every platform (Alt+Shift+K on Linux, the web and Windows).
+  const HarnessCommand(
+    'swarm.quick_switcher',
+    'Switch conversation',
+    ShortcutGroup.navigate,
+    context: KeymapContext.swarmChat,
+    keywords: ['Swarm', 'chat', 'people', 'agents'],
+  ),
+  // Slack's next and previous unread chat, in the sidebar's order. Only the
+  // Swarm chat has them: in a pane, Alt+Shift+arrows still move it where Alt
+  // is the workspace key (Linux, the web, Windows).
+  const HarnessCommand(
+    'swarm.next_unread',
+    'Next unread chat',
+    ShortcutGroup.navigate,
+    extraKeys: ['alt+shift+down'],
+    context: KeymapContext.swarmChat,
+    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
+    repeatable: true,
+  ),
+  const HarnessCommand(
+    'swarm.previous_unread',
+    'Previous unread chat',
+    ShortcutGroup.navigate,
+    extraKeys: ['alt+shift+up'],
+    context: KeymapContext.swarmChat,
+    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
+    repeatable: true,
+  ),
+  // Find in the open chat or thread (task #2826). A focused terminal keeps
+  // the same key for its own find.
+  const HarnessCommand(
+    'swarm.find_in_chat',
+    'Find in chat',
+    ShortcutGroup.navigate,
+    context: KeymapContext.swarmChat,
+    keywords: ['find', 'search', 'chat', 'Swarm'],
+  ),
+  // The current project's Buddy chat, in a Swarm tab, where the PM's private
+  // lines land since Buddies replaced Chat with PM: the id stays, so a key a
+  // person bound to it keeps working. K for "talk": free on every platform
+  // (Alt+Shift+K on Linux, the web and Windows).
   const HarnessCommand(
     'swarm.chat_with_pm',
-    kChatWithPm,
+    kBuddyChat,
     ShortcutGroup.navigate,
     extraKeys: ['cmd+shift+k'],
-    keywords: ['product manager', 'PM', 'Swarm'],
+    keywords: ['Buddy', 'product manager', 'PM', 'Swarm'],
   ),
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
@@ -525,7 +574,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'models.manage',
-    'Manage models',
+    'Your models',
     ShortcutGroup.actions,
     keywords: ['download', 'start', 'stop', 'local', 'API'],
   ),

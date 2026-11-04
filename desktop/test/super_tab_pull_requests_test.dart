@@ -381,6 +381,43 @@ void main() {
     expect(find.textContaining('View status on GitHub'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('the fallback stays on screen while GitHub is asked again', (
+    tester,
+  ) async {
+    final retry = Completer<Map<String, dynamic>>();
+    var reads = 0;
+    await mount(tester, prServer([1]), (_) async {
+      reads++;
+      return reads == 1 ? {'error': 'LOCAL_GITHUB_UNAVAILABLE'} : retry.future;
+    });
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pump();
+    expect(reads, 2);
+    expect(find.textContaining('View status on GitHub'), findsOneWidget);
+    retry.complete({
+      'rows': [prRow(1)],
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Pull request 1'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('a retry that learns GitHub cannot be read stops asking', (
+    tester,
+  ) async {
+    var reads = 0;
+    await mount(tester, prServer([1]), (_) async {
+      reads++;
+      return {'error': reads == 1 ? 'LOCAL_GITHUB_UNAVAILABLE' : 'UNSUPPORTED'};
+    });
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.textContaining('View status on GitHub'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('a computer that cannot read PR status is not asked again', (
     tester,
   ) async {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { BACKEND_ONLY_DOWN_TYPES, declaredClient } from './webWs.js'
+import { BACKEND_ONLY_DOWN_TYPES, declaredClient, sendWhenAwake } from './webWs.js'
+import type { HubClient } from './hub.js'
 
 /**
  * `handleFrame` forwards anything it does not recognise straight to the adapter
@@ -15,7 +16,7 @@ describe('frames a web client may never forge', () => {
     // desk_changed / zoo_changed / machines_changed / connectors_changed make every window re-read from the backend:
     // forged in a loop, that is request amplification against our own API. device_keys_changed makes the
     // daemon re-read its device key log; devlog_append_result is the backend's answer to its own append.
-    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'zoo_changed'])
+    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'swarm_changed', 'swarm_host_changed', 'zoo_changed'])
   })
 
   it('covers only frames that are NOT already caught by the `__` rule', () => {
@@ -45,5 +46,34 @@ describe('who a per-user socket says it is', () => {
     expect(declared('client=web&release=1.0.8&debug=1')).toEqual({ surface: 'web', build: {} })
     expect(declared('release=1.0.8&debug=1')).toEqual({ surface: null, build: {} })
     expect(declared('client=desktop&release=1.0.8')).toEqual({ surface: null, build: {} })
+  })
+})
+
+/** A frame waits for its machine to wake before it goes down (2026-10-28 prod: "Cannot read properties of null (reading
+ *  'sendDown')", once the person deselected the machine during that wait). */
+describe('a frame sent once its machine is awake', () => {
+  const hubClient = () => { const sent: unknown[] = []; return { sent, client: { sendDown: (frame: unknown) => { sent.push(frame) } } as unknown as HubClient } }
+  const frame = { type: 'message', payload: { text: 'hi' } }
+
+  it('goes to the client still selected', async () => {
+    const a = hubClient()
+    await sendWhenAwake(() => a.client, async () => {}, frame)
+    expect(a.sent).toEqual([frame])
+  })
+
+  it('is dropped when the machine was deselected, or another selected, during the wake', async () => {
+    const a = hubClient(), b = hubClient()
+    let selected: HubClient | null = a.client
+    await sendWhenAwake(() => selected, async () => { selected = null }, frame)
+    selected = a.client
+    await sendWhenAwake(() => selected, async () => { selected = b.client }, frame)
+    expect(a.sent).toEqual([])
+    expect(b.sent).toEqual([])
+  })
+
+  it('sends nothing when the wake fails, and says why', async () => {
+    const a = hubClient()
+    await expect(sendWhenAwake(() => a.client, async () => { throw new Error('Machine could not be started') }, frame)).rejects.toThrow('Machine could not be started')
+    expect(a.sent).toEqual([])
   })
 })

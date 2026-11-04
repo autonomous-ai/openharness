@@ -25,12 +25,18 @@ import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
+import { launchContract } from '../../engines/launches.js'
+import { moveCodexConversation } from '../../engines/codex/providerMove.js'
+import { engineBin } from '../../lib/engineBin.js'
+import { sessionCodexHome } from '../../lib/engineHomes.js'
+import { windowsEngineArgv } from '../../lib/windows/launch.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 import { createLaunchAuthority } from './launchAuthority.js'
+import type { AdoptSwarmSkill } from '../api.js'
 import { nativeOpencodeStore } from '../../engines/kit/nativeLocations.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -62,16 +68,18 @@ export interface RetargetDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
+  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  adoptSwarmSkill?: AdoptSwarmSkill
 }
 
 export function createAgentRetargeter({
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE',
+  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', adoptSwarmSkill,
 }: RetargetDeps) {
   const authority = createLaunchAuthority({ byAgent: id => registry.byAgent(id),
     revision: id => restartJobs.revision(id), cancelled: () => false })
-  const retargetAgent: RetargetAgent = async ({ agentId, grid }) => {
+  const retargetAgent: RetargetAgent = async ({ agentId, grid, fresh }) => {
     if (purgeBusy(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     // No backend here can respawn a pane (tmux missing, the pty host down): the configured backend's code.
     if (!terminals.instances().some(canRestart)) return { ok: false, error: noBackendCode }
@@ -105,6 +113,20 @@ export function createAgentRetargeter({
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
+    // An older Swarm session switches with its role, or not at all while the role cannot be read: a switch relaunched an old
+    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). Nothing has touched
+    // the pane yet, so a refusal leaves the running engine as it is.
+    const looked = await adoptSwarmSkill?.lookup?.(session, current)
+    if (looked !== undefined) {
+      // The lookup answers null once this switch no longer owns the row.
+      if (looked === null) return changed()
+      if (looked === 'unavailable') return { ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
+        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' }
+      // Recording the role changes the row this switch owns: it owns the recorded one, taken in the same step.
+      looked.commit()
+      if (looked.row.swarmSkill) session.swarmSkill = looked.row.swarmSkill
+      current = captureAuthority()
+    }
     // Leaving for a grid is the LAST moment this agent's own model is observable: once the pane is on
     // the grid, the engine reports the grid's model and the previous choice exists nowhere. So it is
     // read now and kept, and a later move back returns the person to it rather than to whatever
@@ -138,6 +160,14 @@ export function createAgentRetargeter({
       //    "subscription" one and hand it straight back — teaching the bug to itself.
       ? (!session.grid && observed !== grid.model ? observed : (session.subscriptionModel ?? null))
       : (session.subscriptionModel ?? null)
+    // Which conversation the relaunch reopens. `fresh` (a grid's or an API's: the conversation is too long for the
+    // model's window) starts a new one, and the one left on the own login is remembered, as the model is above. The
+    // way home reopens that one rather than the grid's, so the person is back where they left off. Grid to grid,
+    // the remembered one stays: it is still the own login's. '' starts a new conversation (restartAgent).
+    const onGrid = !!(session.grid || session.gridLaunch)
+    const startsFresh = !!grid && fresh === true
+    const homeConversation = !grid && onGrid ? session.subscriptionSessionId ?? null : null
+    const reopens = startsFresh ? '' : homeConversation ?? session.sessionId
     // What this machine cannot do at all is said first, before the pane is even looked at.
     const target: LaunchSource = {
       gridLaunch: grid,
@@ -160,7 +190,7 @@ export function createAgentRetargeter({
     // the remembered model carries its provider (`subscriptionModel.ts`), and otherwise the engine
     // decides, as it always did. v2 switches the model through OpenCode's own API instead and needs no
     // sqlite3 (`applyOpencodeSessionModel`).
-    const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
+    const rewritesOpencodeSession = session.engine === 'opencode' && !!reopens
       && (!!grid || !!remembered?.includes('/'))
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
     const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
@@ -255,7 +285,7 @@ export function createAgentRetargeter({
         if (model) {
           nativeEffect = 'uncertain'
           const written = await opencode.applyOpencodeSessionModel({
-            opencodeMajor, dbPath: native ? nativeOpencodeStore(native.environment) : opencodeDb, sessionId: session.sessionId, model, cwd: session.cwd ?? undefined,
+            opencodeMajor, dbPath: native ? nativeOpencodeStore(native.environment) : opencodeDb, sessionId: reopens, model, cwd: session.cwd ?? undefined,
             // (A model of opencode's own is looked for in its catalogue; a grid's provider lives in
             // the pane's own config, which the service never reads.)
             checkCatalog: !grid,
@@ -282,11 +312,26 @@ export function createAgentRetargeter({
       const retargetPermission = await downgradedPermission(session, bypassPermission, 'retarget', native)
       if (retargetPermission.nativeHold || native?.current() === false) return failed('NATIVE_LAUNCH_HELD', retargetPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.')
       if (!current()) return changed()
+      // A Codex conversation is bound to its provider (`providerBoundConversations`): moved between a grid and the
+      // own login it goes on in a fork, its whole history with it; grid to grid is one provider and resumes. The
+      // conversation a fresh move left was the own login's, so going home it resumes.
+      const movesProvider = !!launchContract(session.engine)?.providerBoundConversations
+        && !!reopens && (homeConversation ? false : onGrid) !== !!grid
       const outcome = await restartAgent(
-        { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
+        { engine: session.engine, sessionId: reopens, ...(session.resumeOnly ? { resumeOnly: true as const } : {}),
+          ...(movesProvider ? { continueInFork: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
-          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+          retargetPermission.permissionMode ?? null, dispatchCurrent, ...(homeConversation ? [homeConversation] as const : [] as const)), isCurrent: dispatchCurrent,
+          ...(movesProvider ? { prepareFork: () => {
+            const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: sessionCodexHome(session), ...built.overrides.env, ...built.overrides.native?.environment }
+            if (!grid) for (const name of gridEnvVarNames(session.engine)) delete env[name]
+            return moveCodexConversation({
+              sessionId: reopens, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
+              argv: (codexArgs) => windowsEngineArgv(session.engine, [built.overrides.native?.executable?.command ?? engineBin(session.engine), ...codexArgs]),
+              ...(session.cwd ? { cwd: session.cwd } : {}),
+            })
+          } } : {}) },
       )
       replacementStarted = outcome.ok
       if (!current()) return changed()
@@ -308,12 +353,17 @@ export function createAgentRetargeter({
       // must not overwrite the model the agent is still sitting on. Survives a daemon restart, so an
       // agent left on a grid for a week still knows where it came from.
       if (grid && remembered) registry.setSubscriptionModel(session.agentId, remembered)
+      // The conversation: kept on a fresh move from the own login, forgotten on any other move from it (it goes on
+      // on the grid) and once home. Grid to grid it stays, like the model.
+      const keptConversation = !grid ? null : onGrid ? session.subscriptionSessionId ?? null
+        : startsFresh && session.sessionId ? session.sessionId : null
+      if ((session.subscriptionSessionId ?? null) !== keptConversation) registry.setSubscriptionSession(session.agentId, keptConversation)
       registry.setActive(session.agentId, true)
       const refreshed = registry.byAgent(session.agentId)
       // The app decides whether to still offer a move from what it is told here, so a silent success
       // would leave the banner up over an agent that had already been moved.
       if (refreshed) { announceSession(refreshed); refreshGridAssignment(refreshed) }
-      const how = outcome.resumed ? 'resumed' : 'fresh session'
+      const how = outcome.resumed ? (movesProvider ? 'continued in a fork' : 'resumed') : 'fresh session'
       const record = built.overrides.gridLaunchRecord
       const where = record
         ? describeGridLaunch(session.engine, record.override, record.webSearch)

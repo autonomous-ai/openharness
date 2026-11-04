@@ -30,8 +30,7 @@ class DesktopNotificationStore extends OnOffPreference {
 /// and nothing told them. Asked once, whatever the answer: a second offer is a
 /// nag.
 class NotificationOfferStore extends OnOffPreference {
-  NotificationOfferStore({super.storage})
-    : super('app_notifications_offered');
+  NotificationOfferStore({super.storage}) : super('app_notifications_offered');
 }
 
 final notificationOfferStore = NotificationOfferStore();
@@ -370,13 +369,124 @@ ProcessRunner offUiIsolate([ProcessRunner run = Process.run]) =>
     (executable, arguments) =>
         Isolate.run(() => run(executable, arguments), debugName: executable);
 
+/// A `notify-send` waiting for a click: its answer once it exits, and a way to
+/// stop it.
+typedef NoticeWait = ({Future<ProcessResult> result, void Function() kill});
+
+/// Starts one waiting `notify-send`, which stops by itself after [limit].
+typedef NoticeWaiter = NoticeWait Function(
+  String executable,
+  List<String> arguments, {
+  required Duration limit,
+});
+
+/// A [NoticeWaiter] on an isolate of its own, for the reason [offUiIsolate]
+/// gives. The isolate starts the process, stops it at [limit] or when asked,
+/// and answers as [Process.run] would; a missing tool is a [ProcessException].
+NoticeWait waitOffUiIsolate(
+  String executable,
+  List<String> arguments, {
+  required Duration limit,
+}) {
+  final answers = ReceivePort();
+  final done = Completer<ProcessResult>();
+  SendPort? control;
+  var stop = false;
+  void finish() => answers.close();
+  answers.listen((message) {
+    switch (message) {
+      case SendPort port:
+        control = port;
+        if (stop) port.send(null);
+      case (int pid, int code, String out, String err):
+        done.complete(ProcessResult(pid, code, out, err));
+        finish();
+      case String error:
+        done.completeError(ProcessException(executable, arguments, error));
+        finish();
+    }
+  });
+  unawaited(
+    Isolate.spawn(_waitForNotice, (
+      answers.sendPort,
+      executable,
+      arguments,
+      limit,
+    ), debugName: executable).then<void>(
+      (_) {},
+      onError: (Object error) {
+        if (!done.isCompleted) done.completeError(error);
+        finish();
+      },
+    ),
+  );
+  return (
+    result: done.future,
+    kill: () {
+      stop = true;
+      control?.send(null);
+    },
+  );
+}
+
+Future<void> _waitForNotice(
+  (SendPort, String, List<String>, Duration) job,
+) async {
+  final (answers, executable, arguments, limit) = job;
+  final control = ReceivePort();
+  answers.send(control.sendPort);
+  try {
+    final process = await Process.start(executable, arguments);
+    var stopped = false;
+    void stop() {
+      stopped = true;
+      process.kill();
+    }
+
+    control.listen((_) => stop());
+    final out = process.stdout.transform(utf8.decoder).join();
+    final err = process.stderr.transform(utf8.decoder).join();
+    final code = await process.exitCode.timeout(
+      limit,
+      onTimeout: () {
+        stop();
+        return process.exitCode;
+      },
+    );
+    // A stopped process answers without its output: a child it left behind can hold the pipes
+    // open for as long as it runs (Linux CI, 11-03), and a stopped wait opens nothing anyway.
+    answers.send((
+      process.pid,
+      code,
+      stopped ? '' : await out,
+      stopped ? '' : await err,
+    ));
+  } on ProcessException catch (error) {
+    answers.send(error.message);
+  } finally {
+    control.close();
+  }
+}
+
 /// Linux: `notify-send`, which talks to whatever notification daemon the
-/// desktop already runs. No native dependency, and no click action — the tool
-/// has none, so a click does what the desktop's own default is.
+/// desktop already runs. No native dependency. A Swarm tag's or chat's notice
+/// offers its default action and waits for it (`--action`, `--wait`, libnotify
+/// 0.7.10 and later), so a click opens that tag or chat (Diego, 2026-11-03:
+/// no click did anything). An agent's alert keeps `--replace-id` instead,
+/// which a waiting notice cannot learn, so a click on it does what the
+/// desktop's own default is.
 class LinuxSystemNotifier implements SystemNotifier {
-  LinuxSystemNotifier({ProcessRunner? run}) : _run = run ?? offUiIsolate();
+  LinuxSystemNotifier({ProcessRunner? run, NoticeWaiter? wait})
+    : _run = run ?? offUiIsolate(),
+      _wait =
+          wait ??
+          (run == null
+              ? waitOffUiIsolate
+              : (exe, args, {required limit}) =>
+                    (result: run(exe, args), kill: () {}));
 
   final ProcessRunner _run;
+  final NoticeWaiter _wait;
 
   /// The daemon's id for each agent's notification, so the next one REPLACES it
   /// (`--replace-id`) rather than stacking — the banner's rule.
@@ -386,6 +496,21 @@ class LinuxSystemNotifier implements SystemNotifier {
   /// 0.7.9 and later). An older one refuses the flags; it is asked once, and
   /// every notification after that is posted plainly.
   bool _canReplace = true;
+
+  /// Whether this `notify-send` knows `--action`/`--wait`; asked once, as above.
+  bool _canAct = true;
+
+  /// The notices whose `notify-send` still waits for a click, oldest first,
+  /// each on an isolate of its own. GNOME and KDE keep an unclicked notice
+  /// until it is dismissed, so a wait would last all session (review of
+  /// #2808): each stops after [_waitLimit], and past [_maxWaiting] the oldest
+  /// stops so the newest can still be clicked. A stopped wait leaves its
+  /// notice up; only its click goes nowhere.
+  final _waits = <NoticeWait>[];
+  static const _maxWaiting = 8;
+  static const _waitLimit = Duration(minutes: 10);
+
+  void Function(String machineId, String agentId)? _onTap;
 
   @override
   bool get supported => true;
@@ -417,6 +542,68 @@ class LinuxSystemNotifier implements SystemNotifier {
     required String machineId,
     required String agentId,
   }) async {
+    final opens =
+        (machineId == SystemNotifications.mentionNoticeMachine ||
+            machineId == SystemNotifications.chatNoticeMachine ||
+            machineId == SystemNotifications.messageNoticeMachine) &&
+        agentId.isNotEmpty;
+    if (opens && _canAct) {
+      if (_waits.length >= _maxWaiting) _waits.removeAt(0).kill();
+      final wait = _wait('notify-send', [
+        '--app-name=Harness',
+        '--action=default=Open',
+        '--wait',
+        '--',
+        title,
+        body,
+      ], limit: _waitLimit);
+      _waits.add(wait);
+      unawaited(_clicked(wait, id, title, body, machineId, agentId));
+      // Its answer comes when the notice closes; what the platform last said stands meanwhile.
+      return NotificationPermission.unknown;
+    }
+    return _post(id, title, body);
+  }
+
+  Future<void> _clicked(
+    NoticeWait wait,
+    String id,
+    String title,
+    String body,
+    String machineId,
+    String agentId,
+  ) async {
+    try {
+      final result = await wait.result;
+      if (result.exitCode == 0) {
+        // The invoked action's name, on a line of its own; nothing when the notice expired or
+        // was dismissed.
+        final lines = '${result.stdout}'.split('\n').map((l) => l.trim());
+        if (lines.contains('default')) _onTap?.call(machineId, agentId);
+        return;
+      }
+      // Stopped by a signal: its time ran out, or a newer notice took its place. Its notice is up.
+      if (result.exitCode < 0) return;
+      // A notify-send that does not KNOW the flags gives them up for good. Any other failure is
+      // the daemon's; either way the notice still goes up, plainly, and says what happened.
+      if ('${result.stderr}'.toLowerCase().contains('unknown option')) {
+        _canAct = false;
+      }
+      await _post(id, title, body);
+    } on ProcessException {
+      // No notify-send at all: the next notice goes the plain way, which reports it.
+      _canAct = false;
+      await _post(id, title, body);
+    } finally {
+      _waits.remove(wait);
+    }
+  }
+
+  Future<NotificationPermission> _post(
+    String id,
+    String title,
+    String body,
+  ) async {
     List<String> args({required bool replace}) => [
       '--app-name=Harness',
       if (replace) '--print-id',
@@ -457,7 +644,8 @@ class LinuxSystemNotifier implements SystemNotifier {
   Future<void> withdraw(String id) async => _ids.remove(id);
 
   @override
-  set onTap(void Function(String machineId, String agentId)? handler) {}
+  set onTap(void Function(String machineId, String agentId)? handler) =>
+      _onTap = handler;
 }
 
 /// The notifier for the platform this build runs on ([operatingSystem] is
@@ -560,9 +748,31 @@ class SystemNotifications {
   /// in the Swift code; [postNotice] puts the device's key in the `agentId` slot.
   static const deviceNoticeMachine = '@device';
 
-  /// News about the ACCOUNT rather than an agent — a device joined it. The same switch and the same
-  /// rules as [post]; a click on it opens that device ([devicePub]) when given, else nothing.
-  void postNotice({required String id, required String title, required String body, String? devicePub}) {
+  /// What a Swarm tag's notice puts in the `machineId` slot; the `agentId` slot holds
+  /// `<swarm tab id>/<tag id>` ([mention]), which the click opens (swarm_screen.dart).
+  static const mentionNoticeMachine = '@mention';
+
+  /// What a Swarm chat's New messages notice puts in the `machineId` slot; the `agentId` slot holds
+  /// `<swarm tab id>/<conversation id>` ([chat]), which the click opens (swarm_screen.dart).
+  static const chatNoticeMachine = '@chat';
+
+  /// What a reply's notice puts in the `machineId` slot; the `agentId` slot holds the reply's message
+  /// link (`harness://swarm/…`, [messageLink]), which the click opens as a message link (swarm_screen.dart).
+  static const messageNoticeMachine = '@message';
+
+  /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged, a chat
+  /// has new messages, a thread has a reply. The same switch and the same rules as [post]; a click on
+  /// it opens that device ([devicePub]), that tag in its Swarm ([mention]), that chat in its Swarm
+  /// ([chat]) or that message ([messageLink]) when given, else nothing.
+  void postNotice({
+    required String id,
+    required String title,
+    required String body,
+    String? devicePub,
+    ({String tabId, String mentionId})? mention,
+    ({String tabId, String conversationId})? chat,
+    String? messageLink,
+  }) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
     _ordered(
@@ -572,8 +782,20 @@ class SystemNotifications {
             id: id,
             title: title,
             body: body,
-            machineId: devicePub == null ? '' : deviceNoticeMachine,
-            agentId: devicePub ?? '',
+            machineId: mention != null
+                ? mentionNoticeMachine
+                : chat != null
+                ? chatNoticeMachine
+                : messageLink != null
+                ? messageNoticeMachine
+                : devicePub == null
+                ? ''
+                : deviceNoticeMachine,
+            agentId: mention != null
+                ? '${mention.tabId}/${mention.mentionId}'
+                : chat != null
+                ? '${chat.tabId}/${chat.conversationId}'
+                : messageLink ?? devicePub ?? '',
           )
           .then((answer) {
             if (answer != NotificationPermission.unknown) {

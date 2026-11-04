@@ -6,9 +6,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import '../auth/sign_in_provider.dart';
-import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
+import '../widgets/approval_sign_in_panel.dart';
 import '../widgets/finger_target.dart' show kFingerTarget;
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
@@ -367,84 +367,21 @@ class _ActionState extends State<_Action> {
       );
     }
 
-    // A phone approved this sign-in: whose account is it? Someone else's phone may have scanned
-    // the code, and nothing is signed in until the person here says yes.
-    if (notifier.pendingConfirmEmail case final email?) {
-      final previous = notifier.previousAccountEmail;
-      final changed =
-          previous != null && previous.toLowerCase() != email.toLowerCase();
-      return Column(
-        children: [
-          Text(
-            'Sign in as $email?',
-            key: const Key('login-phone-confirm'),
-            textAlign: TextAlign.center,
-            style: grid.AppType.heading(),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            changed
-                ? 'This computer was signed in as $previous. Continue only if $email is yours.'
-                : 'Your phone approved this sign-in. Continue only if this is your account.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: changed ? grid.AppPalette.warn : null),
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              FilledButton(
-                key: const Key('login-phone-continue'),
-                autofocus: true,
-                onPressed: () => notifier.confirmPhoneSignIn(true),
-                child: const Text('Continue'),
-              ),
-              TextButton(
-                key: const Key('login-phone-refuse'),
-                onPressed: () => notifier.confirmPhoneSignIn(false),
-                child: const Text('Cancel'),
-              ),
-            ],
-          ),
-        ],
-      );
-    }
-
-    // Waiting for a phone to scan the QR.
-    if (notifier.pendingQrLink case final link?) {
+    // A phone scanning the QR, then whose account approved it: someone else's phone may have
+    // scanned the code, and nothing is signed in until the person here says yes.
+    if (notifier.approvalSignIn case final method?) {
       return _RevealOnShow(
-        child: Column(
-          children: [
-            QrCodeView(
-              key: const Key('login-phone-qr'),
-              data: link,
-              side: 200,
-              semanticLabel: 'QR code to sign in with your phone',
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'On your phone: Harness ▸ Settings ▸ Sign in a computer',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                // Back to the two buttons: that is where the browser's way in is chosen.
-                TextButton(
-                  onPressed: notifier.cancelLogin,
-                  style: TextButton.styleFrom(
-                    foregroundColor: grid.AppPalette.textSecondary,
-                  ),
-                  child: const Text('Cancel'),
-                ),
-              ],
-            ),
-          ],
+        child: ApprovalSignInPanel(
+          method: method,
+          qrLink: notifier.pendingQrLink,
+          code: notifier.pendingSignInCode,
+          refreshAt: notifier.approvalRefreshAt,
+          confirmEmail: notifier.pendingConfirmEmail,
+          previousEmail: notifier.previousAccountEmail,
+          answered: notifier.approvalAnswered,
+          onConfirm: notifier.confirmPhoneSignIn,
+          // Back to the ways in: that is where the browser's way in is chosen.
+          onCancel: notifier.cancelLogin,
         ),
       );
     }

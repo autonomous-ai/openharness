@@ -15,11 +15,11 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-function setup() {
+function setup(replyEffort?: string) {
   const root = mkdtempSync(join(tmpdir(), 'attach-profile-'))
   roots.push(root)
   const path = join(root, 'session.jsonl')
-  writeFileSync(path, `${JSON.stringify({ type: 'assistant', version: '2.1.209',
+  writeFileSync(path, `${JSON.stringify({ type: 'assistant', version: '2.1.209', ...(replyEffort ? { effort: replyEffort } : {}),
     message: { role: 'assistant', model: 'claude-opus-5', content: [] } })}\n`)
   const session = { agentId: 'agent', sessionId: 'session', engine: 'claude', cwd: root,
     transcriptPath: path, cliVersion: '2.1.100', model: 'claude-sonnet-4-6' } as RegisteredSession
@@ -75,3 +75,14 @@ it.each(['expired', 'superseded', 'failed', 'installed'] as const)(
     p.profiles.forget(p.session.sessionId)
   },
 )
+
+// Attach reads the settings after the transcript. Their default replaced the effort a reply recorded, so an adopted agent
+// or a restarted daemon reported "auto" (or the settings' effort) until its next reply (#1966 review).
+it.each(['low', 'auto'])('keeps the effort a reply recorded when the settings answer %s', async configured => {
+  const p = setup('medium')
+  await vi.waitFor(() => expect(p.configuredEffort).toHaveBeenCalledOnce())
+  p.finish(configured)
+  expect(await p.attaching).toBe(true)
+  expect(p.profiles.getState(p.session.sessionId)).toMatchObject({ model: 'claude-opus-5', effort: 'medium' })
+  p.profiles.forget(p.session.sessionId)
+})

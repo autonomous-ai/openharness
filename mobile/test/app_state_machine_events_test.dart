@@ -705,6 +705,29 @@ void main() {
       );
     });
 
+    test('a machine refused as not on the account is read again and leaves the list', () async {
+      // Prod, 2026-10-28: a laptop removed in September was still selected every ~7 s.
+      final rig = await signedInWith({
+        'm': ['a'],
+        'gone': ['b'],
+      });
+      addTearDown(rig.app.dispose);
+      final fetches = rig.api.machineFetches;
+      rig.api.onMachines = () async => [remoteMachine('m')];
+
+      await push(rig, 'gone', 'machine_select_error', {
+        'machineId': 'gone',
+        'error': 'NOT_YOUR_MACHINE',
+      });
+      await settle();
+
+      expect(rig.api.machineFetches, fetches + 1);
+      expect(rig.app.stateOf('gone'), isNull);
+      expect(rig.app.machines.map((m) => m.machineId), ['m']);
+      expect(rig.app.lastError, 'Machine gone is no longer on your account.');
+      expect(rig.app.lastErrorRetryable, isFalse);
+    });
+
     test('pushes for a machine the phone does not have are ignored', () async {
       final rig = await signedInWith({
         'm': ['a'],

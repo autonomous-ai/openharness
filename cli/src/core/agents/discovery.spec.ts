@@ -139,6 +139,12 @@ describe('discovery', () => {
       expect(mode, 'this fixture must name a mode').not.toBeNull()
     })
 
+    it('reads a Buddy launched in full mode back as full, never as an older Buddy\'s mode (task #2832)', () => {
+      expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
+      expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')
+      expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    })
+
     it('adopts the engine someone typed into a terminal, and announces it', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()

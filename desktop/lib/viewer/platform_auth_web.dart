@@ -7,6 +7,10 @@ import '../core/browser_lock.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
 
+/// The browser build keeps its SSO sign-in: it asks for no Harness session
+/// ([DirectAuthApi.harnessSessionLabel]).
+String? viewerSessionLabel() => null;
+
 DirectAuth createViewerAuth({
   required AuthSession session,
   required DirectAuthApi api,
@@ -77,6 +81,11 @@ class BrowserAuth extends DirectAuth {
       }
     });
   }
+
+  /// This browser's own count, which also moves when another tab changes the
+  /// account: the delegate's moves only with this tab's sign-ins.
+  @override
+  int get signInRevision => _revision;
 
   @override
   Future<bool> hasSession() => _run(_delegate.hasSession);

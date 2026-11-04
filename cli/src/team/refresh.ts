@@ -20,13 +20,15 @@ import { dirname, join } from 'node:path'
 import type { TeamConfig } from './config.js'
 import type { TeamStatus } from './privacy.js'
 import { TEAM_ENGINES } from './engines.js'
+import { checkWindowsPath } from './layout.js'
+import { windowsTeamPaths } from './windowsLayout.js'
 
 /** How long after one try the owner's daemon may try again. */
 export const TEAM_REFRESH_RETRY_MS = 24 * 60 * 60_000
 
 export interface TeamRefreshDeps {
   config(): TeamConfig | null
-  status(path: string): TeamStatus | null
+  status(path: string): TeamStatus | null | Promise<TeamStatus | null>
   /** When this daemon last published the owner's relay (team/relay.ts), or null before it has. */
   publishedAt(): number | null
   /** The account's machines, from `GET /api/machines`: the team account of this Mac is among them. */
@@ -38,6 +40,8 @@ export interface TeamRefreshDeps {
   lastTry(): number | null
   remember(at: number): void
   now(): number
+  /** Which system's team account: this one's unless told. */
+  platform?: NodeJS.Platform
   log(line: string): void
 }
 
@@ -49,18 +53,34 @@ export function teamBuildStale(status: TeamStatus | null, publishedAt: number | 
   return installed.length > 0 && installed.every(({ engine }) => engines[engine].signedIn !== true && !engines[engine].relayed)
 }
 
+/**
+ * What the team account runs to update itself. On Windows its CLI lives in version folders that its updater writes and
+ * prunes, and the one `.harness\cli\current` names is the build in use (./windowsScript.ts): the version team.json names
+ * may be gone. Only the team account can read its profile, and the command runs as that account, so cmd.exe reads
+ * `current` there, as the team task does. In separate words with no space or quote in any, so the spawn joins them back
+ * into the very line cmd.exe parses (it quotes only a word that needs it).
+ */
+export function teamUpdateArgv(config: Pick<TeamConfig, 'node' | 'cli' | 'home'>, platform: NodeJS.Platform): string[] {
+  if (platform !== 'win32') return [config.node, config.cli, 'update', '--force']
+  const cli = windowsTeamPaths(checkWindowsPath(config.home, 'team home')).cli
+  const node = checkWindowsPath(config.node, 'team Node')
+  if (`${cli}${node}`.includes(' ')) throw new Error(`a path with a space cannot be handed to cmd.exe here: ${JSON.stringify(cli)}`)
+  return ['cmd.exe', '/d', '/v:on', '/c', 'set', '/p', `V=<${cli}\\current`, '&', node, `${cli}\\!V!\\cli.js`, 'update', '--force']
+}
+
 /** One look: updates the team account when its build is too old, at most once a day. Never throws. */
 export async function refreshTeamAccount(deps: TeamRefreshDeps): Promise<void> {
   try {
     const config = deps.config()
-    if (!config || !teamBuildStale(deps.status(config.statusFile), deps.publishedAt())) return
+    if (!config || !teamBuildStale(await deps.status(config.statusFile), deps.publishedAt())) return
     const last = deps.lastTry()
     if (last !== null && deps.now() - last < TEAM_REFRESH_RETRY_MS && deps.now() >= last) return
     const here = deps.machineId()
     const team = (await deps.machines()).find((m) => m.sessionKind === 'team' && m.hostMachineId === here)
     if (!team) return
+    const argv = teamUpdateArgv(config, deps.platform ?? process.platform)
     deps.remember(deps.now())
-    const answer = await deps.run(team.machineId, [config.node, config.cli, 'update', '--force'], config.home)
+    const answer = await deps.run(team.machineId, argv, config.home)
     deps.log(answer.ok
       ? 'team: the Harness Team account was on a build without this Mac\'s subscriptions; updating it'
       : `team: could not update the Harness Team account (${answer.error ?? 'no answer'}); trying again tomorrow`)

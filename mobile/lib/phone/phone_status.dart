@@ -31,7 +31,13 @@ PhoneMachineStatus phoneMachineStatusOf(MachineState machine) {
   // fail. The password is worth asking for once there is something to give it to, which is what the
   // desktop's "Offline · Link required" already says.
   if (machine.nodeOnline == false) return PhoneMachineStatus.offline;
-  if (machine.needsLink) return PhoneMachineStatus.needsPassword;
+  // Its key not in the account's log yet ([MachineState.awaitingKey]): late, not locked. It comes
+  // in by itself once the key lands; only a wait that runs out asks for its password.
+  if (machine.needsLink) {
+    return machine.awaitingKey
+        ? PhoneMachineStatus.connecting
+        : PhoneMachineStatus.needsPassword;
+  }
   final answering =
       machine.connectionStatus == ConnectionStatus.connected &&
       machine.agentLoadStatus != AgentLoadStatus.loading;
@@ -45,6 +51,12 @@ bool phoneAccountSaysOnline(String? status) =>
       'running' || 'online' || 'connected' || 'ready' => true,
       _ => false,
     };
+
+/// Whether this phone can open [machine]'s terminals now: one it has, linked,
+/// and not reported offline — the rule the terminal search draws "Offline" by
+/// (`phone_search_catalog.dart`). A machine not heard from yet counts.
+bool phoneMachineOpensTerminals(MachineState? machine) =>
+    machine != null && !machine.needsLink && machine.nodeOnline != false;
 
 /// Whether [machine] is away for real: offline by its socket's word, and the account's own record
 /// agrees.

@@ -17,6 +17,11 @@ import { createHash } from 'node:crypto'
  * What the TTL costs: a token revoked at the SSO keeps working HERE for at most that long. Only a
  * positive answer is remembered — a rejected token is asked about again every time — and an entry
  * never outlives the token's own `exp`.
+ *
+ * While the profile service cannot answer (down, slow, its circuit open), a token this process validated within
+ * `staleGraceMs` past its TTL keeps working, so an SSO outage does not sign out everyone who is already working. Only
+ * this process' own entries, only for errors `servesStale` accepts, never past the token's `exp`, and a token the
+ * service rejects is forgotten at once.
  */
 
 export interface CachedSsoProfile {
@@ -47,11 +52,17 @@ interface Options {
    *  seconds; nobody signing in should wait that long for a cache. */
   sharedReadTimeoutMs?: number
   maxEntries?: number
+  /** How long past its TTL an entry may still answer while the profile service is unavailable. 0: never. */
+  staleGraceMs?: number
+  /** Whether a load error means the service could not answer (serve stale), not that it refused the token. */
+  servesStale?: (err: unknown) => boolean
 }
 
 interface Entry {
   profile: CachedSsoProfile
   expiresAt: number
+  /** The last moment it may answer while the profile service is unavailable. */
+  staleUntil?: number
 }
 
 /** The token's own expiry in ms, if it is a JWT that states one. Unverified: it can only SHORTEN the TTL. */
@@ -88,7 +99,9 @@ function promptly<T>(work: Promise<T>, ms: number): Promise<T | null> {
   })
 }
 
-export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => null, sharedReadTimeoutMs = 250, maxEntries = 50_000 }: Options): SsoProfileCache {
+export function createSsoProfileCache({
+  ttlMs, now = Date.now, shared = () => null, sharedReadTimeoutMs = 250, maxEntries = 50_000, staleGraceMs = 0, servesStale = () => false,
+}: Options): SsoProfileCache {
   const entries = new Map<string, Entry>()
   const inFlight = new Map<string, Promise<CachedSsoProfile>>()
 
@@ -96,26 +109,34 @@ export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => nu
   const keyOf = (token: string, autonomousEnv: string): string =>
     `sso:profile:${createHash('sha256').update(`${autonomousEnv}:${token}`).digest('hex')}`
 
-  const remember = (key: string, profile: CachedSsoProfile, expiresAt: number): void => {
+  const remember = (key: string, profile: CachedSsoProfile, expiresAt: number, tokenExpiry: number): void => {
     if (entries.size >= maxEntries && !entries.has(key)) {
       const oldest = entries.keys().next().value
       if (oldest !== undefined) entries.delete(oldest)
     }
-    entries.set(key, { profile, expiresAt })
+    const staleUntil = staleGraceMs > 0 ? Math.min(expiresAt + staleGraceMs, tokenExpiry) : undefined
+    entries.set(key, { profile, expiresAt, ...(staleUntil !== undefined && staleUntil > expiresAt ? { staleUntil } : {}) })
   }
 
-  const fill = async (key: string, expiresAt: number, load: () => Promise<CachedSsoProfile>): Promise<CachedSsoProfile> => {
+  const fill = async (key: string, expiresAt: number, tokenExpiry: number, load: () => Promise<CachedSsoProfile>, stale?: Entry): Promise<CachedSsoProfile> => {
     const store = shared()
     if (store) {
       // A store that is down — or merely slow — is a cache miss, not an authentication failure.
       const hit = parseEntry(await promptly(store.get(key), sharedReadTimeoutMs))
       if (hit && hit.expiresAt > now()) {
-        remember(key, hit.profile, Math.min(hit.expiresAt, expiresAt))
+        remember(key, hit.profile, Math.min(hit.expiresAt, expiresAt), tokenExpiry)
         return hit.profile
       }
     }
-    const profile = await load()
-    remember(key, profile, expiresAt)
+    let profile: CachedSsoProfile
+    try {
+      profile = await load()
+    } catch (err) {
+      if (stale?.staleUntil !== undefined && stale.staleUntil > now() && servesStale(err)) return stale.profile
+      entries.delete(key)
+      throw err
+    }
+    remember(key, profile, expiresAt, tokenExpiry)
     // Not awaited: the token is already proved, and a hung store must not hold the answer hostage.
     if (store) void Promise.resolve().then(() => store.set(key, JSON.stringify({ ...profile, expiresAt }), expiresAt - now())).catch(() => { /* best effort */ })
     return profile
@@ -123,17 +144,20 @@ export function createSsoProfileCache({ ttlMs, now = Date.now, shared = () => nu
 
   return {
     resolve(token, autonomousEnv, load) {
-      const expiresAt = Math.min(now() + ttlMs, tokenExpiresAt(token) ?? Infinity)
+      const tokenExpiry = tokenExpiresAt(token) ?? Infinity
+      const expiresAt = Math.min(now() + ttlMs, tokenExpiry)
       if (expiresAt <= now()) return load()
 
       const key = keyOf(token, autonomousEnv)
       const entry = entries.get(key)
       if (entry && entry.expiresAt > now()) return Promise.resolve(entry.profile)
-      if (entry) entries.delete(key)
+      // An expired entry stays only as long as it could still answer during an outage.
+      const stale = entry?.staleUntil !== undefined && entry.staleUntil > now() ? entry : undefined
+      if (entry && !stale) entries.delete(key)
 
       const pending = inFlight.get(key)
       if (pending) return pending
-      const filling = fill(key, expiresAt, load).finally(() => { inFlight.delete(key) })
+      const filling = fill(key, expiresAt, tokenExpiry, load, stale).finally(() => { inFlight.delete(key) })
       inFlight.set(key, filling)
       return filling
     },

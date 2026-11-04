@@ -1,15 +1,17 @@
 import { PrismaClient, type Prisma } from '@prisma/client'
 import { env } from '../config/env.js'
-import { logger } from '../utils/logger.js'
+import { POOL_DEFAULTS, withPoolDefaults } from './databaseUrl.js'
+import { withQueryStats } from './queryStats.js'
 import { metrics, withQueryTiming } from './metrics.js'
 
 // The Prisma CLI (db push) reads env("DATABASE_URL"); keep it in sync for any manual run.
 process.env.DATABASE_URL ??= env.DATABASE_URL
 
-// Every query is timed into prisma_query_duration_seconds; one over 100 ms is logged (lib/metrics.ts).
-export const prisma = withQueryTiming(new PrismaClient({
-  datasources: { db: { url: env.DATABASE_URL } },
-}), metrics)
+// Every query is timed for the per-minute `db by shape` log (lib/queryStats.ts, DB roadmap Phase 1) and into
+// prisma_query_duration_seconds (lib/metrics.ts).
+export const prisma = withQueryTiming(withQueryStats(new PrismaClient({
+  datasources: { db: { url: withPoolDefaults(env.DATABASE_URL, POOL_DEFAULTS) } },
+})), metrics)
 
 /** "Not soft-deleted" filter for Machine findMany where-clauses. Mongo-Prisma gotcha: legacy
  *  rows have NO `deletedAt` field and `{deletedAt: null}` matches only an explicit null, so the
@@ -23,10 +25,5 @@ export const machineAlive: Prisma.MachineWhereInput = { OR: [{ deletedAt: null }
  * counter added to an existing collection needs a one-time raw `$set` backfill for legacy rows
  * before any code increments it (see lib/db/migrate.ts backfillMachinePresenceTurnsStarted). */
 
-const gracefulShutdown = async () => {
-  logger.info('Disconnecting Prisma client...')
-  await prisma.$disconnect().catch(() => { /* ignore */ })
-}
-
-process.on('SIGINT', gracefulShutdown)
-process.on('SIGTERM', gracefulShutdown)
+// No signal handler here: each entry point disconnects in its own shutdown, the API only after its drain (server.ts),
+// so requests it still serves while draining keep their database.

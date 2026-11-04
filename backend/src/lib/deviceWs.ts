@@ -44,6 +44,7 @@ import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { AppError } from '../errors/index.js'
 import type { Machine } from '@prisma/client'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
+import { markCpuKind } from './selfProfile.js'
 import {
   VoiceQuotaExceededError,
   voiceQuotaService,
@@ -390,7 +391,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
   // the picker (or short of `device_hello`) it would otherwise never be pinged and a half-open drop would
   // never be reaped — leaving presence green, the MQTT bridge open and this relay's timers running.
   // The device pings US every 15s, so it earns a much shorter silence deadline than a browser.
-  const releaseLiveness = trackSocketLiveness(device, DEVICE_IDLE_DEADLINE_MS)
+  const releaseLiveness = trackSocketLiveness(device, 'device', DEVICE_IDLE_DEADLINE_MS)
   // Multi-attach: the device is a `commander` on ALL the user's machines at once — ONE per-user socket
   // holding N per-machine commander clients, keyed by machineId. Each machine's node then sees commander>0 and
   // runs its recap, so a background machine's turn-done can badge the device. `activeMachineId` is the ONE
@@ -1249,6 +1250,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     },
   )
   device.on('message', (raw: RawData, isBinary: boolean) => {
+    markCpuKind(isBinary ? 'device-ws binary' : 'device-ws text')
     if (isBinary) {
       if (voiceActive) {
         const buf = raw as Buffer
@@ -1273,6 +1275,9 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     if (msg.type === 'voice_end') { void finishVoice(); return }
     if (msg.type === 'voice_resume') { void handleVoiceResume(msg); return }
     if (msg.type === 'device_hello') { handleHello(msg); return }
+    // Presence for us alone: any inbound frame already refreshed this socket's liveness (trackSocketLiveness).
+    // Relayed, it reached a machine that refuses it as plaintext and logged that every 15 s.
+    if (msg.type === 'ping') return
     inbox.enqueue(msg)
   })
   device.on('close', closeBoth)

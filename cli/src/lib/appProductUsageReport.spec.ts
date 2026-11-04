@@ -85,7 +85,7 @@ it('drops names this contract does not know yet, says so once, and refuses every
 })
 
 it('announces vocabulary 6 including first-arrival, invite and existing Add Phone names', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(6)
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(6)
   for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
     expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
   }
@@ -103,7 +103,7 @@ it('announces vocabulary 6 including first-arrival, invite and existing Add Phon
 })
 
 it('forwards returning offers, every skip reason and every pairing source in vocabulary 6', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(6)
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(6)
   const metrics = [
     ...['started', 'ok', 'cancelled', 'unknown', 'under_1s', 'over_1m'].map(x => `ui_desktop_phone_offer_returning_${x}`),
     ...['has_phone', 'no_device_list', 'already_shown', 'stopped', 'cap_reached', 'not_signed_in',
@@ -114,4 +114,11 @@ it('forwards returning offers, every skip reason and every pairing source in voc
     const report = { ...native, counters: { [metric]: 1 } }
     expect(appProductUsageReport(report), metric).toEqual(report)
   }
+})
+
+it('forwards Import agent outcomes in vocabulary 7 (task #2379)', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(7)
+  const report = { ...native, counters: Object.fromEntries(['started', 'ok', 'failed', 'cancelled', 'unknown', 'over_1m']
+    .map(measure => [`ui_desktop_agent_import_${measure}`, 1])) }
+  expect(appProductUsageReport(report)).toBe(report)
 })

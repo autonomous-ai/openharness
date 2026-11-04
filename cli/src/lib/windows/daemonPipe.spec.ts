@@ -52,6 +52,13 @@ describe('the daemon over its Windows pipe', () => {
     expect(await daemonPipe(pipeDir(), port, alive)).toBeNull()
   })
 
+  // A Harness Team account holds the configured port, so the daemon is given another, which `daemonPort` hands every command.
+  it('is found by the port the daemon was given, as well as the one it was configured with', async () => {
+    const { dir, pipe } = await windowsDaemon((_req, res) => res.end('{}'))
+    expect((await daemonPipe(dir, 24567, alive))?.pipe).toBe(pipe)
+    expect(await daemonPipe(dir, 24567, { alive: () => false })).toBeNull()
+  })
+
   it('answers status over the pipe, and nothing for an answer without the proof', async () => {
     const { dir, port } = await windowsDaemon((_req, res) => res.end(JSON.stringify({ machineId: 'account-a' })))
     expect(await localDaemonStatus(dir, port, options)).toEqual({ machineId: 'account-a' })
@@ -60,7 +67,9 @@ describe('the daemon over its Windows pipe', () => {
     expect(foreign).toBeNull()
   })
 
-  it('makes control calls over the pipe, falls back to TCP only where nothing is there, and never after an unproven answer', async () => {
+  // Audit W1 (docs/security/2026-11-02-team-account-windows.md): with nothing on the pipe it fell back to TCP, which the Team
+  // account's daemon, started at boot, can hold. Now it fails there as a daemon that is down.
+  it('makes control calls over the pipe, never TCP: not with nothing there, not after an unproven answer', async () => {
     let got = ''
     const { dir, port, pipe } = await windowsDaemon((req, res) => {
       got = `${req.method} ${req.url} ${req.headers['x-adapter-local']}`
@@ -73,15 +82,13 @@ describe('the daemon over its Windows pipe', () => {
     const over = await call()
     expect(await over.json()).toEqual({ ok: true })
     expect(got).toBe('POST /api/pair 1')
-    expect(tcp).not.toHaveBeenCalled()
-    // No pipe to reach: as on every other OS.
-    expect(await (await call({ pipe: async () => null })).json()).toEqual({ tcp: true })
-    expect(await (await call({ platform: 'darwin' })).json()).toEqual({ tcp: true })
-    // A recorded pipe nothing listens on any more.
+    // No pipe to reach, or a recorded pipe nothing listens on any more: the daemon is down.
+    await expect(call({ pipe: async () => null })).rejects.toThrow('fetch failed')
     const gone = pipeName(pipeDir())
-    expect(await (await call({ pipe: async () => ({ pipe: gone, token: randomBytes(32) }) })).json()).toEqual({ tcp: true })
-    expect(tcp).toHaveBeenCalledTimes(3)
+    await expect(call({ pipe: async () => ({ pipe: gone, token: randomBytes(32) }) })).rejects.toThrow('fetch failed')
     await expect(call({ pipe: async () => ({ pipe, token: randomBytes(32) }) })).rejects.toBeInstanceOf(PipeUnproven)
-    expect(tcp).toHaveBeenCalledTimes(3)
+    expect(tcp).not.toHaveBeenCalled()
+    // Elsewhere the call is the transport's: here the test's stand-in for it.
+    expect(await (await call({ platform: 'darwin' })).json()).toEqual({ tcp: true })
   })
 })

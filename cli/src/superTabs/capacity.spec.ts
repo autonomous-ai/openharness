@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { admission, quotaOf, readCapabilities } from './capacity.js'
+import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, startRequirements, USED_UP_WINDOW } from './capacity.js'
 const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['/dev/test'], quotaRequired: false }
 it('uses the destination filesystem and reports missing tools/devices without executing commands', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 25, memoryTotalBytes: 1000, memoryUsedBytes: 300 })),
@@ -36,7 +36,9 @@ it('keeps unknown quota distinct from unused quota and honors all limiting windo
   const capacity = { resources: { cpuPercent: 95, memoryTotalBytes: 1000, memoryUsedBytes: 950, projectDiskFreeBytes: 10 }, tools: {}, devices: {} }
   const result = admission(capacity, { installed: true }, quota, requirements)
   expect(result.allowed).toBe(false)
-  expect(result.reasons).toHaveLength(6)
+  // CPU, memory, disk, the tool and the device; the used-up weekly window is information (project instructions, phase 4).
+  expect(result.reasons).toHaveLength(5)
+  expect(result.unknown).toContain(USED_UP_WINDOW)
   expect(admission({}, { installed: true, signedIn: false }, quotaOf({}, 'codex', false), requirements).reasons).not.toContain('The selected agent engine is not signed in on this machine.')
   expect(admission({}, {}, quotaOf({}, 'claude', false), { ...requirements, quotaRequired: true }).reasons).toContain('The requested subscription allowance could not be verified.')
 })
@@ -54,4 +56,63 @@ it('distinguishes a missing tool from a failed probe and keeps the failure detai
   expect(unverified.toolProbeErrors).toEqual({ git: 'interactive shell timed out' })
   expect(admission(unverified, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, devices: [] }).reasons)
     .toEqual(expect.arrayContaining([expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/)]))
+})
+it('says how much memory is free and how much a start needs, in GiB', () => {
+  const GiB = 1024 ** 3
+  const capacity = { resources: { cpuPercent: 10, memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - 1.85 * GiB, projectDiskFreeBytes: 500 }, tools: { git: true }, devices: {} }
+  expect(admission(capacity, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, memoryBytes: 2 * GiB, devices: [] }).reasons)
+    .toEqual(['Not enough free memory: 1.8 GiB free, 2 GiB needed.'])
+})
+
+// Ken's MacBook Pro showed no Claude allowance while Claude agents ran there (2026-10-28). Every way the reading can fail
+// now says why, in words that name no account, token or plan.
+it('says why an allowance is unknown, for each way its reading fails', () => {
+  const reply = (claude: Record<string, unknown>) => ({ providers: [{ provider: 'claude', account: 'k', ...claude }] })
+  expect(quotaUnknownReason({}, 'claude', false)).toBe('The allowance reader on this machine did not answer.')
+  expect(quotaUnknownReason({ error: 'USAGE_READ_FAILED' }, 'claude', false)).toBe('The allowance reader on this machine did not answer.')
+  expect(quotaUnknownReason(reply({ outcome: 'signedOut' }), 'claude', false)).toBe('No subscription sign-in is stored on this machine.')
+  expect(quotaUnknownReason(reply({ outcome: 'signedOut', message: 'Claude session expired — run claude to sign in again' }), 'claude', false))
+    .toBe('The stored sign-in has expired; it renews the next time the engine runs here.')
+  expect(quotaUnknownReason(reply({ outcome: 'unreachable' }), 'claude', false)).toBe('Anthropic could not be reached.')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 429, body: { error: {} } }), 'claude', false))
+    .toBe('Anthropic is limiting how often the allowance can be read.')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 401 }), 'claude', false)).toBe('Anthropic refused the stored sign-in.')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 403 }), 'claude', false)).toBe('Anthropic refused the stored sign-in.')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 503 }), 'claude', false)).toBe('Anthropic answered with an error (HTTP 503).')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: null } }), 'claude', false))
+    .toBe('Anthropic answered without usage windows.')
+  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'unreachable' }] }, 'codex', false)).toBe('OpenAI could not be reached.')
+  // A Harness Team account spends its owner's subscription through the owner's relay; its own home holds no sign-in.
+  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'signedOut' }] }, 'codex', true))
+    .toBe("This account runs on its owner's subscription; its allowance is read on the owner's machine.")
+  // A readable allowance has no reason.
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 5 } } }), 'claude', false)).toBeNull()
+})
+it('admits a Product Manager, Buddy or template start on a busy CPU, as a routed Builder start, while memory, disk and pressure still refuse (Diego, 10-30)', () => {
+  const GiB = 1024 ** 3
+  // What the backend sends for a PM and a Buddy (leadStart.ts LEAD_REQUIREMENTS, buddies.ts BUDDY_REQUIREMENTS).
+  const pmOrBuddy = { memoryBytes: 2 * GiB, diskBytes: GiB, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
+  const busy = { resources: { cpuPercent: 91.4, memoryTotalBytes: 32 * GiB, memoryUsedBytes: 16 * GiB, projectDiskFreeBytes: 100 * GiB }, tools: { git: true }, devices: {} }
+  for (const wanted of [pmOrBuddy, START_REQUIREMENTS, startRequirements({ tools: [], devices: [] })]) {
+    expect(admission(busy, { installed: true }, quotaOf({}, 'claude', false), wanted)).toMatchObject({ allowed: true, reasons: [] })
+    // An unknown CPU reading does not refuse either; memory, disk and critical pressure still do.
+    expect(admission({ ...busy, resources: { ...busy.resources, cpuPercent: null } }, { installed: true }, quotaOf({}, 'claude', false), wanted).allowed).toBe(true)
+    expect(admission({ ...busy, resources: { ...busy.resources, memoryUsedBytes: 31 * GiB } }, { installed: true }, quotaOf({}, 'claude', false), wanted).reasons)
+      .toEqual([expect.stringMatching(/memory/i)])
+    expect(admission({ ...busy, resources: { ...busy.resources, projectDiskFreeBytes: 1 } }, { installed: true }, quotaOf({}, 'claude', false), wanted).reasons)
+      .toEqual([expect.stringMatching(/Project disk space/)])
+    expect(admission({ ...busy, resources: { ...busy.resources, memoryPressure: 'critical' } }, { installed: true }, quotaOf({}, 'claude', false), wanted).reasons)
+      .toEqual(['The machine reports critical memory pressure.'])
+  }
+})
+
+// Project instructions, phase 4: quota is information, not a gate. A start on a used-up account goes ahead and waits for
+// the reset there; the admission says so.
+it('starts on a used-up account and says so', () => {
+  const used = quotaOf({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 100 } } }] }, 'claude', false)
+  const fine = { resources: { cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 500 }, tools: {}, devices: {} }
+  const result = admission(fine, { installed: true }, used, { ...requirements, tools: [], devices: [] })
+  expect(result).toMatchObject({ allowed: true, reasons: [] })
+  expect(result.unknown).toContain(USED_UP_WINDOW)
+  expect(USED_UP_WINDOW).toMatch(/used-up usage window/)
 })

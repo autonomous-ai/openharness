@@ -16,6 +16,7 @@ import type { TerminalBinaryClear } from '../terminalBinary.js'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
+import { declaredClientQuery } from '../declaredClient.js'
 
 type Frame = Record<string, unknown>
 
@@ -60,6 +61,8 @@ export class RelaySessionCrypto {
   }
 
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
+  /** The far process's group-key epoch, as its welcome or its last rekey named it ('' before either). */
+  get groupEpoch(): string { return this.epoch }
   get terminalP2pVersion(): number { return this.p2pVersion }
   get viewerForwardingVersion(): number { return this.viewerVersion }
   /** The daemon opens every sealed type and refuses STRICT_DOWN_TYPES unsealed (its welcome said so). */
@@ -209,7 +212,7 @@ export async function connectWithPassword(opts: {
    *  machineId gets pinned back by a target that understands it, so the link works both ways. */
   self?: { machineId?: string; kind: 'machine' | 'viewer'; label?: string }
 }): Promise<PwConnectResult> {
-  const url = `${opts.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(opts.autonomousEnv)}`
+  const url = `${opts.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(opts.autonomousEnv)}&${declaredClientQuery('link')}`
   const ws = new WebSocket(url, [opts.accessToken])
   const sid = C.newPairId()
   const sidB64 = C.b64e(sid)

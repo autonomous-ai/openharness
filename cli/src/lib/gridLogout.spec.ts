@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let root = ''
 let runtimeDir = ''
-const saved = { PATH: process.env.PATH, HOME: process.env.HOME, HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN, ADAPTER_RUNTIME_DIR: process.env.ADAPTER_RUNTIME_DIR }
+const saved = { PATH: process.env.PATH, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN, ADAPTER_RUNTIME_DIR: process.env.ADAPTER_RUNTIME_DIR }
 
 async function load() {
   vi.resetModules()
@@ -45,8 +45,9 @@ beforeEach(() => {
   process.env.PATH = join(root, 'empty-bin')
   // The resolver's last resort is `$HOME/.local/bin/grid` (gridExec.ts) — on a developer's machine
   // that is a REAL grid, and the "no child" case below ran its real `grid logout` before HOME was
-  // pointed here. Every case now sees a home with nothing under it.
+  // pointed here. Every case now sees a home with nothing under it (`USERPROFILE` is Windows' HOME).
   process.env.HOME = root
+  process.env.USERPROFILE = root
   delete process.env.HARNESS_GRID_BIN
 })
 

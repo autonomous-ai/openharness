@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayAccount } from '../core/api.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { createAccountHttp, retryAfterMs } from './accountHttp.js'
+import { VERSION } from '../version.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -39,7 +40,8 @@ describe('account HTTP in the gateway', () => {
     expect(await api.backend('PATCH', '/api/machines/local', { name: 'Renamed' })).toEqual({ status: 409, body: { error: { code: 'CONFLICT' } } })
     expect(request).toHaveBeenCalledWith('https://backend.invalid/api/machines/local', expect.objectContaining({
       method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }),
-      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
+      // The CLI and its version, so a refusal the backend logs names its sender (#2675; backend superTabs/refusalLog.ts).
+      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'x-harness-client': `cli/${VERSION}`, 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
     }))
     await api.backend('GET', '/api/auth/me')
     expect(request.mock.calls[1][1]?.headers).not.toHaveProperty('content-type')
@@ -82,6 +84,52 @@ describe('account HTTP in the gateway', () => {
     }
   })
 
+  // Scholes 10-29: the banner read "Could not reach the Harness backend (). Check the connection and try again."
+  it.each([
+    ['an empty cause message', Object.assign(new Error('fetch failed'), { cause: { message: '' } }), 'fetch failed'],
+    ['no message at all', new Error(''), null],
+    ['a blank cause and message', Object.assign(new Error('  '), { cause: { message: ' ' } }), null],
+  ])('never shows empty parentheses when the failure has %s', async (_name, failure, reason) => {
+    const { api, request } = setup()
+    request.mockRejectedValueOnce(failure)
+    const answer = await api.backend('GET', '/api/auth/me')
+    expect(answer.body).toMatchObject({ error: { message: reason === null
+      ? 'Could not reach the Harness backend. Check the connection and try again.'
+      : `Could not reach the Harness backend (${reason}). Check the connection and try again.` } })
+  })
+
+  // Diego 10-29: a body that timed out after the headers, or HTML from a proxy, read as '200 OK, {}'.
+  it('answers a body that times out after the headers as a timeout, not as an empty success', async () => {
+    const { api, request } = setup()
+    for (const name of ['TimeoutError', 'AbortError']) {
+      const stalled = new ReadableStream({ start(controller) { controller.error(new DOMException('late', name)) } })
+      request.mockResolvedValueOnce(new Response(stalled, { status: 200 }))
+      expect(await api.backend('GET', '/api/auth/me')).toEqual({ status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT',
+        message: 'The Harness backend did not answer GET /api/auth/me within 20s. Try again in a moment.' } } })
+    }
+  })
+  // A refusal must keep its status whatever its body does: 401/403 sign out, 426 asks for an update, 429/5xx carry Retry-After.
+  it('keeps a refusal\'s status with {} when its body stalls or is not JSON', async () => {
+    const { api, request } = setup()
+    const stalled = (status: number, headers: Record<string, string> = {}) => new Response(
+      new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status, headers })
+    request.mockResolvedValueOnce(stalled(401))
+    expect(await api.backend('GET', '/api/auth/me')).toEqual({ status: 401, body: {} })
+    request.mockResolvedValueOnce(stalled(503, { 'retry-after': '30' }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 503, body: {}, retryAfterMs: 30_000 })
+    request.mockResolvedValueOnce(new Response('<html>Upgrade Required</html>', { status: 426 }))
+    expect(await api.backend('GET', '/api/super-tabs/hosts/machine-1/changes?full=1')).toEqual({ status: 426, body: {} })
+  })
+  it('answers a success whose body is not JSON as a bad response, and an empty one as {}', async () => {
+    const { api, request } = setup()
+    request.mockResolvedValueOnce(new Response('<html>Bad gateway</html>', { status: 200 }))
+    expect(await api.backend('GET', '/api/auth/me')).toMatchObject({ status: 502, body: { success: false, error: { code: 'BACKEND_BAD_RESPONSE' } } })
+    request.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 204, body: {} })
+    request.mockResolvedValueOnce(new Response('', { status: 200, headers: { 'content-length': '0' } }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 200, body: {} })
+  })
+
   it('keeps the guest list local and never asks for a token', async () => {
     const { api, account, request, changed } = setup()
     account({ machineId: null, signIn: null })
@@ -109,6 +157,33 @@ describe('account HTTP in the gateway', () => {
     expect(await restarted.machines(true)).toMatchObject({ status: 200, body: { data: { ...body.data, stale: true } } })
     request.mockResolvedValueOnce(response({}, 503))
     expect((await restarted.machines()).status).toBe(503)
+  })
+
+  // Task #2598: the relay answers a machine this list shows offline without a dial (lib/remoteRelay.ts).
+  it('tells which machines the backend\'s list shows offline, and nothing on a sign-out', async () => {
+    const offline = vi.fn()
+    const { deps, request } = setup()
+    const api = createAccountHttp({ ...deps, offline })
+    request.mockResolvedValueOnce(response({ success: true, data: { machines: [
+      { machineId: 'off', computerId: 'a', status: 'stopped' }, { machineId: 'gone', computerId: 'b', status: 'offline' },
+      { machineId: 'on', computerId: 'c', status: 'running' }, { machineId: 'new', computerId: 'd', status: 'provisioning' },
+    ] } }))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(['off', 'gone'])
+    request.mockResolvedValueOnce(response({}, 401))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(null)
+  })
+
+  it('asks the list again only when it is older than asked, sharing a read in flight', async () => {
+    const { api, request } = setup()
+    await api.machines()
+    expect(request).toHaveBeenCalledTimes(1)
+    await api.recheck(60_000)
+    expect(request).toHaveBeenCalledTimes(1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await Promise.all([api.recheck(1), api.recheck(1)])
+    expect(request).toHaveBeenCalledTimes(2)
   })
 
   it('does not serve stale rows across accounts or after a real refusal', async () => {

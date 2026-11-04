@@ -7,6 +7,7 @@ import 'package:harness/devices/devices_harness_controller.dart';
 import 'package:harness/devices/devices_screen.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 
@@ -29,7 +30,9 @@ void main() {
           'configuration': {'engine': 'codex'},
         },
       ];
-      (server.state['conversations'] as List)[0]['agentIds'] = ['pm'];
+      (server.state['conversations'] as List)[0]
+        ..['agentIds'] = ['pm']
+        ..['leadId'] = 'pm';
       final c = server.controller();
       await c.refresh();
       c.setDraft('lead', 'Keep discussing this project.');
@@ -117,7 +120,9 @@ void main() {
           ? find.byType(TextField).last
           : field;
       await tester.enterText(composer, 'An unfinished project message');
-      await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+      await tester.tap(find.byKey(const ValueKey('super-manage')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-manage-tab-devices')));
       await tester.pumpAndSettle();
       expect(f.app.activeSwarm, same(tab));
       expect(f.app.swarms.map((s) => s.id), before);
@@ -136,7 +141,7 @@ void main() {
       final center = tester.getRect(find.byType(PaneGrid));
       expect(bounds.left, closeTo(center.left, 2));
       expect(bounds.right, closeTo(center.right, 2));
-      await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+      await tester.tap(find.byKey(const ValueKey('super-manage-tab-devices')));
       await tester.pumpAndSettle();
       expect(tab.panes.single, same(viewer));
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
@@ -144,6 +149,8 @@ void main() {
       expect(c.devicesSelected, isFalse);
       expect(f.app.activeSwarm, same(tab));
       expect(find.byType(DevicesScreen), findsNothing);
+      // A project's row leaves Manage for its chat.
+      expect(find.byType(SuperTabManageTabs), findsNothing);
       expect(find.text('An unfinished project message'), findsOneWidget);
       expect(
         f.connection.calls.where(

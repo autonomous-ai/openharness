@@ -2,7 +2,7 @@
  * `harness help agents`: all an agent needs on one screen (docs/design/2026-10-15-agent-experience.md, part 4). Each
  * verb's line is its own usage's first line, so this cannot name an option the verb does not take.
  */
-import { CLOSE_USAGE, EXIT, PS_USAGE, SHOW_USAGE, SPAWN_LIMITS, TELL_USAGE, WAIT_USAGE, WHOAMI_USAGE } from './commands.js'
+import { CLOSE_USAGE, EXIT, PS_USAGE, SHOW_USAGE, SPAWN_LIMITS, TELL_USAGE, WAIT_USAGE, WATCH_USAGE, WHOAMI_USAGE } from './commands.js'
 import { NEW_USAGE } from '../lib/newCommand.js'
 import { SEND_USAGE } from '../messages/command.js'
 import { outsideCaller } from './model.js'
@@ -23,6 +23,7 @@ export function agentsHelp(): string {
     `        ${synopsis(NEW_USAGE)}`,
     `        ${synopsis(WAIT_USAGE)}`,
     `        ${synopsis(SHOW_USAGE)}`,
+    `        ${synopsis(WATCH_USAGE)}   a line each time it changes, for a program that follows it`,
     `        ${synopsis(CLOSE_USAGE)}`,
     `        ${synopsis(TELL_USAGE)}   more work for one you started, while the person allows it`,
     `        ${sendLine()}`,

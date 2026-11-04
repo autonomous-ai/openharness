@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 import type { RegisteredSession } from '../lib/registry.js'
-import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
+import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 import { FleetRouter } from '../services/fleetRouter.js'
@@ -28,14 +28,14 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadRecap, SaidOnCard, SayOptions, SwarmCard } from '../superTabs/cards.js'
 import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
-import type { MachineFleet } from './machineFleet.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 
@@ -108,13 +108,20 @@ export interface CableHostWiring {
   /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
   swarmCardsWanted?: (on: boolean) => void
   /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?: (tabId: string, leadId: string) => Promise<LeadRecap | null>
+  swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
-  swarmCardOpen?: (session: string, tabId: string, leadId: string | null) => void
-  /** Words for a Lead that runs here, posted as the person in its Swarm chat; false when the harness leads no project. */
-  swarmSay?: (harnessId: string, text: string) => Promise<boolean>
+  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
+  /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
+  swarmCardSide?: (tabId: string, side: CardSide) => void
+  /** A swarmThread dial left the thread on its face: the conversation whose thread the window should close, or null when it had none. */
+  swarmThreadLeave?: (tabId: string, leadId: string, chat?: CardChat) => Promise<{ tabId: string; conversationId: string } | null>
+  /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
+   *  `refused` with the backend's reason when it refused the post. */
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
-  superTabSelected?: (superTabId: string, projectId: string) => void
+  superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide) => void
+  /** The dial's thread opened (a root) or closed (null) beside a conversation of a Swarm tab, with no project pick. */
+  superTabThread?: (superTabId: string, conversationId: string, threadRoot: string | null) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -145,6 +152,25 @@ function isPlaceholder(id: string): boolean {
   return id.startsWith('cable:')
 }
 
+/** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
+const RELEASE_KEEP_MS = 30 * 60_000
+/**
+ * The wait before trying the plug-in's lane again, doubling to the cap: the same backoff as the lane's own reconnect
+ * (deviceLink.ts reconnectLater). Diego, 11-01: a first open lost to a refresh that failed in a network blip was
+ * never tried again, and the wheel had no other Mac until the dial was replugged.
+ */
+const LANE_RETRY_MS = 1_000
+const LANE_RETRY_MAX_MS = 30_000
+
+/** How a pick of a machine ended: `code` is the daemon's, `message` is shown to a person (CableHost.selectMachine). */
+type MachinePick = { ok: true } | { ok: false; code: string; message: string }
+
+/** A pick on its way; `replaced` when it took over from another still running. */
+interface PendingPick { machineId: string; replaced: boolean; done: Promise<MachinePick> }
+
+/** A pick's end that says no about that machine and nothing about the lane (deviceFleet.ts select and codeFor). */
+const REFUSALS = new Set(['NEEDS_LINK', 'UNKNOWN_MACHINE', 'NOT_YOURS', 'BILLING'])
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -161,6 +187,23 @@ export class DaemonCableHost implements CableHost {
    * remember across a daemon restart either — that is when the registry reloads anyway.
    */
   private selected = ''
+  /**
+   * The newest pick still on its way to a remote machine, until it settles. Only it may move `selected`: a pick waiting on
+   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego's Buddy, 11-02). Which pick it is, not
+   * just which machine: going away and back to one machine looks the same by name, and the first landing says nothing of
+   * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
+   * choice at the lane (deviceLink.ts select).
+   */
+  private pending: PendingPick | null = null
+
+  /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
+  private plugIn = 0
+  /** The next try at the lane for this plug-in, after an open that failed; cleared by an unplug or a replug. */
+  private laneRetry: NodeJS.Timeout | null = null
+  private laneTries = 0
+
+  /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
+  private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
 
   /**
    * `fleet` is a bare lane to the other machines for this host's own router — its tests give it one. A
@@ -221,9 +264,15 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.listMachines())
   }
 
-  async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  /** The machine the newest pick is still on its way to, or '' when none is. */
+  pendingPick(): string {
+    return this.pending?.machineId ?? ''
+  }
+
+  async selectMachine(machineId: string): Promise<MachinePick> {
     if (machineId === this.localId()) {
       this.selected = machineId
+      this.pending = null
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
@@ -234,8 +283,44 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    const selected = await this.viaFleet((r) => r.select(machineId))
-    if (!selected.ok) return selected
+    // A second pick of the machine already on its way shares its one answer, as the lane's select does. Each caller may be
+    // the only one left to tell the dial: an app follow's answer is dropped once a newer focus arrives (reviews of #2504).
+    if (this.pending?.machineId === machineId) return this.pending.done
+    // Set before the select starts, so a fleet call that fails at once still finds it and clears it.
+    const entry: PendingPick = { machineId, replaced: this.pending !== null, done: null as unknown as Promise<MachinePick> }
+    this.pending = entry
+    entry.done = this.pickMachine(entry)
+    return entry.done
+  }
+
+  private async pickMachine(entry: PendingPick): Promise<MachinePick> {
+    const { machineId } = entry
+    let selected: Awaited<ReturnType<FleetRouting['select']>>
+    let newest = false
+    try {
+      selected = await this.viaFleet((r) => r.select(machineId))
+    } finally {
+      newest = this.pending === entry
+      if (newest) this.pending = null
+    }
+    if (!newest) {
+      // Replaced, however it ended: a machine the person left failing late is no news to them. A newer pick of this same
+      // machine (away and back) speaks for this one too: the dial waits on that machine, and an error would end its wait.
+      if (this.pending?.machineId === machineId) return this.pending.done
+      if (this.selected === machineId) return { ok: true }
+      return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
+    }
+    if (!selected.ok) {
+      // The lane may still be where the pick this one replaced took it: the fleet refuses an unlinked machine before asking
+      // the lane, so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews
+      // of #2504). Said again now, as picking this machine again would not: it is already selected. Only for a refusal, and
+      // only with a pick replaced: that one was still running, so the lane is up. Any other failure may be the lane's end (a
+      // revoke, a 4403, an unplug), and telling it anything would dial straight back past what it decided.
+      if (entry.replaced && REFUSALS.has(selected.code)) {
+        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
+      }
+      return selected
+    }
     this.selected = machineId
     return { ok: true }
   }
@@ -250,22 +335,64 @@ export class DaemonCableHost implements CableHost {
    */
   onDialAttached(): void {
     this.wiring.watching?.(true)
+    this.stopLaneRetry()
+    this.laneTries = 0
+    this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+  }
+
+  private openLane(plugIn: number, line: string): void {
     if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
-    // cable, and everything it shows on this computer is served in-process.
+    // cable, and everything it shows on this computer is served in-process. A retry stops here too.
     if (this.wiring.signedIn?.() === false) {
       this.wiring.log('cable: dial on the wire — this computer only (not signed in)')
       return
     }
-    this.wiring.log('cable: dial on the wire — opening the cloud lane')
+    this.wiring.log(line)
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      const online = await this.viaFleet((r) => r.online())
-      if (!online.ok) throw new Error(online.message)
+      let online: { ok: true } | { ok: false; message: string; code?: string }
+      try {
+        online = await this.viaFleet((r) => r.online())
+      } catch (err) {
+        online = { ok: false, message: (err as Error).message }
+      }
+      if (!online.ok) {
+        // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
+        // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
+        if (online.code === LANE_SESSION_OVER) {
+          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          return
+        }
+        this.wiring.log(`cable: could not open the lane (${online.message})`)
+        // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
+        // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
+        // ran two backoffs against a backend that is down (security review 2 on #2483).
+        if (online.code === LANE_TOKEN_UNAVAILABLE) this.retryLane(plugIn)
+        return
+      }
+      // Unplugged or replugged while it opened: the newer plug-in announces for itself, and an unplugged dial is
+      // nowhere to announce.
+      if (plugIn !== this.plugIn) return
+      this.laneTries = 0
       await this.announceSelection()
     })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
+  }
+
+  private retryLane(plugIn: number): void {
+    if (plugIn !== this.plugIn) return
+    this.stopLaneRetry()
+    const delay = Math.min(LANE_RETRY_MAX_MS, LANE_RETRY_MS * 2 ** Math.min(this.laneTries++, 5))
+    this.laneRetry = setTimeout(() => {
+      this.laneRetry = null
+      if (plugIn === this.plugIn) this.openLane(plugIn, 'cable: trying the cloud lane again')
+    }, delay)
+  }
+
+  private stopLaneRetry(): void {
+    if (this.laneRetry) { clearTimeout(this.laneRetry); this.laneRetry = null }
   }
 
   /**
@@ -279,12 +406,13 @@ export class DaemonCableHost implements CableHost {
    */
   private async announceSelection(): Promise<void> {
     if (!this.viaFleet((r) => r.hasLane())) return
-    const machineId = this.selectedMachine()
+    const machineId = this.pendingPick() || this.selectedMachine()
     if (isPlaceholder(machineId)) return
     const selected = await this.viaFleet((r) => r.select(machineId))
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
-    // one machine the cable can vouch for on its own.
-    if (!selected.ok) this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
+    // one machine the cable can vouch for on its own. Replaced by a newer select is not a failure: that
+    // one tells the backend where the dial is.
+    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
   }
 
   /**
@@ -296,6 +424,8 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.plugIn++
+    this.stopLaneRetry()
     this.wiring.watching?.(false)
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()
@@ -409,13 +539,13 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (superTabs/inCore/cards.ts replays). */
-  private cards: SwarmCard[] = []
+  private cards: SwarmCard[] | null = null
 
   setSwarmCards(items: SwarmCard[]): void {
     this.cards = items
   }
 
-  swarmCards(): SwarmCard[] {
+  swarmCards(): SwarmCard[] | null {
     return this.cards
   }
 
@@ -423,27 +553,50 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardsWanted?.(on)
   }
 
-  swarmCardRecap(tabId: string, leadId: string): Promise<LeadRecap | null> {
-    return this.wiring.swarmCardRecap?.(tabId, leadId) ?? Promise.resolve(null)
+  swarmCardRecap(tabId: string, leadId: string, chat: CardChat = false): Promise<LeadRecap | null> {
+    return this.wiring.swarmCardRecap?.(tabId, leadId, chat) ?? Promise.resolve(null)
   }
 
-  swarmCardOpen(session: string, tabId: string, leadId: string | null): void {
-    this.wiring.swarmCardOpen?.(session, tabId, leadId)
+  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat: CardChat = false): void {
+    this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
   }
 
-  swarmSay(harnessId: string, text: string): Promise<boolean> {
-    return this.wiring.swarmSay?.(harnessId, text) ?? Promise.resolve(false)
+  swarmCardSide(tabId: string, side: CardSide): void {
+    this.wiring.swarmCardSide?.(tabId, side)
   }
 
-  superTabSelected(superTabId: string, projectId: string): void {
-    this.wiring.superTabSelected?.(superTabId, projectId)
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false, options?: SayOptions): Promise<SaidOnCard> {
+    if (options) return this.wiring.swarmSay?.(harnessId, text, chat, chatId, reviewed, options) ?? Promise.resolve({ said: false })
+    const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
+    return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
   }
 
-  /** The active tab when it is a Swarm with an open project; `fromDevice` when the announce was a device's own pick. */
-  activeSwarmProject(): { superTabId: string; projectId: string; fromDevice: boolean } | null {
+  swarmThreadLeave(tabId: string, leadId: string, chat: CardChat = true): Promise<{ tabId: string; conversationId: string } | null> {
+    return this.wiring.swarmThreadLeave?.(tabId, leadId, chat) ?? Promise.resolve(null)
+  }
+
+  superTabSelected(superTabId: string, projectId: string, chat?: CardSide): void {
+    if (chat) this.wiring.superTabSelected?.(superTabId, projectId, chat)
+    else this.wiring.superTabSelected?.(superTabId, projectId)
+  }
+
+  superTabThread(superTabId: string, conversationId: string, threadRoot: string | null): void {
+    this.wiring.superTabThread?.(superTabId, conversationId, threadRoot)
+  }
+
+  /**
+   * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
+   * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
+   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
+   * conversation it has open there, when the window names one, which the round dial's face follows, and `threadRoot` the
+   * thread whose pane is on screen beside it.
+   */
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
-    return app && tab?.superTabId && tab.projectId ? { superTabId: tab.superTabId, projectId: tab.projectId, fromDevice: app.fromDevice === true } : null
+    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
+      ...(tab.conversationId ? { conversationId: tab.conversationId, ...(tab.threadRoot ? { threadRoot: tab.threadRoot } : {}) } : {}),
+      fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {
@@ -725,9 +878,19 @@ export class DaemonCableHost implements CableHost {
    * only thing that could plug in, and a brick the moment a Pro could: its ESP32-P4 cannot run an
    * ESP32-S3 image, and the cable that would let us put it right is the firmware that just stopped.
    */
-  async firmwareFor(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
+  async firmwareFor(runningVersion: string, key: string, keepalive = false): Promise<{ version: string; image: Buffer; sha256: string } | null> {
     if (env.CABLE_FW_DISABLE) return null
-    const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+    // A plugged-in dial greets every fifteen seconds, and each greeting read the manifest from GCS: 240 GETs
+    // an hour per device, with the pets' sync waiting behind each one (2026-10-29). A keepalive is answered
+    // from the last good read for half an hour, so a new image reaches a dial already plugged in within that;
+    // a new dial, image or connection reads at once. A failed read is not kept, so the next greeting retries.
+    const kept = this.releases.get(key)
+    let release = keepalive && kept && Date.now() - kept.at < RELEASE_KEEP_MS ? kept.release : null
+    if (!release) {
+      release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+      if (release) this.releases.set(key, { release, at: Date.now() })
+      else this.releases.delete(key)
+    }
     if (!release || !shouldOffer(runningVersion, release.version)) return null
     const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'), key)
     if (!image) return null

@@ -3,6 +3,7 @@ import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createForgetSession, type ForgetDeps } from './forget.js'
 import { createRelaunchMarks } from '../transcripts/relaunch.js'
+import { createShortTurnGuard, type ShortTurnGuard } from '../turns/shortTurnGuard.js'
 
 // Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
 vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
@@ -13,7 +14,12 @@ function setup() {
     ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
     ['fresh', { agentId: 'fresh', sessionId: '', engine: 'claude' } as RegisteredSession],
   ])
+  // Both sessions held by the short-turn guard: ten back-to-back turns of a second each.
+  let at = 0
+  const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+  for (const session of ['s1', 'other']) for (let i = 0; i < 10; i++) { shortTurns.started(session, session); at += 1_000; shortTurns.ended(session) }
   const deps: ForgetDeps = {
+    shortTurns,
     registry: { resolve: vi.fn((id: string) => agents.get(id)), unbindSession: vi.fn(() => true), removeAgent: vi.fn(() => true), remove: vi.fn(() => true) },
     stoppedAgents: { save: vi.fn() },
     syncRecapPool: vi.fn(),
@@ -48,6 +54,9 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(deps.neverFoldedHistory.has(sessionId)).toBe(false)
   expect(deps.replayedFirstTurn.has(sessionId)).toBe(false)
   expect(deps.turnStartedAt.has('other')).toBe(true)
+  const shortTurns = deps.shortTurns as ShortTurnGuard
+  expect(shortTurns.holding(sessionId)).toBe(0)
+  expect(shortTurns.holding('other')).toBeGreaterThan(0)
   expect(deps.clearAgyIdleWatch).toHaveBeenCalledWith(sessionId)
   expect(deps.cursorDiscovery.remove).toHaveBeenCalledWith(sessionId)
   expect(deps.cursorSubagents.forget).toHaveBeenCalledWith(sessionId)

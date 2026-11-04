@@ -124,7 +124,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })
@@ -185,6 +185,27 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.unsubscribe).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(5_000)
     expect(t.backend).toHaveBeenCalledTimes(3)
+  })
+
+  // Spec 2026-11-02-poll-cost Part 4.5: every desk operation (a tab moved, renamed, opened) made every daemon read the
+  // experiments again (prod 2026-11-02: 127 a minute). A change to them publishes revision 0 (backend
+  // routes/experimentalSettings.ts); a desk operation publishes the desk's own revision.
+  it('a desk operation\'s desk_changed reads no experiments, a revision-0 one does', async () => {
+    vi.useFakeTimers()
+    const t = setup({ everyMs: null })
+    answer(account({}))
+    t.sync.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.backend).toHaveBeenCalledTimes(1)
+    t.notice({ type: 'desk_changed', revision: 7 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.backend).toHaveBeenCalledTimes(1)
+    answer(account({ agent_messages: true }))
+    t.notice({ type: 'desk_changed', revision: 0 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.backend).toHaveBeenCalledTimes(2)
+    expect(kept()).toEqual({ ...OFF, agentMessages: true })
+    t.sync.stop()
   })
 
   it('reads them again every five minutes when not told otherwise', async () => {

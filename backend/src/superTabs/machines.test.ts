@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, machineObservationSchema, servedLocalModels, type ContributedMachine } from './machines.js'
+import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, removalPreview, servedLocalModels, storedObservation, type ContributedMachine,
+  type MachineObservation } from './machines.js'
+import { owner, peer, richSwarm } from './read/fixture.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -11,6 +13,12 @@ it('accepts optional tool probe failures while preserving older observations', (
   const { receivedAt: _receivedAt, ...sent } = observation
   expect(machineObservationSchema.safeParse(sent).success).toBe(true)
   expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
+})
+
+it('takes the sessions its idle cleanup closed, bounded as the stopped ones are', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse({ ...sent, stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, closedHarnessIds: Array(1001).fill('a') }).success).toBe(false)
 })
 
 it('takes a model that is starting, and never counts it as served for a Builder', () => {
@@ -37,6 +45,16 @@ it('accepts the served models Builders are not offered, with why', () => {
   expect(machineObservationSchema.safeParse({ ...sent, refusedModels: Array(17).fill(refused) }).success).toBe(false)
 })
 
+it('accepts why an allowance is unknown, and a reading from before it', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: 'Anthropic is limiting how often the allowance can be read.' } }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: '' } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { claude: 'x'.repeat(301) } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: { 'Not An Engine': 'why' } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, quotaReasons: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`e${i}`, 'why'])) }).success).toBe(false)
+})
+
 it('accepts what a machine is ready for, and a reading from before it', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const readiness = { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: null, signedIn: null }],
@@ -48,6 +66,17 @@ it('accepts what a machine is ready for, and a reading from before it', () => {
   expect(machineObservationSchema.safeParse({ ...sent, readiness: { checkouts: [{ ...readiness.checkouts[0], folder: '../p1' }] } }).success).toBe(false)
   expect(machineObservationSchema.safeParse({ ...sent, readiness: { checkouts: Array(65).fill(readiness.checkouts[0]) } }).success).toBe(false)
   expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: [{ engine: 'claude', installed: 'yes', signedIn: null }] } }).success).toBe(false)
+})
+
+it('accepts each running agent’s token counts by model, counts only and bounded, and a reading from before them', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const opus = { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }
+  expect(machineObservationSchema.safeParse({ ...sent, harnessTokens: { h1: { 'claude-opus-5-5': opus, 'gpt-5.5-codex': opus } } }).success).toBe(true)
+  for (const harnessTokens of [{ h1: { 'two words': opus } }, { h1: { m: { ...opus, prompt: 'text' } } }, { h1: { m: { ...opus, input: -1 } } },
+    { h1: { m: { ...opus, output: 1.5 } } }, { h1: { m: { input: 1 } } }, { h1: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`m${i}`, opus])) },
+    Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`h${i}`, { m: opus }]))]) {
+    expect(machineObservationSchema.safeParse({ ...sent, harnessTokens }).success, JSON.stringify(harnessTokens).slice(0, 80)).toBe(false)
+  }
 })
 
 function setup(machine: Partial<ContributedMachine> = {}) {
@@ -178,4 +207,131 @@ it('keeps durable release receipts authoritative over stale observations and ret
   expect(machineSlots(f.state, pool)).toBe(0)
   f.state.harnessReservations = [{ machineId: 'host', harnessId: 'finished', generation: 'new-runtime', renewed: true }]
   expect(machineSlots(f.state, pool)).toBe(1)
+})
+
+describe('reported engine profiles', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const profile = { engine: 'claude', id: '0123456789abcdef', label: 'Work', leftPercent: 40, resetsAt: '2026-11-02T10:00:00.000Z' }
+  const ok = (profiles: unknown) => machineObservationSchema.safeParse({ ...sent, profiles }).success
+
+  it('accepts up to 16 profiles and refuses a 17th', () => {
+    expect(ok(Array(16).fill(profile))).toBe(true)
+    expect(ok(Array(17).fill(profile))).toBe(false)
+    expect(ok([{ ...profile, leftPercent: null, resetsAt: null }])).toBe(true)
+  })
+  it('refuses a label with @, and any other malformed profile', () => {
+    expect(ok([{ ...profile, label: 'me@x.com' }])).toBe(false)
+    expect(ok([{ ...profile, label: '' }])).toBe(false)
+    expect(ok([{ ...profile, id: 'ABC' }])).toBe(false)
+    expect(ok([{ ...profile, engine: 'gemini' }])).toBe(false)
+    expect(ok([{ ...profile, leftPercent: 101 }])).toBe(false)
+    expect(ok([{ ...profile, extra: 1 }])).toBe(false)
+  })
+  it('keeps profiles of contributed engines only', () => {
+    const pool: ContributedMachine = { machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
+      cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false }
+    const kept = storedObservation(pool, { ...sent, profiles: [profile, { ...profile, engine: 'codex' }] } as MachineObservation,
+      { team: false, now: NOW, preparable: () => true })
+    expect(kept.profiles).toEqual([profile])
+  })
+})
+
+describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const pool = (extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId: 'host', name: 'Mac', contributorId: 'owner',
+    membershipGeneration: 'tab', generation: 'g1', cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false, ...extra })
+  const quota = (engine: string) => ({ engine, known: true, windows: [] })
+  const tokens = { opus: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }
+  const reading = (extra: Partial<MachineObservation> = {}): MachineObservation => ({ ...sent, runningHarnessIds: ['a'], stoppedHarnessIds: ['z'],
+    ...extra } as MachineObservation)
+  const stored = (extra: Partial<MachineObservation> = {}, at = NOW, preparable = (_id: string) => true) =>
+    storedObservation(pool(), reading(extra), { team: false, now: at, preparable })
+
+  it('keeps what a full report keeps: running sessions\' progress and tokens, its own preparing starts, contributed engines\' quotas', () => {
+    const kept = storedObservation(pool(), reading({ harnessProgress: { a: 5, b: 6 }, harnessTokens: { a: tokens, b: tokens },
+      preparingStartIds: ['s1', 's2'], quotas: [quota('claude'), quota('codex')], privacy: { mode: 'dedicated' } }),
+    { team: false, now: NOW, preparable: id => id === 's1' })
+    expect(kept).toMatchObject({ receivedAt: NOW, sessionKind: 'computer', harnessProgress: { a: 5 }, harnessTokens: { a: tokens },
+      preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
+    expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
+    // Only a team session's privacy check is kept.
+    expect(kept.privacy).toBeUndefined()
+    const team = storedObservation(pool(), reading({ privacy: { mode: 'dedicated' } }), { team: true, now: NOW, preparable: () => true })
+    expect(team).toMatchObject({ sessionKind: 'team', privacy: { mode: 'dedicated', seenAt: NOW } })
+  })
+
+  it('names a start preparing only when this machine launched it and it neither runs nor failed', () => {
+    const start = (extra: Record<string, unknown>) => ({ id: 's', request: { machineId: 'host' }, dispatched: true, ...extra }) as unknown as AgentStart
+    expect(preparableStart(start({}), 'host')).toBe(true)
+    expect(preparableStart(start({}), 'other')).toBe(false)
+    expect(preparableStart(start({ dispatched: false }), 'host')).toBe(false)
+    expect(preparableStart(start({ harnessId: 'h' }), 'host')).toBe(false)
+    expect(preparableStart(start({ error: 'failed' }), 'host')).toBe(false)
+  })
+
+  it('reads as the reading alone only when every decision it feeds is the same', () => {
+    const before = stored({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] })
+    const same = (extra: Partial<MachineObservation>) => readingOnly(before, stored({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'], ...extra }, NOW + 15_000))
+    // The reading alone: resources, quotas, tools, tokens, privacy, a later progress time, the same sets in another order.
+    expect(same({})).toBe(true)
+    expect(same({ resources: { ...sent.resources, cpuPercent: 90 }, tools: { git: true }, harnessTokens: { a: tokens } })).toBe(true)
+    expect(same({ harnessProgress: { a: 9 } })).toBe(true)
+    // Which stopped sessions its idle cleanup closed decides who may be assigned (closedAgents.ts sessionClosed, task #2744).
+    expect(same({ stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] })).toBe(false)
+    expect(readingOnly(stored({ stoppedHarnessIds: ['a'] }), stored({ stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] }))).toBe(false)
+    expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['b', 'a'] }))).toBe(true)
+    // A decision may differ.
+    expect(same({ runningHarnessIds: ['a', 'b'] })).toBe(false)
+    expect(same({ stoppedHarnessIds: [] })).toBe(false)
+    expect(same({ stoppedReservations: [{ harnessId: 'z', generation: 'g1' }] })).toBe(false)
+    expect(same({ preparingStartIds: [] })).toBe(false)
+    // Progress renews a worker's lease (liveness.ts reportRenewedAt): a map added or gone, an entry gone or earlier.
+    expect(same({ harnessProgress: undefined })).toBe(false)
+    expect(same({ harnessProgress: {} })).toBe(false)
+    expect(same({ harnessProgress: { a: 4 } })).toBe(false)
+    expect(readingOnly(stored({}), stored({ harnessProgress: { a: 5 } }))).toBe(false)
+    expect(readingOnly(undefined, before)).toBe(false)
+    // Sessions are compared as sets: a session repeated is not one that stayed.
+    expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['a', 'a'] }))).toBe(false)
+    // A reading from the other kind of session decides who may host the machine (store.ts teamByRecord).
+    const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
+    expect(readingOnly(before, team)).toBe(false)
+  })
+})
+
+it('names the default account the same way the CLI and Desktop do', () => {
+  expect(defaultProfileId('m', 'claude')).toBe('71dc90339553114c')
+})
+
+it('the removal preview names only the agents and projects its owner reads', () => {
+  const s = richSwarm(NOW)
+  s.contribute('host')
+  const secretTask = s.group('Private task title', s.secret)
+  const secretLead = s.state.projects!.find(project => project.id === s.secret)!.leadConversationId
+  const secretPm = s.add('hidden-pm-harness', secretLead, true)
+  const secretWorker = s.add('hidden-builder-harness', secretTask)
+  s.run({ type: 'work.assign', conversationId: secretTask, agentId: secretWorker })
+  s.edit(state => {
+    // The peer owns this machine but is not a member of the owner's private project.
+    const machine = state.machines!.find(item => item.machineId === 'host')!
+    machine.contributorId = peer.userId
+    machine.membershipGeneration = state.people.find(person => person.id === peer.userId)!.generation
+    // The public project's PM is elsewhere; the first PM on this machine is from the unreadable project.
+    state.agents.find(agent => agent.id === s.lead)!.machineId = 'elsewhere'
+    state.projects!.find(project => project.id === s.secret)!.repository = { machineId: 'host', cwd: '/private/repo', repositoryUrl: null }
+  })
+
+  const preview = removalPreview(s.state, peer, 'host')
+
+  expect(preview).toEqual({
+    blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." },
+    agents: [{ id: s.worker, name: 'worker-harness', projectName: 'Pilot', task: 'Web' }],
+    hiddenAgentCount: 2,
+    soleSourceProjects: [],
+    hiddenSoleSourceProjectCount: 1,
+  })
+  const response = JSON.stringify(preview)
+  for (const unreadable of [secretPm, secretWorker, 'hidden-pm-harness', 'hidden-builder-harness', 'Private task title', 'Secret', '/private/repo']) {
+    expect(response).not.toContain(unreadable)
+  }
 })

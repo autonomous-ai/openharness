@@ -29,7 +29,8 @@ import { formatNext, type NextStep } from './next.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath, type Pending, type Started, type Told } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
-import { TELL_OFF_TEXT } from '../messages/tell.js'
+import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
+import { NOT_ONE_TEXT, TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
@@ -66,7 +67,20 @@ ${ON_MACHINE}`
 export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--json] -- <words…>
 
 Says <words> to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer to the question it asked, or what to do next.
+To a harness in a pane, only when it is idle and the person allows it (harness settings programs-reply): more work,
+typed into it once its composer is free. Then wait for it (harness wait <name>) and read its answer (harness show <name>).
 The person's, or a program's acting for them; an agent does not answer for the person.
+${ON_MACHINE}`
+export const ROUTE_USAGE = `Usage: harness route [--machine <name>] [--send] [--json] -- <words…>
+
+Says which of a machine's harnesses in a pane <words> belong to, as the person's ⌘B does: one of them, or new work.
+With --send, words for an idle one are typed into it, as harness reply does; nothing is ever started. For a program
+acting for the person, while they allow it (harness settings programs-reply).
+--json answers {"decided":"session","id","name","machine","confidence","reason"} or {"decided":"new","reason"},
+and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING",…}. NOT_IDLE: it is still working
+on the last words or waits for the person. Wait for it (harness wait <name>) and send them with harness reply, or
+say so: never start new work for them, or a follow-up ("how is it going?") becomes a second harness.
+Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE).
 ${ON_MACHINE}`
 export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
 
@@ -80,6 +94,16 @@ Waits until each harness has stopped working, then prints its state. --any retur
 Exit status: 0 idle or closed by you, 3 one needs the person (a question or a permission), 4 one stopped or is gone,
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
+${ON_MACHINE}`
+export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> [--chars N] [--timeout 30m] [--json]
+
+Follows one harness and prints a line each time it changes: started, working, needs_person (its last words),
+done (its answer), idle (nothing asked of it), failed, stopped (with its last answer). With --json each line is one
+JSON object, for a program to read. The first line is how it stands now; the same state with new words is a new line.
+It looks every 3 s, as wait does. A cloud harness's state is its maker's: Devin Cloud says needs_person both when it
+asks and when it has only finished, so read the words and cloud.providerStatus.
+Exit status: 4 once it stops or is gone, 124 when --timeout passes. --timeout takes 90s, 30m, 2h; 0, the default,
+follows it as long as it lives.
 ${ON_MACHINE}`
 export const CLOSE_USAGE = `Usage: harness close [--machine <name>] <name> [--now] [--json]
 
@@ -95,8 +119,9 @@ and, if not, who can change that; how many of yours are open, and how many start
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, refused: 5, timeout: 124 } as const
 
 /** Not a failure: the caller may not do this. It should not retry; it tells the person or does the work itself.
- *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s: retried, they are refused the same. */
-export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING'])
+ *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s, `REPLY_OFF` is `harness reply`'s: retried, they are refused the
+ *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
+export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -328,6 +353,42 @@ const notStarted = (env: NodeJS.ProcessEnv, a: Asked, away: Away | null = null):
 
 interface Target { daemon: Daemon; frame: Frame; machineId: string; machine: string; yours: boolean; remote: boolean }
 
+/**
+ * Whether [t] is a harness the person started on this machine and the caller a Swarm session here (started by an agent with
+ * no starter on this machine): the shape of a person's Buddy passing their words to their own harness (#2626). Only a filter
+ * on what is asked: this machine decides from its own registry whether the caller is that person's Buddy, with their grant,
+ * and whose the harness is (messages/tell.ts `relayRefusal`). Never for another machine's harness.
+ */
+/** A Swarm session in its pane here (started by an agent, with no starter on this machine): a person's Buddy has this shape. */
+function swarmCaller(s: Setup, o: Opened): boolean {
+  const caller = o.caller
+  if (!caller || caller.outside || !s.pane) return false
+  const self = o.frames.find((f) => f.id === caller.agentId)
+  return self?.startedBy === 'agent' && !self.parentAgentId
+}
+
+/**
+ * The harness [name] means for a Swarm session here (security review 2 of #2626): one it started, by any part of its name
+ * among those alone, as `target` reads it; else a live harness the person started here, by its exact name or id. Anything
+ * else is one refusal that names no other harness, so a Buddy reads no list of the machine's harnesses from its answers.
+ */
+async function closedTarget(s: Setup, o: Opened, name: string): Promise<Target> {
+  const all = await list(o.daemon, true)
+  const mine: Opened = { ...o, frames: all.filter((f) => yoursOn(o, o.where.machineId, f.id)), stopped: true }
+  try { return await target(s, mine, name) } catch (error) { if (!(error instanceof AgentClientError) || error.code !== 'UNKNOWN_HARNESS') throw error }
+  const frame = named(all).find((f) => f.status !== 'stopped' && exactly(name)(f))
+  const t: Target | null = frame ? { daemon: o.daemon, frame, machineId: o.where.machineId, machine: o.machine, yours: false, remote: false } : null
+  if (!t || !relayable(s, o, t)) throw new AgentClientError('NOT_YOURS', NOT_ONE_TEXT)
+  return t
+}
+
+function relayable(s: Setup, o: Opened, t: Target): boolean {
+  const caller = o.caller
+  if (!caller || caller.outside || !s.pane || t.remote || t.machineId !== o.where.machineId || t.frame.location === 'cloud') return false
+  const self = o.frames.find((f) => f.id === caller.agentId)
+  return self?.startedBy === 'agent' && !self.parentAgentId && t.frame.startedBy !== 'agent' && !t.frame.parentAgentId && t.frame.id !== caller.agentId
+}
+
 /** A machine's harnesses by the names the verbs call them: a terminal is the person's, and an unnamed one is its id's start. */
 const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
 
@@ -526,6 +587,21 @@ export function formatRows(rows: Row[], now: number, on = 'this machine'): strin
   return [head, ...lines].join('\n')
 }
 
+/** What each live one of [rows] is about: the person's last asks and the summaries the daemon keeps (no transcript
+ *  read), filled in place. `harness ps`'s, and what `harness route` shows the router. */
+async function describeRows(daemon: Daemon, rows: Row[]): Promise<void> {
+  await Promise.all(rows.filter((r) => r.state !== 'stopped').slice(0, ABOUT_MAX).map(async (row) => {
+    const recent = await daemon.request('agent_recent', { agentId: row.id, n: 3 }, 3_000).catch(() => null)
+    if (!recent || recent.error) return
+    const asks = (Array.isArray(recent.asks) ? recent.asks as unknown[] : []).filter((a): a is string => typeof a === 'string' && !!a.trim()).slice(0, 2)
+    const about = (Array.isArray(recent.events) ? recent.events as Array<Record<string, unknown>> : [])
+      .map((e) => (typeof e.recap === 'string' && e.recap ? e.recap : typeof e.text === 'string' ? e.text : '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean).slice(0, 3).map((t) => clip(t, 140))
+    if (asks.length) row.asks = asks.map((a) => clip(asSaid(a).replace(/\s+/g, ' ').trim(), 200))
+    if (about.length) row.about = about.join(' / ')
+  }))
+}
+
 export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(PS_USAGE, deps, wantsJson, argv, async (s) => {
     const { names, flags, machine } = words(argv, { '--all': 'flag', '--json': 'flag' })
@@ -541,17 +617,7 @@ export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promi
         : { daemon: o.daemon, machineId: o.where.machineId, machine: o.machine }
       const frames = line ? await list(line, all) : o.frames
       const rows = rowsOf(frames, { machineId: on.machineId, machine: on.machine, caller: o.caller, ledger: o.ledger, now: s.now(), all })
-      // What each is about: the summaries the daemon keeps (no transcript read), for the live ones.
-      await Promise.all(rows.filter((r) => r.state !== 'stopped').slice(0, ABOUT_MAX).map(async (row) => {
-        const recent = await on.daemon.request('agent_recent', { agentId: row.id, n: 3 }, 3_000).catch(() => null)
-        if (!recent || recent.error) return
-        const asks = (Array.isArray(recent.asks) ? recent.asks as unknown[] : []).filter((a): a is string => typeof a === 'string' && !!a.trim()).slice(0, 2)
-        const about = (Array.isArray(recent.events) ? recent.events as Array<Record<string, unknown>> : [])
-          .map((e) => (typeof e.recap === 'string' && e.recap ? e.recap : typeof e.text === 'string' ? e.text : '').replace(/\s+/g, ' ').trim())
-          .filter(Boolean).slice(0, 3).map((t) => clip(t, 140))
-        if (asks.length) row.asks = asks.map((a) => clip(asSaid(a).replace(/\s+/g, ' ').trim(), 200))
-        if (about.length) row.about = about.join(' / ')
-      }))
+      await describeRows(on.daemon, rows)
       // Asked for and not started yet: listed by the name it was given, and what it waits for.
       rows.unshift(...o.asked.filter((a) => !away || a.row.creation.machineId === away.machineId).map((a): Row => ({
         name: askedName(a), id: a.row.creation.creationId, agent: engineName(a.row.creation.engine),
@@ -725,6 +791,11 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
   })
 }
 
+/** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
+const PROBE_CHARS = 80
+/** The words as a turn's ask holds them, to compare: spaces as one, since a pane may wrap or trim them. */
+const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
 // ── reply ──────────────────────────────────────────────────────────────────────────────────────────
 
 export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
@@ -738,27 +809,155 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     const o = await opened(s)
     let t: Target | null = null
     try {
-      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a cloud harness: tell them what it asked.')
+      const notYours = () => new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
+      if (o.orphan) throw notYours()
+      // A person's Buddy here passes their words to their own idle harness here, as its machine allows (#2626): found by
+      // its exact name (closedTarget). Any other agent is refused before anything is looked up.
+      if (o.caller) {
+        if (away || !swarmCaller(s, o)) throw notYours()
+        t = await closedTarget(s, o, names[0])
+        if (t.yours) throw notYours()
+        return await relayReply(s, o, t, text, flags.has('--json'))
+      }
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
-      // A terminal agent is typed to in its pane; nothing here sends it words.
-      if (t.frame.location !== 'cloud') throw new UsageError(`${name} is not a cloud harness: open it in Harness to talk to it.`)
-      const reply = await t.daemon.request('cloud_send', { agentId: t.frame.id, text }, 3 * 60_000)
-      if (typeof reply.error === 'string') throw new AgentClientError(reply.error, typeof reply.detail === 'string' && reply.detail ? reply.detail : `${name} did not take it (${reply.error}).`)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
       const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
+      if (t.frame.location !== 'cloud') {
+        // A harness in a pane, for a program acting for the person (messages/replyLocal.ts): the machine it runs on
+        // checks the switch and that it is idle again, and queues the words in its mailbox.
+        if (!readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', REPLY_OFF_TEXT)
+        const reply = await replyInPane(s, o, t, text, at)
+        const failed = reply.state === 'failed'
+        const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.` : `${name} has it: typed once its composer is free.`
+        s.out(flags.has('--json') ? JSON.stringify({ ok: !failed, name, id: t.frame.id, message: reply.id ?? null, state: reply.state ?? 'queued', effect, next: failed ? [] : next })
+          : [`${name} on ${t.machine}: ${effect}`, failed ? null : formatNext(next)].filter(Boolean).join('\n'))
+        return failed ? EXIT.failed : EXIT.ok
+      }
+      const reply = await t.daemon.request('cloud_send', { agentId: t.frame.id, text }, 3 * 60_000)
+      if (typeof reply.error === 'string') throw new AgentClientError(reply.error, typeof reply.detail === 'string' && reply.detail ? reply.detail : `${name} did not take it (${reply.error}).`)
       s.out(flags.has('--json') ? JSON.stringify({ ok: true, name, id: t.frame.id, next }) : `Sent to ${name}.\n${formatNext(next)}`)
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
 }
 
-// ── tell ───────────────────────────────────────────────────────────────────────────────────────────
+/** `harness reply` from a person's Buddy (#2626): asked of this machine from its pane, as a tell is; the machine checks it is their
+ *  Buddy and their harness, the switch, and that the harness is idle. */
+async function relayReply(s: Setup, o: Opened, t: Target, text: string, json: boolean): Promise<number> {
+  if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
+  const name = t.frame.name ?? t.frame.id.slice(0, 8)
+  let reply: Record<string, unknown>
+  try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'tell', pane: s.pane, machine: o.machine, agentId: t.frame.id, text, reply: true }, 20_000) } catch (error) {
+    if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+    throw error
+  }
+  const failed = reply.state === 'failed'
+  const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.` : `${name} has it: typed once its composer is free.`
+  s.out(json ? JSON.stringify({ ok: !failed, name, id: t.frame.id, message: reply.id ?? null, state: reply.state ?? 'queued', effect }) : `${name} on ${t.machine}: ${effect}`)
+  return failed ? EXIT.failed : EXIT.ok
+}
 
-/** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
-const PROBE_CHARS = 80
-/** The words as a turn's ask holds them, to compare: spaces as one, since a pane may wrap or trim them. */
-const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
+/** How long words sent from here still steer a follow-up that names nothing ("and the other one?") to where they went. */
+const ROUTE_LAST_MS = 10 * 60_000
+
+/**
+ * Where a program's words for the person go (docs/design/2026-10-09-auto-router.md): the machine's harnesses in a
+ * pane, as `ps` reads them, are shown to this machine's router (services/router.ts `route_decide`), which picks one or
+ * says new work. With `--send` the words go into the one picked, idle only, as `harness reply` types them; new work is
+ * the caller's to start (`harness new`). The same caller policy as `reply` (#1628): the person's switch, never an agent.
+ */
+export function routeCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(ROUTE_USAGE, deps, wantsJson, argv, async (s) => {
+    const dash = argv.indexOf('--')
+    const { names, flags, machine } = words(dash < 0 ? argv : argv.slice(0, dash), { '--json': 'flag', '--send': 'flag' })
+    const text = dash < 0 ? '' : argv.slice(dash + 1).join(' ').trim()
+    if (names.length) throw new UsageError('harness route takes no name: it picks one. Give the words after --.')
+    if (!text) throw new UsageError('Give the words after --: harness route -- <words>')
+    const away = await machineOf(s, s.where(), machine)
+    const o = await opened(s)
+    let line: Daemon | null = null
+    try {
+      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person, or a program acting for them, routes words to a harness. To give more work to one you started, use harness tell.')
+      if (!readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', REPLY_OFF_TEXT)
+      const on = away
+        ? { daemon: line = await s.open(o.where, away.machineId), machineId: away.machineId, machine: away.label }
+        : { daemon: o.daemon, machineId: o.where.machineId, machine: o.machine }
+      // Harnesses in a pane only: a cloud one is answered with `harness reply`, through its maker.
+      const frames = (line ? await list(line, false) : o.frames).filter((f) => isAgent(f) && f.location !== 'cloud')
+      const rows = rowsOf(frames, { machineId: on.machineId, machine: on.machine, caller: o.caller, ledger: o.ledger, now: s.now(), all: false })
+        .filter((r) => r.state !== 'stopped')
+      await describeRows(on.daemon, rows)
+      // Where this computer's last words for that machine went, within ROUTE_LAST_MS. This computer's ledger, so one
+      // lamp's follow-up is never steered by another's.
+      const told = o.ledger.lastToldBy({ machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, on.machineId)
+      const last = told && s.now() - told.at <= ROUTE_LAST_MS && rows.some((r) => r.id === told.told.agentId)
+        ? { id: told.told.agentId, agoMs: s.now() - told.at } : undefined
+      const sessions = rows.map((r) => ({ id: r.id, name: r.name, asks: r.asks ?? [], ...(r.about ? { about: r.about } : {}) }))
+      // Asked of THIS machine's router, as the owner over its own socket: the list is the caller's, so a harness on
+      // another computer is routed to as well as one here.
+      const verdict = await o.daemon.request('route_decide', { text, sessions, projects: [], agents: [], ...(last ? { last } : {}) }, 15_000)
+      if (typeof verdict.error === 'string') {
+        throw new AgentClientError('ROUTER_UNAVAILABLE', `Nothing was decided (${verdict.error}${typeof verdict.detail === 'string' ? `: ${verdict.detail}` : ''}). Act on nothing, or ask the person.`)
+      }
+      const row = verdict.decided === 'session' ? rows.find((r) => r.id === verdict.id) : undefined
+      if (!row) {
+        const reason = typeof verdict.reason === 'string' ? verdict.reason : 'new work'
+        s.out(flags.has('--json') ? JSON.stringify({ decided: 'new', reason }) : `New work: ${reason}. Start it with harness new.`)
+        return EXIT.ok
+      }
+      const decided = { decided: 'session', id: row.id, name: row.name, machine: on.machine,
+        confidence: typeof verdict.p === 'number' ? Math.round(verdict.p * 1000) / 1000 : null,
+        reason: typeof verdict.trace === 'string' ? verdict.trace : null }
+      if (!flags.has('--send')) {
+        s.out(flags.has('--json') ? JSON.stringify(decided) : `${row.name} on ${on.machine}${decided.confidence !== null ? ` (${Math.round(decided.confidence * 100)}%)` : ''}`)
+        return EXIT.ok
+      }
+      const frame = frames.find((f) => f.id === row.id)!
+      const at = onAway(addressOf({ machineId: '', agentId: row.id, name: row.name, engine: '' }), away)
+      let sent: Record<string, unknown>
+      try {
+        const reply = await replyInPane(s, o, { daemon: on.daemon, frame, machineId: on.machineId, machine: on.machine, yours: false, remote: !!line }, text, at)
+        sent = reply.state === 'failed'
+          ? { error: 'FAILED', detail: typeof reply.reason === 'string' ? reply.reason : 'its machine refused it' }
+          : { state: typeof reply.state === 'string' ? reply.state : 'queued', message: reply.id ?? null }
+      } catch (error) {
+        if (!(error instanceof AgentClientError) || !['NOT_IDLE', 'NOT_RUNNING'].includes(error.code)) throw error
+        sent = { error: error.code, detail: error.message }
+      }
+      const next: NextStep[] = sent.error === 'NOT_IDLE'
+        ? [{ run: step(s.env, 'wait', at), when: 'it is still on the last words: then send these with harness reply. Never start new work for them' }]
+        : sent.error ? [] : [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
+      s.out(flags.has('--json') ? JSON.stringify({ ...decided, sent, next })
+        : [`${row.name} on ${on.machine}: ${sent.error ? `not sent (${sent.detail})` : 'has it: typed once its composer is free.'}`, formatNext(next)].filter(Boolean).join('\n'))
+      return EXIT.ok
+    } finally { line?.close(); o.daemon.close() }
+  })
+}
+
+/**
+ * [text] typed into [t], a harness in a pane, for the person (messages/replyLocal.ts): only while it is idle. The
+ * machine it runs on checks the switch and that it is idle again, and queues the words in its mailbox; its answer is
+ * returned. `harness reply`'s and `harness route --send`'s, which check the person's switch first.
+ */
+async function replyInPane(s: Setup, o: Opened, t: Target, text: string, at: string): Promise<Record<string, unknown>> {
+  const name = t.frame.name ?? t.frame.id.slice(0, 8)
+  const state = stateOf(t.frame)
+  if (state === 'stopped' || state === 'offline') throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
+  if (state !== 'idle') throw new AgentClientError('NOT_IDLE', state === 'working' ? `${name} is working. Wait for it to finish (${step(s.env, 'wait', at)}), then reply.` : `${name} is not idle: it may be waiting for the person (a question or a permission). Only they answer that.`)
+  let reply: Record<string, unknown>
+  try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'reply_local', machine: o.machine, agentId: t.frame.id, text }, 20_000) } catch (error) {
+    if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+    throw error
+  }
+  // As a tell's: `wait` and `show` then hold the answer to the work before until it has taken these words, and the
+  // next `harness route` from here takes it for where the last words went (`Ledger.lastToldBy`).
+  try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
+  catch { /* `wait` then reads its last answer as it would without the line */ }
+  return reply
+}
+
+// ── tell ───────────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * More work for a harness the caller started (messages/tell.ts): asked of the machine it runs on, which checks its own
@@ -783,10 +982,11 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         throw new AgentClientError('NOT_YOURS', 'harness tell runs in the pane of the harness that started the one it tells. To talk to a harness yourself, open it in Harness.')
       }
       if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
-      t = await target(s, o, names[0], away)
+      // A Swarm session finds what it did not start by its exact name only (closedTarget): a Buddy is given no list.
+      t = swarmCaller(s, o) && !away ? await closedTarget(s, o, names[0]) : await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness tell reaches a harness in a pane only.`)
-      if (!t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
+      if (!t.yours && !relayable(s, o, t)) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
       // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts).
       if (stateOf(t.frame) === 'stopped') {
         throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
@@ -804,7 +1004,8 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       try { o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
       catch { /* `wait` then reads its last answer as it would without the line */ }
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
-      const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: `until it has answered; then read it: ${step(s.env, 'show', at)}` }]
+      // A Buddy passing words on reads no answer (its guard runs neither wait nor show): nothing to suggest.
+      const next: NextStep[] = t.yours ? [{ run: step(s.env, 'wait', at), when: `until it has answered; then read it: ${step(s.env, 'show', at)}` }] : []
       const state = typeof reply.state === 'string' ? reply.state : 'queued'
       const failed = state === 'failed'
       const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.`
@@ -826,7 +1027,9 @@ const TOLD_HOLD_MS = 10 * 60_000
  * then its last answer is to the work before: the answer a `wait` returned at once, and wrongly, after a tell.
  */
 function toldPending(o: Opened, t: Target, turn: { ask?: string | null } | null, now: number): Told | null {
-  const told = o.caller ? o.ledger.toldBy(o.caller, { machineId: t.machineId, agentId: t.frame.id }) : null
+  // No caller is the person, or a program acting for them: their replies are recorded as the person's (`harness reply`).
+  const by = o.caller ?? (o.orphan ? null : { machineId: o.where.machineId, agentId: PERSON_AGENT_ID })
+  const told = by ? o.ledger.toldBy(by, { machineId: t.machineId, agentId: t.frame.id }) : null
   if (!told || now - told.at > TOLD_HOLD_MS) return null
   if (turn?.ask && flat(turn.ask).includes(told.probe)) return null
   // Another machine's clock: a minute either way says nothing, and the turn's words still do.
@@ -1031,6 +1234,130 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       o.daemon.close()
     }
   })
+}
+
+// ── watch ──────────────────────────────────────────────────────────────────────────────────────────
+
+/** What `harness watch` says changed. `idle`: idle with nothing asked of it, so nothing done to report. */
+export type WatchEvent = 'started' | 'working' | 'needs_person' | 'done' | 'idle' | 'failed' | 'stopped'
+
+/** A cloud harness's maker state as an event; none while it is unknown. */
+const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
+  starting: 'started', installing: 'started', working: 'working', 'needs-input': 'needs_person', idle: 'done', failed: 'failed', stopped: 'stopped',
+}
+
+/** The state a harness here is in at each event: its frame says only working or idle, the screen the rest. */
+const EVENT_STATES: Record<WatchEvent, State> = {
+  started: 'starting', working: 'working', needs_person: 'needs-input', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
+}
+
+/**
+ * Follows one harness by `wait`'s looks (the maker's state for a cloud harness; the daemon's activity, then the screen,
+ * then two idle looks on one turn for one here) and prints each change once: what a program driving something from a
+ * harness (lampOS's lamp, which moves and speaks as Devin works) polled `show` for and worked out itself. Read-only:
+ * the same requests over the same local socket, so an older harnessd answers it as it answers `wait`.
+ */
+export function watchCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(WATCH_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--chars': 'value', '--timeout': 'value', '--json': 'flag' })
+    if (names.length !== 1) throw new UsageError(names.length ? 'Watch one harness.' : 'Name the harness to watch.')
+    const chars = flags.has('--chars') ? Number(flags.get('--chars')) : DEFAULT_CHARS
+    if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
+    const timeoutMs = flags.has('--timeout') ? parseDuration(String(flags.get('--timeout'))) : 0
+    const json = flags.has('--json')
+    const away = await machineOf(s, s.where(), machine)
+    const o = await opened(s)
+    let t: Target | null = null
+    try {
+      t = await target(s, o, names[0], away)
+      const h = t
+      const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
+      /** The last line printed, as its event and the turn it spoke of: a line is printed only when this changes. */
+      let printed: string | null = null
+      let sawWorking = false
+      let idle: { turn: string; looks: number } | null = null
+      /** The turn read for the frame last seen changed (its `updatedAt`): read again only when that moves. */
+      let turnFor: { updatedAt: string; turn: Awaited<ReturnType<typeof readLastTurn>> } | null = null
+      const turnNow = async () => {
+        const updatedAt = h.frame.updatedAt ?? ''
+        if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h, 1) }
+        return turnFor.turn
+      }
+      const keyOf = (turn: Awaited<ReturnType<typeof readLastTurn>>): string => (turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : '')
+      /** This round's event: null while it can't be told yet (an idle look not yet confirmed, a state unknown). */
+      const look = async (): Promise<WatchEvent | null> => {
+        const frame = (await list(h.daemon, false)).find((f) => f.id === h.frame.id)
+        if (!frame) {
+          const stopped = (await list(h.daemon, true)).find((f) => f.id === h.frame.id)
+          if (stopped) h.frame = stopped
+          return 'stopped'
+        }
+        h.frame = frame
+        if (frame.status === 'stopped') return 'stopped'
+        if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
+        const screen = frame.activity?.state === 'working' ? 'working' : await inspect(h)
+        if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; return 'working' }
+        if (screen === 'needs-input') { idle = null; return 'needs_person' }
+        if (screen === null && stateOf(frame) !== 'idle') { idle = null; return null }
+        // Idle on two looks in a row with the same last turn, as `wait` decides it (#1180).
+        const turn = await turnNow()
+        if (toldPending(o, h, turn, s.now())) { idle = null; return 'working' }
+        const key = keyOf(turn)
+        const looks = idle && idle.turn === key ? idle.looks + 1 : 1
+        idle = { turn: key, looks }
+        if (looks < 2) return null
+        if (sawWorking || turn?.answered) return 'done'
+        const age = frame.createdAt ? s.now() - Date.parse(frame.createdAt) : Infinity
+        return age > STARTING_MS && looks >= QUIET_LOOKS ? 'idle' : null
+      }
+      for (;;) {
+        const event = await look().catch((error) => {
+          // A round that timed out (its machine slow for a moment) is looked at again next round, as `wait` does.
+          if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
+          throw error
+        })
+        if (event) {
+          const said = event !== 'started' && event !== 'idle'
+          const turn = said ? await turnNow() : null
+          const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : keyOf(turn)}`
+          if (key !== printed) {
+            printed = key
+            printWatch(s, json, chars, h, event, turn)
+          }
+          if (event === 'stopped') return EXIT.stopped
+        }
+        if (s.now() >= deadline) return EXIT.timeout
+        await s.sleep(Math.min(s.intervalMs, Math.max(0, deadline - s.now())))
+      }
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+/** The line `harness new` puts before an agent's task, saying who started it (`startHeader`): not the person's words. */
+const START_HEADER = /^\[from [^\]\n]*, the (?:agent|harness) that started you\. It reads your answer itself\.\]\n\n/
+const withoutStartHeader = (ask: string): string => ask.replace(START_HEADER, '')
+
+/** One `watch` line: a JSON object with `--json`, else the time, the harness, the event and its words. */
+function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: WatchEvent,
+  turn: { ask: string | null; answer: string; tools: number } | null): void {
+  const text = turn?.answer ?? ''
+  const words: Record<string, unknown> = event === 'working' ? { ask: turn?.ask ? withoutStartHeader(turn.ask) : null }
+    : event === 'needs_person' ? { question: clip(text, chars), truncated: text.length > chars }
+    : event === 'done' || event === 'failed' ? { summary: clip(text, chars), truncated: text.length > chars, tools: turn?.tools ?? 0 }
+    // Stopped after a turn (Devin put to sleep once it finished, #1449): its answer is still the one to read.
+    : event === 'stopped' && text ? { summary: clip(text, chars), truncated: text.length > chars }
+    : {}
+  const cloud = cloudMeta(t.frame)
+  const at = new Date(s.now()).toISOString()
+  const line = {
+    event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, agent: engineName(t.frame.engine ?? ''),
+    state: t.frame.location === 'cloud' && event !== 'stopped' ? stateOf(t.frame) : EVENT_STATES[event], ...words,
+    ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
+  }
+  if (json) { s.out(JSON.stringify(line)); return }
+  const said = typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
+    : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
+  s.out(`${at.slice(11, 19)}Z ${line.name}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
 }
 
 // ── close ──────────────────────────────────────────────────────────────────────────────────────────

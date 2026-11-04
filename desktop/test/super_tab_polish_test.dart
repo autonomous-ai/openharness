@@ -12,7 +12,6 @@ import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/recording_notice.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -314,7 +313,6 @@ void main() {
         addTearDown(() => grid.AppTheme.brightness.value = previous);
         final server = polishFixture(), c = server.controller();
         await c.refresh();
-        c.toggleProject('lead');
         var opened = '';
         final boundary = GlobalKey();
         await tester.pumpWidget(
@@ -378,7 +376,7 @@ void main() {
 
         await shot('');
         if (profile.scale > 1) {
-          await tester.tap(find.byTooltip('Members and machines'));
+          await tester.tap(find.byTooltip('Members'));
           await tester.pumpAndSettle();
           await shot('-resources');
           expect(tester.takeException(), isNull);
@@ -386,28 +384,23 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(find.byTooltip('Conversations'));
           await tester.pumpAndSettle();
-          // Below the pinned Chat with PM and the projects, a scroll away.
-          await tester.scrollUntilVisible(
-            find.text('Machines'),
-            100,
-            scrollable: find
-                .descendant(
-                  of: find.byType(ProjectSidebar),
-                  matching: find.byType(Scrollable),
-                )
-                .first,
+          // Manage, where the machines are, stands at the foot however long
+          // the list: no scroll away.
+          expect(
+            find.byKey(const ValueKey('super-manage')).hitTestable(),
+            findsOneWidget,
           );
-          expect(find.text('Machines'), findsOneWidget);
           expect(tester.takeException(), isNull);
           await shot('-projects');
           expect(tester.takeException(), isNull);
         } else {
-          expect(find.text('Machines'), findsOneWidget);
           expect(find.text('Projects'), findsOneWidget);
-          // The Machines group lives beside Projects in the left sidebar.
+          // Manage's row starts where the project rows do.
           expect(
-            tester.getTopLeft(find.text('Machines')).dx,
-            tester.getTopLeft(find.text('Projects')).dx,
+            tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dx,
+            tester
+                .getTopLeft(find.byKey(const ValueKey('super-group-lead')))
+                .dx,
           );
         }
         // Capture one row treatment across disclosure, label and nested work.
@@ -417,7 +410,6 @@ void main() {
         await mouse.addPointer(location: Offset.zero);
         for (final target in [
           ('project-hover', const ValueKey('super-group-lead')),
-          ('workgroup-hover', const ValueKey('super-group-offline')),
         ]) {
           await mouse.moveTo(tester.getCenter(find.byKey(target.$2)));
           await tester.pump();

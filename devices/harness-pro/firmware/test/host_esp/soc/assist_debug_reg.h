@@ -1,0 +1,7 @@
+// Host-test stand-in: the P4's assist_debug PC and SP record registers (offsets as in IDF, base made up).
+#pragma once
+#define DR_REG_ASSIST_DEBUG_BASE 0x1000u
+#define ASSIST_DEBUG_CORE_0_RCD_PDEBUGPC_REG (DR_REG_ASSIST_DEBUG_BASE + 0x48)
+#define ASSIST_DEBUG_CORE_0_RCD_PDEBUGSP_REG (DR_REG_ASSIST_DEBUG_BASE + 0x4c)
+#define ASSIST_DEBUG_CORE_1_RCD_PDEBUGPC_REG (DR_REG_ASSIST_DEBUG_BASE + 0xc8)
+#define ASSIST_DEBUG_CORE_1_RCD_PDEBUGSP_REG (DR_REG_ASSIST_DEBUG_BASE + 0xcc)

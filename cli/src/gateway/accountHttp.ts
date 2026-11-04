@@ -1,4 +1,5 @@
 /** Backend HTTP and the single writer of machines.json, owned by the gateway. */
+import { VERSION } from '../version.js'
 import type { GatewayAccount, GatewayMachines, HttpAnswer } from '../core/api.js'
 import { MachineListCache } from '../device/machineList.js'
 import { AuthSessionError } from '../lib/authSession.js'
@@ -18,11 +19,15 @@ interface AccountHttpDeps {
   /** Every machine list the backend answered (its body), and null on a sign-out: the trust group reads which of the
    *  account's machines are team machines from it (lib/e2ee/machineKinds.ts). */
   listed?(body: Record<string, unknown> | null): void
+  /** The machines the backend's list shows offline, and null when the list is not the backend's: the relay answers
+   *  their selects without a dial (lib/remoteRelay.ts). */
+  offline?(machineIds: string[] | null): void
   log?(line: string): void
 }
 
 const failure = (status: number, code: string, message: string): HttpAnswer =>
   ({ status, body: { success: false, error: { code, message } } })
+const timedOut = (error: Error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
 
 /** A Retry-After header as milliseconds from [now]: delta-seconds or an HTTP date; null when absent or unreadable. */
 export function retryAfterMs(header: string | null, now = Date.now()): number | null {
@@ -57,20 +62,37 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     try {
       res = await request(`${(deps.base ?? backendHttpBase)()}${path}`, {
         method,
+        // The CLI and its version, as its sockets declare them (lib/declaredClient.ts): the backend's refusal log names the
+        // sender of a refused command with it (#2675, 615 refusals in 32 minutes nobody could attribute).
         headers: { authorization: `Bearer ${accessToken}`, 'x-autonomous-env': deps.account().autonomousEnv ?? deps.environment,
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+          'x-harness-client': `cli/${VERSION}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
       const e = error as Error & { cause?: { message?: string } }
-      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-        return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
+      if (timedOut(e)) return timeout()
+      // An empty reason is no reason: no parentheses then (Scholes 10-29).
+      const reason = [e.cause?.message, e.message].map(text => text?.trim()).find(Boolean)
+      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend${reason ? ` (${reason})` : ''}. Check the connection and try again.`)
+    }
+    // The timeout also covers the body: a success that stalls after the headers, or a proxy's HTML page, is not an empty
+    // success (Diego 10-29). A refusal keeps its status whatever its body does: 401/403 sign out, 426 asks for an update.
+    let answer: Record<string, unknown> = {}
+    if (res.body !== null && res.headers?.get?.('content-length') !== '0') {
+      try { answer = await res.json() as Record<string, unknown> } catch (error) {
+        if (res.status >= 200 && res.status < 300) {
+          return timedOut(error as Error) ? timeout()
+            : failure(502, 'BACKEND_BAD_RESPONSE', `The Harness backend answered ${method} ${path} with an unreadable reply. Try again in a moment.`)
+        }
       }
-      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
     }
     const retry = res.status === 429 || res.status >= 500 ? retryAfterMs(res.headers?.get?.('retry-after') ?? null) : null
-    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown>, ...(retry !== null ? { retryAfterMs: retry } : {}) }
+    return { status: res.status, body: answer, ...(retry !== null ? { retryAfterMs: retry } : {}) }
+
+    function timeout(): HttpAnswer {
+      return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
+    }
   }
 
   const cache = new MachineListCache(() => backend('GET', '/api/machines'), () => deps.computer.id,
@@ -79,6 +101,7 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     const { machines, source } = cache.list()
     deps.reachable?.(source !== 'backend' ? null : machines.filter(m => m.state !== 'offline').map(m => m.machineId))
     deps.listed?.(source === 'backend' ? body : null)
+    deps.offline?.(source !== 'backend' ? null : machines.filter(m => m.state === 'offline').map(m => m.machineId))
     deps.changed?.({ owner: deps.account().machineId, body, fetchedAt: cache.lastResponse()?.fetchedAt ?? Date.now() })
   })
   const restored = cache.lastResponse()
@@ -109,5 +132,12 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     return (res.body.data as { gridName?: string } | undefined)?.gridName ?? null
   }
 
-  return { backend, machines, mintGridName }
+  /** Read the list again unless it was read within `maxAgeMs`; a read in flight is shared. The relay asks this for
+   *  the selects it holds on the list's word (lib/remoteRelay.ts). */
+  async function recheck(maxAgeMs: number): Promise<void> {
+    if (!deps.account().machineId) return
+    await cache.refresh({ maxAgeMs })
+  }
+
+  return { backend, machines, mintGridName, recheck }
 }

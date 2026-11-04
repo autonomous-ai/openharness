@@ -24,6 +24,7 @@ import '../core/git_worktree.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
+import '../core/ssh_hosts.dart';
 import '../core/test_run.dart';
 import '../finder/finder_availability.dart';
 import '../widgets/engine_identity.dart';
@@ -33,6 +34,7 @@ import 'attached_task_delivery.dart';
 import 'harness_placement.dart';
 import 'harness_attachments.dart';
 import 'harness_launch_integration.dart';
+import 'lead_placement.dart';
 import 'pane_arrangement.dart';
 
 /// Whether New Harness opens as a line in the box, or as the full form.
@@ -157,17 +159,35 @@ String? currentBranchRef(GitProjectInfo info) =>
     ? 'refs/heads/${info.branch}'
     : null;
 
-/// Git projects keep Worktree on; an empty repository asks for a choice.
-bool worktreeByDefault(GitProjectInfo info) => info.isGit;
+/// A repository with nothing to branch from: `git init` and no commit yet, or
+/// a folder inside one (a `git init` in the home folder makes ~/Downloads
+/// one). As in Claude Code, work starts in the folder itself, with no Worktree
+/// or Branch to choose, until the first commit gives Git something to branch.
+bool hasNoCommits(GitProjectInfo info) => info.isGit && info.branches.isEmpty;
 
-/// New work starts from main. If it is absent, require an explicit choice.
+/// Git projects keep Worktree on, once there is a commit to start it from.
+bool worktreeByDefault(GitProjectInfo info) =>
+    info.isGit && !hasNoCommits(info);
+
+/// New work starts from the branch the project calls its default
+/// (`origin/HEAD`), preferring the local copy; then main, for a project that
+/// names none; then the branch it is on. octocat/Hello-World is on master, and
+/// reading only main refused it until a branch was chosen by hand. Null asks.
 /// With Worktree off, show the branch the folder is actually on.
 String? defaultBranchRef(GitProjectInfo info, {required bool worktree}) {
   if (!worktree) return currentBranchRef(info);
-  for (final ref in ['refs/heads/main', 'refs/remotes/origin/main']) {
+  final remote = info.defaultRef;
+  for (final ref in [
+    if (remote != null) ...[
+      'refs/heads/${remote.split('/').skip(3).join('/')}',
+      remote,
+    ],
+    'refs/heads/main',
+    'refs/remotes/origin/main',
+  ]) {
     if (info.branches.any((branch) => branch.ref == ref)) return ref;
   }
-  return null;
+  return currentBranchRef(info);
 }
 
 /// The branch a worktree started from [base] is on, unless [name] was typed:
@@ -243,6 +263,8 @@ ProjectFolderRequest? gitFolderRequest(
   required String? branchName,
   required String placeholder,
 }) {
+  // Nothing to branch from: the folder is used as it is ([hasNoCommits]).
+  if (hasNoCommits(info)) return null;
   final ref = branchRef ?? defaultBranchRef(info, worktree: worktree);
   if (!worktree) {
     if (newBranchHere(info, branchName) case final name?) {
@@ -516,6 +538,8 @@ class NewHarnessController extends ChangeNotifier {
     // its machine, whatever machine this form was opened on.
     if (this.integration case final request? when request.pending) {
       _machineId = request.machineId ?? _machineId;
+      // Its person chose that machine when it was sent.
+      _leadPicked = request.machineId != null;
       if (request.engine case final engine?) {
         _engine = engine;
         _harnessId = null;
@@ -856,34 +880,50 @@ class NewHarnessController extends ChangeNotifier {
   DateTime? _branchesCheckedAt;
   bool get isGitProject => _gitProject.isGit && !_noGitSetup && !isCloud;
 
+  /// A Git project with no commit yet starts in its folder ([hasNoCommits]).
+  bool get noCommitsYet => isGitProject && hasNoCommits(_gitProject);
+
+  /// Whether Branch is offered: a Git project with something to branch from.
+  bool get choosesBranch => isGitProject && !noCommitsYet;
+
   /// A worktree the person picked: the harness works in it, on its branch.
   bool get inWorktree => _project.exact && _gitProject.mainFolder != null;
-  bool get canUseWorktree => isGitProject && !checkingGit && !inWorktree;
+  bool get canUseWorktree => choosesBranch && !checkingGit && !inWorktree;
   bool get worktree =>
-      isGitProject &&
+      choosesBranch &&
       !inWorktree &&
-      (_worktree ??
-          (_desktopChoices
-              ? app.agentPreference.successfulWorktree ?? true
-              : app.projectHistory.worktreeFor(
-                      _machineId,
-                      _project.folder ?? '',
-                    ) ??
-                    worktreeByDefault(_gitProject)));
+      // A Swarm's Product Manager never edits the person's checkout.
+      (placesLead ||
+          (_worktree ??
+              (_desktopChoices
+                  ? app.agentPreference.successfulWorktree ?? true
+                  : app.projectHistory.worktreeFor(
+                          _machineId,
+                          _project.folder ?? '',
+                        ) ??
+                        worktreeByDefault(_gitProject))));
 
   bool? _recoveredWorktreePreference;
 
-  /// Fresh desktop work starts on main, with or without a worktree. A retry
+  /// The Worktree setting a successful start saves for the next New Harness,
+  /// or null to leave it: a Swarm's Product Manager always gets a worktree,
+  /// which is not the person's choice.
+  bool? get worktreeToRemember => placesLead
+      ? null
+      : _recoveredWorktreePreference ??
+            (choosesBranch && !inWorktree ? worktree : null);
+
+  /// Fresh desktop work starts on the default branch, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
-  bool get _defaultsToMain =>
+  bool get _startsOnDefault =>
       _desktopChoices && _attempt?.preparedFolder == null && !inWorktree;
   String? get branchRef {
     if (_branchRef != null) return _branchRef;
-    if (_defaultsToMain) {
-      final main = defaultBranchRef(_gitProject, worktree: true);
-      return !worktree && main?.startsWith('refs/remotes/') == true
+    if (_startsOnDefault) {
+      final start = defaultBranchRef(_gitProject, worktree: true);
+      return !worktree && start?.startsWith('refs/remotes/') == true
           ? null
-          : main;
+          : start;
     }
     return defaultBranchRef(_gitProject, worktree: worktree);
   }
@@ -891,7 +931,9 @@ class NewHarnessController extends ChangeNotifier {
   String? get gitError => _gitProject.error;
   String get branchLabel =>
       _refName(branchRef) ??
-      (worktree || _defaultsToMain ? 'main · unavailable' : 'Detached HEAD');
+      (worktree || _startsOnDefault
+          ? 'default · unavailable'
+          : 'Detached HEAD');
   String? _refName(String? ref) =>
       _gitProject.branches
           .where((branch) => branch.ref == ref)
@@ -969,7 +1011,7 @@ class NewHarnessController extends ChangeNotifier {
       : _branchHere == null && _worktreeOf(branchRef) != null;
 
   void toggleWorktree() {
-    if (locked || !canUseWorktree) return;
+    if (locked || !canUseWorktree || placesLead) return;
     _worktree = !worktree;
     _recoveredWorktreePreference = null;
     if (_project.folder case final folder? when !_desktopChoices) {
@@ -997,7 +1039,7 @@ class NewHarnessController extends ChangeNotifier {
         locked ||
         checkingGit ||
         refreshingBranches ||
-        !isGitProject ||
+        !choosesBranch ||
         _gitKey == null) {
       return;
     }
@@ -1011,7 +1053,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   bool get canRefreshChoices => switch (field) {
-    NewHarnessField.branch => isGitProject,
+    NewHarnessField.branch => choosesBranch,
     NewHarnessField.project ||
     NewHarnessField.projectName => _visibleFolder != null,
     _ => false,
@@ -1101,7 +1143,7 @@ class NewHarnessController extends ChangeNotifier {
     // One the person picked stays itself ([inWorktree]).
     if (info.mainFolder case final main?
         when _project.folder == key.$2 && !_project.exact) {
-      if (!_defaultsToMain &&
+      if (!_startsOnDefault &&
           _worktree == false &&
           _branchRef == null &&
           info.branch != null) {
@@ -1176,7 +1218,7 @@ class NewHarnessController extends ChangeNotifier {
       return 'The selected model is unavailable. Choose another model or your subscription.';
     }
     if (catalog.sections.every((section) => section.models.isEmpty)) {
-      return 'No models are running on your machines. Open Manage Models to start one.';
+      return 'No models are running on your machines. Open Your models to start one.';
     }
     return null;
   }
@@ -1226,6 +1268,8 @@ class NewHarnessController extends ChangeNotifier {
           group: 'Subscription',
           engine: _engine,
           machineId: _machineId,
+          enabled: _leadModelRefusal(null) == null,
+          why: _leadModelRefusal(null),
         ),
       ]),
       if (catalog?.supportsModelLaunch == true &&
@@ -1253,6 +1297,8 @@ class NewHarnessController extends ChangeNotifier {
                   grid: section.name,
                 ),
                 machineId: _machineId,
+                enabled: _leadModelRefusal(model.id, grid: true) == null,
+                why: _leadModelRefusal(model.id, grid: true),
               ),
           ]),
       NewHarnessOption(
@@ -1263,7 +1309,7 @@ class NewHarnessController extends ChangeNotifier {
       ),
       const NewHarnessOption(
         id: manageModelsId,
-        title: 'Manage Models…',
+        title: 'Your models…',
         synthetic: true,
       ),
     ];
@@ -1498,7 +1544,7 @@ class NewHarnessController extends ChangeNotifier {
     if (!asGuest || (_guestFolders?.folders.isNotEmpty ?? false))
       NewHarnessField.projectMenu,
     if (advancedOpen) ...[
-      if (isGitProject && !asGuest) NewHarnessField.branch,
+      if (choosesBranch && !asGuest) NewHarnessField.branch,
       if (hasModes) NewHarnessField.mode,
       if (usesProfile) NewHarnessField.profile,
     ],
@@ -1511,7 +1557,7 @@ class NewHarnessController extends ChangeNotifier {
       value == NewHarnessField.projectName ||
       value == NewHarnessField.projectRepository ||
       value == NewHarnessField.machine ||
-      (value == NewHarnessField.branch && isGitProject) ||
+      (value == NewHarnessField.branch && choosesBranch) ||
       (value == NewHarnessField.mode && _settingsModes.isNotEmpty) ||
       (value == NewHarnessField.profile && hasProfile);
 
@@ -1557,10 +1603,280 @@ class NewHarnessController extends ChangeNotifier {
   /// one takes a GitHub repository, and Devin Cloud an ACU limit.
   bool get isCloud => _harnessId == null && isCloudAgentId(_engine);
 
+  /// New Project in a Swarm: the Swarm places the Product Manager on one of
+  /// [HarnessLaunchIntegration.leadMachines], and the form asks only the
+  /// task, repo and visibility.
+  bool get placesLead => integration?.leadMachines != null;
+
+  /// The machine the Swarm starts the Product Manager on, rather than this
+  /// Desktop: a teammate's Team account, or a machine of the person's this
+  /// Desktop is not connected to. The repo stays the one chosen on
+  /// [machineId]; that machine clones it. Null when this Desktop starts it on
+  /// [machineId].
+  String? _swarmLeadMachine;
+  String? get leadSwarmMachine => _swarmLeadMachine;
+
+  /// The person chose the Product Manager's machine: none is chosen for them,
+  /// since only they know which one stays on (Ken, 10-29).
+  bool _leadPicked = false;
+  bool get leadPicked => _leadPicked;
+
+  /// The machine the Product Manager starts on, as the Swarm lists it; null
+  /// until the person chooses one.
+  LeadMachine? get leadMachine => !_leadPicked
+      ? null
+      : integration?.leadMachines
+            ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
+            .firstOrNull;
+
+  bool _paused(List<LeadMachine> machines) =>
+      machines.isNotEmpty &&
+      machines.every((m) => m.unavailable == kLeadSwarmPaused);
+
+  /// No machine could start the Product Manager now: each is paused, offline,
+  /// full, another person's that cannot take it, or runs no engine it can
+  /// start with. Its list says why for each.
+  bool get leadNone {
+    final machines = integration?.leadMachines;
+    return machines != null &&
+        !_paused(machines) &&
+        !machines.any((m) => m.startable);
+  }
+
+  /// The Swarm starts the Product Manager, on [leadSwarmMachine]; this
+  /// Desktop does not.
+  bool get leadThroughSwarm => placesLead && _swarmLeadMachine != null;
+
+  /// The address the Swarm clones the chosen repo from, or null when it is
+  /// not known.
+  String? get leadRepositoryUrl => switch (_remoteOf(_machineId, _project)) {
+    final String remote when remote.startsWith('github.com/') =>
+      'https://$remote',
+    final remote => remote,
+  };
+
+  String? get _leadRepositoryName =>
+      _project.repository?.name ??
+      switch (_project.folder) {
+        final String folder => _pathsFor(_machineId, folder).basename(folder),
+        null => null,
+      };
+
+  /// The Product Manager line: where it starts, its engine and model.
+  String get leadLine {
+    final target = leadMachine;
+    final name = target == null
+        ? machineLabel
+        : target.inTeam(_engine)
+        ? '${target.name}’s Team account'
+        : target.name;
+    return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');
+  }
+
+  /// Under [leadLine]: the repo that machine clones first, or null.
+  String? get leadCloneNote {
+    if (_leadRepositoryName == null) return null;
+    final target = leadMachine;
+    final clones = leadThroughSwarm
+        ? target != null && !target.has(leadRepositoryUrl)
+        : _project.repository != null;
+    return clones ? 'Clones $_leadRepositoryName there first' : null;
+  }
+
+  /// Why New Project cannot start its Product Manager now, or null.
+  String? get leadBlocked {
+    final machines = integration?.leadMachines;
+    if (machines == null) return null;
+    if (_paused(machines)) {
+      return '$kLeadSwarmPaused. New Project can start once it resumes.';
+    }
+    if (leadNone) return 'No machine can run the Product Manager now.';
+    if (!_leadPicked) return kLeadChooseMachine;
+    if (leadMachine?.startable != true) {
+      final name = leadMachine?.name ?? machineLabel;
+      return '$name cannot start the Product Manager. Choose another machine.';
+    }
+    final refusal = leadMachine?.engineRefusals[_engine];
+    if (refusal != null) {
+      return '${leadMachine!.name} can’t run $agentLabel: $refusal. '
+          'Choose another engine.';
+    }
+    if (leadThroughSwarm) {
+      if (leadRepositoryUrl == null) {
+        return 'Choose a repo with a remote, so the Swarm can clone it for '
+            'the Product Manager.';
+      }
+      if (_model != null) {
+        return 'Models on the grid run only where this Desktop starts the '
+            'Product Manager. Choose the default model.';
+      }
+    }
+    return _leadModelListRefusal;
+  }
+
+  /// The engine a chosen machine runs, as a choice the person did not make.
+  void _placeLeadEngine(String engine) {
+    final touched = _selectionTouched;
+    _selectEngine(engine);
+    _selectionTouched = touched;
+  }
+
+  /// Starts the Product Manager on [id], a machine the list can start it on
+  /// now: this Desktop starts it on one of the person's it is connected to,
+  /// the Swarm on any other. Anything else is refused with its reason.
+  void chooseLeadMachine(String id) {
+    if (locked) return;
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == id)
+        .firstOrNull;
+    // The machine chosen last wins over an engine it cannot run.
+    if (listed != null && listed.startable && !listed.runs(_engine)) {
+      _placeLeadEngine(listed.leadEngines.first);
+    }
+    if (listed != null && listed.startable && !listed.native) {
+      error = null;
+      _swarmLeadMachine = id;
+      _leadPicked = true;
+      notifyListeners();
+      return;
+    }
+    final choice = machineChoices.where((m) => m.id == id).firstOrNull;
+    if (listed == null ||
+        !listed.startable ||
+        choice == null ||
+        !choice.enabled) {
+      warn(
+        listed?.unavailable ??
+            choice?.why ??
+            '${listed?.name ?? 'This machine'} cannot start the Product Manager.',
+      );
+      return;
+    }
+    error = null;
+    _swarmLeadMachine = null;
+    _leadPicked = true;
+    final remote = _remoteOf(_machineId, _project);
+    _selectMachine(id);
+    if (remote != null) _keepRepository(id, remote, listed.name);
+    // That machine's branches: a branch chosen on the other one is not here.
+    if (_desktopChoices) _syncGitProject();
+    notifyListeners();
+  }
+
+  /// The model the Product Manager runs: the one chosen; else its role's
+  /// default, Claude Opus 5.5 at xhigh (Scholes's roadmap, piece 1); else its
+  /// engine's own, which nothing knows before it starts.
+  String get leadModelLabel => _model != null
+      ? modelLabel
+      : leadLaunchModel != null
+      ? '${kLeadModel.label} · ${kLeadModel.effort}'
+      : 'Default model';
+
+  /// The model and effort a Claude Product Manager is launched with when its
+  /// person chose no model and the Swarm's model list leaves Opus on: on this
+  /// Mac as flags. Through the Swarm its start names none, and the Swarm
+  /// fills the same default under the owner's list and rules (backend
+  /// commands.ts). A machine that cannot take them starts it on the engine's
+  /// own (AppNotifier.createAgent).
+  ({String model, String effort})? get leadLaunchModel =>
+      integration?.swarmRole == 'lead' &&
+          _engine == 'claude' &&
+          _model == null &&
+          !asGuest &&
+          (integration?.leadModels?.modelOn(
+                'claude',
+                kLeadModel.model,
+                kLeadModel.effort,
+              ) ??
+              true)
+      ? (model: kLeadModel.model, effort: kLeadModel.effort)
+      : null;
+
+  /// Why the Swarm's model list rules out [model] (null for the engine's
+  /// default) for a new project's Product Manager, or null.
+  String? _leadModelRefusal(String? model, {bool grid = false}) {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (grid && !list.gridModels) {
+      return 'The Swarm’s model list turns off models on its grid.';
+    }
+    return list.refusal(_engine, model);
+  }
+
+  /// Why the Swarm's model list rules out the engine or model chosen, or
+  /// null.
+  String? get _leadModelListRefusal {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (list.engineRefusal(_engine) case final why?) {
+      return '$why Choose another engine.';
+    }
+    final why = _leadModelRefusal(_model?.id, grid: _model != null);
+    return why == null ? null : '$why Choose another model.';
+  }
+
+  /// The remote [project] on [machineId] has, when anything says so: a
+  /// repository to clone, an agent that ran in that folder, or the Swarm's
+  /// own checkout there.
+  String? _remoteOf(String machineId, NewHarnessProject project) {
+    if (project.repository case final repository?) {
+      return repository.shareableUrl;
+    }
+    final folder = project.folder;
+    if (folder == null) return null;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known?.remote case final remote?
+          when known!.root == folder || known.cwd == folder) {
+        return remote;
+      }
+    }
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull;
+    for (final MapEntry(:key, :value) in listed?.folders.entries ?? const []) {
+      if (value == folder) return key;
+    }
+    return null;
+  }
+
+  /// Keeps the repo [remote] names on [machineId]: its folder there, found by
+  /// its remote, or else the repository to clone there.
+  void _keepRepository(String machineId, String remote, String machineName) {
+    final key = leadRepositoryKey(remote);
+    String? folder;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known != null &&
+          !known.worktree &&
+          leadRepositoryKey(known.remote) == key) {
+        folder = known.root ?? known.cwd;
+        break;
+      }
+    }
+    folder ??= integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull
+        ?.folders[key];
+    final clone = GitHubRepository.parse(
+      remote.startsWith('github.com/') ? 'https://$remote' : remote,
+    );
+    if (folder != null) {
+      _project = NewHarnessProject.folder(folder);
+    } else if (clone != null) {
+      _project = NewHarnessProject.clone(clone);
+    } else {
+      warn('$machineName has no copy of $remote. Choose its folder there.');
+      return;
+    }
+  }
+
   /// The GitHub repository a cloud coding agent works on: the one chosen to
   /// clone, else the chosen folder's own remote; null when neither is on GitHub.
   String? get cloudRepository {
-    final cloned = _project.repository?.url;
+    final cloned = _project.repository?.shareableUrl;
     if (cloned != null) return cloned;
     final folder = _project.folder;
     final machine = _machine;
@@ -1600,6 +1916,14 @@ class NewHarnessController extends ChangeNotifier {
     if (checking) return null;
     if (needsProject) {
       return (field: NewHarnessField.projectMenu, message: 'Choose a project.');
+    }
+    // A terminal sends no project ([projectFolderRequest]): it would open at
+    // home under a chip that still names the repository.
+    if (isTerminal && _project.repository != null) {
+      return (
+        field: NewHarnessField.projectMenu,
+        message: "A terminal can't clone. Choose a folder or an agent.",
+      );
     }
     final machine = _machine;
     if (machine == null || machine.isOffline || machine.needsLink) {
@@ -1652,17 +1976,22 @@ class NewHarnessController extends ChangeNotifier {
         message: 'This project is unavailable. Choose a project.',
       );
     }
+    // A harness starts in the folder of a project with no commit
+    // ([noCommitsYet]), but a Product Manager never works in the person's
+    // checkout, and its worktree needs a commit to start from.
+    if (!checkingGit && placesLead && noCommitsYet) {
+      return (
+        field: NewHarnessField.projectMenu,
+        message: 'This project has no commits, and a Product Manager works in its own worktree. Choose a project with a commit.',
+      );
+    }
     if (!checkingGit &&
-        isGitProject &&
-        (worktree || _defaultsToMain && _gitProject.branches.isNotEmpty) &&
+        choosesBranch &&
+        (worktree || _startsOnDefault) &&
         branchRef == null) {
       return (
-        field: _gitProject.branches.isEmpty
-            ? NewHarnessField.projectMenu
-            : NewHarnessField.branch,
-        message: _gitProject.branches.isEmpty
-            ? 'This project has no commits. Choose a project or make an initial commit.'
-            : 'This project has no main branch. Choose a branch.',
+        field: NewHarnessField.branch,
+        message: 'This project has no default branch. Choose a branch.',
       );
     }
     if (usesProfile &&
@@ -2041,6 +2370,19 @@ class NewHarnessController extends ChangeNotifier {
   static const guestWorkspaceId = 'project:guest-workspace';
   static const guestFolderId = 'project:guest-folder:';
   static const repositoryId = 'project:repository';
+
+  /// The one action a pasted path or GitHub link gets at the top of the
+  /// project menu (docs/plans/2026-10-30-new-harness-paste-path-or-repository.md).
+  static const pasteOpenId = 'project:paste:open';
+  static const pasteBrowseId = 'project:paste:browse';
+  static const pasteInvalidId = 'project:paste:invalid';
+  static const cloneId = 'project:clone';
+  static const _pasteIds = {
+    pasteOpenId,
+    pasteBrowseId,
+    pasteInvalidId,
+    cloneId,
+  };
   static const storeId = 'agent:store';
   static const codingId = 'harness:coding';
   static const defaultModelId = 'model:subscription';
@@ -2104,37 +2446,44 @@ class NewHarnessController extends ChangeNotifier {
     }
   }
 
-  List<NewHarnessOption> _projectMenu() => asGuest
-      ? _guestPlaces()
-      : [
-          if (!_desktopChoices)
-            const NewHarnessOption(
-              id: repositoryId,
-              synthetic: true,
-              title: 'Clone Repository',
-              detail: 'Paste a GitHub repository URL',
-            ),
-          const NewHarnessOption(
-            id: existingProjectId,
-            synthetic: true,
-            title: 'Open Folder',
-            detail: 'Enter a path or browse folders',
-          ),
-          const NewHarnessOption(
-            id: newProjectId,
-            synthetic: true,
-            title: 'New Folder',
-            detail: 'Name a new folder',
-          ),
-          if (_desktopChoices)
-            const NewHarnessOption(
-              id: repositoryId,
-              synthetic: true,
-              title: 'GitHub',
-              detail: 'Clone a GitHub repository',
-            ),
-          ..._ranked(_recentProjects()),
-        ];
+  List<NewHarnessOption> _projectMenu() {
+    if (asGuest) return _guestPlaces();
+    final recent = _ranked(_recentProjects());
+    var pasted = _pasteAction();
+    // A half-typed path a recent project matches is that project: Browse
+    // would take the highlight from the answer already on screen.
+    if (pasted?.id == pasteBrowseId && recent.isNotEmpty) pasted = null;
+    return [
+      ?pasted,
+      if (!_desktopChoices)
+        const NewHarnessOption(
+          id: repositoryId,
+          synthetic: true,
+          title: 'Clone Repository',
+          detail: 'Paste a GitHub repository URL',
+        ),
+      const NewHarnessOption(
+        id: existingProjectId,
+        synthetic: true,
+        title: 'Open Folder',
+        detail: 'Enter a path or browse folders',
+      ),
+      const NewHarnessOption(
+        id: newProjectId,
+        synthetic: true,
+        title: 'New Folder',
+        detail: 'Name a new folder',
+      ),
+      if (_desktopChoices)
+        const NewHarnessOption(
+          id: repositoryId,
+          synthetic: true,
+          title: 'GitHub',
+          detail: 'Clone a GitHub repository',
+        ),
+      ...recent,
+    ];
+  }
 
   /// Takes the highlighted row as this field's answer and moves along.
   void accept([NewHarnessOption? row]) {
@@ -2176,6 +2525,12 @@ class NewHarnessController extends ChangeNotifier {
       return;
     }
     if (option?.id == browseId) return;
+    if (option?.id == pasteBrowseId) {
+      final typed = query.trim();
+      focusField(NewHarnessField.project);
+      setQuery(typed);
+      return;
+    }
     if (option == null) {
       // Return is never silent: nothing matched, so say so and how to go on.
       error = field == NewHarnessField.projectName && query.trim().isEmpty
@@ -2285,6 +2640,8 @@ class NewHarnessController extends ChangeNotifier {
           if (option.id != codingId) _selectEngine(option.id);
         }
       case NewHarnessField.agent:
+        // A machine that cannot run it says so (leadBlocked); the person
+        // chooses again, nothing moves on its own.
         _selectEngine(option.id);
       case NewHarnessField.model:
         _model = option.model;
@@ -2406,6 +2763,9 @@ class NewHarnessController extends ChangeNotifier {
     _resetProfiles();
     _machineRevision++;
     _listDebounce?.cancel();
+    _hiddenFolderDebounce?.cancel();
+    _hiddenFolders.clear();
+    _hiddenFolderAsked = null;
     _listings.clear();
     _loadingFolders.clear();
     _visibleFolder = folderRefreshError = null;
@@ -2932,7 +3292,9 @@ class NewHarnessController extends ChangeNotifier {
         : kept >= 0
         ? kept
         : field == NewHarnessField.projectMenu
-        ? (firstProject >= 0
+        ? (options.isNotEmpty && _pasteIds.contains(options.first.id)
+              ? 0
+              : firstProject >= 0
               ? firstProject
               : options.indexWhere((option) => option.id == existingProjectId))
         : query.isEmpty && now >= 0
@@ -3245,12 +3607,15 @@ class NewHarnessController extends ChangeNotifier {
   /// machine its row says so instead of opening.
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
+    final ruledOut = placesLead
+        ? integration?.leadModels?.engineRefusal(id)
+        : null;
     return NewHarnessOption(
       id: id,
       title: labelOf(id),
       engine: id,
-      enabled: !finderElsewhere,
-      why: finderElsewhere ? kFinderElsewhere : null,
+      enabled: !finderElsewhere && ruledOut == null,
+      why: finderElsewhere ? kFinderElsewhere : ruledOut,
     );
   }
 
@@ -3482,17 +3847,146 @@ class NewHarnessController extends ChangeNotifier {
 
   List<NewHarnessOption> _repositoryOptions() {
     final repository = GitHubRepository.parse(query.trim());
-    return [
-      if (repository != null)
-        NewHarnessOption(
-          id: 'project:clone',
+    return [?(repository == null ? null : _cloneRow(repository))];
+  }
+
+  /// What a pasted path or GitHub link offers, or null for a search. A bare
+  /// `owner/repo` is a search here: `team/api` is as likely a folder name.
+  NewHarnessOption? _pasteAction() {
+    final typed = query.trim();
+    if (typed.isEmpty) return null;
+    if (_isPath(typed)) return _pathAction(typed);
+    if (!typed.contains('github.com/') &&
+        !RegExp(r'^git@[^:/\s]+:').hasMatch(typed)) {
+      return null;
+    }
+    final repository = GitHubRepository.parse(typed);
+    if (repository == null) {
+      return const NewHarnessOption(
+        id: pasteInvalidId,
+        synthetic: true,
+        title: 'Not a repository link',
+        detail: 'Use github.com/owner/repo',
+        enabled: false,
+        why: 'Use a link to a repository, like github.com/owner/repo.',
+      );
+    }
+    return _cloneRow(repository);
+  }
+
+  /// Open for a path that names a folder, else Browse, which goes on in the
+  /// Open Folder prompt with what was typed.
+  NewHarnessOption _pathAction(String typed) {
+    final full = _expand(typed);
+    final paths = _pathsFor(_machineId, full);
+    final trailing =
+        full.endsWith('/') ||
+        paths.style == p.Style.windows && full.endsWith('\\');
+    final parent = !paths.isAbsolute(full)
+        ? null
+        : trailing
+        ? paths.normalize(full)
+        : paths.dirname(full);
+    final names = parent == null ? null : _listings[parent];
+    if (parent != null && names == null) _requestListing(parent);
+    final name = paths.basename(full);
+    final hidden =
+        !trailing &&
+        parent != null &&
+        _machine?.isLocalMachine != true &&
+        name.startsWith('.') &&
+        name != '.' &&
+        name != '..';
+    if (hidden && !_hiddenFolders.contains(full)) _askAboutHiddenFolder(full);
+    if (!trailing &&
+        (_hiddenFolders.contains(full) || names?.contains(name) == true)) {
+      return NewHarnessOption(
+        id: pasteOpenId,
+        synthetic: true,
+        title: 'Open ${tildePath(full)}',
+        detail: 'Folder on $machineLabel',
+        project: NewHarnessProject.folder(full, exact: true),
+        machineId: _machineId,
+      );
+    }
+    final shown = parent == null ? typed : tildePath(parent);
+    return NewHarnessOption(
+      id: pasteBrowseId,
+      synthetic: true,
+      title:
+          'Browse ${shown.endsWith(paths.separator) ? shown : '$shown${paths.separator}'}',
+      detail: 'Choose a folder on $machineLabel',
+    );
+  }
+
+  /// Reads this computer's `~/.ssh/config` for a pasted alias. A test gives
+  /// its own, so no suite reads the developer's.
+  @visibleForTesting
+  SshHosts sshHosts = SshHosts();
+
+  /// What each pasted alias stands for on this computer; absent until it is
+  /// asked about.
+  final _aliasHosts = <String, String>{};
+
+  Future<void> _resolveAlias(String alias) async {
+    final host = await sshHosts.resolveHost(alias);
+    if (_disposed) return;
+    // ssh that cannot say (a timeout, no ssh) has not called it another host:
+    // it stays offered, and the launch reads it again and says what went wrong.
+    if (host != null) _aliasHosts[alias] = host;
+    if (field == NewHarnessField.projectMenu ||
+        field == NewHarnessField.projectRepository) {
+      _refresh();
+    }
+  }
+
+  /// Cloning [repository] where the harness will run, with the account it
+  /// goes through: an SSH alias, or the other computer's own GitHub access.
+  /// Another computer's aliases are its daemon's to check, at launch.
+  NewHarnessOption _cloneRow(GitHubRepository repository) {
+    if (isTerminal) {
+      return NewHarnessOption(
+        id: pasteInvalidId,
+        synthetic: true,
+        title: "A terminal can't clone",
+        detail: 'Choose an agent to clone ${repository.slug}',
+        enabled: false,
+        why: 'Choose an agent to clone ${repository.slug}.',
+      );
+    }
+    final alias = repository.alias;
+    final local = _machine?.isLocalMachine == true;
+    if (local && alias != null) {
+      final host = _aliasHosts[alias];
+      if (host == null) {
+        // Offered as GitHub until ssh says otherwise: no flicker for the
+        // usual alias, and a launch checks again before it clones.
+        _aliasHosts[alias] = 'github.com';
+        unawaited(_resolveAlias(alias));
+      } else if (!isGitHubHost(host)) {
+        return NewHarnessOption(
+          id: pasteInvalidId,
           synthetic: true,
-          title: 'Clone ${repository.name}',
-          detail: location('~/harnesses/${repository.name}'),
-          project: NewHarnessProject.clone(repository),
-          machineId: _machineId,
-        ),
-    ];
+          title: "$alias isn't a GitHub host",
+          detail: 'Only GitHub repositories can be cloned here',
+          enabled: false,
+          why: '$alias does not lead to github.com on this computer.',
+        );
+      }
+    }
+    return NewHarnessOption(
+      id: cloneId,
+      synthetic: true,
+      title: 'Clone ${repository.slug}',
+      detail: [
+        if (alias != null) 'over SSH as $alias',
+        local
+            ? 'into ${location('~/harnesses/${repository.name}')}'
+            : 'on $machineLabel · uses that computer’s GitHub access',
+      ].join(' · '),
+      project: NewHarnessProject.clone(repository),
+      machineId: _machineId,
+    );
   }
 
   /// The most folders one listing offers. `node_modules` has five thousand; a
@@ -3609,6 +4103,106 @@ class NewHarnessController extends ChangeNotifier {
     });
   }
 
+  static const _startingLine = 'Starting harness…';
+
+  /// A repository whose checkout is already there is used, not cloned, and the
+  /// line said Cloning for that moment anyway. Only the preparation decides,
+  /// and on another computer it says nothing until it is done, so look at the
+  /// same place first and leave the creation itself waiting on nothing.
+  Future<void> _sayWhenCloning(
+    GitHubRepository repository,
+    AgentCreationAttempt attempt,
+  ) async {
+    final free = await _cloneDestinationIsFree(repository);
+    if (!free ||
+        _disposed ||
+        !busy ||
+        !identical(attempt, _attempt) ||
+        status != _startingLine) {
+      return;
+    }
+    status = 'Cloning ${repository.slug}…';
+    notifyListeners();
+  }
+
+  /// Whether nothing is at `<projects folder>/<name>` where the harness will
+  /// run. Saying nothing about a clone is less wrong than announcing one that
+  /// is not happening, so false also covers a computer that cannot say.
+  Future<bool> _cloneDestinationIsFree(GitHubRepository repository) async {
+    final id = _machineId;
+    final home = await _ensureHome(id);
+    if (home == null) return false;
+    final root = _pathsFor(id, home).join(home, 'harnesses');
+    if (app.stateOf(id)?.isLocalMachine == true) {
+      final kind = await FileSystemEntity.type(
+        p.join(root, repository.name),
+        followLinks: false,
+      );
+      return kind == FileSystemEntityType.notFound;
+    }
+    // fs_list_dir (cli fsBrowse.ts) leaves hidden folders out: `.github` would
+    // look free whether it is there or not.
+    if (repository.name.startsWith('.')) return false;
+    // This app is not told which folder that computer's daemon uses: Harness OS
+    // keeps its projects in ~/projects (cli projectsRoot). A case-insensitive
+    // disk holds `Repo` as `repo`, so any spelling may be the same folder.
+    final name = repository.name.toLowerCase();
+    for (final folder in [root, _pathsFor(id, home).join(home, 'projects')]) {
+      final answer = await app.listRemoteFolder(id, folder);
+      // The first clone on that computer: the folder is made for it.
+      if (answer['error'] == 'NOT_FOUND') continue;
+      final entries = answer['entries'];
+      if (answer['error'] != null ||
+          entries is! List ||
+          answer['truncated'] == true) {
+        return false;
+      }
+      final listed = entries.any(
+        (entry) =>
+            entry is Map &&
+            entry['name'] is String &&
+            (entry['name'] as String).toLowerCase() == name,
+      );
+      if (listed) return false;
+    }
+    return true;
+  }
+
+  /// Folders another computer has said are there though their parent's listing
+  /// leaves them out: fs_list_dir (cli fsBrowse.ts) hides dot folders, so each
+  /// is asked about by its own path. Not a [_listings] entry: a failed listing
+  /// is kept there as empty, and here that would read as a folder.
+  final _hiddenFolders = <String>{};
+  Timer? _hiddenFolderDebounce;
+
+  /// The folder last asked about. A refresh runs the path row again, and the
+  /// parent's listing arriving is one: without this each pushed the question
+  /// back, or asked it twice.
+  String? _hiddenFolderAsked;
+
+  void _askAboutHiddenFolder(String folder) {
+    if (_hiddenFolderAsked == folder) return;
+    _hiddenFolderAsked = folder;
+    _hiddenFolderDebounce?.cancel();
+    _hiddenFolderDebounce = Timer(
+      const Duration(milliseconds: 80),
+      () => unawaited(_readHiddenFolder(folder)),
+    );
+  }
+
+  Future<void> _readHiddenFolder(String folder) async {
+    final id = _machineId;
+    final revision = _machineRevision;
+    final answer = await app.listRemoteFolder(id, folder);
+    if (_disposed || id != _machineId || revision != _machineRevision) return;
+    if (answer['error'] != null || answer['entries'] is! List) return;
+    _hiddenFolders.add(folder);
+    if (field == NewHarnessField.project ||
+        field == NewHarnessField.projectMenu) {
+      _refresh();
+    }
+  }
+
   /// Ask for [folder]'s listing. A local folder is read at once, off this
   /// isolate; another machine's is asked for only once the typing pauses — each
   /// keystroke through `~/code/au` would otherwise be a round trip whose answer
@@ -3687,7 +4281,8 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (current &&
         (field == NewHarnessField.project ||
-            field == NewHarnessField.projectName)) {
+            field == NewHarnessField.projectName ||
+            field == NewHarnessField.projectMenu)) {
       _refresh();
     }
   }
@@ -3912,6 +4507,12 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     if (isCloud) return _createCloud();
+    // Whoever starts it, New Project never starts a Product Manager on a
+    // machine the person did not choose, or one that cannot run it.
+    if (placesLead) {
+      if (leadBlocked case final why?) return _fail(why);
+    }
+    if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
       if (gitError != null) retryGitProject();
@@ -4000,6 +4601,7 @@ class NewHarnessController extends ChangeNotifier {
       _attempt = AgentCreationAttempt(
         background: integration != null,
         beforeSubmit: integration?.beforeSubmit,
+        launchModel: leadLaunchModel,
       );
       _existing = null;
       _warnedAboutClosing = false;
@@ -4009,8 +4611,14 @@ class NewHarnessController extends ChangeNotifier {
     busy = true;
     if (!(quiet && recheck)) {
       error = null;
-      status = recheck ? 'Checking on the harness…' : 'Starting harness…';
+      status = recheck ? 'Checking on the harness…' : _startingLine;
       notifyListeners();
+    }
+    if (!recheck && !asGuest) {
+      // What is sent, not what is shown: a terminal takes no project.
+      if (projectFolderRequest?.repository case final repository?) {
+        unawaited(_sayWhenCloning(repository, attempt));
+      }
     }
     if (model != null && !recheck) {
       await refreshModels();
@@ -4077,7 +4685,7 @@ class NewHarnessController extends ChangeNotifier {
     if (integration case final destination?) {
       try {
         launchMessage = destination.preparedPrompt ??= await destination
-            .prepare(_machineId, firstMessage);
+            .prepare(_machineId, firstMessage, base);
       } catch (failure) {
         return _fail(failure.toString());
       }
@@ -4113,7 +4721,7 @@ class NewHarnessController extends ChangeNotifier {
     // Working in a picked worktree says nothing about the next harness's.
     final launchedWorktree =
         _recoveredWorktreePreference ??
-        (isGitProject && !inWorktree ? worktree : null);
+        (choosesBranch && !inWorktree ? worktree : null);
     // A destination's journal keeps them for a later recovery's form.
     // Only a real folder: a new project's or a clone's label is no path, and a
     // recovery that unlocks the form after a failure would send it as one.
@@ -4165,6 +4773,7 @@ class NewHarnessController extends ChangeNotifier {
       destination.pending = true;
       try {
         if (!destination.completed) {
+          destination.launchModelRefused = attempt.launchModelRefused;
           await destination.complete(_machineId, attempt.agentId!);
           destination.completed = true;
         }
@@ -4195,7 +4804,7 @@ class NewHarnessController extends ChangeNotifier {
           choice,
           harnessId: harness,
           setup: launchSetup,
-          worktree: launchedWorktree,
+          worktree: worktreeToRemember,
         ),
       );
     }
@@ -4238,6 +4847,44 @@ class NewHarnessController extends ChangeNotifier {
 
   /// A cloud harness: made by the cloud service on this machine (CLI
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
+  /// New Project's Product Manager the Swarm starts
+  /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
+  Future<NewHarnessOutcome> _startInSwarm() async {
+    final start = integration?.startInSwarm;
+    if (start == null) {
+      return _fail(
+        'Update Harness to start a Product Manager on another machine.',
+      );
+    }
+    if (leadBlocked case final why?) return _fail(why);
+    busy = true;
+    error = null;
+    status =
+        'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
+    notifyListeners();
+    try {
+      await start(
+        LeadSwarmStart(
+          machineId: _swarmLeadMachine!,
+          engine: _engine,
+          repositoryUrl: leadRepositoryUrl,
+          title: _leadRepositoryName,
+          task: task.trim(),
+          files: attachments?.files ?? const [],
+        ),
+      );
+    } catch (failure) {
+      return _fail(failure.toString());
+    }
+    integration?.completed = true;
+    if (_disposed) return NewHarnessOutcome.created;
+    busy = false;
+    status = null;
+    attachments?.clear();
+    notifyListeners();
+    return NewHarnessOutcome.created;
+  }
+
   Future<NewHarnessOutcome> _createCloud() async {
     busy = true;
     error = null;
@@ -4306,9 +4953,14 @@ class NewHarnessController extends ChangeNotifier {
     _appTick?.cancel();
     _projectRefresh?.cancel();
     _listDebounce?.cancel();
+    _hiddenFolderDebounce?.cancel();
     app.removeListener(_onApp);
     _modelUsage?.removeListener(_refresh);
     if (_ownsModelUsage) _modelUsage?.dispose();
     super.dispose();
   }
 }
+
+/// The Product Manager's default (backend projects.ts BUILT_IN_ROLE_DEFAULTS):
+/// `opus` is Claude Code's name for its newest Opus, Opus 5.5.
+const kLeadModel = (model: 'opus', label: 'Opus 5.5', effort: 'xhigh');

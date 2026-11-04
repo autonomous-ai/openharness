@@ -1,5 +1,5 @@
 import importlib.util
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stdout
 import hashlib
 import io
 import json
@@ -13,6 +13,11 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('installer', Path(__file__).resolve().parents[1] / 'installer.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
+
+
+def no_usb(kernel):
+    """No Harness USB at hand: installed without a recovery."""
+    return nullcontext()
 
 
 class DiskSafety(unittest.TestCase):
@@ -42,6 +47,34 @@ class DiskSafety(unittest.TestCase):
         for changes in [{'ro': True}, {'type': 'part'}, {'type': 'loop'}, {'size': 1024}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 installer.validate_disk(self.disk(**changes))
+
+    def test_recovery_is_the_fourth_partition(self):
+        self.assertEqual(installer.recovery_partition('/dev/nvme0n1'), '/dev/nvme0n1p4')
+        self.assertEqual(installer.recovery_partition('/dev/sda'), '/dev/sda4')
+
+    def test_only_the_recovery_may_install_beside_its_own_mounted_partition(self):
+        disk = self.disk(children=[{'label': 'HN_RECOVERY', 'mountpoints': ['/run/archiso/bootmnt']}])
+        installer.validate_disk(disk, recovery=True)
+        with self.assertRaises(ValueError):
+            installer.validate_disk(disk)
+        other = self.disk(children=[{'label': 'HNROOT', 'mountpoints': ['/']}])
+        with self.assertRaises(ValueError):
+            installer.validate_disk(other, recovery=True)
+
+    def test_grubenv_is_one_block_that_names_the_next_start(self):
+        block = installer.grubenv('harness-recovery')
+        self.assertEqual(len(block), 1024)
+        self.assertIn(b'\nnext_entry=harness-recovery\n', block)
+        self.assertTrue(block.startswith(b'# GRUB Environment Block\n'))
+        self.assertNotIn(b'next_entry', installer.grubenv())
+        self.assertEqual(len(installer.grubenv()), 1024)
+
+    def test_recovery_entry_finds_itself_by_its_label_and_stays_on_disk(self):
+        conf = installer.recovery_conf('abcd-1234', 'linux-lts', ['intel_iommu=on'])
+        self.assertIn("RECOVERY_UUID='abcd-1234'", conf)
+        self.assertIn("RECOVERY_KERNEL='linux-lts'", conf)
+        for argument in ['archisolabel=HN_RECOVERY', 'copytoram=n', 'harness.recovery', 'intel_iommu=on']:
+            self.assertIn(argument, conf)
 
     def test_unattended_serial_must_match(self):
         installer.validate_disk(self.disk(), 'HN_TEST')
@@ -267,6 +300,7 @@ class EncryptionMemory(unittest.TestCase):
             with patch.object(installer, 'selected_disk'), \
                  patch.object(installer, 'preflight'), \
                  patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'live_medium', no_usb), \
                  patch.object(installer, 'encryption_memory', return_value=192 * 1024), \
                  patch.object(installer, 'run', side_effect=stop_at_open) as commands:
                 with self.assertRaisesRegex(OSError, 'stop before mapping'):
@@ -278,6 +312,56 @@ class EncryptionMemory(unittest.TestCase):
             for option in ['--iter-time', '--pbkdf-force-iterations', '--pbkdf', '--cipher', '--key-size']:
                 self.assertNotIn(option, call.args)
 
+    def install_until_open(self, config, medium, size=64 * 1024**3):
+        """The commands of an encrypted installation up to opening its disk, with [medium] as the USB."""
+        def stop_at_open(*args, **kwargs):
+            if args[:2] == ('cryptsetup', 'open'):
+                raise OSError('stop before mapping a real disk')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload'
+            source.touch()
+            with patch.object(installer, 'selected_disk', return_value={'size': size}), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'live_medium', return_value=nullcontext(medium)) as usb, \
+                 patch.object(installer, 'write_recovery') as recovery, \
+                 patch.object(installer, 'encryption_memory', return_value=192 * 1024), \
+                 patch.object(installer, 'boot_module') as boot, \
+                 patch.object(installer, 'run', side_effect=stop_at_open) as commands:
+                boot.return_value.selected.return_value = {'id': 'pc', 'kernel': 'linux-lts', 'parameters': [], 'modules': []}
+                with self.assertRaisesRegex(OSError, 'stop before mapping'):
+                    installer.install(config, source, Path(temp) / 'target')
+        return [call.args for call in commands.call_args_list], recovery, usb
+
+    def test_an_installation_from_the_usb_keeps_a_recovery_at_the_end(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        commands, recovery, _ = self.install_until_open(config, Path('/run/archiso/bootmnt'))
+        sgdisk = next(args for args in commands if args[0] == 'sgdisk' and '-n' in args)
+        self.assertIn('3:0:-4GiB', sgdisk)
+        self.assertIn('4:0:0', sgdisk)
+        recovery.assert_called_once_with('/dev/vda4', Path('/run/archiso/bootmnt'), 'linux-lts')
+
+    def test_without_the_usb_or_room_the_root_takes_the_whole_disk(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        for medium, size in [(None, 64 * 1024**3), (Path('/run/archiso/bootmnt'), 16 * 1024**3)]:
+            with self.subTest(medium=medium, size=size):
+                commands, recovery, _ = self.install_until_open(config, medium, size)
+                sgdisk = next(args for args in commands if args[0] == 'sgdisk' and '-n' in args)
+                self.assertIn('3:0:0', sgdisk)
+                self.assertNotIn('4:0:0', sgdisk)
+                recovery.assert_not_called()
+
+    def test_the_recovery_keeps_its_partitions_and_the_boot_one(self):
+        config = dict(username='me', hostname='harness', password='1234', encrypt=True, disk='/dev/vda',
+                      confirm_erase='/dev/vda', recovery=True)
+        commands, recovery, usb = self.install_until_open(config, Path('/run/archiso/bootmnt'))
+        self.assertFalse([args for args in commands if args[0] in ('sgdisk', 'mkfs.fat')])
+        self.assertIn(('wipefs', '-a', '/dev/vda3'), commands)
+        recovery.assert_not_called()
+        usb.assert_not_called()
+
     def test_plain_install_does_not_require_an_encryption_budget(self):
         config = dict(username='me', hostname='harness', password='test-password',
                       encrypt=False, disk='/dev/vda', confirm_erase='/dev/vda')
@@ -287,6 +371,7 @@ class EncryptionMemory(unittest.TestCase):
             with patch.object(installer, 'selected_disk'), \
                  patch.object(installer, 'preflight'), \
                  patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'live_medium', no_usb), \
                  patch.object(installer, 'encryption_memory') as budget, \
                  patch.object(installer, 'run', side_effect=OSError('stop before erasing')):
                 with self.assertRaisesRegex(OSError, 'stop before erasing'):
@@ -365,6 +450,7 @@ class InstallerCleanup(unittest.TestCase):
             with patch.object(installer, 'selected_disk'), \
                  patch.object(installer, 'preflight'), \
                  patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'live_medium', no_usb), \
                  patch.object(installer, 'encryption_memory', return_value=128 * 1024), \
                  patch.object(installer, 'run', side_effect=command), \
                  patch.object(installer, 'close_install_mapping', side_effect=cleanup) as close, \

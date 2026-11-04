@@ -23,6 +23,8 @@ class SuperTabPartsChange {
     required this.changed,
     this.removedGroups = const {},
     this.dormantGroups = const {},
+    this.readMarksOnly = false,
+    this.machinesOnly = false,
   });
 
   /// Some part or a derived value is new: what the screens draw may differ.
@@ -33,6 +35,13 @@ class SuperTabPartsChange {
 
   /// Groups that left the active set: they stay readable on demand.
   final Set<String> dormantGroups;
+
+  /// Only the reader's read marks moved: the page around the view, not what a saved view holds.
+  final bool readMarksOnly;
+
+  /// Only what a machine reports moved (its reading, its Lent, its worked-out
+  /// values): what shows machines may differ, nothing else.
+  final bool machinesOnly;
 }
 
 /// The parts of one Swarm as this reader last saw them (section 5.1): every part by kind and key at the newest
@@ -46,6 +55,7 @@ class SuperTabParts {
     required this.epoch,
     required this.lastChangedAt,
     required this.githubApp,
+    this.derivedEtag,
   });
 
   /// A first load (section 4.3). Throws a [FormatException] for a response of another format.
@@ -53,14 +63,21 @@ class SuperTabParts {
     if (answer['format'] != superTabReadFormat) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
+    // Read marks are held apart from the other derived values (_readMarks).
+    final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
+    final marks = derived.remove('readMarks');
+    final unreadMarks = derived.remove('unreadMarks');
+    final threadMarks = derived.remove('threadMarks');
+    final chatSettings = derived.remove('chatSettings');
     final parts = SuperTabParts._(
       _envelope(answer['head'], live: true),
-      superTabMap(answer['derived'] ?? const {}),
+      derived,
       cursor: _cursor(answer),
       epoch: _int(answer['epoch']),
       // Null for a Swarm with no part changed yet (contract.ts `ReadMeta`).
       lastChangedAt: _int(answer['lastChangedAt'] ?? 0),
       githubApp: answer['githubApp'] == true,
+      derivedEtag: _etag(answer),
     );
     parts._seen['head'] = _int(parts._head['version']);
     for (final kind in _lists) {
@@ -71,6 +88,11 @@ class SuperTabParts {
         parts._seen['$kind:${part['key']}'] = _int(part['version']);
       }
     }
+    parts._takeReadMarks(marks);
+    // Every one is news to a device whose own mark is higher.
+    parts._takeUnreadMarks(unreadMarks, all: true);
+    parts._takeThreadMarks(threadMarks);
+    parts._takeChatSettings(chatSettings);
     return parts;
   }
 
@@ -92,6 +114,9 @@ class SuperTabParts {
         }
       }
     }
+    parts._takeReadMarks(json['readMarks']);
+    parts._takeThreadMarks(json['threadMarks']);
+    parts._takeChatSettings(json['chatSettings']);
     return parts;
   }
 
@@ -108,6 +133,26 @@ class SuperTabParts {
   /// Whether the backend has the GitHub app, as the first load says.
   final bool githubApp;
 
+  /// The etag of the summary held (`derived` without the marks, backend read/derivedEtag.ts, #2906), as the last read
+  /// sent it: sent back with the cursor, so a change read leaves the summary out while it still matches. Null from a
+  /// backend without it, and then none is sent.
+  String? derivedEtag;
+
+  /// What a change read asks after `?`: the cursor, and the summary's etag when one is held.
+  String get changesQuery {
+    final etag = derivedEtag;
+    final query = 'cursor=${Uri.encodeQueryComponent(cursor)}';
+    return etag == null
+        ? query
+        : '$query&derivedEtag=${Uri.encodeQueryComponent(etag)}';
+  }
+
+  static String? _etag(Map<String, dynamic> answer) =>
+      switch (answer['derivedEtag']) {
+        final String etag when etag.isNotEmpty => etag,
+        _ => null,
+      };
+
   Map<String, dynamic> _head;
   Map<String, dynamic> _derived;
   final _live = <String, Map<String, Map<String, dynamic>>>{};
@@ -118,6 +163,101 @@ class SuperTabParts {
   /// The newest version seen of every part, deleted and dormant ones included: an older copy the overlap sends
   /// again never replaces it or brings it back (section 4.4).
   final _seen = <String, int>{};
+
+  /// The reader's own read marks by conversation (backend readMarks.ts), the highest each read sent: a first load
+  /// sends them all, a change read only those moved since its cursor.
+  final _readMarks = <String, int>{};
+
+  /// Keeps the higher of each mark in [marks] and the one held; whether any moved.
+  bool _takeReadMarks(Object? marks) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(:key, :value) in marks.entries) {
+      if (key is! String || value is! num) continue;
+      if ((_readMarks[key] ?? 0) >= value) continue;
+      _readMarks[key] = value.toInt();
+      moved = true;
+    }
+    return moved;
+  }
+
+  /// The marks a Mark unread moved back (backend readMarks.ts `unreadMarks`) since [takeLowered] last ran: the one
+  /// way a mark goes down, on every device of the reader.
+  final _lowered = <String, int>{};
+
+  /// Takes the marks in [marks] that a Mark unread moved below the one held (or, [all], each one sent); whether any
+  /// moved.
+  bool _takeUnreadMarks(Object? marks, {required bool all}) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(:key, :value) in marks.entries) {
+      if (key is! String || value is! num) continue;
+      final sequence = value.toInt();
+      if (!all && (_readMarks[key] ?? 0) <= sequence) continue;
+      _readMarks[key] = sequence;
+      _lowered[key] = sequence;
+      moved = true;
+    }
+    return moved;
+  }
+
+  /// This device marked [conversationId] unread back to [sequence]: the mark held goes there.
+  void lowerReadMark(String conversationId, int sequence) {
+    if ((_readMarks[conversationId] ?? sequence + 1) > sequence) {
+      _readMarks[conversationId] = sequence;
+    }
+  }
+
+  /// A Mark unread this device asked for was not kept: the mark held goes back to [sequence].
+  void raiseReadMark(String conversationId, int sequence) =>
+      _takeReadMarks({conversationId: sequence});
+
+  /// The marks lowered by a Mark unread elsewhere since the last call, by conversation.
+  Map<String, int> takeLowered() {
+    final taken = Map.of(_lowered);
+    _lowered.clear();
+    return taken;
+  }
+
+  /// The reader's own thread marks (backend readMarks.ts): by conversation, the newest message sequence read in each
+  /// thread, by its root. Kept as read marks are: the higher of each, and gone with their conversation.
+  final _threadMarks = <String, Map<String, int>>{};
+
+  /// Keeps the higher of each thread mark in [marks] and the one held; whether any moved.
+  bool _takeThreadMarks(Object? marks) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(key: id, value: threads) in marks.entries) {
+      if (id is! String || threads is! Map) continue;
+      for (final MapEntry(key: root, value: sequence) in threads.entries) {
+        if (root is! String || sequence is! num) continue;
+        final held = _threadMarks[id] ??= {};
+        if ((held[root] ?? 0) >= sequence) continue;
+        held[root] = sequence.toInt();
+        moved = true;
+      }
+    }
+    return moved;
+  }
+
+  /// The reader's own notification setting by conversation (backend chatSettings.ts): `all`, `mentions` or `muted`.
+  /// A first load sends every one, a change read those moved since its cursor; the newest wins, and a setting goes
+  /// with its conversation.
+  final _chatSettings = <String, String>{};
+
+  /// Keeps each setting in [settings] the server knows; whether any moved.
+  bool _takeChatSettings(Object? settings) {
+    var moved = false;
+    if (settings is! Map) return moved;
+    for (final MapEntry(:key, :value) in settings.entries) {
+      if (key is! String || value is! String) continue;
+      if (!const {'all', 'mentions', 'muted'}.contains(value)) continue;
+      if (_chatSettings[key] == value) continue;
+      _chatSettings[key] = value;
+      moved = true;
+    }
+    return moved;
+  }
 
   /// Dormant groups held with their data from before a stub closed them: a read by id at the stub's version is
   /// their current data.
@@ -131,6 +271,14 @@ class SuperTabParts {
       _live['groups']?.containsKey(groupId) == true ||
       _dormant.containsKey(groupId);
 
+  /// When group [groupId] last changed, in epoch milliseconds: its part's `changedAt` (backend read/contract.ts), which
+  /// moves with anything in it, a message included. Null for a group this reader does not hold.
+  int? groupChangedAt(String groupId) =>
+      switch ((_live['groups']?[groupId] ?? _dormant[groupId])?['changedAt']) {
+        final num at => at.toInt(),
+        _ => null,
+      };
+
   /// Dormant groups held with data from before a stub closed them, to read again by id.
   List<String> get staleGroups => _stale.toList();
 
@@ -143,13 +291,23 @@ class SuperTabParts {
   /// Merges one change read (section 4.4): a higher version wins, a tombstone removes the part, a dormant stub moves
   /// the group out of the active ones, `derived` is replaced, and the cursor moves. A reload answer is the caller's.
   SuperTabPartsChange apply(Map<String, dynamic> changes) {
+    // Without the summary, a reply is only right for the one held: checked before anything is merged.
+    final unchanged = changes['derivedUnchanged'] == true;
+    final etag = _etag(changes);
+    if (unchanged && (etag == null || etag != derivedEtag)) {
+      throw const FormatException(
+        'A Swarm read left out a summary this reader does not hold.',
+      );
+    }
     var changed = false;
+    // Anything but a machine's own report moved.
+    var beyondMachines = false;
     final removed = <String>{}, dormant = <String>{};
     if (changes['head'] != null) {
       final head = _envelope(changes['head'], live: true);
       if (_newer('head', head)) {
         _head = head;
-        changed = true;
+        changed = beyondMachines = true;
       }
     }
     for (final kind in _lists) {
@@ -159,11 +317,17 @@ class SuperTabParts {
         final key = part['key'] as String;
         if (!_newer('$kind:$key', part)) continue;
         changed = true;
+        if (kind != 'machines' || !_reportOnly(held[key], part)) {
+          beyondMachines = true;
+        }
         if (part['deleted'] == true) {
           held.remove(key);
           if (kind == 'groups') {
             _dormant.remove(key);
             _stale.remove(key);
+            _readMarks.remove(key);
+            _threadMarks.remove(key);
+            _chatSettings.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
@@ -190,19 +354,68 @@ class SuperTabParts {
         }
       }
     }
-    final derived = superTabMap(changes['derived'] ?? const {});
-    if (!const DeepCollectionEquality().equals(derived, _derived)) {
+    final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
+    final readMarksMoved =
+        _takeReadMarks(derived.remove('readMarks')) |
+        _takeUnreadMarks(derived.remove('unreadMarks'), all: false);
+    // Both run: one moving never skips the other.
+    final marksMoved =
+        _takeThreadMarks(derived.remove('threadMarks')) |
+        _takeChatSettings(derived.remove('chatSettings')) |
+        readMarksMoved;
+    // Unchanged: `derived` held only the marks, and the summary held stands.
+    if (!unchanged &&
+        !const DeepCollectionEquality().equals(derived, _derived)) {
+      if (!_sameBeyondMachines(derived, _derived)) beyondMachines = true;
       _derived = derived;
       changed = true;
     }
+    derivedEtag = etag;
     cursor = _cursor(changes);
     epoch = _int(changes['epoch'] ?? epoch);
     lastChangedAt = _int(changes['lastChangedAt'] ?? lastChangedAt);
     return SuperTabPartsChange(
-      changed: changed,
+      changed: changed || marksMoved,
       removedGroups: removed,
       dormantGroups: dormant,
+      readMarksOnly: marksMoved && !changed,
+      machinesOnly: changed && !beyondMachines && !marksMoved,
     );
+  }
+
+  /// Whether [next] says of a held machine only what its reports write: a
+  /// heartbeat. A new machine, a removed one, or one renamed or paused is news
+  /// to more than the machines list.
+  static bool _reportOnly(
+    Map<String, dynamic>? held,
+    Map<String, dynamic> next,
+  ) {
+    if (held == null || next['deleted'] == true || next['data'] == null) {
+      return false;
+    }
+    Map<String, dynamic> rest(Map<String, dynamic> part) =>
+        Map.of(superTabMap(part['data']))
+          ..remove('observation')
+          ..remove('lent')
+          ..remove('lentDays');
+    return const DeepCollectionEquality().equals(rest(held), rest(next));
+  }
+
+  static bool _sameBeyondMachines(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) => const DeepCollectionEquality().equals(
+    Map.of(a)..remove('machines'),
+    Map.of(b)..remove('machines'),
+  );
+
+  /// The machines as [state] lists them, with what the server worked out.
+  List<Map<String, dynamic>> get machines {
+    final worked = _derivedMap('machines');
+    return [
+      for (final machine in _data('machines'))
+        _overlay(machine, worked[machine['machineId']]),
+    ];
   }
 
   /// Takes dormant groups read on demand (section 4.5): a page of the dormant list, or one group by id. Each is kept
@@ -233,7 +446,6 @@ class SuperTabParts {
   /// groups come first in the order they were read, then the dormant groups held.
   Map<String, dynamic> get state {
     final agentsDerived = _derivedMap('agents');
-    final machinesDerived = _derivedMap('machines');
     final avatars = _derivedMap('avatars');
     final state = <String, dynamic>{
       ...superTabMap(_head['data']),
@@ -257,10 +469,7 @@ class SuperTabParts {
         ..._data('groups'),
         for (final part in _dormant.values) superTabMap(part['data']),
       ],
-      'machines': [
-        for (final machine in _data('machines'))
-          _overlay(machine, machinesDerived[machine['machineId']]),
-      ],
+      'machines': machines,
       'starts': [for (final start in _data('starts')) start],
       'githubApp': githubApp,
     };
@@ -270,11 +479,38 @@ class SuperTabParts {
     if (_derived['mentionsWaiting'] case final num waiting) {
       state['mentionsWaiting'] = waiting.toInt();
     }
+    if (_derived['mentionsDigest'] case final String digest) {
+      state['mentionsDigest'] = digest;
+    }
     if (_derived['decisionsWaiting'] case final num waiting) {
       state['decisionsWaiting'] = waiting.toInt();
     }
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
+    }
+    if (_derived['remindersDigest'] case final String digest) {
+      state['remindersDigest'] = digest;
+    }
+    if (_derived['activityDigest'] case final String digest) {
+      state['activityDigest'] = digest;
+    }
+    // Sent only where the server does not try Harness Team accounts yet.
+    if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
+    // Sent by a server that takes a thread reply's New session.
+    if (_derived['threadSessions'] == true) state['threadSessions'] = true;
+    // And one that also takes it on a top-level message in a Buddy chat.
+    if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
+    // And one that gives each person one Buddy for the whole Swarm.
+    if (_derived['swarmBuddy'] == true) state['swarmBuddy'] = true;
+    if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
+    if (_chatSettings.isNotEmpty) {
+      state['chatSettings'] = Map.of(_chatSettings);
+    }
+    if (_threadMarks.isNotEmpty) {
+      state['threadMarks'] = {
+        for (final MapEntry(:key, :value) in _threadMarks.entries)
+          key: Map<String, int>.of(value),
+      };
     }
     return state;
   }
@@ -291,10 +527,17 @@ class SuperTabParts {
       for (final kind in _lists)
         kind: (_live[kind] ?? const {}).values.toList(),
       'derived': _derived,
+      if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
+    'readMarks': Map<String, int>.of(_readMarks),
+    'chatSettings': Map<String, String>.of(_chatSettings),
+    'threadMarks': {
+      for (final MapEntry(:key, :value) in _threadMarks.entries)
+        key: Map<String, int>.of(value),
+    },
   };
 
   /// [json] (from [toJson]) without what the screens never draw: agent starts carry their tasks, and project

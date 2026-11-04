@@ -1,0 +1,290 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+/// A person already in a Swarm is told of a new invitation (Tony's mobile list,
+/// task 24): the phone reads them in any Swarm state, slowly while it has a
+/// Swarm to show.
+void main() {
+  const invitations = '/api/super-tabs/invitations';
+  Map<String, Object?> invite(String id, String name) => {
+    'tabId': 't-$id',
+    'name': name,
+    'inviteId': id,
+    'role': 'collaborator',
+  };
+
+  FakeSwarm backend({List<String> tabs = const ['a']}) {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        for (final id in tabs) {'id': id, 'name': id, 'ownerId': me},
+      ],
+      'next': null,
+    };
+    for (final id in tabs) {
+      fake.routes['/api/super-tabs/$id/parts'] = (_) => firstLoad(tabId: id);
+    }
+    fake.routes[invitations] = (_) => [invite('i1', 'Design Team')];
+    return fake;
+  }
+
+  int reads(FakeSwarm fake) => fake.paths.where((p) => p == invitations).length;
+
+  late DateTime at;
+  SwarmInbox inbox(FakeSwarm fake) {
+    final i = SwarmInbox(accountId: me, request: fake.request, now: () => at);
+    addTearDown(i.dispose);
+    return i;
+  }
+
+  setUp(() => at = DateTime.utc(2026, 11, 3, 9));
+
+  test('reads them with a Swarm to show', () async {
+    final i = inbox(backend());
+    await i.refresh();
+    expect(i.invitations.single.name, 'Design Team');
+  });
+
+  test('with a Swarm, at most every 5 minutes', () async {
+    final fake = backend();
+    final i = inbox(fake);
+    await i.refresh();
+    await i.refresh();
+    at = at.add(const Duration(minutes: 4, seconds: 59));
+    await i.refresh();
+    expect(reads(fake), 1);
+    at = at.add(const Duration(seconds: 1));
+    await i.refresh();
+    expect(reads(fake), 2);
+  });
+
+  test('with no Swarm, every read of the list, as before', () async {
+    final fake = backend(tabs: const []);
+    final i = inbox(fake);
+    await i.refresh();
+    await i.refresh();
+    expect(reads(fake), 2);
+  });
+
+  test('a pull reads them now', () async {
+    final fake = backend();
+    final i = inbox(fake);
+    await i.refresh();
+    await i.refreshAll();
+    expect(reads(fake), 2);
+  });
+
+  test('a failed read with a Swarm keeps the list and says nothing', () async {
+    final fake = backend();
+    final i = inbox(fake);
+    await i.refresh();
+    fake.routes[invitations] = (_) => throw const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'No computer.',
+      statusCode: 503,
+    );
+    await i.refreshAll();
+    expect(i.invitations.single.name, 'Design Team');
+    expect(i.invitationsFailed, isFalse);
+    expect(i.noComputer, isFalse);
+    expect(i.error, isNull);
+  });
+
+  test('joining takes it off the list at once, and it stays off', () async {
+    final fake = backend();
+    fake.routes['/api/super-tabs/t-i1/commands'] = (_) => <String, Object?>{};
+    final i = inbox(fake);
+    await i.refresh();
+    expect(await i.join(i.invitations.single), isTrue);
+    expect(i.invitations, isEmpty);
+    expect(reads(fake), 2, reason: 'joining reads them again');
+  });
+
+  test('Not now stays hidden after a pull', () async {
+    final i = inbox(backend());
+    await i.refresh();
+    i.notNow(i.invitations.single);
+    await i.refreshAll();
+    expect(i.invitations, isEmpty);
+  });
+
+  /// The invitations moved from Home to Activity's All and Needs you, counted
+  /// on the tab (Slack's Activity, 2026-11-03).
+  group('Activity', () {
+    Future<SwarmHost> pump(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      Widget page = const Scaffold(body: SwarmActivityView()),
+    }) async {
+      tester.view.physicalSize = const Size(1170, 2532);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: fake.request,
+        notices: SilentSystemNotices(),
+        features: features,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) =>
+              SwarmScope(notifier: host, child: child!),
+          home: page,
+        ),
+      );
+      await tester.pumpAndSettle();
+      return host;
+    }
+
+    Finder key(String k) => find.byKey(ValueKey(k));
+    final section = key('swarm-activity-invitations');
+
+    testWidgets('a person in a Swarm sees a new invitation in All, first and '
+        'on one line, and joins it', (tester) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/t-i1/commands'] = (_) {
+        fake.routes['/api/super-tabs/list'] = (_) => {
+          'tabs': [
+            {'id': 'a', 'name': 'a', 'ownerId': me},
+            {'id': 't-i1', 'name': 'Design Team', 'ownerId': 'ken'},
+          ],
+          'next': null,
+        };
+        fake.routes['/api/super-tabs/t-i1/parts'] = (_) =>
+            firstLoad(tabId: 't-i1');
+        fake.routes[invitations] = (_) => <Object>[];
+        return <String, Object?>{};
+      };
+      await pump(tester, fake);
+      expect(section, findsOneWidget);
+      final row = key('swarm-invitation-i1');
+      expect(
+        find.descendant(of: row, matching: find.text('Design Team')),
+        findsOneWidget,
+      );
+      double y(Finder f) => tester.getCenter(f).dy;
+      expect(
+        y(row),
+        greaterThan(y(key('swarm-activity-filter-all'))),
+        reason: 'under the filters, on All',
+      );
+      expect(
+        find.text("You're all caught up."),
+        findsNothing,
+        reason: 'one waits on the person',
+      );
+      final line = y(
+        find.descendant(of: row, matching: find.text('Design Team')),
+      );
+      expect(y(key('swarm-invitation-later-i1')), line, reason: 'one line');
+      expect(y(key('swarm-invitation-join-i1')), line, reason: 'one line');
+      await tester.tap(key('swarm-invitation-join-i1'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.last, {'type': 'invite.accept', 'inviteId': 'i1'});
+      expect(section, findsNothing);
+      expect(row, findsNothing);
+    });
+
+    testWidgets('Not now hides it, and the section with it', (tester) async {
+      final host = await pump(tester, backend());
+      await tester.tap(key('swarm-invitation-later-i1'));
+      await tester.pumpAndSettle();
+      expect(section, findsNothing);
+      await host.session!.inbox.refreshAll();
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsNothing);
+    });
+
+    testWidgets('a join refused says why, and the row stays', (tester) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/t-i1/commands'] = (_) =>
+          throw const SuperTabFailure(
+            'INVITE_EXPIRED',
+            'This invitation has expired.',
+            statusCode: 409,
+          );
+      await pump(tester, fake);
+      await tester.tap(key('swarm-invitation-join-i1'));
+      await tester.pumpAndSettle();
+      expect(find.text('This invitation has expired.'), findsOneWidget);
+      expect(key('swarm-invitation-i1'), findsOneWidget);
+    });
+
+    testWidgets('with none, no section', (tester) async {
+      final fake = backend();
+      fake.routes[invitations] = (_) => <Object>[];
+      await pump(tester, fake);
+      expect(section, findsNothing);
+    });
+
+    testWidgets('All and Needs you have them, first, and count them: they '
+        'wait on the person; Mentions and a page pushed over a page do not', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      Finder count(String filter, String n) => find.descendant(
+        of: key('swarm-activity-filter-$filter'),
+        matching: find.text(n),
+      );
+      expect(count('all', '1'), findsOneWidget);
+      expect(count('needsYou', '1'), findsOneWidget);
+      expect(count('mentions', '0'), findsOneWidget);
+
+      await tester.tap(key('swarm-activity-filter-needsYou'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing, reason: 'one does');
+
+      await tester.ensureVisible(key('swarm-activity-filter-mentions'));
+      await tester.tap(key('swarm-activity-filter-mentions'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsNothing);
+
+      await pump(tester, backend(), page: const SwarmActivityPage());
+      expect(key('swarm-invitation-i1'), findsNothing);
+    });
+
+    testWidgets("the Activity tab's count has them, and loses one put off", (
+      tester,
+    ) async {
+      final host = await pump(tester, backend(), page: const SwarmTabsPage());
+      final badge = key('swarm-tab-badge-activity');
+      expect(swarmActivityTabBadge(host.session!), 1);
+      expect(
+        find.descendant(of: badge, matching: find.text('1')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-tab-activity'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-invitation-later-i1'));
+      await tester.pumpAndSettle();
+
+      expect(swarmActivityTabBadge(host.session!), 0);
+      expect(badge, findsNothing);
+    });
+
+    testWidgets('Home lists none: they are Activity\'s', (tester) async {
+      await pump(tester, backend(), page: const SwarmPage());
+      expect(key('swarm-invitation-i1'), findsNothing);
+      expect(find.text('Invitations'), findsNothing);
+    });
+  });
+}

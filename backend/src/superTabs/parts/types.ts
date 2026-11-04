@@ -12,8 +12,12 @@ export interface Part<T = unknown> {
   key: string
   /** Moves on every write and every guarded touch; never resets. */
   version: number
-  /** Epoch ms of the last data change (or tombstone). A touch leaves it. */
+  /** Epoch ms of the last data change (or tombstone). A touch leaves it, and so does a machine's own reading (`readAt`). */
   changedAt: number
+  /** A machine part's last write of its own reading alone, when there was one (change reads only). */
+  readAt?: number
+  /** A machine part's last reading that changed more than its volatile fields, when there was one (change reads only). */
+  contentAt?: number
   deleted?: true
   dormant?: true
   ordinal: number
@@ -25,7 +29,7 @@ export type HeadProject = Omit<SwarmProject, 'progress'>
 
 /** The head: everything in `SuperTabState` that is not one of the other parts. */
 export type HeadData = Omit<SuperTabState, 'people' | 'agents' | 'conversations' | 'parkedConversations' | 'starts' | 'machines'
-  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
+  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'removedSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
   | 'groupCounter' | 'sequenceBase'> & { projects?: HeadProject[]
     /** Which optional lists the state had, so an empty one comes back as `[]` and an absent one stays absent. */
     presentLists?: string[] }
@@ -43,8 +47,10 @@ export interface MachineData {
   reservations: Array<{ harnessId: string; generation: string; renewed: boolean }>
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
-  closingSessions: Array<{ agentId: string; harnessId: string; machineOwnerId: string }>
-  cleanups: Array<{ removalId: string; machineOwnerId: string }>
+  closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string; buddyOnly?: true }>
+  /** Absent on a part with none, as on every part from before it. */
+  removedSessions?: Array<Omit<NonNullable<SuperTabState['removedSessions']>[number], 'machineId'>>
 }
 
 /** One project's report watermark (section 3.6). Group sequences are per group; floors carry pre-split tab revisions. */

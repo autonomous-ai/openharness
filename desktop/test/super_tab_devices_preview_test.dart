@@ -36,7 +36,8 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
         'configuration': {'engine': 'codex'},
       },
   ];
-  (state['conversations'] as List)[0]['agentIds'] = [
+  // A workgroup: the project chat shows its coordinator's terminal alone (#2207).
+  (state['conversations'] as List)[1]['agentIds'] = [
     for (var i = 0; i < agents; i++) 'agent-$i',
   ];
   f.app.machineStates['m']!.agents = [
@@ -58,7 +59,9 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
   if (finder) f.app.finderRoots.set('m', 'native-0', _finderRoot);
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
-  c.selectGroupTerminals('lead');
+  c
+    ..select('offline')
+    ..selectGroupTerminals('offline');
   if (legacyDevices) {
     final tab = f.app.activeSwarm;
     tab.panes
@@ -110,8 +113,14 @@ Future<void> _dispose(
 }
 
 void main() {
-  for (final kind in ['web', 'Finder']) {
-    testWidgets('$kind viewer survives repeated Devices round trips', (
+  for (final (kind, viaManage) in [
+    ('web', true),
+    ('Finder', true),
+    ('web', false),
+    ('Finder', false),
+  ]) {
+    final way = viaManage ? 'Manage' : "the avatar's menu";
+    testWidgets('$kind viewer survives repeated Devices round trips, by $way', (
       tester,
     ) async {
       final finder = kind == 'Finder';
@@ -136,7 +145,16 @@ void main() {
 
       expectPreview();
       for (var visit = 0; visit < 2; visit++) {
-        await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+        if (viaManage) {
+          await tester.tap(find.byKey(const ValueKey('super-manage')));
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const ValueKey('super-manage-tab-devices')),
+          );
+        } else {
+          // What the avatar's menu does.
+          f.app.openDevices();
+        }
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isTrue);
         expect(f.app.activeSwarm, same(tab));
@@ -150,7 +168,8 @@ void main() {
           await persisted.load();
           expect(persisted.rootOf('m', 'native-0'), _finderRoot);
         }
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        // Back to the task, as its Tasks view opens it.
+        await c.select('offline');
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isFalse);
         expectPreview();
@@ -186,7 +205,7 @@ void main() {
         expect(tab.panes.single.isDevices, isTrue);
         expect(tab.panes.single.ownerAgentId, isNull);
         expect(tab.manualLayout, isNull);
-        c.select('lead');
+        c.select('offline');
         await tester.pumpAndSettle();
         expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
       }
@@ -214,7 +233,7 @@ void main() {
     expect(tab.focusedPaneId, tab.panes.single.id);
     expect(tab.zoomedPaneId, isNull);
     expect(tab.manualLayout, isNull);
-    c.select('lead');
+    c.select('offline');
     await tester.pumpAndSettle();
     expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
     c.selectDevices();

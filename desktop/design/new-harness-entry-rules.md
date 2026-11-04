@@ -14,7 +14,7 @@ Agent, Computer, and Repo selectors sit above the message. The local computer is
 **This Mac** on macOS and **This Computer** on Linux; remote computers retain their
 names. Model, Approvals, applicable Account, Worktree, and Branch remain visible
 below the message. Worktree and Branch stay on one line, without explanatory text
-underneath. **From main** identifies the base of a new worktree branch; a tooltip
+underneath. **From \<branch\>**, usually **From main**, identifies the base of a new worktree branch; a tooltip
 explains the operation. Existing branches and worktrees retain their branch name.
 
 The model control retains the provider/subscription picker and shared models.
@@ -142,7 +142,7 @@ Machine identifies where the agent, project and tools run. The model can be
 served from a different machine. Changing Machine or Agent preserves an explicit
 model, refreshes availability, and blocks Start with an explanation if the new
 combination is unavailable. It never substitutes a subscription. Refresh models
-updates the choices; Manage Models opens the existing Models panel for lifecycle
+updates the choices; Your models opens the existing Models panel for lifecycle
 management and preserves the launch draft. Choosing Terminal clears model routing;
 its Model row is omitted.
 
@@ -159,8 +159,13 @@ Git projects enable Branch and Worktree. Worktree defaults to **Yes** until a
 successful Git launch remembers another global choice.
 The checkbox supports pointer and keyboard activation through the form's active
 keymap. Its label and branch icon remain together as the form narrows.
-An empty repository explains that a commit is required for a worktree and asks
-for a choice. Folders without Git keep both rows disabled. Discovery runs on the selected machine
+A repository with no commit yet — or a folder inside one, as `git init` in the
+home folder makes `~/Downloads` — starts in the folder itself, as Claude Code's
+app does: Branch and Worktree are hidden (the row form says "No commits yet"),
+nothing blocks Start, and the remembered Worktree choice is left for the next
+repository (`hasNoCommits`). A Swarm's Product Manager is the exception: it
+never works in the person's checkout, so such a project is refused for it.
+Folders without Git keep both rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
@@ -182,10 +187,11 @@ person browses or types stays itself: the harness works in it on its current
 branch, and Worktree is off and unavailable ("Already a worktree"). Worktrees
 Start made are never offered as recent projects.
 
-**Branch** starts on `main` for a fresh desktop form. With Worktree on, local
-`main` or `origin/main` can supply the base. With Worktree off, it must be a local
-branch; a remote-only `main` requires an explicit local branch choice. Missing `main` requires
-an explicit branch choice; a failed worktree creation never silently turns
+**Branch** starts on the project's default branch (`origin/HEAD`) for a fresh desktop
+form; then `main`, for a project that names none; then the branch it is on. With
+Worktree on, a local or remote default can supply the base. With Worktree off, it must
+be a local branch; a remote-only default requires an explicit local branch choice. None
+of these requires an explicit branch choice; a failed worktree creation never silently turns
 Worktree off. Branch does not follow the pane New Harness was opened from:
 New Harness is new work, and another agent's branch is one pick away. The start
 action reads **New Harness**, whatever the rows say.
@@ -281,6 +287,42 @@ machine and starts there only when pressed; a file of that name, or another
 name or machine, offers nothing. A clone whose destination is already a
 checkout of the same repository (its `origin`, however git spells it) starts in
 that checkout instead of cloning; anything else there is still refused.
+
+## Pasting a path or a GitHub link
+
+The project search reads what was typed
+(docs/plans/2026-10-30-new-harness-paste-path-or-repository.md). A path, or a
+GitHub link (`github.com/…` or `git@<host>:…`), gets one action row above the
+doors, highlighted, so Enter does it. Anything else, a bare `owner/repo`
+included, filters the recent projects as before.
+
+- A path naming a folder: **Open \<path\>**. Otherwise **Browse \<folder\>/**,
+  which moves to the Open Folder prompt with the typed text. A half-typed path
+  that a recent project matches shows no Browse row: the project keeps the
+  highlight.
+- A repository link: **Clone owner/repo**, the same row the GitHub prompt shows.
+  Its detail names the SSH alias it goes through, and, on another computer,
+  that it uses that computer's GitHub access. A GitHub link that is no
+  repository is a disabled **Not a repository link**. On this computer, an
+  alias whose `ssh -G` host is not github.com is a disabled **\<alias\> isn't a
+  GitHub host**. Another computer's daemon checks its own aliases at launch.
+- A terminal takes no project, so it clones nothing: a link shows a disabled **A terminal
+  can't clone**, and changing to Terminal with a clone chosen asks for a folder or an agent.
+- While it clones the line reads **Cloning owner/repo…**. A checkout of that
+  repository already in the projects folder (`~/harnesses`, or `~/projects` on Harness
+  OS, under any spelling of its name) is used, not cloned, and the line
+  stays **Starting harness…**, as it does when the computer cannot say. A clone refused
+  access tries the other transport, then up to three `~/.ssh/config` aliases
+  leading to github.com. It moves on after a refusal or a host key ssh will not
+  trust, never after a network failure or a timeout. Through an alias, the workspace
+  says **Cloned via \<alias\>** once. Refused everywhere: **No access to owner/repo on
+  \<computer\>**, with the task and choices kept. When an untrusted host key was among
+  the failures, the line names the key and `ssh -T git@github.com` instead: GitHub
+  was not asked, and that key may have changed.
+- A remote path ending in a hidden folder is asked about by its own path, because
+  its parent's listing leaves it out; there it shows **Open**.
+- An alias `ssh -G` cannot read stays offered, and its launch says so; only an
+  answered host other than github.com is refused in the row.
 
 ## Regression coverage
 

@@ -23,7 +23,8 @@ import { registry, type RegisterInput, type RegisteredSession } from './lib/regi
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
-import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
+import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
@@ -59,6 +60,8 @@ export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: read
 export interface PairOutcome {
   status: number
   body: Record<string, unknown>
+  /** A busy backend's Retry-After, passed on where an answer is forwarded whole (the usage report). */
+  retryAfterMs?: number
 }
 
 export interface HookServerHandlers {
@@ -160,6 +163,9 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
+   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
+  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
@@ -196,6 +202,9 @@ export interface HookServerHandlers {
   /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
    *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
   onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
+  /** A chat file over 10 MB goes straight to storage (superTabs/attach.ts): its link asked for, and its upload said complete,
+   *  with this computer's account. Small JSON both ways; the bytes never pass through here. */
+  onSuperTabAttachmentUpload?: (path: string, body: Record<string, unknown>) => Promise<PairOutcome>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -392,6 +401,8 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
 }
 
 export interface HookServerOptions {
+  /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
   /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
   socketPath?: string | null
   /** Windows: the daemon's token. When given, `socketPath` is a pipe whose every request proves it (lib/localSocket.ts). */
@@ -421,6 +432,8 @@ export function startHookServer(
   options: HookServerOptions = {},
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
+  const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
+  const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
@@ -478,15 +491,18 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
-      // An engine hook's token. Today the daemon's own credential; a guest's harness will carry a token
-      // scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md), checked here.
-      const hookTokenMatches = (request: http.IncomingMessage): boolean =>
-        hookCredentialMatches(hookCredential, request.headers['x-harness-hook-token'])
-      const hookOk = hookTokenMatches(req)
+      // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
+      // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
+      // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+      // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
+      // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
+      const suppliedHookToken = req.headers['x-harness-hook-token']
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await peerAccount(req.socket))
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
-      // read. Over the daemon's Unix socket the filesystem already said who this is.
-      const credentialOk = trustedLocal || localCredentialMatches(hookCredential, req)
+      // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have
+      // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
+      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await peerAccount(req.socket))
       // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
       // own token, above) and the native device routes (their own bearer, just below).
       const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
@@ -497,7 +513,7 @@ export function startHookServer(
         const peer = req.socket.remoteAddress
         const loopback = trustedLocal || peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
         const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined
-        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer)) {
+        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
         if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
@@ -1101,11 +1117,15 @@ export function startHookServer(
         }
         try {
           const result = await handlers.onProductUsageReport(report)
+          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
+          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
+      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
+      // with only "Could not upload the file".
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1114,6 +1134,21 @@ export function startHookServer(
         const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
         const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
         await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
+      }
+      const direct = req.method === 'POST'
+        ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments\/uploads(\/[A-Za-z0-9_-]{1,160}\/complete)?$/.exec(url) : null
+      if (direct) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSuperTabAttachmentUpload) { json(503, { error: 'UNAVAILABLE' }); return }
+        // A link's request names the file ({conversationId, name, mime, size}); a completion's is {}, and may be empty.
+        let body: unknown
+        try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
+        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
+        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
+        const { conversationId, name, mime, size } = body as Record<string, unknown>
+        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
       }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {
@@ -1168,6 +1203,13 @@ export function startHookServer(
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      if (req.method === 'PATCH' && url === '/api/auth/me') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onAuthMeUpdate!(body)); return
       }
       // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
       // a credential. So not the CSRF header, which any local process can send, but the daemon's

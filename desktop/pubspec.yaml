@@ -90,17 +90,34 @@ dependencies:
   # The web pane: a domain harness's viewer (Circuit's board, Workshop's part)
   # drawn beside its agent's terminal. THE one native plugin this feature adds
   # — WKWebView via the endorsed `webview_flutter_wkwebview`, which lands in
-  # the macOS SPM package list and GeneratedPluginRegistrant. macOS only for
-  # now; the pane shows the URL as text where no implementation is registered
-  # (Linux, and every `flutter test`). See CLAUDE.md on what a plugin costs.
+  # the macOS SPM package list and GeneratedPluginRegistrant. Linux support
+  # is added separately below; it falls back to the URL when WebKitGTK is
+  # unavailable. See CLAUDE.md on what a plugin costs.
   webview_flutter: ^4.14.1
   # Named directly for the WebKit creation params (muted autoplay in viewer panes).
   webview_flutter_platform_interface: ^2.15.1
   webview_flutter_wkwebview: ^3.26.1
+  # Keep exact: 1.3+ uses a different platform interface. This pin controls
+  # plugin updates, not the host WebKitGTK engine. See RELEASE.md.
+  webview_all_linux: 1.2.1
   # The Finder tile's code editor and its highlighter (lib/finder/): pure
   # Dart, no native plugin, so the macOS SPM package list is unchanged.
   re_editor: ^0.10.0
   re_highlight: ^0.0.3
+  # The Dart team's IANA zone table: the local time on a person's card in the
+  # Swarm chat (super_tabs/zone_time.dart), daylight saving included. Pure
+  # Dart; its 10-year data is a deferred import, out of the web's first load.
+  timezone: ^0.11.2
+  # Plays a chat's voice messages (`super_tabs/voice_bubble.dart`), from a
+  # local copy of the file. A native plugin, first-party Flutter: AVPlayer on
+  # macOS, through its Swift package, so it lands in the macOS SPM package list
+  # and GeneratedPluginRegistrant; the browser's own media element on the web.
+  # It has no Linux or Windows implementation, so there the bubble's play
+  # opens the file as a file chip does. See CLAUDE.md on what a plugin costs.
+  video_player: ^2.14.0
+  # The composer's mic on macOS and the web, as the phone records (#2665):
+  # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:
@@ -123,6 +140,13 @@ dev_dependencies:
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
+dependency_overrides:
+  # 2.12.2 rewrote the macOS player in Swift against the macOS 26 SDK
+  # (`AVAsset.load(_:isolation:)`); the release runner's Xcode 16 cannot build
+  # it, which failed every Desktop build since #2887. 2.12.1 is the last
+  # Objective-C release. Lift this once release-desktop.yml builds on Xcode 26.
+  video_player_avfoundation: 2.12.1
+
 flutter:
   fonts:
     - family: Roboto Mono
@@ -130,6 +154,13 @@ flutter:
         - asset: assets/fonts/roboto-mono/RobotoMono.ttf
         - asset: assets/fonts/roboto-mono/RobotoMono-Italic.ttf
           style: italic
+    # Icons only (Nerd Fonts v3.5.1: MIT, plus the glyph-set licenses listed in
+    # its NOTICE). Claude Code prints these from the private-use area;
+    # the text faces above do not carry them. One em wide, so the terminal
+    # scales them down to the cell measured from the text face.
+    - family: Symbols Nerd Font Mono
+      fonts:
+        - asset: assets/fonts/symbols-nerd-font-mono/SymbolsNerdFontMono-Regular.ttf
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
@@ -141,6 +172,11 @@ flutter:
     - assets/daemon-art/slot/
     - assets/daemon-art/portrait/
     - assets/fonts/roboto-mono/OFL.txt
+    - assets/fonts/symbols-nerd-font-mono/LICENSE
+    - assets/fonts/symbols-nerd-font-mono/NOTICE
+    - assets/fonts/symbols-nerd-font-mono/CC-BY-4.0.txt
+    - assets/fonts/symbols-nerd-font-mono/Apache-2.0.txt
+    - assets/fonts/symbols-nerd-font-mono/OFL.txt
     - assets/machines.svg
     - assets/models.svg
     - assets/harnesses.svg

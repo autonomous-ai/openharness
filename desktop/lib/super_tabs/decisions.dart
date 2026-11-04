@@ -20,20 +20,49 @@ class SuperTabDecision {
       options = List.unmodifiable([
         for (final option in row['options'] as List? ?? const []) '$option',
       ]),
-      recommended = (row['recommended'] as num?)?.toInt() ?? 0,
+      recommended = (row['recommended'] as num?)?.toInt(),
       unblocks = row['unblocks'] as String? ?? '',
       choice = (row['choice'] as num?)?.toInt(),
+      delegated = row['delegated'] == true,
+      overdue = row['overdue'] == true,
+      pmTakesOver = row['pmTakesOver'] == true,
       note = row['note'] as String?,
-      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
+      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      answeredAt = DateTime.tryParse(row['answeredAt'] as String? ?? '');
   final String id, batchId, projectId, projectName, conversationId;
   final String conversationTitle, askerName, question, unblocks;
   final List<String> options;
-  final int recommended;
 
-  /// The option the reader chose; null while it is open.
+  /// The option the asker recommends; null, or not one of [options], when it
+  /// recommends none.
+  final int? recommended;
+
+  /// Whether Let PM decide can answer it: only with a recommended option.
+  bool get canDelegate {
+    final r = recommended;
+    return r != null && r >= 0 && r < options.length;
+  }
+
+  /// The option the reader chose, or the PM chose for them ([delegated]);
+  /// null while it is open.
   final int? choice;
+
+  /// The reader left it to the PM, who took the recommended option.
+  final bool delegated;
+
+  /// The PM answered it because it waited 24 hours, not because the reader
+  /// chose Let PM decide.
+  final bool overdue;
+
+  /// Whether the 24-hour sweep will take it over (the backend says: not a
+  /// reflection, and the recommended option exists). Only then does its row say
+  /// `PM in ...`.
+  final bool pmTakesOver;
   final String? note;
   final DateTime? createdAt;
+
+  /// When it was answered; null while it is open.
+  final DateTime? answeredAt;
 }
 
 /// The reader's decisions in one Swarm: open and answered, read from the
@@ -54,10 +83,28 @@ class SuperTabDecisions extends ChangeNotifier {
 
   final SuperTabController controller;
   List<SuperTabDecision> open = const [], answered = const [];
+
+  /// Whether [open] was read since the Swarm was opened or its audience last
+  /// changed. Before that, the server's count is all there is.
+  bool loaded = false;
   String? error;
 
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
+
+  /// The answer that failed to send for each decision, sent again by [retry].
+  final Map<String, Map<String, dynamic>> _failed = {};
+
+  /// Whether the reader's last answer to [decision] failed to send.
+  bool failedToSend(SuperTabDecision decision) =>
+      _failed.containsKey(decision.id);
+
+  /// Sends the answer that failed again: the same option, or Let PM decide.
+  Future<bool> retry(SuperTabDecision decision) =>
+      switch (_failed[decision.id]) {
+        final answer? => _answer(decision, answer),
+        null => Future.value(false),
+      };
   int? _count;
   String? _digest;
   int? _epoch;
@@ -69,11 +116,36 @@ class SuperTabDecisions extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// The open ones asked in [projectId]'s conversations, for its Chat with PM.
+  /// The open ones asked in [projectId]'s conversations, for its Buddy chat.
+  /// The open decisions asked in [projectId]; for the empty id, the
+  /// reader's one Buddy chat for the whole Swarm, every project's (spec
+  /// 2026-10-31-one-buddy-per-swarm; security review 1 of #2437).
   List<SuperTabDecision> openIn(String projectId) => [
     for (final d in open)
-      if (d.projectId == projectId) d,
+      if (projectId == SuperTabController.kSwarmBuddyKey ||
+          d.projectId == projectId)
+        d,
   ];
+
+  /// Those of [openIn] the reader has not set aside with Not now or Hide.
+  List<SuperTabDecision> shownIn(String projectId) {
+    final aside = controller.decisionsAside;
+    return [
+      for (final d in openIn(projectId))
+        if (!aside.contains(d.id)) d,
+    ];
+  }
+
+  /// Not now and Hide: folded in the Buddy chat until the reader shows them
+  /// again; a decision asked later still shows.
+  void setAside(Iterable<SuperTabDecision> decisions) =>
+      controller.setDecisionsAside(decisions.map((d) => d.id), aside: true);
+
+  /// Show: every open decision of [projectId] in its Buddy chat again.
+  void showAgain(String projectId) => controller.setDecisionsAside(
+    openIn(projectId).map((d) => d.id),
+    aside: false,
+  );
 
   void _changed() {
     final snapshot = controller.snapshot;
@@ -82,6 +154,7 @@ class SuperTabDecisions extends ChangeNotifier {
     if (epoch != null && epoch != _epoch) {
       // Who may read what changed: nothing read before shows until read again
       // (review of #1820), even while the count stays.
+      if (_epoch != null) loaded = false;
       if (_epoch != null && (open.isNotEmpty || answered.isNotEmpty)) {
         open = answered = const [];
         notifyListeners();
@@ -111,33 +184,55 @@ class SuperTabDecisions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
-  Future<List<SuperTabDecision>> _list(String state) async {
+  /// One list, newest first, and whether it holds every one of its kind:
+  /// only when the backend says it left none out.
+  Future<(List<SuperTabDecision>, bool)> _list(String state) async {
     final Map<String, dynamic> answer;
     try {
       answer = await controller.request('GET', '$_path/decisions?state=$state');
     } on SuperTabFailure catch (failure) {
       // A backend from before decisions has no list: there is nothing to show.
-      if (failure.statusCode == 404) return const [];
+      if (failure.statusCode == 404) return (const <SuperTabDecision>[], true);
+      // One from before Let PM decide has no `settled` list: its answered
+      // list has every answer, none of them the PM's.
+      if (failure.statusCode == 400 && state == 'settled') {
+        return _list('answered');
+      }
       rethrow;
     }
-    return List.unmodifiable([
-      for (final row in answer['decisions'] as List)
-        SuperTabDecision.fromJson(superTabMap(row)),
-    ]);
+    return (
+      List<SuperTabDecision>.unmodifiable([
+        for (final row in answer['decisions'] as List)
+          SuperTabDecision.fromJson(superTabMap(row)),
+      ]),
+      answer['more'] == false,
+    );
   }
+
+  /// Whether [open] holds every open decision, as its last read said.
+  bool _openComplete = false;
 
   Future<void> _read() async {
     final epoch = _epoch;
     try {
-      final [nextOpen, nextAnswered] = await Future.wait([
+      // `settled` has the answers the PM gave too; `answered` is what an
+      // older Desktop reads, without them.
+      final [(nextOpen, openComplete), (nextAnswered, _)] = await Future.wait([
         _list('open'),
-        _list('answered'),
+        _list('settled'),
       ]);
       // Read before who may read what changed: the read asked again since
       // replaces it.
       if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
+      loaded = true;
+      _openComplete = openComplete;
+      // The lists are the newest of each (the backend caps them): what is
+      // set aside is forgotten only once it is known answered or gone.
+      final gone = _gone();
+      controller.forgetDecisionsAside(gone);
+      _failed.removeWhere((id, _) => gone(id));
       error = null;
       _failedAt = null;
     } catch (_) {
@@ -147,9 +242,58 @@ class SuperTabDecisions extends ChangeNotifier {
     notifyListeners();
   }
 
+  static const sendFailed = 'Could not send your answer. Try again.';
+
+  /// Whether a decision is known answered or gone: in the answered list, or
+  /// missing from an open list the backend says holds every open one.
+  bool Function(String id) _gone() {
+    final openIds = {for (final d in open) d.id};
+    final answeredIds = {for (final d in answered) d.id};
+    final complete = _openComplete;
+    return (id) =>
+        answeredIds.contains(id) || (complete && !openIds.contains(id));
+  }
+
   /// The reader's one-tap answer. Any reader may answer what was asked of
   /// them, so this does not wait behind the composer's pending send.
-  Future<bool> answer(SuperTabDecision decision, int choice) async {
+  Future<bool> answer(SuperTabDecision decision, int choice) =>
+      _answer(decision, {'choice': choice});
+
+  /// Let PM decide: the backend answers with the recommended option on the
+  /// reader's behalf, recorded as the PM's choice, never as theirs.
+  Future<bool> delegate(SuperTabDecision decision) =>
+      _answer(decision, {'delegate': true});
+
+  /// Let PM decide for every one of [decisions] it can (those with a
+  /// recommended option) that are not being answered, two at a time and read
+  /// back once; how many the backend took. A failed one stays on its card for
+  /// [retry].
+  Future<int> delegateAll(List<SuperTabDecision> decisions) async {
+    final sent = await superTabTwoAtATime([
+      for (final d in decisions)
+        if (d.canDelegate && !answering.contains(d.id)) d,
+    ], (d) => _send(d, {'delegate': true}));
+    await load();
+    unawaited(controller.refresh());
+    return sent.where((ok) => ok).length;
+  }
+
+  Future<bool> _answer(
+    SuperTabDecision decision,
+    Map<String, dynamic> answer,
+  ) async {
+    if (!await _send(decision, answer)) return false;
+    await load();
+    unawaited(controller.refresh());
+    return true;
+  }
+
+  /// Sends one answer and keeps what it needs to be sent again; the callers
+  /// read the decisions back, once for all they sent.
+  Future<bool> _send(
+    SuperTabDecision decision,
+    Map<String, dynamic> answer,
+  ) async {
     answering.add(decision.id);
     notifyListeners();
     try {
@@ -161,19 +305,19 @@ class SuperTabDecisions extends ChangeNotifier {
           'command': {
             'type': 'decision.answer',
             'decisionId': decision.id,
-            'choice': choice,
+            ...answer,
           },
         },
       );
+      _failed.remove(decision.id);
+      return true;
     } catch (_) {
-      error = 'Could not send your answer. Try again.';
+      // Said on the card that sent it ([failedToSend]), wherever it shows.
+      _failed[decision.id] = answer;
       return false;
     } finally {
       answering.remove(decision.id);
       notifyListeners();
     }
-    await load();
-    unawaited(controller.refresh());
-    return true;
   }
 }

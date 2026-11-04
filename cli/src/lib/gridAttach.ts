@@ -187,7 +187,13 @@ export interface GridAccessOptions {
    *  since forgets what this daemon remembered. */
   signedIn: () => boolean
   log: (line: string) => void
+  /** Injected for the tests. */
+  now?: () => number
 }
+
+/** How long a failure is answered as it is before grid is asked again: a minute, doubled for each failure in a row. */
+const FAILURE_HOLD_MS = 60_000
+const MAX_FAILURE_HOLD_MS = 10 * 60_000
 
 export interface GridAccess {
   /** Have grid ready for what the caller is about to do: signed in as this account, and — `ownGrid` —
@@ -204,30 +210,42 @@ export interface GridAccess {
  * - **Remembered.** A sign-in as this account, and the account's grid once it is there, hold for the
  *   daemon's life — until `grid` no longer holds a sign-in at all, which a hand-run `grid logout`
  *   leaves behind.
- * - **Failures are not remembered.** Every ask is a person acting, so the next one simply tries again.
+ * - **A failure is held.** Not every ask is a person acting: a held Swarm start asks every 2 seconds
+ *   (core/agents/pendingLaunches.ts) and each owner's Swarm every minute (superTabs/swarmGrids.ts), and each ask that
+ *   failed ran grid's installer again. A failure answers as it is for a minute, twice as long after each failure in a
+ *   row up to ten; a success clears it.
  */
 export function createGridAccess(opts: GridAccessOptions): GridAccess {
+  const now = opts.now ?? Date.now
   let signedIn = false
   let ownGridThere = false
   let last: GridAttachResult | null = null
+  let failure: { result: GridAttachResult; until: number; hold: number } | null = null
   let queue: Promise<unknown> = Promise.resolve()
+
+  const failed = (result: GridAttachResult): GridAttachResult => {
+    const hold = failure ? Math.min(failure.hold * 2, MAX_FAILURE_HOLD_MS) : FAILURE_HOLD_MS
+    failure = { result, until: now() + hold, hold }
+    return result
+  }
 
   const once = async (ownGrid: boolean): Promise<GridAttachResult> => {
     if (!opts.signedIn()) signedIn = ownGridThere = false
     if (last && signedIn && (!ownGrid || ownGridThere)) return last
+    if (failure && now() < failure.until) return failure.result
     let result: GridAttachResult
     try {
       result = await opts.attempt({ ownGrid, signedInThisRun: signedIn })
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       opts.log(`attempt failed: ${detail}`)
-      return { status: 'handoff-failed', name: null, detail }
+      return failed({ status: 'handoff-failed', name: null, detail })
     }
-    if (result.status === 'converged' || result.status === 'signed-in') {
-      signedIn = true
-      if (result.ownGrid && OWN_GRID_THERE.has(result.ownGrid)) ownGridThere = true
-      last = result
-    }
+    if (result.status !== 'converged' && result.status !== 'signed-in') return failed(result)
+    failure = null
+    signedIn = true
+    if (result.ownGrid && OWN_GRID_THERE.has(result.ownGrid)) ownGridThere = true
+    last = result
     return result
   }
 

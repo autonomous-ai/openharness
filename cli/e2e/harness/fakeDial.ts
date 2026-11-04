@@ -20,6 +20,8 @@ export interface FakeDialOptions {
   mac?: string
   /** The settings it says it holds when it greets, as the firmware reads them from its flash. */
   settings?: Record<string, unknown>
+  /** The capabilities its greeting names (`swarmCard: 'v1'`, …), as a firmware that speaks them does. */
+  capabilities?: Record<string, string>
 }
 
 export class FakeDial {
@@ -29,6 +31,7 @@ export class FakeDial {
   private readonly decoder = new CableDecoder()
   private readonly mac: string
   private readonly settings?: Record<string, unknown>
+  private readonly capabilities: Record<string, string>
   /** When the daemon last said anything, and whether it has welcomed this dial since it last went quiet. */
   private heardAt = 0
   private welcomed = false
@@ -37,6 +40,7 @@ export class FakeDial {
   private constructor(private readonly bridge: ChildProcess, readonly path: string, options: FakeDialOptions) {
     this.mac = options.mac ?? 'e2:e0:00:00:00:01'
     this.settings = options.settings
+    this.capabilities = options.capabilities ?? {}
     bridge.stdout!.on('data', (chunk: Buffer) => {
       this.decoder.feed(chunk, (frame) => {
         if (frame.type !== CableType.Json) return
@@ -68,7 +72,7 @@ export class FakeDial {
   }
 
   private hello(): DialMessage {
-    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: '0.0.0-e2e', hw: 'e2e', ...(this.settings ? { settings: this.settings } : {}) }
+    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: '0.0.0-e2e', hw: 'e2e', ...this.capabilities, ...(this.settings ? { settings: this.settings } : {}) }
   }
 
   send(message: DialMessage): void {

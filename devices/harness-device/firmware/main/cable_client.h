@@ -210,7 +210,7 @@ typedef struct {
     bool read_on_dial;
     uint32_t display_revision;
     uint32_t received_ms; // ms() when the row was filed; rows expire 6 h later (notice_expire)
-    uint8_t swarm;        // the dial's own Swarm entry, kept across notif.replace: 1 needs you, 2 stuck (0 the desktop's)
+    uint8_t swarm;        // the dial's own Swarm entry, kept across notif.replace: 1 needs you, 2 stuck, 3 the Lead said (0 the desktop's)
 } cable_notif_t;
 
 bool cable_client_notification_read(const char *agent_id, const char *read_token);
@@ -226,13 +226,18 @@ void cable_client_list_swarms(void);
 //        supertab {id, tab, name, count, leads:[{id, projectId, project, engine, owner, local, state, since?, order?}]}
 //                                          one Swarm, ≤12 Leads; `tab` is its desk tab or ""; `order` is the project's
 //                                          place in the app (absent from an older daemon: the frame's order)
-//        supertab.recap {tab, lead, text, at, none}    the open Lead's last message
+//        supertab.recap {tab, lead, text, at, none, thread?}    the open Lead's last message
 //        supertab.focus {tab, lead}        the desktop moved to that Lead
 //        question {…, superTab, attention} a Super Tab wait (id "supertab:…"); never an answer screen here
 //   out  supertab.recap.get / supertab.open / supertab.select {tab, lead}
 // A Lead id is not an agent id: it never goes into focus, agent.open or voice.begin. Only its `local` harness id does.
 // `t` is one of the three requests; `lead` is "" only for an open (the dial left the Swarm).
 void cable_client_supertab_send(const char *t, const char *tab, const char *lead);
+// `supertab.side` {tab, side}: the dial swiped that Swarm to its Buddy side (true) or its PM side (spec
+// 2026-10-29-round-dial-pm-buddy). A tab id it cannot hold sends nothing.
+void cable_client_supertab_thread_leave(const char *tab, const char *lead);   // {t: supertab.thread.leave, tab, lead}
+void cable_client_supertab_side(const char *tab, bool buddy);
+void cable_client_supertab_side_kept(const char *tab);
 
 // Send what the user asked for, into `agent_id`. Fire-and-forget: everything after this arrives back as
 // `turn.started` / `turn.done`, or as `turn.error` in words a person can act on.

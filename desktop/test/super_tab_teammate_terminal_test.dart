@@ -76,6 +76,7 @@ Machine _teammate(int day) => Machine(
 /// A Swarm where River runs on scholes' computer, contributed by scholes, and this account is another member.
 Future<(SuperTabLaunchFixture, _Machines, SuperTabController)> _swarm({
   Duration lastHeard = const Duration(seconds: 5),
+  bool confidential = false,
 }) async {
   final f = SuperTabLaunchFixture(discovery: _Discovery());
   final api = _Machines();
@@ -105,10 +106,12 @@ Future<(SuperTabLaunchFixture, _Machines, SuperTabController)> _swarm({
       'harnessId': 'river-native',
       'contributorId': 'scholes',
       'machineOwnerId': 'scholes',
+      if (confidential) 'confidential': true,
       'configuration': {'engine': 'claude'},
     },
   ];
-  (state['conversations'] as List)[0]['agentIds'] = ['river'];
+  // A workgroup: the project chat shows its coordinator's terminal alone (#2207).
+  (state['conversations'] as List)[1]['agentIds'] = ['river'];
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   return (f, api, c);
@@ -182,51 +185,75 @@ void main() {
     if (_shots != null) await loadPreviewFonts();
   });
   group('why a member’s terminal is unavailable', () {
-    SuperTabSnapshot snapshot({int? receivedAt, bool ownerListed = true}) =>
-        SuperTabSnapshot.fromJson({
-          'version': 1,
-          'id': tabId,
-          'name': 'Pilot',
-          'ownerId': 'owner',
-          'people': [
-            {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-            if (ownerListed)
-              {
-                'id': 'scholes',
-                'email': 'scholes@autonomous.ai',
-                'role': 'collaborator',
-              },
-          ],
-          'agents': [
-            {
-              'id': 'river',
-              'name': 'Builder',
-              'displayName': 'River',
-              'machineId': 'mate',
-              'harnessId': 'river-native',
-              'contributorId': 'scholes',
-              'machineOwnerId': 'scholes',
-              'configuration': {'engine': 'claude'},
-            },
-            {
-              'id': 'mine',
-              'name': 'Builder',
-              'machineId': 'm',
-              'harnessId': 'mine-native',
-              'contributorId': 'owner',
-              'configuration': {'engine': 'codex'},
-            },
-          ],
-          'machines': [
-            {
-              'machineId': 'mate',
-              'name': _computer,
-              if (receivedAt != null) 'observation': {'receivedAt': receivedAt},
-            },
-          ],
-          'conversations': const [],
-          'invitations': const [],
-        });
+    SuperTabSnapshot snapshot({
+      int? receivedAt,
+      bool ownerListed = true,
+      bool confidential = false,
+      bool lead = false,
+    }) => SuperTabSnapshot.fromJson({
+      'version': 1,
+      'id': tabId,
+      'name': 'Pilot',
+      'ownerId': 'owner',
+      'people': [
+        {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+        if (ownerListed)
+          {
+            'id': 'scholes',
+            'email': 'scholes@autonomous.ai',
+            'role': 'collaborator',
+          },
+      ],
+      'agents': [
+        {
+          'id': 'river',
+          'name': 'Builder',
+          'displayName': 'River',
+          'machineId': 'mate',
+          'harnessId': 'river-native',
+          'contributorId': 'scholes',
+          'machineOwnerId': 'scholes',
+          if (confidential) 'confidential': true,
+          'configuration': {'engine': 'claude'},
+        },
+        {
+          'id': 'mine',
+          'name': 'Builder',
+          'machineId': 'm',
+          'harnessId': 'mine-native',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ],
+      'machines': [
+        {
+          'machineId': 'mate',
+          'name': _computer,
+          if (receivedAt != null) 'observation': {'receivedAt': receivedAt},
+        },
+      ],
+      if (lead)
+        'projects': [
+          {
+            'id': 'p',
+            'name': 'Pilot',
+            'ownerId': 'owner',
+            'leadConversationId': 'pm',
+          },
+        ],
+      'conversations': [
+        if (lead)
+          {
+            'id': 'pm',
+            'projectId': 'p',
+            'title': 'Product Manager',
+            'brief': 'Product Manager',
+            'leadId': 'river',
+            'agentIds': ['river'],
+          },
+      ],
+      'invitations': const [],
+    });
     final now = DateTime.utc(2026, 10, 23, 4, 11);
     String reason(SuperTabSnapshot s, String agentId) =>
         superTabTerminalUnavailable(
@@ -249,12 +276,48 @@ void main() {
       );
       expect(
         text,
-        'River runs on $_computer, scholes@autonomous.ai’s computer. Its '
+        'River runs on $_computer, scholes’s computer. Its '
         'terminal is not shared with you yet: Harness there shares it with '
         'Swarm members once it is up to date and running. Ask '
-        'scholes@autonomous.ai to update and restart Harness, then Retry.',
+        'scholes to update and restart Harness, then Retry.',
       );
       expect(text, isNot(contains('must be online')));
+    });
+
+    test('says a private session’s terminal is only its owner’s to watch, '
+        'never that the owner must update Harness', () {
+      final heard = now
+          .subtract(const Duration(seconds: 4))
+          .millisecondsSinceEpoch;
+      // Every member watches the current Product Manager, view only (Ken, 2026-10-28), though the backend marks it
+      // confidential: until its invitation arrives, its computer is the one to update.
+      final pm = snapshot(receivedAt: heard, lead: true, confidential: true);
+      expect(superTabTerminalPrivate(pm, pm.agent('river')!), isFalse);
+      expect(
+        reason(pm, 'river'),
+        'River runs on $_computer, scholes’s computer. Its '
+        'terminal is not shared with you yet: Harness there shares it with '
+        'Swarm members once it is up to date and running. Ask '
+        'scholes to update and restart Harness, then Retry.',
+      );
+      // Marked confidential by the backend: in a private chat, or a Product Manager before.
+      final private = reason(
+        snapshot(receivedAt: heard, confidential: true),
+        'river',
+      );
+      expect(
+        private,
+        'River reads private chats, so only scholes can watch '
+        'its terminal.',
+      );
+      // Its computer offline changes nothing: the terminal stays private once it is back.
+      final silent = now
+          .subtract(const Duration(minutes: 3))
+          .millisecondsSinceEpoch;
+      expect(
+        reason(snapshot(receivedAt: silent, confidential: true), 'river'),
+        private,
+      );
     });
 
     test('says a teammate’s computer is offline only when the Swarm stopped '
@@ -264,7 +327,7 @@ void main() {
           .millisecondsSinceEpoch;
       expect(
         reason(snapshot(receivedAt: silent), 'river'),
-        'River runs on $_computer, scholes@autonomous.ai’s computer, which is '
+        'River runs on $_computer, scholes’s computer, which is '
         'offline. Its terminal shows here once that computer is back.',
       );
       expect(reason(snapshot(), 'river'), contains('which is offline'));
@@ -309,14 +372,13 @@ void main() {
     (tester) async {
       final (f, api, c) = await _swarm();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       await _shoot(tester, 'teammate-without-invitation');
       expect(find.textContaining('must be online'), findsNothing);
-      expect(
-        find.textContaining('scholes@autonomous.ai’s computer'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('scholes’s computer'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.byType(SharedHarnessPanel), findsNothing);
 
@@ -342,6 +404,25 @@ void main() {
   );
 
   testWidgets(
+    'a teammate’s private session says only its owner watches it, without '
+    're-reading the machine list for an invitation that never comes',
+    (tester) async {
+      final (f, api, c) = await _swarm(confidential: true);
+      await _show(tester, f);
+      final reads = api.reads;
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
+      await _settle(tester);
+      expect(find.textContaining('only scholes can watch'), findsOneWidget);
+      expect(find.textContaining('update and restart'), findsNothing);
+      expect(find.byType(SharedHarnessPanel), findsNothing);
+      expect(api.reads, reads);
+      await _close(tester, f, c);
+    },
+  );
+
+  testWidgets(
     'a teammate’s read-only terminal stays the same connection across '
     'machine-list refreshes, renewed invitations included',
     (tester) async {
@@ -349,7 +430,9 @@ void main() {
       api.list = [_own, _teammate(21)];
       await f.app.refreshMachines();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       final panel = tester.state(find.byType(SharedHarnessPanel));
       final pane = f.app.panes.single;
@@ -363,7 +446,18 @@ void main() {
       expect(api.reads, greaterThanOrEqualTo(9));
       expect(tester.state(find.byType(SharedHarnessPanel)), same(panel));
       expect(f.app.panes.single, same(pane));
-      expect(find.text('Retry'), findsNothing);
+      // No Retry where the terminal is; its chat beside it, in the right pane
+      // (#2792), answers for its own connection.
+      expect(
+        find.text('Retry').evaluate().length,
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('super-right-pane')),
+              matching: find.text('Retry'),
+            )
+            .evaluate()
+            .length,
+      );
       await _close(tester, f, c);
     },
   );
@@ -380,7 +474,9 @@ void main() {
         ..['machineOwnerId'] = 'owner';
       await c.refresh();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       expect(find.text(superTabTerminalOffline), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);

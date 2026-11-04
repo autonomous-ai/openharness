@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:file_selector/file_selector.dart';
@@ -9,16 +10,29 @@ import 'package:flutter/material.dart';
 import '../core/open_in_browser.dart';
 import '../finder/finder_file_kind.dart';
 import '../widgets/desktop_chrome.dart';
+import 'attachment_upload.dart' show kSuperTabFormAttachmentMaxBytes;
+import 'file_links.dart';
 import 'model.dart';
 
 /// The largest file read into the chat's text viewer; a bigger one opens in
-/// the browser. Specs and logs sit well under it, and the backend takes 10 MB.
+/// the browser. Specs and logs sit well under it, though a message's file may
+/// weigh up to 256 MB.
 const kAttachmentTextMaxBytes = 2 * 1024 * 1024;
 
 /// Reads a file off the attachments host, when a person asks for it.
 @visibleForTesting
 Future<Uint8List> Function(Uri url, {int? maxBytes}) attachmentFetcher =
     fetchAttachment;
+
+/// A picture off the attachments host, drawn where the chat shows it; tests
+/// hand it bytes instead.
+@visibleForTesting
+ImageProvider Function(Uri url) attachmentImage = _networkImage;
+
+ImageProvider _networkImage(Uri url) => AttachmentImage(url);
+
+/// The picture at [url] through [attachmentImage].
+ImageProvider attachmentPicture(Uri url) => attachmentImage(url);
 
 /// The file at [url] through [attachmentFetcher], for the text viewer
 /// (`attachment_text_viewer.dart`), which a browser downloads apart.
@@ -81,16 +95,36 @@ Future<bool> downloadAttachment(SuperTabAttachment file, Uri url) async {
   return true;
 }
 
-/// A viewer's buttons: save the file, open it in the browser, or close.
+/// A viewer's buttons: save the file, open it in the browser, or close. A
+/// viewer may stay open longer than [url] lasts: with [ref], each button asks
+/// for a link that opens now first.
 class AttachmentViewerActions extends StatefulWidget {
   const AttachmentViewerActions({
     super.key,
     required this.file,
     required this.url,
+    this.ref,
+    this.close = true,
+    this.more,
+    this.ink,
+    this.fill,
   });
 
   final SuperTabAttachment file;
   final Uri url;
+  final SuperTabFileRef? ref;
+
+  /// Whether Close is offered; the picture viewer closes by its own ×.
+  final bool close;
+
+  /// After the buttons: the picture viewer's More.
+  final Widget? more;
+
+  /// The buttons' and the outcome's ink, on the picture viewer's veil.
+  final Color? ink;
+
+  /// The buttons' fill there, the same in both appearances.
+  final Color? fill;
 
   @override
   State<AttachmentViewerActions> createState() =>
@@ -101,6 +135,18 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
   bool _saving = false;
   String? _outcome;
 
+  /// A link that opens now, or null with the reason shown.
+  Future<Uri?> _link() async {
+    final ref = widget.ref;
+    if (ref == null) return widget.url;
+    try {
+      return await ref.link();
+    } on SuperTabFileUnavailable catch (problem) {
+      if (mounted) setState(() => _outcome = problem.message);
+      return null;
+    }
+  }
+
   Future<void> _download() async {
     setState(() {
       _saving = true;
@@ -108,7 +154,12 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
     });
     String? outcome;
     try {
-      if (await downloadAttachment(widget.file, widget.url)) outcome = 'Saved';
+      final url = await _link();
+      if (url == null || !mounted) {
+        if (mounted) setState(() => _saving = false);
+        return;
+      }
+      if (await downloadAttachment(widget.file, url)) outcome = 'Saved';
     } catch (_) {
       outcome = 'Couldn’t save this file.';
     }
@@ -119,25 +170,92 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
     });
   }
 
+  Future<void> _openInBrowser() async {
+    final url = await _link();
+    if (url != null && mounted) await openInBrowser(url);
+  }
+
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      if (_outcome != null) Text(_outcome!, style: DesktopChrome.metadata()),
-      const Spacer(),
-      // A browser cannot write to a chosen path; Open in browser saves there.
-      if (!kIsWeb)
+  Widget build(BuildContext context) {
+    final ink = widget.ink;
+    final style = ink == null
+        ? null
+        : TextButton.styleFrom(
+            foregroundColor: ink,
+            backgroundColor: widget.fill,
+            side: BorderSide.none,
+          );
+    return Row(
+      children: [
+        if (_outcome != null)
+          Flexible(
+            child: Text(
+              _outcome!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(color: ink),
+            ),
+          ),
+        const Spacer(),
+        // A browser cannot write to a chosen path; Open in browser saves there.
+        if (!kIsWeb)
+          TextButton(
+            style: style,
+            onPressed: _saving ? null : _download,
+            child: const Text('Download'),
+          ),
         TextButton(
-          onPressed: _saving ? null : _download,
-          child: const Text('Download'),
+          style: style,
+          onPressed: _openInBrowser,
+          child: const Text('Open in browser'),
         ),
-      TextButton(
-        onPressed: () => openInBrowser(widget.url),
-        child: const Text('Open in browser'),
-      ),
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Close'),
-      ),
-    ],
+        if (widget.close)
+          TextButton(
+            style: style,
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ?widget.more,
+      ],
+    );
+  }
+}
+
+/// The picture at [url], read through [attachmentFetcher] like any chat file:
+/// a redirect is refused, so nothing from another host is fetched or drawn
+/// (`NetworkImage` follows one).
+@immutable
+class AttachmentImage extends ImageProvider<AttachmentImage> {
+  const AttachmentImage(this.url);
+
+  final Uri url;
+
+  @override
+  Future<AttachmentImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    AttachmentImage key,
+    ImageDecoderCallback decode,
+  ) => MultiFrameImageStreamCompleter(
+    codec: _decode(decode),
+    scale: 1,
+    debugLabel: url.toString(),
   );
+
+  // No more than a picture shown in place may weigh, whatever its row says:
+  // a larger one fails to draw rather than being read whole.
+  Future<ui.Codec> _decode(ImageDecoderCallback decode) async => decode(
+    await ui.ImmutableBuffer.fromUint8List(
+      await readAttachment(url, maxBytes: kSuperTabFormAttachmentMaxBytes),
+    ),
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is AttachmentImage && other.url == url;
+
+  @override
+  int get hashCode => url.hashCode;
 }

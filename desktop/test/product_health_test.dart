@@ -143,6 +143,22 @@ void main() {
     expect(totals()['health_desktop_first_run_response'], 1);
   });
 
+  test('Import agent outcomes wait for vocabulary 7 (task #2379)', () async {
+    expect(ProductFlow.agentImport.wire, 'agent_import');
+    expect(ProductFlow.agentImport.vocabulary, 7);
+    await usage.flush();
+    usage.proxyVocabulary = 6;
+    usage.begin(ProductFlow.agentImport)(ProductOutcome.ok);
+    usage.begin(ProductFlow.agentImport)(ProductOutcome.cancelled);
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('agent_import')), isEmpty);
+    usage.proxyVocabulary = 7;
+    await usage.flush();
+    expect(totals()['ui_desktop_agent_import_started'], 2);
+    expect(totals()['ui_desktop_agent_import_ok'], 1);
+    expect(totals()['ui_desktop_agent_import_cancelled'], 1);
+  });
+
   test('invite counters wait for vocabulary 5', () async {
     await usage.flush();
     usage.proxyVocabulary = 4;

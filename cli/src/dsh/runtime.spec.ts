@@ -204,7 +204,7 @@ describe('runtime validation and file ownership', () => {
   it('keeps runtime snapshots out of Git while preserving existing ignore rules', () => {
     write(join(ws, '.harness/.gitignore'), '# User rules\nmy-data');
     prepareHarnessLaunch(pkg, ws, 'codex', 'key');
-    expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8')).toBe('# User rules\nmy-data\nruntime/\nlegacy-AGENTS.md\n');
+    expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8')).toBe('# User rules\nmy-data\nruntime/\nlegacy-AGENTS.md\n/.gitignore\n');
     prepareHarnessLaunch(pkg, ws, 'codex', 'key');
     expect(readFileSync(join(ws, '.harness/.gitignore'), 'utf8').match(/runtime\//g)).toHaveLength(1);
   })
@@ -298,6 +298,16 @@ describe('runtime validation and file ownership', () => {
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('already occupied')
     rmSync(join(pkg.realDir, 'skills/draw/SKILL.md'))
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('Harness skill is missing')
+  })
+
+  // An exact string compare refused a link to the same folder written another way as "already occupied".
+  it('relaunches over its own skill link however the link writes the same folder', () => {
+    const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'draw')
+    unlinkSync(skill)
+    symlinkSync(`${join(pkg.realDir, 'skills/draw')}/`, skill)
+    expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).not.toThrow()
+    expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toContain('# Draw')
   })
 })
 

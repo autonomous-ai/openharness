@@ -235,10 +235,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           borderRadius: BorderRadius.circular(
                             AppDesktop.fieldRadius,
                           ),
-                          borderSide: BorderSide(
-                            color: AppDesktop.focus,
-                            width: AppDesktop.focusWidth,
-                          ),
+                          borderSide: BorderSide.none,
                         ),
                       ),
                       onChanged: (_) => setState(() {}),
@@ -426,7 +423,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                               foregroundColor: AppPalette.textSecondary,
                               textStyle: AppType.monoMeta(),
                             ),
-                            child: const Text('Manage models'),
+                            child: const Text('Your models'),
                           ),
                       ],
                     ),

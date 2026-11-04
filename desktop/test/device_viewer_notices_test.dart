@@ -39,6 +39,9 @@ class _Posts extends SystemNotifications {
     required String title,
     required String body,
     String? devicePub,
+    ({String tabId, String mentionId})? mention,
+    ({String tabId, String conversationId})? chat,
+    String? messageLink,
   }) => ids.add(id);
 }
 

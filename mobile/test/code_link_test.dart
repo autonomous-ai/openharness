@@ -244,7 +244,8 @@ void main() {
       expect(machine.pinned, phone.pub);
       expect(
         socket.dialled.toString(),
-        'wss://relay.invalid/api/web-ws?autonomousEnv=prod',
+        // It says what it is (WebSocket roadmap Phase 0).
+        'wss://relay.invalid/api/web-ws?autonomousEnv=prod&client=link',
       );
       expect(socket.protocols, ['tok']);
       expect(socket.closedByPhone, isTrue);

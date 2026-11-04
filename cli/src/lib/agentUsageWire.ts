@@ -4,11 +4,23 @@ import type { RegisteredSession } from './registry.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
 import type { SessionWork } from './sessionWork.js'
 
-export type AgentTokenUsage = { totalTokens: number | null; updatedAt: string; inputTokens?: number; outputTokens?: number; cachedTokens?: number; output?: AgentOutputStats; work?: SessionWork }
+/** One model's tokens in a session: uncached input, output (reasoning included), cache reads and cache writes. Counts only. */
+export type ModelTokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
+export type AgentTokenUsage = { totalTokens: number | null; updatedAt: string; inputTokens?: number; outputTokens?: number; cachedTokens?: number
+  /** By the model that answered (agentTokenUsage.ts); absent for an engine whose records name none (OpenCode). */
+  models?: Record<string, ModelTokens>; output?: AgentOutputStats; work?: SessionWork }
 export type AgentUsageTarget = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'codexHome' | 'agentId' | 'forkedFrom' | 'registeredAt'>
   & Partial<Pick<RegisteredSession, 'cwd'>>
 export const USAGE_LIMIT = 512
 export const USAGE_REFRESH_MS = 15_000
+/** Models one session counts apart, `other` among them (OTHER_MODELS). A session switches model a handful of times at most. */
+export const MAX_USAGE_MODELS = 16
+/** Where a session's models past the limit are counted together (agentTokenUsage.ts addModel); never priced. */
+export const OTHER_MODELS = 'other'
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/
+/** A model as the counts name it: the engine's own identifier, or `unknown` for none or anything that is not a plain one. */
+export const usageModelName = (v: unknown): string => typeof v === 'string' && MODEL_NAME.test(v) ? v : 'unknown'
+const MODEL_TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'] as const
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const text = (v: unknown): v is string => typeof v === 'string' && v.length <= 4096 && !/[\x00-\x1f\x7f]/.test(v)
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -35,6 +47,7 @@ export function validUsage(v: unknown): v is AgentTokenUsage | null {
   if (v === null) return true
   if (!object(v) || !(v.totalTokens === null || count(v.totalTokens)) || !stamp(v.updatedAt)
     || !['inputTokens', 'outputTokens', 'cachedTokens'].every(k => v[k] === undefined || count(v[k]))) return false
+  if (v.models !== undefined && !validModelTokens(v.models)) return false
   if (v.output !== undefined && (!object(v.output) || !['linesAdded', 'linesRemoved', 'pullRequestsCreated']
     .every(k => (v.output as Record<string, unknown>)[k] === null || count((v.output as Record<string, unknown>)[k])))) return false
   if (v.work !== undefined) {
@@ -54,7 +67,15 @@ export function usageSnapshot(v: AgentTokenUsage | null): AgentTokenUsage | null
     ...(v.inputTokens === undefined ? {} : { inputTokens: v.inputTokens }),
     ...(v.outputTokens === undefined ? {} : { outputTokens: v.outputTokens }),
     ...(v.cachedTokens === undefined ? {} : { cachedTokens: v.cachedTokens }),
+    ...(v.models ? { models: Object.fromEntries(Object.entries(v.models).map(([model, t]) =>
+      [model, { input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite }])) } : {}),
     ...(v.output ? { output: { linesAdded: v.output.linesAdded, linesRemoved: v.output.linesRemoved, pullRequestsCreated: v.output.pullRequestsCreated } } : {}),
     ...(v.work ? { work: { current: v.work.current.map(p => ({ cwd: p.cwd, at: p.at })), locations: v.work.locations.map(p => ({ cwd: p.cwd, at: p.at })),
       pullRequests: v.work.pullRequests.map(p => ({ url: p.url, cwd: p.cwd, at: p.at })), uncertain: v.work.uncertain, truncated: v.work.truncated } } : {}) }
+}
+
+/** At most MAX_USAGE_MODELS plainly named models, each with exactly its four counts. */
+export function validModelTokens(v: unknown): v is Record<string, ModelTokens> {
+  return object(v) && Object.keys(v).length <= MAX_USAGE_MODELS && Object.entries(v).every(([model, t]) => usageModelName(model) === model
+    && object(t) && Object.keys(t).length === MODEL_TOKEN_KEYS.length && MODEL_TOKEN_KEYS.every(k => count(t[k])))
 }

@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let root = ''
 let runtimeDir = ''
-const saved = { PATH: process.env.PATH, HOME: process.env.HOME, HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN, ADAPTER_RUNTIME_DIR: process.env.ADAPTER_RUNTIME_DIR }
+const saved = { PATH: process.env.PATH, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN, ADAPTER_RUNTIME_DIR: process.env.ADAPTER_RUNTIME_DIR }
 
 /** `gridExec.ts` reads `env.ADAPTER_RUNTIME_DIR` at import time, so the module is loaded fresh per case. */
 async function load() {
@@ -54,8 +54,9 @@ beforeEach(() => {
   mkdirSync(join(root, 'empty-bin'))
   process.env.PATH = join(root, 'empty-bin')
   // The resolver's last fallback is `$HOME/.local/bin/grid` (grid's own installer's path), so a
-  // developer machine that has one must not leak into "nothing to run".
+  // developer machine that has one must not leak into "nothing to run" (`USERPROFILE` is Windows' HOME).
   process.env.HOME = root
+  process.env.USERPROFILE = root
   delete process.env.HARNESS_GRID_BIN
 })
 
@@ -81,6 +82,21 @@ describe('handOffToGrid — which grid it runs', () => {
     // grid's own "a newer version is out — run `grid update`" must never reach a binary the
     // harness pins: `update` would overwrite it in place. Off for every child this daemon spawns.
     expect(updateCheckSeenBy('override')).toBe('1')
+  })
+
+  it('waits while an install holds grid calls back (gridCalls.ts)', async () => {
+    process.env.HARNESS_GRID_BIN = fakeGrid(join(root, 'elsewhere'), 'override')
+    const { handOffToGrid } = await load()
+    const { withGridCallsPaused } = await import('./gridCalls.js')
+    let finish: () => void = () => {}
+    const install = withGridCallsPaused(() => new Promise<void>((resolve) => { finish = resolve }))
+    const call = handOffToGrid('tok_1', { json: true })
+    // Spawning takes up to half a second on a busy Mac: give it well over that.
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    expect(ran('override')).toBe(false)
+    finish()
+    await install
+    expect((await call).code).toBe('OK')
   })
 
   it('prefers the managed runtime over a grid on PATH', async () => {

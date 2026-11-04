@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
 import { RETENTION_MS } from './types.js'
+import { noteChange } from '../cache.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -22,7 +23,8 @@ export interface HeadColumns { groupCounter: number; visibilityEpoch: number; se
 export type PartWrite =
   /** `first`: a new key's version, the Swarm's sequence base + 1 (design section 2.1). */
   | { op: 'insert'; kind: PartKind; key: string; data: unknown; ordinal: number; first?: number; head?: HeadColumns; host?: HostColumns }
-  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns; host?: HostColumns }
+  /** `content`: a machine's own reading that changed more than its volatile fields (commit.ts machineContentChanged). */
+  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns; host?: HostColumns; content?: true }
   | { op: 'remove'; kind: PartKind; key: string; seen: number; data: unknown; host?: HostColumns }
   | { op: 'touch'; kind: PartKind; key: string; seen: number }
 
@@ -39,10 +41,10 @@ export function delegate(tx: Transaction, kind: PartKind) {
     create(args: { data: Record<string, unknown> }): Promise<unknown>
     createMany(args: { data: Record<string, unknown>[] }): Promise<unknown>
     updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>
-    groupBy(args: unknown): Promise<Array<{ tabId: string; _max: { changedAt: Date | null } }>>
+    aggregateRaw(args: { pipeline: Record<string, unknown>[] }): Promise<unknown>
   }
 }
-export interface PartRow { id: string; tabId: string; key: string; version: number; changedAt: Date; deleted: boolean; ordinal: number; data: unknown
+export interface PartRow { id: string; tabId: string; key: string; version: number; changedAt: Date; readAt?: Date | null; deleted: boolean; ordinal: number; data: unknown
   dormant?: boolean; groupCounter?: number; visibilityEpoch?: number; sequenceBase?: number }
 
 export const partId = (tabId: string, key: string) => `${tabId}:${key}`
@@ -67,7 +69,9 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
-        workFinished: ['done', 'cancelled'].includes(group.assignment?.status ?? '') }
+        // A step is never marked by a write: it archives with its task (task steps design; steps.ts endSteps), not on its own clock.
+        // Only the worker's startup marks one, once its task has ended (archive.ts markFinishedGroups).
+        workFinished: !group.reviewOf && (['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group))) }
     }
     case 'agent': {
       const agent = data as Agent
@@ -75,7 +79,10 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
     }
     case 'machine': {
       const machine = data as MachineData
-      return { machineId: machine.machineId, contributed: !!machine.contribution, cleanupOwnerIds: machine.cleanups.map(c => c.machineOwnerId) }
+      // A Buddy-only record is no contribution (machines.ts buddyOnly): another Swarm asking whether this machine serves a Swarm
+      // elsewhere (store.ts otherWorkspaceMachines) must not see it (security review 1 of #2234). Hosts find it by the index.
+      return { machineId: machine.machineId, contributed: !!machine.contribution && !machine.contribution.buddyOnly,
+        cleanupOwnerIds: machine.cleanups.map(c => c.machineOwnerId) }
     }
     case 'start': {
       const start = data as AgentStart
@@ -94,6 +101,13 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
   return row?.finishedAt ? { ...fields, finishedAt: row.finishedAt } : fields
 }
 
+/** Where an agent added with no tombstone starts above: the highest version of its Swarm's purged agent tombstones
+ *  (agentTombstones.ts), 0 before any. A client that saw a purged tombstone's version takes the agent again (D6). */
+async function agentFloor(tx: Transaction, tabId: string): Promise<number> {
+  const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') }, select: { agentFloor: true } })
+  return head?.agentFloor ?? 0
+}
+
 /**
  * Writes one part inside the command's transaction, guarded by the version it was read at (design section 3.2). The
  * guard checks the committed version at write time, so it holds whatever the transaction's read concern: a part another
@@ -101,6 +115,10 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
  */
 export async function guardedWrite(tx: Transaction, tabId: string, write: PartWrite, stamp: number): Promise<number> {
   const model = delegate(tx, write.kind), id = partId(tabId, write.key)
+  // A machine's own reading leaves what its host hears of unmarked (commit.ts hostMarker): only the machine stamp moves, and
+  // it is dated `readAt`, not `changedAt`, so the Swarm's newest change stays (load.ts lastChangedAt).
+  const reading = write.kind === 'machine' && write.op === 'update' && !write.host
+  if (write.op !== 'touch') noteChange(tx, tabId, reading ? 'machine' : 'main')
   if (write.op === 'insert') {
     let fields = { ...extracted(write.kind, write.data, stamp), ...write.head, ...write.host }
     // A part added again under the same key continues from its tombstone's version (spec ruling 6).
@@ -113,14 +131,14 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
-    const version = write.first ?? 1
+    const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await agentFloor(tx, tabId) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
       data: json(write.data), ...fields } })
     return version
   }
   const data = write.op === 'touch' ? {}
     : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
-    : { changedAt: new Date(stamp), data: json(write.data), ...(write.kind === 'start'
+    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
       ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)

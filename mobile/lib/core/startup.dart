@@ -3,6 +3,7 @@ import 'dart:async';
 import '../logging/startup_trace.dart';
 import '../phone/phone_name_store.dart';
 import '../phone/voice_language_store.dart';
+import '../settings/experimental_features.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
@@ -28,6 +29,7 @@ Future<void> loadPersistedSettings({
   HarnessStats? stats,
   VoiceLanguageStore? voiceLanguage,
   PhoneNameStore? phoneName,
+  ExperimentalFeaturesStore? experiments,
 }) async {
   // What the OS calls this phone, asked now so it is on hand by the first
   // `terminal_open`; not awaited — a slow answer must not hold the first frame,
@@ -75,5 +77,11 @@ Future<void> loadPersistedSettings({
     // The person's own name for this phone; read late, the first terminal it
     // took would introduce it by the OS's name instead.
     StartupTrace.time('prefs.phoneName', (phoneName ?? phoneNameStore).load),
+    // What Settings ▸ Experimental turned on; read late, a way in that is on would appear a frame
+    // after the screen it belongs to.
+    StartupTrace.time(
+      'prefs.experiments',
+      (experiments ?? experimentalFeaturesStore).load,
+    ),
   ]);
 }

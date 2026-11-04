@@ -21,11 +21,11 @@ On GitHub, open the organization, then **Settings → Developer settings → Git
 
 | Field | Value |
 | --- | --- |
-| GitHub App name | A name of your choice, for example `Harness for Acme`. GitHub needs it to be unique. |
+| GitHub App name | `Harness` where it is free (GitHub needs it to be unique). Its address and its bot account follow it (`github.com/apps/harness`, `harness[bot]`): renaming the app later changes both, so set `GITHUB_APP_SLUG` again. |
 | Homepage URL | `https://harness.autonomous.ai` |
 | Callback URL, Setup URL | Leave empty. |
 | Webhook → Active | Clear it. Harness subscribes to no events. |
-| Repository permissions | **Contents:** Read and write. **Pull requests:** Read and write. **Checks:** Read-only. **Actions:** Read-only. **Metadata:** Read-only (GitHub sets this one). Leave every other permission at *No access*. |
+| Repository permissions | **Contents:** Read and write. **Pull requests:** Read and write. **Checks:** Read-only. **Actions:** Read-only. **Metadata:** Read-only (GitHub sets this one). **Workflows:** Read and write, and **Issues:** Read and write, if agents should push changes to `.github/workflows` and write issues (see [Workflows and issues](#workflows-and-issues)). Leave every other permission at *No access*. |
 | Organization and account permissions | No access. |
 | Where can this GitHub App be installed? | **Only on this account** |
 
@@ -43,7 +43,9 @@ register with [GitHub's manifest flow](https://docs.github.com/apps/sharing-gith
     "pull_requests": "write",
     "checks": "read",
     "actions": "read",
-    "metadata": "read"
+    "metadata": "read",
+    "workflows": "write",
+    "issues": "write"
   },
   "default_events": []
 }
@@ -66,6 +68,32 @@ organization's **Settings → GitHub Apps → Configure**.
 
 If a project uses a repository the app is not installed on, its agents cannot push.
 They receive the install link to pass on to an organization owner.
+
+### Workflows and issues
+
+An agent's token also asks for **Workflows** and **Issues** where the repository's
+installation has granted them, at no more than the granted level. Without
+Workflows, GitHub refuses a push that changes `.github/workflows`, and on a large
+repository it can refuse a push it could not finish checking for workflow changes in
+time. Harness reads what each installation has granted and asks only for that, so an
+installation that has not granted them keeps getting today's tokens. A grant is
+remembered ten minutes, and read again at once when GitHub refuses a token for its
+permissions.
+
+To grant them on an app already installed:
+
+1. On the app's settings page (**Settings → Developer settings → GitHub Apps →
+   the app → Permissions & events**), set **Workflows** and **Issues** to **Read and
+   write** and click **Save changes**.
+2. An owner of each organization the app is installed on opens **Settings → GitHub
+   Apps → Configure** for the app, reviews the request and clicks **Accept new
+   permissions**. Until then, that installation's tokens leave the new permissions out.
+
+Every agent that gets its token from the app, for a repository whose installation
+granted these, gets them, Harness Team account agents included. A workflow change
+runs in CI with the repository's secrets, so a branch an agent pushes can run code
+with them; the default branch's pull request rule (below) still keeps such a change
+from reaching the default branch unreviewed.
 
 ### 3. Require pull requests on the default branch
 
@@ -94,6 +122,18 @@ Set these on the backend and deploy it:
 | `GITHUB_APP_PRIVATE_KEY` | The `.pem` file's contents. You can paste them as they are, with line breaks written as `\n`, or as base64: `base64 < key.pem \| tr -d '\n'`. |
 | `GITHUB_APP_SLUG` | The app's name from `https://github.com/apps/NAME`. Optional; it adds the install link to refusals. |
 
+| `GITHUB_APP_CLIENT_ID` | The app's Client ID (`Iv23…`), for its sign-in. |
+| `GITHUB_APP_CLIENT_SECRET` | A client secret: the app's page, **Client secrets → Generate a new client secret**. Keep it with the private key. |
+
+The last two let a person approve a repository for a Swarm project (below). Set both or neither: one alone stops the
+backend at startup. Without them, no repository can be approved, so the app gives no tokens.
+
+On the app's settings page on GitHub, so that GitHub sends people back to Harness:
+
+- **Callback URL** and **Setup URL**: `https://harness-api.autonomous.ai/api/github/callback` (your server's address).
+- **Request user authorization (OAuth) during installation**: on. Installing then also approves the repository.
+- **Redirect on update**: on.
+
 If both of the first two are empty, the feature is off and nothing changes. If only
 one of them is set, or the key cannot be read, the backend stops at startup with a
 message that never shows the key. Once the key is configured, delete the downloaded
@@ -103,6 +143,16 @@ To try it, start an agent from a Lead on someone else's computer, for a project
 whose repository has the app installed. When it has a task, `git push` and
 `gh pr create` work in its terminal. `git log -1` shows the trailers, and on GitHub
 the push and pull request appear as the app.
+
+## Approving a repository for a project
+
+A project's repository address is text its owner types, and the app is installed on other people's repositories too.
+So the app gives a project tokens only once someone GitHub says can push to the repository approved it, for that
+project or for every project of the Swarm (`backend/src/github/approvals.ts`). In Harness: Project details, **GitHub
+access**, **Approve for this project** (or **for every project here**). The person signs in to GitHub through the app;
+their own short-lived token reads whether they can push, is revoked at once and is never stored. **Install on GitHub**
+in the same place approves too, once installed. A project without an approval gets
+`GITHUB_REPOSITORY_NOT_APPROVED`.
 
 ## Which agents use it
 
@@ -116,8 +166,8 @@ A person's own agents, starts on a server without the app, and computers whose H
 is too old to understand the request keep using the computer's own git and gh
 configuration. The decision is recorded with the session, so a relaunch keeps it.
 In a team account (a Mac's Harness Team account, or a computer after `harness team on`),
-every Swarm agent qualifies, because the owner's login is not there. Windows is not
-wired yet.
+every Swarm agent qualifies, because the owner's login is not there. Windows works the
+same way, through Git for Windows.
 
 ## Preparing the folder before the agent starts
 
@@ -135,6 +185,8 @@ project it does this with the app too, never with its owner's git login:
    config are not read, `git@github.com:` addresses go over HTTPS, and nothing prompts.
    The token is in the git process's environment only.
 3. The agent is created with `swarmGitHub`, and the daemon does not fetch again.
+4. The read-only token is revoked as soon as the clone and the fetch are done, or have failed. The agent gets a token of
+   its own for its task.
 
 If the token cannot be had (the app is not installed on the repository, the project has
 no GitHub address, or a team account's server has no app), the start fails with that
@@ -192,13 +244,28 @@ address. The `commit-msg` hook adds any missing trailers to a message written in
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
+Every such commit also carries `Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>`.
+
+In a Harness Team account, the commits themselves are by `Harness by Autonomous <noreply@autonomous.ai>`. No GitHub
+account owns that address, so GitHub links them to nobody; a Team agent's branch is told apart by who pushed it, from
+GitHub's activity log, which names the app's bot account. The
+account has no git identity of its own, and its commits read `Harness Team
+<harnessteam@<host>.local>` before. The token response names it as `commitAs` for a
+team account only; the daemon writes it to the session's `gitconfig`, which the
+session's git includes. A person's machine keeps its owner's git identity.
+
 The `prepare-commit-msg` hook runs even with `--no-verify`. Two things leave a commit
 without trailers: plumbing such as `git commit-tree`, and a command that sets its own
 `-c core.hooksPath`.
 
-The agent is told to start each pull request body with `Requested by <owner's email>
-through Harness.` The token response also carries `pullRequestLine` with the owner's
-name. This line depends on the agent following its instructions. Harness does not
+Each task's message ends with `Start each pull request body with: Requested by <email>
+through Harness.`, naming the person whose ask the task is: its group's requester while
+they can still read the project, otherwise the project's owner (`requestedByLine` in
+`backend/src/superTabs/projects.ts`). It comes with every task, so an agent reused for
+another person's task names that person; the start prompt names nobody. It is given
+for another person's project (its owner is not the machine's), not for a review. Who asked
+changes no token and no trailer: the token response's `pullRequestLine` and the
+co-author still name the project's owner, so members' emails do not enter git history. This line depends on the agent following its instructions. Harness does not
 assign the pull request, because it does not know the person's GitHub login.
 
 ## The token endpoint
@@ -248,9 +315,14 @@ The endpoint refuses with these codes:
 
 Each token is cached per agent and task, sealed with a key derived from the app's
 private key, in the backend's shared Redis. The backend serves the cached token until
-ten minutes before it expires. The token is revoked (`DELETE /installation/token`)
-and dropped when the task is done, cancelled or stopped, when the agent is removed,
-or when the agent starts a new task. If a revocation fails, Harness logs it without
+ten minutes before it expires. Then it mints a new one and leaves the old one to its
+last ten minutes, so a push that took the old token before the renewal is not broken.
+That token is for the one repository and the task's own session. When the task is
+done, cancelled or stopped, goes to another agent or attempt, or its agent is removed,
+every token minted for the task is revoked (`DELETE /installation/token`) and dropped,
+replaced ones included, whichever backend instance minted them. A request only ever
+ends its own task: one that waited across its task's end leaves the agent's next task
+alone. If a revocation fails, Harness logs it without
 the token and the task's change goes ahead. The token then expires within the hour.
 The server never logs a token.
 
@@ -261,6 +333,9 @@ The server never logs a token.
 - On a personal computer, startup files that export `GITHUB_TOKEN` reach Claude
   Code's and Codex's commands again. gh then uses that token. The team account has
   no such files.
+- The team account has gh of its own: a Homebrew it cannot read leaves it none, so its
+  daemon installs GitHub's release of gh (pinned by checksum in `cli/src/team/gh.ts`)
+  in its home and links it from `~/.local/bin`.
 - If Redis is unavailable, Harness still issues tokens but cannot revoke them when
   the task ends. They expire within the hour.
 - In the first minute of a task, gh can be without a token until the daemon's next

@@ -77,6 +77,47 @@ void main() {
       });
     },
   );
+  test(
+    'why a sign-in did not go through is a signed-out setup count',
+    () async {
+      usage.begin(ProductFlow.signIn)(ProductOutcome.failed);
+      usage.signInEnded(SignInEndReason.noResult);
+      await usage.flush();
+      expect(setup.single['counters'], {
+        'setup_desktop_sign_in_started': 1,
+        'setup_desktop_sign_in_failed': 1,
+        'setup_desktop_sign_in_under_1s': 1,
+        'setup_desktop_sign_in_reason_no_result': 1,
+      });
+    },
+  );
+  test('a signed-in report carries no sign-in reason', () async {
+    await account();
+    usage.signInEnded(SignInEndReason.timeout);
+    await usage.flush();
+    expect(setup, isEmpty);
+    expect(
+      reports.expand((r) => (r['counters'] as Map? ?? {}).keys),
+      isNot(contains(startsWith('setup_desktop_sign_in_reason'))),
+    );
+  });
+  test('the phone and the browser count no sign-in reason', () async {
+    for (final surface in ['phone', 'web']) {
+      final other = ProductMeasurement(
+        surface: surface,
+        automatic: false,
+        now: () => now,
+        sendSetup: (r) async {
+          setup.add(jsonDecode(jsonEncode(r)));
+          return {'accepted': true};
+        },
+      );
+      other.signInEnded(SignInEndReason.timeout);
+      await other.flush();
+      other.dispose();
+    }
+    expect(setup, isEmpty);
+  });
   test('UTC-day counts survive before local midnight', () async {
     now = DateTime.utc(2026, 10, 19, 4);
     usage.begin(ProductFlow.signIn)(ProductOutcome.ok);

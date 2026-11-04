@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { ingestProductUsage, ingestSetupUsage, productUsageChoice, setProductUsageChoice } from '../lib/productUsage.js'
 import { PRODUCT_FEEDBACK, PRODUCT_USAGE_MAX_COUNT, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from '../types/productUsage.js'
@@ -58,6 +58,24 @@ function writeBudget(perMinute: number, inFlight: number) {
   }
 }
 
+/** Busy answers send their client back after 30 to 120 seconds, at random: a fleet refused together does not
+ * return together. The CLI's report backoff honours it (cli/src/gateway/productUsage.ts). */
+function sendBusy(reply: FastifyReply, message: string, code: string): void {
+  reply.header('Retry-After', String(30 + Math.floor(Math.random() * 91)))
+  sendError(reply, message, code, 429)
+}
+/** Storage under load that outlasted its retries, by fixed category: write conflicts on the shared daily totals
+ * (on 2026-10-27, 194 of 223 rejected health reports), a transaction that could not start or finish in time, every
+ * pooled connection in use, a Mongo lock wait. Null for anything else: an outage stays 503, so it still shows. */
+function busyCategory(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'USAGE_BUSY' || code === 'P2024') return 'USAGE_BUSY'
+  if (code === 'P2034' || code === 'P2002') return 'USAGE_WRITE_CONFLICT'
+  if (code === 'P2028') return 'USAGE_TRANSACTION_FAILED'
+  if (error instanceof Error && error.message.includes('TransientTransactionError')) return 'USAGE_BUSY'
+  return null
+}
+
 const REPORT_METRICS = new Set<string>(PRODUCT_USAGE_METRICS)
 const SETUP_METRICS = new Set<string>(PRODUCT_USAGE_SETUP_METRICS)
 /** A client a release ahead of this backend can name a counter the contract here does not have yet.
@@ -91,9 +109,12 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return sendError(reply, 'Invalid setup report', 'INVALID_SETUP_REPORT', 400)
     try {
       const result = await setupBudget(() => ingestSetupUsage(parsed.data))
-      if (result === 'busy') return sendError(reply, 'Setup measurement busy', 'USAGE_UNAVAILABLE', 429)
+      if (result === 'busy') return sendBusy(reply, 'Setup measurement busy', 'USAGE_UNAVAILABLE')
       return sendSuccess(reply, result)
-    } catch { return sendError(reply, 'Setup measurement unavailable', 'USAGE_UNAVAILABLE', 503) }
+    } catch (error) {
+      if (busyCategory(error)) return sendBusy(reply, 'Setup measurement busy', 'USAGE_UNAVAILABLE')
+      return sendError(reply, 'Setup measurement unavailable', 'USAGE_UNAVAILABLE', 503)
+    }
   })
   // The same unlinked receipt, atomic totals and today-or-yesterday rule as setup; no account lookup.
   app.post('/api/product-usage/hub', { bodyLimit: 4096 }, async (req, reply) => {
@@ -102,9 +123,12 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return sendError(reply, 'Invalid Hub report', 'INVALID_HUB_REPORT', 400)
     try {
       const result = await hubBudget(() => ingestSetupUsage(parsed.data))
-      if (result === 'busy') return sendError(reply, 'Hub measurement busy', 'USAGE_UNAVAILABLE', 429)
+      if (result === 'busy') return sendBusy(reply, 'Hub measurement busy', 'USAGE_UNAVAILABLE')
       return sendSuccess(reply, result)
-    } catch { return sendError(reply, 'Hub measurement unavailable', 'USAGE_UNAVAILABLE', 503) }
+    } catch (error) {
+      if (busyCategory(error)) return sendBusy(reply, 'Hub measurement busy', 'USAGE_UNAVAILABLE')
+      return sendError(reply, 'Hub measurement unavailable', 'USAGE_UNAVAILABLE', 503)
+    }
   })
   app.get('/api/product-usage/settings', async (req, reply) => {
     if (!req.user?.sub) return sendError(reply, 'Unauthorized', 'UNAUTHORIZED', 401)
@@ -138,11 +162,9 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
     try { return sendSuccess(reply, await ingestProductUsage(req.user.sub, parsed.data)) }
     catch (error) {
       // A fixed category can diagnose delivery without exposing database errors or report contents.
-      const storageCode = (error as { code?: unknown } | null)?.code
-      if (storageCode === 'USAGE_BUSY') return sendError(reply, 'Usage measurement busy', 'USAGE_BUSY', 429)
-      const code = storageCode === 'P2034' || storageCode === 'P2002' ? 'USAGE_WRITE_CONFLICT'
-        : storageCode === 'P2028' ? 'USAGE_TRANSACTION_FAILED' : 'USAGE_UNAVAILABLE'
-      return sendError(reply, 'Usage report unavailable', code, 503)
+      const busy = busyCategory(error)
+      if (busy) return sendBusy(reply, 'Usage measurement busy', busy)
+      return sendError(reply, 'Usage report unavailable', 'USAGE_UNAVAILABLE', 503)
     }
   })
 }

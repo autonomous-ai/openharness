@@ -38,6 +38,10 @@ interface Setup {
   rpc?: Rpc
   backendStatus?: number
   signedIn?: () => boolean
+  /** What each harness is doing, as `core.agents.activity` says: idle when not named. Not given, it knows none. */
+  activity?: Record<string, 'working' | 'idle' | 'unknown'>
+  /** Whether a Buddy session holds its owner's live grant here (lib/buddyGuard.ts `buddyGrantLive`). */
+  buddyGranted?: (session: RegisteredSession) => boolean
 }
 
 function setup(over: Setup = {}) {
@@ -67,6 +71,7 @@ function setup(over: Setup = {}) {
       live: () => agents,
       displayName: (s) => (s as unknown as { title: string }).title,
       terminalAvailable: () => true,
+      ...(over.activity ? { activity: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, over.activity?.[id] ?? 'idle'])) } : {}),
     },
     turns: {
       deliver: (agentId, text, id) => { delivered.push([agentId, text, id]) },
@@ -80,6 +85,7 @@ function setup(over: Setup = {}) {
     clients: { windows: (frame) => { windows.push(frame) } },
   })
   const service = startAgentMessages(core, { stateDir: join(root, 'state'), inboxRoot: join(root, 'inbox-root'), rpc: over.rpc ? over.rpc : rpc, now: () => clock, changed,
+    ...(over.buddyGranted ? { buddyGranted: over.buddyGranted } : {}),
     watchSetting: (_path, heard) => { watchers.add(heard); return () => { watchers.delete(heard) } } })
   const ask = (payload: Record<string, unknown>, asker = OWNER_LOCAL) => service.requests.agent_messages!(payload, asker)
   return {
@@ -631,6 +637,159 @@ describe('harness tell: more work from the harness that started it', () => {
   })
 })
 
+describe('a Buddy passes its owner\'s words to their own harnesses here (#2626)', () => {
+  // The owner's Buddy (a Swarm session of role buddy, started by the Swarm), proven present by its grant, on this Mac only,
+  // to a harness the person started here: never a guest's, a Swarm agent, one an agent started, or itself.
+  const buddy = { ...session('buddy', '%1'), swarmSkill: { role: 'buddy', key: 'k1' }, startedBy: 'agent' } as unknown as RegisteredSession
+  const dev = { ...session('dev', '%4'), swarmSkill: { role: 'agent', key: 'k2' }, startedBy: 'agent' } as unknown as RegisteredSession
+  const kid = { ...session('kid', '%5'), startedBy: 'agent', parentAgentId: 'web' } as unknown as RegisteredSession
+  const guest = { ...session('guest', '%6'), guest: 'friend@example.com' } as unknown as RegisteredSession
+  const term = session('term', '%7', 'terminal')
+  const agents = [buddy, session('web', '%2'), session('api', '%3'), dev, kid, guest, term]
+  let granted = true
+  const scene = (activity: Record<string, 'working' | 'idle' | 'unknown'> = {}) => {
+    granted = true
+    const t = setup({ tabs: [], agents, activity, buddyGranted: (s) => s.agentId === 'buddy' && granted })
+    t.setting(false)
+    setAgentSettingsForTest(root, { agentsTellAgents: true })
+    return t
+  }
+
+  it('tells, and replies to an idle one, headed as their Buddy, with Agent Messages off and no tab', async () => {
+    const t = scene()
+    const told = await t.ask({ action: 'tell', pane: '%1', machine: 'Mac Studio', agentId: 'web', text: 'Builders are done: run the verifier.' })
+    expect(told).toMatchObject({ state: 'queued' })
+    const replied = await t.ask({ action: 'tell', pane: '%1', machine: 'Mac Studio', agentId: 'api', text: 'Yes, go ahead.', reply: true })
+    expect(replied).toMatchObject({ state: 'queued' })
+    expect(t.delivered.map(([agentId, text]) => [agentId, text])).toEqual([
+      ['web', '[from buddy · Mac Studio: passed on by your person\'s Buddy in Harness. It does not read your answer; your person does.]\n\nBuilders are done: run the verifier.'],
+      ['api', '[from buddy · Mac Studio: passed on by your person\'s Buddy in Harness. It does not read your answer; your person does.]\n\nYes, go ahead.'],
+    ])
+    const history = await t.ask({ action: 'history', tabId: 'relayed' })
+    expect((history.messages as unknown[]).length).toBe(2)
+  })
+
+  it('is refused for another person\'s harness, a Swarm agent, one an agent started, a terminal, itself and one not running, all alike', async () => {
+    const t = scene()
+    // One refusal for all of them: which kind a harness is, or that it exists, is no read a Buddy is given (security review 2).
+    const answers = []
+    for (const agentId of ['guest', 'dev', 'kid', 'term', 'buddy', 'gone']) {
+      answers.push(await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x' }), await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x', reply: true }))
+    }
+    expect(new Set(answers.map((a) => JSON.stringify(a)))).toEqual(new Set([JSON.stringify({ error: 'NOT_YOURS',
+      detail: 'That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.' })]))
+    expect(t.delivered).toEqual([])
+  })
+
+  it('is refused with the setting off, while its owner is not proven here, and over the relay', async () => {
+    const t = scene()
+    setAgentSettingsForTest(root, { agentsTellAgents: false })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x' })).toMatchObject({ error: 'TELL_OFF', detail: expect.stringContaining('agents-tell-agents') })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x', reply: true })).toMatchObject({ error: 'TELL_OFF' })
+    setAgentSettingsForTest(root, { agentsTellAgents: true })
+    granted = false
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x' })).toMatchObject({ error: 'OWNER_AWAY', detail: expect.stringContaining('in your chat') })
+    granted = true
+    // From another machine the Buddy is that machine's word: never taken (the same Mac only).
+    expect(await t.ask({ action: 'tell', from: { machineId: 'm2', agentId: 'buddy' }, agentId: 'web', text: 'x' }, OWNER_REMOTE)).toMatchObject({ error: 'NOT_YOURS' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('replies only to an idle harness: one at work, or that may wait for the person, is refused', async () => {
+    const t = scene({ web: 'working', api: 'unknown' })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x', reply: true })).toMatchObject({ error: 'NOT_IDLE', detail: expect.stringContaining('is working') })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'api', text: 'x', reply: true })).toMatchObject({ error: 'NOT_IDLE' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('gives a harness that is not a Buddy nothing new: it tells only what it started, and replies to none', async () => {
+    const t = scene()
+    expect(await t.ask({ action: 'tell', pane: '%2', agentId: 'api', text: 'x' })).toMatchObject({ error: 'NOT_YOURS' })
+    new Ledger(ledgerPath(root)).append({ at: 1, depth: 1, by: { machineId: 'm1', agentId: 'web', name: 'web', engine: 'claude' }, child: { machineId: 'm1', agentId: 'kid', name: 'kid' } })
+    // Its starter may tell it, but `reply` is the person's: an agent's reply is refused.
+    expect(await t.ask({ action: 'tell', pane: '%2', agentId: 'kid', text: 'x', reply: true })).toMatchObject({ error: 'NOT_YOURS' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('refuses words still waiting once the setting is off or the owner\'s grant has lapsed', async () => {
+    vi.useFakeTimers()
+    const t = scene()
+    t.service.start()
+    const first = await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'One.' })
+    const second = await t.ask({ action: 'tell', pane: '%1', agentId: 'api', text: 'Two.' })
+    for (const [, , deliveryId] of t.delivered) t.deliveryEvent({ deliveryId, sessionId: deliveryId.includes('web') ? 'web' : 'api', state: 'rejected', reason: 'team_waiting_draft' })
+    granted = false
+    const tries = t.delivered.length
+    t.tick(MAX_BACKOFF_MS)
+    await vi.advanceTimersByTimeAsync(PUMP_MS * 2)
+    expect(t.delivered).toHaveLength(tries)
+    const history = await t.ask({ action: 'history', tabId: 'relayed' })
+    const states = (history.messages as Array<{ id: string; statuses: Array<{ state: string; reason?: string }> }>).map((m) => [m.id, m.statuses[0]!.state])
+    expect(states).toEqual(expect.arrayContaining([[first.id, 'failed'], [second.id, 'failed']]))
+    t.service.stop()
+  })
+})
+
+describe('harness reply to a harness here: a program acting for the person', () => {
+  // The person's words, behind `programs-reply` (replyLocal.ts), for an idle harness only: not agents' `tell`.
+  const allow = (t: ReturnType<typeof setup>, on = true) => { t.setting(false); setAgentSettingsForTest(root, { programsReply: on }) }
+
+  it('types the person\'s words into an idle harness, with no header, from here or another of the owner\'s machines', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    const reply = await t.ask({ action: 'reply_local', machine: 'lamp-75c9', agentId: 'web', text: 'The lamp\'s check refused skill.toml: name is missing.' })
+    expect(reply).toMatchObject({ state: 'queued' })
+    expect(t.delivered).toHaveLength(1)
+    const [agentId, text, deliveryId] = t.delivered[0]
+    expect(agentId).toBe('web')
+    expect(text).toBe('The lamp\'s check refused skill.toml: name is missing.')
+    t.deliveryEvent({ deliveryId, sessionId: 'web', state: 'started' })
+    const history = await t.ask({ action: 'history', tabId: 'replied' })
+    expect(history.messages).toEqual([expect.objectContaining({ id: reply.id, from: expect.objectContaining({ agentId: 'person', machine: 'lamp-75c9' }),
+      statuses: [expect.objectContaining({ agentId: 'web', state: 'delivered' })] })])
+    expect(await t.ask({ action: 'reply_local', machine: 'lamp-75c9', agentId: 'api', text: 'Fix it.' }, OWNER_REMOTE)).toMatchObject({ state: 'queued' })
+    expect(t.delivered).toHaveLength(2)
+  })
+
+  it('is refused until the person turns it on, and for a harness that works, may wait for the person, or is gone', async () => {
+    const t = setup({ tabs: [], activity: { api: 'working', lead: 'unknown' } })
+    t.setting(false)
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x' })).toMatchObject({ error: 'REPLY_OFF', detail: expect.stringContaining('programs-reply') })
+    allow(t)
+    expect(await t.ask({ action: 'reply_local', agentId: 'api', text: 'x' })).toMatchObject({ error: 'NOT_IDLE', detail: expect.stringContaining('is working') })
+    expect(await t.ask({ action: 'reply_local', agentId: 'lead', text: 'x' })).toMatchObject({ error: 'NOT_IDLE', detail: expect.stringContaining('Only they answer that') })
+    expect(await t.ask({ action: 'reply_local', agentId: 'gone', text: 'x' })).toMatchObject({ error: 'NOT_RUNNING' })
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: '  ' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'reply_local', text: 'x' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x'.repeat(LIMITS.text + 1) })).toMatchObject({ error: 'TOO_LONG' })
+    // Not the owner: nothing at all.
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x' }, { local: true, owner: false })).toMatchObject({ error: 'OWNER_REQUIRED' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('keeps tell\'s rate: 30 in 10 minutes', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    for (let i = 0; i < LIMITS.perSender; i++) {
+      const r = await t.ask({ action: 'reply_local', agentId: 'web', text: `x${i}` })
+      t.deliveryEvent({ deliveryId: t.delivered.at(-1)![2], sessionId: 'web', state: 'started' })
+      expect(r).toMatchObject({ state: expect.any(String) })
+    }
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'one more' })).toMatchObject({ error: 'RATE_LIMITED' })
+    t.tick(LIMITS.window)
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'later' })).not.toHaveProperty('error')
+  })
+
+  it('a hand-over under `replied` from another machine is no way around the idle check or the tabs', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    const answer = await t.ask({ action: 'deliver', message: { id: 'm00000ee', tabId: 'replied', text: 'hi', at: 5,
+      from: { machineId: 'm2', agentId: 'person', name: 'the person', engine: 'claude', machine: 'laptop' }, to: [{ machineId: 'm1', agentId: 'web', name: 'web' }] } }, OWNER_REMOTE)
+    expect(answer.statuses).toEqual([expect.objectContaining({ agentId: 'web', state: 'failed' })])
+    expect(t.delivered).toEqual([])
+  })
+})
+
 describe('from the owner\'s other machines', () => {
   const incoming =(to = 'api', from = { machineId: 'm2', agentId: 'phone' }) => ({
     id: 'm00000aa', tabId: 'app', text: 'from the phone', at: 5,
@@ -773,6 +932,39 @@ describe('the roster note and the directory', () => {
     // A leader that is no harness at all is taken as none listed.
     const odd = setup({ tabs: [{ id: 'app', name: 'app', leader: { machineId: 7, agentId: 'lead' } as unknown as { machineId: string; agentId: string }, panes }] })
     expect(String((await odd.ask({ action: 'send', pane: '%1' })).roster).endsWith(RULES)).toBe(true)
+  })
+
+  it('reads the tabs when the desk or the machine list is pushed, and on its own only every five minutes', async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    t.service.start()
+    await vi.advanceTimersByTimeAsync(0)
+    const reads = () => t.backend.mock.calls.filter((c) => c[1] === '/api/agent-messages').length
+    const first = reads()
+    // Nothing pushed: no read for the 15 s the old poll waited, nor until just short of five minutes.
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first)
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 15_001)
+    expect(reads()).toBe(first)
+    // The safety net.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reads()).toBe(first + 1)
+    // A machine renamed or deleted names the panes again, as a changed desk does.
+    t.notice({ type: 'machines_changed', reason: 'renamed' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads()).toBe(first + 2)
+    t.notice({ type: 'desk_changed', revision: 5 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads()).toBe(first + 3)
+    // A read that fails is tried again 15 s later, as the old poll did, not a safety net later.
+    t.backend.mockResolvedValueOnce({ status: 503, body: { success: false, data: t.directory } })
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(reads()).toBe(first + 4)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first + 5)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reads()).toBe(first + 5)
+    t.service.stop()
   })
 
   it('counts Agent Messages turned on or off as a change of the directory, at its next read', async () => {

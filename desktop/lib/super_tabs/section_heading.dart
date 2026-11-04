@@ -18,9 +18,14 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.startInset,
     this.collapsed,
     this.onToggleCollapsed,
+    this.titleTooltip,
+    this.titleStyle,
   });
 
   final String title;
+
+  /// The title's style, where a screen sets its own: the Swarm sidebar's are Slack's ([SwarmType.sidebar]).
+  final TextStyle? titleStyle;
   final VoidCallback? onAdd;
   final String? addTooltip;
 
@@ -47,6 +52,12 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// Set on a heading that collapses a sidebar group; its label and an adjacent
   /// trailing chevron form one button on the left of the heading.
   final VoidCallback? onToggleCollapsed;
+
+  /// What hovering a collapsible heading's title says: what the section
+  /// shows, when its title alone does not. The chevron still says Collapse or
+  /// Expand, and a screen reader hears this as the button's hint, never its
+  /// name.
+  final String? titleTooltip;
 
   /// The chevron and every action are a fixed 32 px square; the gap
   /// before the actions is 4 px; the title always keeps at least this
@@ -82,9 +93,9 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final titleStyle = DesktopChrome.metadata().copyWith(
-              fontWeight: FontWeight.w600,
-            );
+            final titleStyle =
+                this.titleStyle ??
+                DesktopChrome.metadata().copyWith(fontWeight: FontWeight.w600);
             final titleMeasure = TextPainter(
               text: TextSpan(text: title, style: titleStyle),
               textDirection: Directionality.of(context),
@@ -120,6 +131,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                           child: Semantics(
                             button: true,
                             expanded: collapsed != true,
+                            hint: titleTooltip,
                             child: Tooltip(
                               message:
                                   '${collapsed == true ? 'Expand' : 'Collapse'} $title',
@@ -135,7 +147,15 @@ class SuperTabSectionHeading extends StatelessWidget {
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Flexible(child: titleLabel),
+                                      Flexible(
+                                        child: titleTooltip == null
+                                            ? titleLabel
+                                            : Tooltip(
+                                                message: titleTooltip,
+                                                excludeFromSemantics: true,
+                                                child: titleLabel,
+                                              ),
+                                      ),
                                       const SizedBox(width: _trailingGap),
                                       Icon(
                                         collapsed == true

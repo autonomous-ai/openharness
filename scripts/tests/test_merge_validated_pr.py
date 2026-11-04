@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zipfile
@@ -105,6 +106,55 @@ class MergeTests(unittest.TestCase):
                 self.assertIn("CI changed during verification", result["error"])
                 self.assertEqual(self.client.writes, [])
 
+    def reused_receipt(self):
+        record = dict(origin_sha="e" * 40, origin_tree="f" * 40, run_id=99, run_attempt=1,
+                      run_url="https://github.com/owner/repo/actions/runs/99", reason="passed in run 99")
+        self.client.receipt_patch = dict(suites=["mobile"], reused={"mobile": record},
+                                         reuse=dict(status="applied", passed_head="e" * 40, main_parent=self.base))
+        return record
+
+    def main_planner(self, verify):
+        calls = []
+
+        def verify_reuse(root, receipt, base, evidence):
+            calls.append((root, receipt["reused"], base, evidence))
+            return verify(receipt)
+        main = types.SimpleNamespace(GitHubEvidence=lambda client: ("main's reader", client), verify_reuse=verify_reuse)
+        loader = self.patch(merger.queue.planner, "main_planner", return_value=main)
+        return loader, calls
+
+    def test_reused_results_are_rederived_by_mains_planner_before_merging(self):
+        record = self.reused_receipt()
+        loader, calls = self.main_planner(lambda receipt: receipt["reused"])
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "merged")
+        loader.assert_called_once_with(self.root, self.base)
+        self.assertEqual(calls, [(self.root, {"mobile": record}, self.base, ("main's reader", self.client))])
+        self.assertEqual(result["pr_evidence"]["reused"], {"mobile": record})
+        self.assertIn("reused mobile from https://github.com/owner/repo/actions/runs/99", (self.output / "merge.md").read_text())
+
+    def test_reuse_that_mains_planner_refuses_or_cannot_check_blocks_the_merge(self):
+        self.reused_receipt()
+
+        def refuse(receipt):
+            raise ValueError("reused mobile refused: main changed its input backend/src/types/productUsage.ts")
+        self.main_planner(refuse)
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "not_merged")
+        self.assertIn("productUsage", result["error"])
+        self.assertEqual(self.client.writes, [])
+        self.output = self.output.with_name("no-verifier")
+        self.patch(merger.queue.planner, "main_planner", side_effect=ValueError("main's planner cannot verify reused results (X)"))
+        result = self.finish(automatic=True)
+        self.assertIn("cannot verify reused results", result["error"])
+        self.assertEqual(self.client.writes, [])
+
+    def test_a_receipt_that_skips_a_suite_it_did_not_reuse_blocks_the_merge(self):
+        self.client.receipt_patch = dict(suites=["mobile"])
+        result = self.finish(automatic=True)
+        self.assertIn("does not run every suite", result["error"])
+        self.assertEqual(self.client.writes, [])
+
     def test_default_command_uses_direct_merge_unless_github_requires_queue(self):
         direct = self.patch(merger, "finish", return_value={"status": "ready"})
         queued = self.patch(merger.queue, "finish", return_value={"status": "ready_for_queue"})
@@ -130,13 +180,77 @@ class MergeTests(unittest.TestCase):
         self.assertTrue((self.output / "ci/validation.md").is_file())
         self.assertEqual(result["reviewed_source"]["tree"], self.tree)
 
+    def commit(self, sha, message, name="Ada", email="ada@example.com", login="ada"):
+        return dict(sha=sha, author=dict(login=login) if login else None,
+                    commit=dict(message=message, author=dict(name=name, email=email)))
+
+    def test_squash_message_names_harness_once_whichever_address_a_commit_has(self):
+        pr = dict(number=5, title="Fix it", user=dict(login="ken"))
+        old = "348238807+harness-for-autonomous[bot]@users.noreply.github.com"
+        commits = [self.commit("1", "First\n\nWhy.", "harness-for-autonomous[bot]", old, "harness-for-autonomous[bot]"),
+                   self.commit("2", f"Second\n\nCo-authored-by: Harness <{old}>", "Harness by Autonomous", "noreply@autonomous.ai", None),
+                   self.commit("3", "Third\n\nCo-authored-by: harness by autonomous <NOREPLY@autonomous.ai>\nHarness-Agent: Atlas")]
+        title, message = merger.squash_message(pr, commits)
+        self.assertEqual(title, "Fix it (#5)")
+        self.assertEqual(message.count("Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>"), 1)
+        self.assertNotIn("[bot]", message)
+        self.assertIn("* First\n\nWhy.", message)
+        self.assertIn("Harness-Agent: Atlas", message)
+        self.assertEqual(message.count("Co-authored-by: Ada <ada@example.com>"), 1)
+        self.assertIn("Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>", message.splitlines()[-2:])
+
+    def test_squash_message_keeps_other_people_once_and_leaves_out_the_pull_requests_author(self):
+        pr = dict(number=5, title="Fix it", user=dict(login="ken"))
+        commits = [self.commit("1", "One\n\nCo-authored-by: Grace <GRACE@example.com>", "Ken", "ken@example.com", "ken"),
+                   self.commit("2", "Two\n\nCo-authored-by: Grace <grace@example.com>", "Ken", "ken@example.com", "ken"),
+                   self.commit("3", "Three", "dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com", "dependabot[bot]")]
+        _, message = merger.squash_message(pr, commits)
+        self.assertEqual(message.lower().count("co-authored-by: grace <grace@example.com>"), 1)
+        self.assertNotIn("ken@example.com", message)
+        self.assertIn("Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>", message)
+
+    def test_a_single_commit_keeps_its_own_title_and_body_as_github_does(self):
+        pr = dict(number=5, title="Other title", user=dict(login="ada"))
+        title, message = merger.squash_message(pr, [self.commit("1", "Only\n\nBody.")])
+        self.assertEqual(title, "Only (#5)")
+        self.assertEqual(message, "Body.")
+
+    def test_a_commit_of_only_co_author_lines_never_makes_an_empty_title(self):
+        pr = dict(number=5, title="Fix it", user=dict(login="ada"))
+        only = "Co-authored-by: Grace <grace@example.com>"
+        title, message = merger.squash_message(pr, [self.commit("1", only)])
+        self.assertEqual(title, "Fix it (#5)")
+        self.assertEqual(message, only)
+        title, message = merger.squash_message(pr, [self.commit("1", only), self.commit("2", "Real")])
+        self.assertEqual(title, "Fix it (#5)")
+        self.assertIn("* Real", message)
+        self.assertNotIn("* \n", message + "\n")
+
+    def test_a_merge_sends_the_composed_message(self):
+        self.client.commits = [self.commit("1", "Only\n\nBody.", "Harness by Autonomous", "noreply@autonomous.ai", None)]
+        result = self.finish()
+        self.assertEqual(result["status"], "merged")
+        write = self.client.writes[0]
+        self.assertIn("commit_title=Only (#5)", write)
+        field = next(part for part in write if part.startswith("commit_message=@"))
+        self.assertIn("Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>", Path(field.split("@", 1)[1]).read_text())
+
+    def test_commits_that_cannot_be_read_never_stop_a_merge(self):
+        self.client.commits = RuntimeError("no commits")
+        result = self.finish()
+        self.assertEqual(result["status"], "merged")
+        self.assertEqual(self.client.writes, [("api", "--method", "PUT", "repos/owner/repo/pulls/5/merge",
+                                               "-f", f"sha={self.head}", "-f", "merge_method=squash")])
+        self.assertIn("squash_message_error", result)
+
     def test_merge_sends_exact_head_once_and_verifies_actual_tree(self):
         result = self.finish()
         self.assertEqual(result["status"], "merged")
         self.assertTrue(result["merge"]["same_tested_tree"])
         self.assertEqual(result["merge"]["commit"], self.client.merged_sha)
-        self.assertEqual(self.client.writes, [("api", "--method", "PUT", "repos/owner/repo/pulls/5/merge",
-                                               "-f", f"sha={self.head}", "-f", "merge_method=squash")])
+        self.assertEqual(len(self.client.writes), 1)
+        self.assertEqual(self.client.writes[0][:8], ("api", "--method", "PUT", "repos/owner/repo/pulls/5/merge",
+                                                     "-f", f"sha={self.head}", "-f", "merge_method=squash"))
         self.assertIn("merge_request", result["phases"])
         self.assertIn("verification", result["phases"])
 
@@ -283,8 +397,9 @@ class FakeClient:
         self.merged_sha, self.merged_tree = "c" * 40, fixture.tree
         self.tested_tree = fixture.tree
         self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
-        self.rules = []
-        self.pr = dict(number=5, state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
+        self.rules, self.receipt_patch = [], {}
+        self.commits = [dict(sha=fixture.head, author=None, commit=dict(message="reviewed", author=dict(name="Fixture", email="fixture@example.test")))]
+        self.pr = dict(number=5, title="Fixture", user=dict(login="fixture"), state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
                        base=dict(sha=fixture.base, ref="main", repo=dict(full_name=self.repository)))
         self.run = dict(id=123, repository=dict(full_name=self.repository), path=".github/workflows/ci.yml",
@@ -298,6 +413,10 @@ class FakeClient:
         self.gate_jobs = [dict(self.jobs[0], name="ci/required")]
 
     def api(self, path):
+        if path.startswith("pulls/5/commits"):
+            if isinstance(self.commits, Exception):
+                raise self.commits
+            return copy.deepcopy(self.commits) if path.endswith("page=1") else []
         if path == "rules/branches/main":
             return copy.deepcopy(self.rules)
         if path == "pulls/5":
@@ -325,6 +444,7 @@ class FakeClient:
                                source_tree=self.tested_tree, event="pull_request", run_id=123, run_attempt=1,
                                suites=[], required_jobs=["process-checks"],
                                results={"plan": "success", "process-checks": "success"})
+                receipt.update(self.receipt_patch)
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w") as bundle:
                     bundle.writestr("ci-required.json", json.dumps(receipt))

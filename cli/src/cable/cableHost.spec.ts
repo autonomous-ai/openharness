@@ -1,11 +1,14 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
-import type { FleetMachine, MachineFleet } from './machineFleet.js'
+import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { WebSocketServer, type WebSocket } from 'ws'
+import { DeviceFleet } from '../device/deviceFleet.js'
+import { DeviceLink } from '../device/deviceLink.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
@@ -967,6 +970,9 @@ describe('Swarm cards', () => {
 
   it('keeps the list the core last handed it, and names a Swarm tab\'s Swarm on the desk row', () => {
     const host = new DaemonCableHost(wiring())
+    // Not read yet is not "no Swarms": a dial told so before the core had read them left the Swarm on its face.
+    expect(host.swarmCards()).toBeNull()
+    host.setSwarmCards([])
     expect(host.swarmCards()).toEqual([])
     host.setSwarmCards([card])
     expect(host.swarmCards()).toEqual([card])
@@ -980,7 +986,7 @@ describe('Swarm cards', () => {
     ])
   })
 
-  it('says which Swarm project the window has open: only on a Swarm tab that names one, with the device mark', () => {
+  it('says which Swarm project the window has open: only on a Swarm tab, with the device mark, and no project as none', () => {
     const host = new DaemonCableHost(wiring())
     expect(host.activeSwarmProject()).toBeNull()   // no window
     const swarms = [
@@ -994,23 +1000,670 @@ describe('Swarm cards', () => {
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
     host.setSwarms({ active: 't2', swarms, tiles: [], fromDevice: true })
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: true })
+    // The Swarm tab on its Chat with PM or a DM: still that Swarm, with no project of its own (Diego, 2026-10-28:
+    // the dial sat on "Nothing on this tab" while the window showed the Swarm).
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
+  })
+
+  it('names the thread the window has open beside that conversation', () => {
+    const host = new DaemonCableHost(wiring())
+    host.setSwarms({ active: 't1', tiles: [], swarms: [{ id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', threadRoot: 'm1' }] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', threadRoot: 'm1', fromDevice: false })
+  })
+
+  it('names the conversation the window has open in the active Swarm tab, when it names one', () => {
+    const host = new DaemonCableHost(wiring())
+    const swarms = [
+      { id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1' },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Work', agentIds: [], panes: 0, conversationId: 'c1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
     host.setSwarms({ active: 't3', swarms, tiles: [] })
     expect(host.activeSwarmProject()).toBeNull()
   })
 
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), swarmCardSide: vi.fn(), superTabSelected: vi.fn(), superTabThread: vi.fn(), swarmSay: vi.fn(async () => ({ said: true as const })),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
     host.swarmCardsWanted(true); host.swarmCardOpen('c1', 'st1', 'l1'); host.superTabSelected('st1', 'p1')
     expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
-    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1')
+    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1', false)
     expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
+    host.superTabSelected('st1', 'p1', 'buddy')
+    expect(w.superTabSelected).toHaveBeenLastCalledWith('st1', 'p1', 'buddy')
     expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
+    // A dial that speaks swarmChat asks for the chat on the face: the flag goes on to the wiring.
+    host.swarmCardOpen('c1', 'st1', 'l1', true)
+    expect(w.swarmCardOpen).toHaveBeenLastCalledWith('c1', 'st1', 'l1', true)
+    await host.swarmCardRecap('st1', 'l1', true)
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', true)
+    expect(await host.swarmSay('h1', 'ship it', true)).toEqual({ said: true })
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await host.swarmSay('h1', 'ship it')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', false)
+    // A dial that speaks swarmBuddy asks for the face on its side, and says which side it swiped to.
+    await host.swarmCardRecap('st1', 'l1', 'buddy')
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
+    host.swarmCardSide('st1', 'buddy')
+    expect(w.swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
+    // A swarmThread dial leaves the thread on its face (with its chat flag), and the window closes (null) or opens (a root) a
+    // thread beside a conversation, with no project pick.
+    const left = vi.fn(async () => ({ tabId: 'st1', conversationId: 'c1' }))
+    const threaded = new DaemonCableHost(wiring({ swarmThreadLeave: left, superTabThread: w.superTabThread }))
+    expect(await threaded.swarmThreadLeave('st1', 'l1', 'buddy')).toEqual({ tabId: 'st1', conversationId: 'c1' })
+    expect(left).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
+    threaded.superTabThread('st1', 'c1', null)
+    expect(w.superTabThread).toHaveBeenLastCalledWith('st1', 'c1', null)
+    threaded.superTabThread('st1', 'c1', 'm9')
+    expect(w.superTabThread).toHaveBeenLastCalledWith('st1', 'c1', 'm9')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1', false, { thread: null, threaded: true })
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1', false, { thread: null, threaded: true })
     const bare = new DaemonCableHost(wiring())
-    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
+    expect(await bare.swarmThreadLeave('st1', 'l1')).toBeNull()
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1'); bare.superTabThread('st1', 'c1', null)
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+    expect(await bare.swarmSay('h1', 'ship it')).toEqual({ said: false })
   })
+})
+
+describe('firmware release lookup', () => {
+  // A dial on 9.9.9 is never offered the manifest's 0.0.1, so each call ends after the manifest read and
+  // the count below is exactly the GETs a plugged-in dial costs.
+  const manifest = { circle: { version: '0.0.1', url: 'https://x/fw.bin', sha256: 'a'.repeat(64), size: 1 } }
+  function stubManifest(ok = () => true) {
+    const fetch = vi.fn(async () => (ok() ? new Response(JSON.stringify(manifest)) : new Response('', { status: 503 })))
+    vi.stubGlobal('fetch', fetch)
+    return fetch
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('answers repeat keepalives from the release it read, for 30 minutes', async () => {
+    vi.useFakeTimers()
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    for (let i = 0; i < 19; i++) {
+      vi.advanceTimersByTime(15_000)
+      await host.firmwareFor('9.9.9', 'circle', true)
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(30 * 60_000)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the manifest at once unless a keepalive asks, and per OTA key', async () => {
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await host.firmwareFor('9.9.9', 'harness-pro', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('never keeps a failed read: the next keepalive asks again', async () => {
+    let up = true
+    const fetch = stubManifest(() => up)
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    up = false
+    // Nor does an earlier good read stand in for it.
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+    up = true
+    await host.firmwareFor('9.9.9', 'circle', true)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(4)
+  })
+})
+
+/**
+ * The two announces of a plug-in, over the real lane (deviceLink.ts) and fleet (deviceFleet.ts), against a fake device
+ * socket that answers only the newest select, as the backend does (deviceWs.ts bindMachine). Diego's Mac, 10-30: 13
+ * "could not announce" lines in a day, each about 15 s after a select the backend had answered.
+ */
+describe('announcing over the real lane', () => {
+  const CLOUD_ROW = { machineId: 'cloud-1', name: 'cloud-box', state: 'ready', authMode: 'managed', local: false }
+  const stops: Array<() => Promise<void> | void> = []
+  afterEach(async () => {
+    vi.useRealTimers()
+    for (const stop of stops.splice(0)) await stop()
+  })
+
+  /** Wait on the lane without a timer (they are faked): it reads each frame through promises alone. */
+  const soon = async (what: string, check: () => boolean): Promise<void> => {
+    for (let turn = 0; turn < 50_000; turn++) {
+      if (check()) return
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    throw new Error(`never: ${what}`)
+  }
+
+  async function plugged(over: { linked?: string } = {}) {
+    const selects: string[] = []
+    let socket: WebSocket | null = null
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })
+    await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+    let connections = 0
+    wss.on('connection', (ws) => {
+      connections++
+      socket = ws
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as { type?: string; payload?: { machineId?: string } }
+        if (frame.type === 'machine_select') selects.push(String(frame.payload?.machineId))
+      })
+    })
+    stops.push(() => new Promise<void>((resolve) => { for (const client of wss.clients) client.terminate(); wss.close(() => resolve()) }))
+    /** The backend has read every select so far: only the newest is answered. */
+    const answerNewest = () => socket?.send(JSON.stringify({ type: 'machine_selected', payload: { machineId: selects.at(-1) } }))
+    const lines: string[] = []
+    const seal = { hello: vi.fn(async () => ({ type: 'e2e_hello', payload: {} })), welcome: vi.fn(async () => true), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() }
+    const link = new DeviceLink({
+      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
+      computerId: 'this-computer', autonomousEnv: 'test', seal: seal as never,
+      peer: (machineId) => (machineId === over.linked ? { machineId, pub: 'PUB', label: 'linked', linkedAt: 1 } as never : null),
+      localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }, CLOUD_ROW,
+      { machineId: 'unlinked', name: 'not-linked', state: 'ready', authMode: 'remote', local: false }]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    // The lane is up from before (the dial was plugged in already): what overlaps is the announces.
+    await link.online()
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    const announced = () => lines.filter((line) => line.includes('could not announce'))
+    const welcome = (machineId: string) => socket?.send(JSON.stringify({ type: 'e2e_welcome', machineId, payload: {} }))
+    const revoke = () => socket?.send(JSON.stringify({ type: 'device_revoked' }))
+    const closeWith = (code: number) => socket?.close(code)
+    return { host, selects, answerNewest, lines, announced, seal, welcome, revoke, closeWith, connections: () => connections }
+  }
+
+  it('logs no "could not announce" for a plug-in that announces through both paths when the backend answers', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    host.onDialAttached()                       // announces where the dial is, once the lane is up
+    const picked = host.selectMachine('mine')   // the dial's own pick on hello, announced too
+    expect(await picked).toEqual({ ok: true })
+    await soon('the announce', () => selects.length >= 1)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    await vi.advanceTimersByTimeAsync(15_000)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['mine'])
+  })
+
+  it('announces the machine a select is on its way to, instead of replacing it with the one before', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const picked = host.selectMachine('cloud-1')
+    await soon('the pick', () => selects.length === 1)
+    host.onDialAttached()
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    answerNewest()
+    await soon('its answer', () => lines.some((line) => line.startsWith('device: machine_selected')))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await picked).toEqual({ ok: true })
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(host.selectedMachine()).toBe('cloud-1')
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['cloud-1'])
+  })
+
+  it('refuses a pick whose session was still being made when the person picked this computer, end to end over the lane', async () => {
+    const { host, selects, answerNewest, lines, seal, welcome, announced } = await plugged({ linked: 'cloud-1' })
+    const late = host.selectMachine('cloud-1')
+    await soon('the pick', () => selects.length === 1)
+    answerNewest()
+    await soon('its hello', () => seal.hello.mock.calls.length === 1)
+    expect(await host.selectMachine('mine')).toEqual({ ok: true })
+    await soon('the announce', () => selects.length === 2)
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    welcome('cloud-1')
+    expect(await late).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    expect(host.selectedMachine()).toBe('mine')
+    expect(announced()).toEqual([])
+  })
+
+  it('puts the lane back where the dial is when a refused pick replaced a slow one', async () => {
+    // Refused before the lane is asked, so the lane would stay on the machine the person left, and a reconnect return there.
+    const { host, selects, answerNewest, lines, seal, welcome, announced } = await plugged({ linked: 'cloud-1' })
+    const late = host.selectMachine('cloud-1')
+    await soon('the pick', () => selects.length === 1)
+    answerNewest()
+    await soon('its hello', () => seal.hello.mock.calls.length === 1)
+    expect(await host.selectMachine('unlinked')).toMatchObject({ ok: false, code: 'NEEDS_LINK' })
+    await soon('the lane told again', () => selects.length === 2)
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    welcome('cloud-1')
+    expect(await late).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    expect(selects).toEqual(['cloud-1', 'mine'])
+    expect(host.selectedMachine()).toBe('mine')
+    expect(announced()).toEqual([])
+  })
+
+  describe('a lane that ends during a pick stays ended (review of #2504)', () => {
+    /** A pick in its handshake, on a lane about to end. */
+    const inHandshake = async () => {
+      const up = await plugged({ linked: 'cloud-1' })
+      const first = up.host.selectMachine('cloud-1')
+      await soon('the pick', () => up.selects.length === 1)
+      up.answerNewest()
+      await soon('its hello', () => up.seal.hello.mock.calls.length === 1)
+      return { ...up, first }
+    }
+
+    it('sends no select on the way out of a revoke', async () => {
+      const { host, selects, revoke, first } = await inHandshake()
+      revoke()
+      expect(await first).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(selects).toEqual(['cloud-1'])
+      expect(host.selectedMachine()).toBe('mine')
+    })
+
+    it('dials nothing after the backend refuses the lane with 4403, whatever is picked next', async () => {
+      const { host, selects, closeWith, connections, lines, first } = await inHandshake()
+      closeWith(4403)
+      expect(await first).toMatchObject({ ok: false })
+      await soon('the refusal', () => lines.some((line) => line.includes('not authorized')))
+      expect(await host.selectMachine('unlinked')).toMatchObject({ code: 'NEEDS_LINK' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(connections()).toBe(1)
+      expect(selects).toEqual(['cloud-1'])
+    })
+  })
+
+  it('says nothing of an announce a newer pick replaced, and the pick lands', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    const first = host.selectMachine('cloud-1')
+    await soon('the first pick', () => selects.length === 1)
+    answerNewest()
+    expect(await first).toEqual({ ok: true })
+    host.onDialGone()                            // unplugged: the lane goes with it, and comes back at once
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    host.onDialAttached()                        // and back: announces cloud-1, where the dial was
+    await soon('the announce', () => selects.length === 2)
+    expect(await host.selectMachine('mine')).toEqual({ ok: true })   // and the person picks this computer
+    await soon('the pick', () => selects.length === 3)
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    await vi.advanceTimersByTimeAsync(15_000)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['cloud-1', 'cloud-1', 'mine'])
+    expect(host.selectedMachine()).toBe('mine')
+  })
+})
+
+/**
+ * Diego's Buddy, 11-02: a pick waiting on a slow machine lands after the person left it. The late answer used to set
+ * `selected`, so the check mark moved to a machine nobody had asked for any more. The newest pick decides.
+ */
+describe('a pick a newer pick replaced', () => {
+  const SECOND: FleetMachine = { machineId: 'second', name: 'second-mac', state: 'ready', authMode: 'remote' }
+  /** A fleet whose selects wait until the test settles them, in the order they were asked. */
+  const slow = () => {
+    const asked: Array<{ machineId: string; ok: () => void; fail: (error: Error) => void }> = []
+    const fleet = fleetOf([REMOTE, SECOND])
+    fleet.select = vi.fn((machineId: string) => new Promise<void>((ok, fail) => { asked.push({ machineId, ok, fail }) }))
+    return { fleet, asked }
+  }
+  const SUPERSEDED = { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
+
+  it('keeps this computer selected when a pick of another machine lands after a pick of this one', async () => {
+    const { fleet, asked } = slow()
+    // No machine id yet: nothing is announced, so the lane never hears of the newer pick. The host alone knows of it.
+    const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
+    const here = host.localMachine().id
+    const late = host.selectMachine('other')
+    expect(host.pendingPick()).toBe('other')
+    expect(await host.selectMachine(here)).toEqual({ ok: true })
+    expect(host.pendingPick()).toBe('')
+    asked[0]!.ok()
+    expect(await late).toEqual(SUPERSEDED)
+    expect(host.selectedMachine()).toBe(here)
+  })
+
+  it('reports a late failure of a replaced pick as replaced, not as the machine failing', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
+    const late = host.selectMachine('other')
+    await host.selectMachine(host.localMachine().id)
+    asked[0]!.fail(new Error('the machine did not answer'))
+    expect(await late).toEqual(SUPERSEDED)
+  })
+
+  it('lets only the newest of two remote picks move the selection, whichever lands first', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const newer = host.selectMachine('second')
+    expect(host.pendingPick()).toBe('second')
+    asked[0]!.ok()
+    expect(await older).toEqual(SUPERSEDED)
+    // Still on its way: the older one's end does not clear it, or a plug-in now would announce the machine before.
+    expect(host.pendingPick()).toBe('second')
+    expect(host.selectedMachine()).toBe('mine')
+    asked[1]!.ok()
+    expect(await newer).toEqual({ ok: true })
+    expect(host.selectedMachine()).toBe('second')
+    expect(host.pendingPick()).toBe('')
+  })
+
+  it('answers a person going away and back with the last pick\'s outcome: the first one landing proves nothing', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
+    const first = host.selectMachine('other')
+    await host.selectMachine(host.localMachine().id)
+    const third = host.selectMachine('other')
+    asked[0]!.ok()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(host.selectedMachine()).toBe(host.localMachine().id)
+    expect(host.pendingPick()).toBe('other')
+    asked[1]!.fail(new Error('the machine did not answer'))
+    expect(await third).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(await first).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(host.selectedMachine()).toBe(host.localMachine().id)
+  })
+
+  it('answers a first pick ok when the same machine\'s last pick landed before it', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
+    const first = host.selectMachine('other')
+    await host.selectMachine(host.localMachine().id)
+    const third = host.selectMachine('other')
+    asked[1]!.ok()
+    expect(await third).toEqual({ ok: true })
+    asked[0]!.ok()
+    expect(await first).toEqual({ ok: true })
+    expect(host.selectedMachine()).toBe('other')
+  })
+
+  it('asks once for two picks of one machine, and gives both its answer', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const first = host.selectMachine('other')
+    const second = host.selectMachine('other')
+    expect(asked).toHaveLength(1)
+    asked[0]!.ok()
+    expect([await first, await second]).toEqual([{ ok: true }, { ok: true }])
+    expect(host.selectedMachine()).toBe('other')
+  })
+
+  it('says where the dial is when a machine refuses a pick that replaced another, and not for a replaced pick failing', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const newest = host.selectMachine('second')
+    asked[0]!.fail(new Error('the machine did not answer'))
+    await older
+    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second'])
+    asked[1]!.fail(new FleetError('BILLING', 'second-mac needs a subscription'))
+    expect(await newest).toMatchObject({ ok: false, code: 'BILLING' })
+    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second', 'mine'])
+    asked[2]!.ok()
+  })
+
+  it('tells the lane nothing after a refusal with no pick replaced: it never moved', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const pick = host.selectMachine('other')
+    asked[0]!.fail(new FleetError('NEEDS_LINK', 'Link it first'))
+    expect(await pick).toMatchObject({ code: 'NEEDS_LINK' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('tells the lane nothing after a failure that is not a refusal: it may be the lane\'s end', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const newest = host.selectMachine('second')
+    asked[1]!.fail(new Error('socket closed (4403)'))
+    expect(await newest).toMatchObject({ code: 'UNREACHABLE' })
+    asked[0]!.ok()
+    await older
+    expect(asked).toHaveLength(2)
+  })
+
+  it('opens nothing again when a pick fails because the dial was unplugged', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const pick = host.selectMachine('second')
+    host.onDialGone()
+    asked[1]!.fail(new Error('released'))
+    await pick
+    asked[0]!.fail(new Error('released'))
+    await older
+    expect(asked).toHaveLength(2)
+    expect(fleet.release).toHaveBeenCalledWith(true)
+  })
+
+  it('leaves the lane alone when it says a newer select replaced the pick', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const pick = host.selectMachine('second')
+    asked[1]!.fail(new FleetError('SUPERSEDED', 'Another machine was chosen'))
+    expect(await pick).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    asked[0]!.ok()
+    await older
+    expect(asked).toHaveLength(2)
+  })
+
+  it('leaves nothing pending when the fleet call fails at once', async () => {
+    const { fleet } = slow()
+    fleet.select = vi.fn(() => { throw new Error('broken fleet') })
+    const host = new DaemonCableHost(wiring(), fleet)
+    expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(host.pendingPick()).toBe('')
+  })
+
+  it('still reports the newest pick\'s own refusal', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const pick = host.selectMachine('other')
+    asked[0]!.fail(new Error('the machine did not answer'))
+    expect(await pick).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(host.pendingPick()).toBe('')
+  })
+})
+
+/**
+ * A plug-in whose first lane open fails — Diego, 11-01: the sign-in refresh failed in a network blip, nothing tried
+ * again, and the wheel lost every other Mac until the dial was replugged.
+ */
+describe('a plug-in whose first lane open fails', () => {
+  const stops: Array<() => Promise<void> | void> = []
+  afterEach(async () => {
+    vi.useRealTimers()
+    for (const stop of stops.splice(0)) await stop()
+  })
+  /** A bare fleet whose online() throws `fails` times, as a token read lost to a blip does, then opens. */
+  const failing = (fails: number) => {
+    let left = fails
+    const fleet = fleetOf([REMOTE])
+    fleet.online = vi.fn(async () => { if (left-- > 0) throw Object.assign(new Error('UNAVAILABLE: the sign-in could not be refreshed'), { code: 'TOKEN_UNAVAILABLE' }) })
+    fleet.select = vi.fn(async () => {})
+    fleet.release = vi.fn()
+    return fleet
+  }
+  const turns = async () => { for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve)) }
+
+  it('opens the lane later, and then announces where the dial is', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(2)
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (UNAVAILABLE: the sign-in could not be refreshed)')
+    expect(fleet.select).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)   // failed again: the next try waits longer
+    await vi.advanceTimersByTimeAsync(1_999)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+    expect(fleet.select).toHaveBeenCalledWith('mine')
+    // Open now: nothing more is scheduled.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops trying once the dial is unplugged', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialGone()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops trying once this computer is signed out', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    let signedIn = true
+    const host = new DaemonCableHost(wiring({ signedIn: () => signedIn }), fleet)
+    host.onDialAttached()
+    await turns()
+    signedIn = false
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+  })
+
+  it('announces nothing for an open that lands after the dial was unplugged', async () => {
+    let finish: () => void = () => {}
+    const fleet = failing(0)
+    fleet.online = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialGone()
+    finish()
+    await turns()
+    expect(fleet.select).not.toHaveBeenCalled()
+  })
+
+  it('keeps one retry for a replug while one is waiting, not two', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialAttached()   // the session re-reports the dial without an unplug in between
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops at once when the session is over, and says why', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(0)
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SESSION_OVER' }) })
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (sign in again) — other machines are unavailable until the next sign-in')
+    expect(log).not.toHaveBeenCalledWith('cable: trying the cloud lane again')
+  })
+
+  it('leaves a socket that failed to the lane\'s own reconnect: one backoff, not two', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(0)
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }) })
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (connect ECONNREFUSED 127.0.0.1:1)')
+  })
+
+  it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
+    // A port nothing listens on: every dial is refused at once, as with the backend down.
+    const probe = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => probe.once('listening', () => resolve()))
+    const port = (probe.address() as { port: number }).port
+    await new Promise<void>((resolve) => probe.close(() => resolve()))
+    const lines: string[] = []
+    const link = new DeviceLink({
+      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${port}`,
+      computerId: 'this-computer', autonomousEnv: 'test',
+      seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
+      peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    host.onDialAttached()
+    await new Promise((resolve) => setTimeout(resolve, 3_500))   // the first dial, then the lane's own at 1 s and 3 s
+    const dials = lines.filter((line) => line.startsWith('device: connecting'))
+    expect(dials.length).toBeGreaterThanOrEqual(2)   // the lane did try again by itself
+    expect(dials.length).toBeLessThanOrEqual(3)
+    expect(lines).not.toContain('cable: trying the cloud lane again')
+  }, 10_000)
+
+  it('opens the real lane later when its first token read throws', async () => {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })
+    await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+    const frames: Array<{ type?: string; payload?: { machineId?: string } }> = []
+    wss.on('connection', (ws) => { ws.on('message', (raw) => { frames.push(JSON.parse(raw.toString())) }) })
+    stops.push(() => new Promise<void>((resolve) => { for (const client of wss.clients) client.terminate(); wss.close(() => resolve()) }))
+    let fails = 1
+    const lines: string[] = []
+    const link = new DeviceLink({
+      auth: { accessToken: async () => { if (fails-- > 0) throw new Error('UNAVAILABLE'); return 'token' } },
+      backendWsBase: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
+      computerId: 'this-computer', autonomousEnv: 'test',
+      seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
+      peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    host.onDialAttached()
+    const deadline = Date.now() + 4_000
+    while (!frames.some((frame) => frame.type === 'machine_select')) {
+      if (Date.now() > deadline) throw new Error(`the lane never opened: ${lines.join(' | ')}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(lines).toContain('cable: could not open the lane (UNAVAILABLE)')
+    expect(frames.filter((frame) => frame.type === 'machines_watch')).toHaveLength(1)
+    expect(frames.find((frame) => frame.type === 'machine_select')?.payload?.machineId).toBe('mine')
+    expect(link.status()).toBe('ready')
+  }, 10_000)
 })

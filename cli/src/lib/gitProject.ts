@@ -1,9 +1,10 @@
-import { execFile } from 'node:child_process'
-import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
+import { redactSecretsInText } from './logBundle.js'
 import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
@@ -26,15 +27,19 @@ export function validGitPath(path: unknown): path is string {
 /** [base]: the environment git starts from, the daemon's own unless a caller gives the one it must use instead
  *  (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
 async function git(path: string, args: string[], timeout = 4000, base: NodeJS.ProcessEnv = process.env): Promise<string> {
-  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
-  // core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
-  // one for the daemon (same guard as projectPreview.ts).
-  return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args], {
+  return (await exec('git', gitArgs(path, args), {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
-    env,
+    env: gitEnv(base),
   })).stdout.replace(/\r?\n$/, '')
 }
+export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
+  return env
+}
+// core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
+// one for the daemon (same guard as projectPreview.ts).
+const gitArgs = (path: string, args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args]
 
 /** `git worktree list --porcelain`, main checkout first. A bare repository has no files and a
  *  prunable entry lost its folder, so neither is somewhere to work. */
@@ -51,6 +56,17 @@ function parseWorktrees(output: string): Worktree[] {
     }]
   })
 }
+/** Whether `path` is a worktree Harness made in `root`'s worktrees folder: a linked worktree there whose branch carries
+ *  Harness's `branch.<name>.harness` mark. A person's own checkout or worktree, anywhere, is not. */
+export async function harnessMadeWorktree(path: string, root: string): Promise<boolean> {
+  try {
+    const [here, home] = await Promise.all([realpath(path), realpath(join(root, 'worktrees'))])
+    if (dirname(here) === here || !here.startsWith(`${home}${sep}`) || !(await lstat(join(here, '.git'))).isFile()) return false
+    const branch = (await git(here, ['branch', '--show-current'])).trim()
+    return !!branch && (await git(here, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`])).trim() !== ''
+  } catch { return false }
+}
+
 /** `branch.<name>.harness` in the repository's config marks a branch Harness made: `placeholder` while
  *  its name waits for the session's, `created` once it has one or was named at Start. */
 export const HARNESS_BRANCH_KEY = 'harness'
@@ -187,7 +203,7 @@ export async function readGitProject(requested: string, options: { refresh?: boo
 }
 
 /** `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec updating exactly that ref. */
-function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
+export function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
   const match = /^refs\/remotes\/([A-Za-z0-9._][A-Za-z0-9._-]*)\/([A-Za-z0-9._]\S*)$/.exec(ref ?? '')
   if (!match || match[2] === 'HEAD') return null
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
@@ -195,7 +211,7 @@ function remoteBranch(ref: string | undefined): { remote: string; branch: string
 
 /** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
  *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
-async function originDefaultRef(path: string): Promise<string | null> {
+export async function originDefaultRef(path: string): Promise<string | null> {
   const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
   for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
     if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref
@@ -204,16 +220,42 @@ async function originDefaultRef(path: string): Promise<string | null> {
 }
 
 /**
- * Brings the remote's default branch up to date in [source], with [env]'s git setup instead of the daemon's: a Swarm
- * host's fetch with the Harness GitHub App's token (lib/swarmGitHub.ts `swarmGitPrepareEnv`), before the worktree starts
- * from it. True when it fetched. Offline, slow or refused, the worktree starts from what is here, as `prepareGitProject`'s
- * own fetch does; a repository with no `origin` default branch has nothing to fetch.
+ * Brings the branch a start names ([branchRef], `refs/remotes/origin/X`), or the remote's default branch when it names none
+ * or a local one, up to date in [source], with [env]'s git setup instead of the daemon's: a Swarm host's fetch with the
+ * Harness GitHub App's token (lib/swarmGitHub.ts `swarmGitPrepareEnv`), before the worktree starts from it. Offline, slow or
+ * refused, the worktree starts from what is here; a repository with no `origin` default branch has nothing to fetch. A
+ * project clone is single-branch (projectFolder.ts), so X is fetched here or not at all: the start that follows is offline. In a blob-less clone the files of that branch's tip come too, with the same [env], so the
+ * offline worktree needs nothing fetched lazily (it may not: `prepareGitProject` `offline`). False when nothing was fetched;
+ * files that could not come leave the branch fetched and the start to fail offline, never to use another login.
  */
-export async function fetchDefaultBranch(source: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+export async function fetchStartBase(source: string, env: NodeJS.ProcessEnv, branchRef?: string): Promise<boolean> {
   if (!validGitPath(source) || !(await insideGitCheckout(source))) return false
-  const remote = remoteBranch(await originDefaultRef(source) ?? undefined)
+  const remote = remoteBranch(branchRef) ?? remoteBranch(await originDefaultRef(source) ?? undefined)
   if (!remote) return false
-  return git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 60_000, env).then(() => true, () => false)
+  const fetched = await git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 60_000, env).then(() => true, () => false)
+  if (fetched) await fetchMissingFiles(source, remote.remote, `refs/remotes/${remote.remote}/${remote.branch}`, env)
+  return fetched
+}
+
+/** In a partial clone, fetches what [ref]'s tree lacks from [remote] in one request, as git's own lazy fetch would ask for it
+ *  (promisor-remote.c), but with [env]. Listing what is missing fetches nothing. A clone that is not partial lacks nothing.
+ *  A failure is logged: the offline worktree that follows then fails on the files it lacks. */
+async function fetchMissingFiles(source: string, remote: string, ref: string, env: NodeJS.ProcessEnv): Promise<void> {
+  if (await git(source, ['config', '--get', `remote.${remote}.promisor`]).catch(() => '') !== 'true') return
+  const failed = (stderr: string) => console.warn(`[worktree] could not fetch the files of ${ref} for an offline start: ${gitReason(stderr)}`)
+  const listing = await exec('git', gitArgs(source, ['rev-list', '--objects', '--missing=print', '--no-object-names', '--end-of-options', `${ref}^{tree}`]), {
+    timeout: 120_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024, env: { ...gitEnv(env), GIT_NO_LAZY_FETCH: '1' },
+  }).then(out => out.stdout, (error: { stderr?: string; message?: string }) => { failed(error.stderr || error.message || ''); return '' })
+  const missing = listing.split('\n').filter(line => /^\?[0-9a-f]{40,64}$/.test(line)).map(line => line.slice(1))
+  if (missing.length === 0) return
+  await new Promise<void>(resolve => {
+    const child = execFile('git', gitArgs(source, ['-c', 'fetch.negotiationAlgorithm=noop', 'fetch', '--quiet', '--no-tags', '--no-write-fetch-head',
+      '--recurse-submodules=no', '--filter=blob:none', '--stdin', remote]), { timeout: 600_000, killSignal: 'SIGKILL', env: gitEnv(env) },
+      (error, _stdout, stderr) => { if (error) failed(stderr || error.message); resolve() })
+    // A git that exits before reading the whole list closes its input; that is its failure above, not another.
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(missing.join('\n') + '\n')
+  })
 }
 
 export type GitProjectOptions = {
@@ -226,7 +268,7 @@ export type GitProjectOptions = {
    *  behind. Only a Swarm start asks for it; a repository with no `origin` default branch starts from `HEAD`. */
   fromDefaultBranch?: boolean
   /** Fetch nothing: start from what the checkout already has. A Swarm start doing another person's work: its host
-   *  fetched with the Harness GitHub App's token just before (`fetchDefaultBranch`), and this machine's own git
+   *  fetched with the Harness GitHub App's token just before (`fetchStartBase`), and this machine's own git
    *  login must not be used for it. */
   offline?: boolean
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
@@ -235,6 +277,8 @@ export type GitProjectOptions = {
   /** `branchName` was made up (`brave-otter`): the session's name replaces it once there is one. */
   placeholder?: boolean
   pick?: (n: number) => number
+  /** How long `git worktree add` may run, in ms: `WORKTREE_ADD_TIMEOUT` unless a test gives a shorter one. */
+  worktreeTimeout?: number
 }
 
 /** Worktree on: a new worktree under `<root>/worktrees/<repository>`, on `branchName` — created from
@@ -322,8 +366,11 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   // Grouped by repository, so the leaf only needs the branch.
   const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
   const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
-  const branch = options.branchName ?? placeholderBranch(taken, options.pick)
   const placeholder = !options.branchName || options.placeholder === true
+  let branch = options.branchName ?? placeholderBranch(taken, options.pick)
+  // A name made up before the start (Desktop keeps its pick) may be taken by then; nobody chose it, so the next
+  // free number is taken instead of refusing with BRANCH_EXISTS.
+  if (placeholder && !existing) for (let suffix = 2, base = branch; taken.has(`refs/heads/${branch}`); suffix++) branch = `${base}-${suffix}`
   if (existing) {
     if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
     if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
@@ -366,16 +413,46 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
         await git(source, ['config', '--add', key, remote.refspec])
       }
     }
-    await git(source, existing
-      ? ['worktree', 'add', '--', destination, branch]
-      // A remote branch checked out under its own name tracks it; a new branch from one must not,
-      // or it would push onto the base.
-      : remote && remote.branch === branch
-        ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
-        : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], 120_000)
   } catch (error) {
-    // Keep any partial checkout and branch available for recovery.
     if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+  }
+  // A remote branch checked out under its own name tracks it; a new branch from one must not, or it would push onto the base.
+  const tracks = !existing && remote?.branch === branch
+  // The new branch is made here, before the worktree, by a ref update that refuses one existing by now: a branch a person made
+  // after the check above is never taken for this start's (review of #1837). A failed start deletes exactly the ref it made.
+  const made = existing ? null : { branch, head, tracks }
+  if (made) {
+    const created = await git(source, ['update-ref', '-m', `branch: Created from ${tracks ? options.ref : head}`, `refs/heads/${branch}`, head, ''])
+      .then(() => true, () => false)
+    if (!created) {
+      await rm(destination, { recursive: true, force: true })
+      throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
+    }
+  }
+  const admin = await worktreeAdmin(source)
+  const registered = new Set(await readdir(admin).catch(() => [] as string[]))
+  const upstream = tracks ? await git(source, ['branch', `--set-upstream-to=${options.ref}`, branch]).then(() => true, () => false) : true
+  const added: WorktreeAdd = upstream
+    // Offline means nothing fetched, a partial clone's missing files included: they would come with this machine's login.
+    // GIT_NO_LAZY_FETCH is read from git 2.44 on; a protocol list naming no transport stops every git (review 1 of #2770).
+    ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT,
+      options.offline ? { GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none' } : {})
+    : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
+  if (!added.ok && added.running) {
+    // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
+    console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}; something git started is still running, so the folder and branch are left as it is: ${gitReason(added.stderr)}`)
+    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+  }
+  if (!added.ok && !(added.timedOut && await finishedCheckout(source, destination, branch))) {
+    console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}: ${gitReason(added.stderr)}`)
+    // A retry starts clean. The folder is this start's own (reserved above), and so is the branch it made.
+    await removePartialWorktree(source, destination, made, admin, registered)
+    if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    // Offline in a blob-less clone: files `fetchStartBase` could not bring, which this start may not fetch itself.
+    if (options.offline && /promisor remote|lazy fetching disabled/i.test(added.stderr)) {
+      throw new GitProjectError('WORKTREE_FAILED', "This branch's files could not be fetched for the start. Check the connection, then retry.")
+    }
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
   }
   // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
@@ -384,6 +461,115 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   }
   await copyIncluded(root, destination)
   return inside(destination)
+}
+
+/** Ten minutes for `git worktree add`. 120 s failed 2 of 4 Swarm starts on a busy Mac Studio (2026-10-27): the
+ *  checkout of the whole repository was still writing when the time ran out. */
+export const WORKTREE_ADD_TIMEOUT = 10 * 60_000
+
+/** `running`: something git started still held its stderr when this stopped waiting, so it may still be writing the folder. */
+type WorktreeAddFailure = { ok: false; reason: string; stderr: string; timedOut: boolean; diskFull: boolean; running: boolean }
+type WorktreeAdd = { ok: true } | WorktreeAddFailure
+
+/** `git worktree add`, in a process group of its own. git checks the files out in a child (`git reset --hard`)
+ *  and runs hooks and filters below that: killing only git at the timeout left the child writing the folder after
+ *  the start had given up, and the worktree registered as locked "initializing" with its branch (2026-10-27). At
+ *  the timeout the whole group is killed (on Windows, git's process tree), and the result waits until no process
+ *  holds git's stderr any more: until then something git started may still be writing the folder. If that takes
+ *  as long again as the timeout (at most a minute), the result says it is `running`. */
+function worktreeAdd(source: string, args: string[], timeout: number, extraEnv: NodeJS.ProcessEnv = {}): Promise<WorktreeAdd> {
+  return new Promise(resolve => {
+    let stderr = '', timedOut = false, settled = false, waited: NodeJS.Timeout | undefined
+    const done = (result: WorktreeAdd) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(waited); resolve(result) } }
+    const failed = (reason: string, running = false): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }), running })
+    const late = () => `timed out after ${Math.round(timeout / 1000)} s`
+    const child = spawn('git', gitArgs(source, args), {
+      env: { ...gitEnv(process.env), ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
+    })
+    child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })
+    const timer = setTimeout(() => {
+      timedOut = true
+      void stopTree(child.pid).then(problem => { if (problem) console.error(`[worktree] could not stop git and what it started: ${gitReason(problem)}`) })
+      waited = setTimeout(() => done(failed(late(), true)), Math.min(timeout, 60_000))
+    }, timeout)
+    child.once('error', error => done({ ...failed((error as NodeJS.ErrnoException).code ?? 'could not run git'), diskFull: diskFull(error) }))
+    child.once('close', (code, signal) => done(timedOut ? failed(late())
+      : code === 0 ? { ok: true } : failed(code === null ? `signal ${signal}` : `exit ${code}`)))
+  })
+}
+
+/** Kills [pid] and everything it started: its process group, or on Windows its tree. Null when that was done, else why
+ *  not. On Windows `taskkill /T` finds only what still descends from a live git, so a failure here is reported and
+ *  `worktreeAdd` still waits for git's stderr to close before anything is read or removed. */
+export function stopTree(pid: number | undefined): Promise<string | null> {
+  if (pid === undefined) return Promise.resolve(null)
+  if (process.platform !== 'win32') {
+    try { process.kill(-pid, 'SIGKILL'); return Promise.resolve(null) } catch (error) {
+      return Promise.resolve((error as NodeJS.ErrnoException).code === 'ESRCH' ? null : String((error as Error).message))
+    }
+  }
+  return new Promise(resolve => {
+    let output = ''
+    const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    taskkill.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
+    taskkill.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
+    taskkill.once('error', error => resolve(`taskkill: ${error.message}`))
+    taskkill.once('close', code => resolve(code === 0 ? null : `taskkill exit ${code}: ${output.trim() || 'no output'}`))
+  })
+}
+
+/** Whether git, stopped at the timeout, had already checked the worktree out: registered on its branch, every
+ *  tracked file as the branch has it (the index is written after the files). Then it is used, unlocked. */
+async function finishedCheckout(source: string, destination: string, branch: string): Promise<boolean> {
+  const here = await real(destination)
+  let registered = false
+  for (const tree of await worktrees(source)) registered ||= tree.ref === `refs/heads/${branch}` && await real(tree.path) === here
+  if (!registered) return false
+  const changed = await git(destination, ['status', '--porcelain', '--untracked-files=no'], 120_000).catch(() => null)
+  if (changed !== '') return false
+  await git(source, ['worktree', 'unlock', '--', destination]).catch(() => '')
+  return true
+}
+
+/** `<common git dir>/worktrees`, where git registers each linked worktree in a folder of its own. */
+async function worktreeAdmin(source: string): Promise<string> {
+  const common = await git(source, ['rev-parse', '--git-common-dir']).catch(() => '')
+  return join(isAbsolute(common) ? common : join(source, common), 'worktrees')
+}
+
+/** Removes what a failed `worktree add` left: its registration (locked or not), the folder, and `branch` when this
+ *  start made it. A registration in [registered] was there before and stays, whatever folder it names. `git branch
+ *  -D` refuses a branch any other worktree has checked out. */
+async function removePartialWorktree(source: string, destination: string, made: { branch: string; head: string; tracks: boolean } | null,
+  admin: string, registered: Set<string>): Promise<void> {
+  const here = await real(destination)
+  try {
+    for (const entry of await readdir(admin).catch(() => [] as string[])) {
+      if (registered.has(entry)) continue
+      const gitdir = (await readFile(join(admin, entry, 'gitdir'), 'utf8').catch(() => '')).trim()
+      if (gitdir && await real(dirname(gitdir)) === here) await rm(join(admin, entry), { recursive: true, force: true })
+    }
+    await rm(destination, { recursive: true, force: true })
+    // Only while it is still where this start put it: a ref update with its old value is a compare-and-delete.
+    if (made && await git(source, ['update-ref', '-d', `refs/heads/${made.branch}`, made.head]).then(() => true, () => false) && made.tracks) {
+      for (const key of ['remote', 'merge']) await git(source, ['config', '--unset', `branch.${made.branch}.${key}`]).catch(() => '')
+    }
+  } catch (error) {
+    console.error(`[worktree] could not remove the partial worktree at ${destination}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** git's last words, short and without credentials: a remote URL's user and password, GitHub tokens (the stateless
+ *  `ghs_APPID_` and a JWT before the older forms, which would stop at its first dot), JWTs, and the shared denylist. */
+function gitReason(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).join(' / ')
+  return redactSecretsInText((lines || 'no output')
+    // A bounded scheme: an unbounded one made a run of `ab-ab-…` quadratic (lib/agentHandoff.ts).
+    .replace(/([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+@/gi, '$1<redacted>@')
+    .replace(/\bghs_\d+_[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,}){2}/g, '<redacted>')
+    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '<redacted>')
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '<redacted>'))
+    .slice(0, 500)
 }
 
 /** `.worktreeinclude` (gitignore syntax) in the repository names ignored files a new worktree needs

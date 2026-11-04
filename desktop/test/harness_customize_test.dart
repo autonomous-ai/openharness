@@ -23,7 +23,6 @@ import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:xterm/xterm.dart';
 
 import 'support/real_fonts.dart';
@@ -176,7 +175,8 @@ void main() {
       // Workspace: the panes' shading, the tabs' names and the colour palette.
       await tester.tap(find.byKey(const ValueKey('customize-appearance')));
       await tester.pumpAndSettle();
-      expect(find.text('Shade inactive panes'), findsOneWidget);
+      expect(find.text('Fade inactive panes'), findsOneWidget);
+      expect(find.text('Pane style'), findsOneWidget);
       expect(find.text('Auto rename'), findsOneWidget);
       expect(find.text('Color palette'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -422,13 +422,6 @@ void main() {
       } finally {
         semantics.dispose();
       }
-      final button = tester.widget<TextButton>(
-        find.descendant(of: other, matching: find.byType(TextButton)),
-      );
-      expect(
-        button.style!.side!.resolve({WidgetState.focused})!.color,
-        DesktopChrome.accent,
-      );
       await _capture(tester, boundary, 'desktop-$name-focus-large-terminal');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();

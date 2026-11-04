@@ -46,6 +46,31 @@ describe('individual agent names', () => {
     expect(agents.map(a => a.name)).toContain('Lead')
   })
 
+  it('gives Reviewers member names like Builders, also one that kept "Reviewer" as its name (Dee, 2026-10-30)', () => {
+    // Three Reviewers once read "Reviewer" three times: the role was not a role's name here, so it stuck.
+    const agents: NamedAgent[] = [
+      { id: 'r-1', name: 'Reviewer' },
+      { id: 'r-2', name: 'Reviewer', displayName: 'Reviewer' },
+      { id: 'r-3', name: 'reviewer 2' },
+      { id: 'kept', name: 'Reviewer', displayName: 'Quinn' },
+    ]
+    assignAgentDisplayNames(agents)
+    const names = agents.map(a => a.displayName!)
+    for (const name of names.slice(0, 3)) expect(name).not.toMatch(/reviewer/i)
+    expect(new Set(names).size).toBe(names.length)
+    expect(agents[3]!.displayName).toBe('Quinn')
+    expect(agentDisplayName([{ id: 'r', name: 'Reviewer', displayName: 'Reviewer' }], 'r')).not.toBe('Reviewer')
+  })
+
+  it('keeps every other stored name, even one that reads like a role or an automatic session (review of #2281)', () => {
+    // A Buddy may be named "claude-2026-10-30" (buddies.ts accepts it); only a stored "Reviewer" is replaced.
+    const kept = ['Dev', 'PM', 'Lead 2', 'claude-2026-10-30', 'codex-2026-10-30T09']
+    const agents: NamedAgent[] = kept.map((displayName, i) => ({ id: `k-${i}`, name: 'Builder', displayName }))
+    assignAgentDisplayNames(agents)
+    expect(agents.map(a => a.displayName)).toEqual(kept)
+    for (const [i, name] of kept.entries()) expect(agentDisplayName(agents, `k-${i}`)).toBe(name)
+  })
+
   it('resolves legacy identities before filtering private projects without mutating reads', () => {
     const state = legacyState(), original = structuredClone(state)
     const all = visibleState(state, owner), publicOnly = visibleState(state, peer)

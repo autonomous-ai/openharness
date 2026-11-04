@@ -12,12 +12,16 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
+import '../core/runtime_platform.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
+import '../state/lead_placement.dart';
+import '../super_tabs/identity.dart' show SuperTabAvatar;
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -26,6 +30,7 @@ import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
 import 'engine_identity.dart';
+import 'laid_out_list.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
 /// Enter on the selected launch action starts with the displayed defaults.
@@ -84,16 +89,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
+  final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
+      box.leadBlocked == null &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
-      !box.taskTooLong &&
-      (box.integration?.roles == null ||
-          box.integration!.roles!.any(
-            (role) => role.id == box.integration!.roleId,
-          ));
+      !box.taskTooLong;
   FocusNode get _desktopDefaultFocus => box.takesTask
       ? _taskFocus
       : _desktopStartEnabled
@@ -160,6 +163,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       box.useDesktopChoices(widget.desktop);
+      _startOnLastMachine();
       if (box.checking) _row = _Row.start;
       _syncField();
       // Restoring the successful agent can replace an unfocusable Terminal
@@ -212,6 +216,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _taskText.dispose();
     _taskFocus.dispose();
     _headerMachineFocus.dispose();
+    for (final node in _leadRowFocus.values) {
+      node.dispose();
+    }
     _dialogScope.dispose();
     for (final node in _desktopFocus.values) {
       node.dispose();
@@ -374,6 +381,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   String? _blocked(_Row row) => switch (row) {
     _Row.branch || _Row.worktree when box.checkingGit => '',
     _Row.branch when box.gitError != null => box.gitError,
+    _Row.branch || _Row.worktree when box.noCommitsYet => 'No commits yet',
     _Row.branch when !box.isGitProject => 'Not a Git repository',
     _Row.worktree when box.gitError != null => box.gitError,
     _Row.worktree when box.inWorktree => 'Already a worktree',
@@ -401,7 +409,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.advanced => box.advancedOpen ? '[-]' : '[+]',
     _Row.project => box.launchProjectLabel,
     _Row.agent => box.launchAgentLabel,
-    _Row.model => box.modelLabel,
+    // The Product Manager's own model, never one guessed from other agents.
+    _Row.model => box.placesLead ? box.leadModelLabel : box.modelLabel,
     _Row.branch => box.branchRowLabel,
     _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
@@ -1366,6 +1375,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         )
       : terminalContentStyle(color: color ?? _theme.foreground);
 
+  /// The search line, at the size of every other field on desktop.
+  TextStyle _queryInk(Color color) => widget.desktop
+      ? _ink(color).copyWith(fontSize: grid.AppType.bodySize)
+      : _ink(color);
+
   /// THE GRID. A terminal has two units and positions nothing in pixels:
   ///
   /// * [_cell] — one character wide, in the terminal's own face and size.
@@ -1635,7 +1649,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           key: _desktopCanvasKey,
           children: [
             Align(
-              alignment: const Alignment(0, -.12),
+              // A Windows new tab starts at one fixed line under the tabs:
+              // centred, its top moved with the length of the list below it.
+              alignment: widget.embedded && RuntimePlatform.isWindows
+                  ? Alignment.topCenter
+                  : const Alignment(0, -.12),
               child: SizedBox(
                 width: (constraints.maxWidth - (widget.embedded ? 48 : 0))
                     .clamp(0.0, 680.0),
@@ -1657,7 +1675,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                             policy: OrderedTraversalPolicy(),
                             child: SingleChildScrollView(
                               controller: _fieldsScroll,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              // On a Windows new tab the form is the page
+                              // under the caption row, and 12 put its pickers
+                              // right against the tabs (owner, 2026-11-03).
+                              padding: EdgeInsets.only(
+                                top:
+                                    widget.embedded && RuntimePlatform.isWindows
+                                    ? 32
+                                    : 12,
+                                bottom: 12,
+                              ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
@@ -1669,6 +1696,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
                                     _desktopSettings(),
+                                    if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
                                       const SizedBox(height: 14),
@@ -1788,19 +1816,23 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
-  Widget _desktopHeader() {
+  String get _desktopProjectName {
     final folder = box.project.folder;
     final lastPart = folder
         ?.split(RegExp(r'[/\\]'))
         .where((p) => p.isNotEmpty)
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
-    final projectName = box.asGuest
+    return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
               lastPart ??
               box.project.repository?.name ??
               'Choose repo';
+  }
+
+  Widget _desktopHeader() {
+    final projectName = _desktopProjectName;
     // A phone has room for neither the capsules side by side nor a mouse's
     // target: there each is a line of its own, a finger tall.
     final phone = workspaceIsCompact(context);
@@ -1844,6 +1876,31 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   textSize: 13,
                   surfaceColor: DesktopChrome.surface,
                   onPressed: null,
+                ),
+              )
+            else if (box.placesLead)
+              _desktopField(
+                order: 2,
+                finger: phone,
+                anchor: _headerMachineAnchor,
+                child: _desktopLeadMachineAnchor(
+                  child: DesktopPill(
+                    key: const ValueKey('new-harness-field-machine'),
+                    focusNode: _headerMachineFocus,
+                    label: _leadChipLabel,
+                    semanticLabel: 'Computer, $_leadChipLabel',
+                    icon: AppIcons.monitor,
+                    menu: true,
+                    capsule: true,
+                    tooltip: 'Choose computer',
+                    textSize: 13,
+                    surfaceColor: DesktopChrome.surface,
+                    onPressed: box.locked
+                        ? null
+                        : () => _headerMachineMenu.isOpen
+                              ? _headerMachineMenu.close()
+                              : _headerMachineMenu.open(),
+                  ),
                 ),
               )
             else
@@ -2018,6 +2075,163 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
+  /// New Project's machine chip: where the Product Manager runs, or Choose
+  /// machine until the person has one it can run on.
+  String get _leadChipLabel => box.leadMachine?.name ?? 'Choose machine';
+
+  /// New Project opens on the person's last-used machine, as New Harness
+  /// does, when it can run the Product Manager; else nothing is chosen for
+  /// them and the chip asks (Lead's ruling, 10-29: the Swarm picks nothing).
+  void _startOnLastMachine() {
+    final machines = box.integration?.leadMachines;
+    if (machines == null || box.leadPicked || box.locked) return;
+    if (machines.any((m) => m.id == box.machineId && m.startable)) {
+      box.chooseLeadMachine(box.machineId);
+    }
+  }
+
+  /// A machine's one status word in the menu, or null when it can take the
+  /// Product Manager: no explanation lines (Dee, 10-29).
+  String? _leadStatusWord(LeadMachine machine) => machine.startable
+      ? null
+      : !machine.online
+      ? 'offline'
+      : machine.unavailable == kLeadSwarmPaused ||
+            machine.unavailable == 'Paused in this Swarm'
+      ? 'paused'
+      : machine.unavailable == null &&
+            machine.leadEngines.isNotEmpty &&
+            (machine.freeAgents ?? 1) <= 0
+      ? 'busy'
+      : 'unavailable';
+
+  /// Under the settings, only while it blocks New Project: one line saying
+  /// why. Choosing a machine is the chip's to ask.
+  Widget _desktopLeadBlocked() {
+    final why = box.leadBlocked;
+    if (why == null || why == kLeadChooseMachine) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 4),
+      child: Text(
+        why,
+        key: const ValueKey('new-harness-lead-blocked'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+      ),
+    );
+  }
+
+  /// New Project's machine menu: your machines, then team machines, each its
+  /// own name (a team machine wears its owner's avatar) and one status word
+  /// when it cannot take the Product Manager now.
+  Widget _desktopLeadMachineAnchor({required Widget child}) {
+    final machines = box.integration?.leadMachines ?? const <LeadMachine>[];
+    final yours = [
+      for (final m in machines)
+        if (m.own) m,
+    ];
+    final team = [
+      for (final m in machines)
+        if (!m.own) m,
+    ];
+    Widget heading(String text) => Padding(
+      // At the rows' label column: AppMenuItem's 6 gutter + 10 padding.
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+      child: Semantics(
+        header: true,
+        child: Text(
+          text,
+          style: DesktopChrome.text(
+            size: 12,
+            medium: true,
+            color: DesktopChrome.muted,
+          ),
+        ),
+      ),
+    );
+    return AppDropdown(
+      controller: _headerMachineMenu,
+      childFocusNode: _headerMachineFocus,
+      width: _machineMenuWidth,
+      onOpen: () => setState(() {}),
+      onClose: () {
+        if (!mounted) return;
+        setState(() {});
+        _focusEditor();
+      },
+      children: [
+        if (yours.isNotEmpty) heading('Your machines'),
+        for (final machine in yours) _desktopLeadMachineRow(machine),
+        if (team.isNotEmpty) heading('Team machines'),
+        for (final machine in team) _desktopLeadMachineRow(machine),
+      ],
+      child: child,
+    );
+  }
+
+  Widget _desktopLeadMachineRow(LeadMachine machine) {
+    final chosen = machine.id == box.leadMachine?.id;
+    final enabled = machine.startable && !box.locked;
+    final status = _leadStatusWord(machine);
+    final choose = enabled ? () => box.chooseLeadMachine(machine.id) : null;
+    final focus = _leadRowFocus.putIfAbsent(
+      machine.id,
+      () => FocusNode(debugLabel: 'New harness computer row'),
+    );
+    return KeyedSubtree(
+      key: ValueKey('new-harness-lead-machine-${machine.id}'),
+      // The press and focus actions stay on the semantics node (review of
+      // #2237), and assistive technology hears the full reason where the row
+      // shows one word.
+      child: Semantics(
+        enabled: enabled,
+        selected: chosen,
+        focusable: enabled,
+        onFocus: enabled ? focus.requestFocus : null,
+        onTap: choose,
+        label: machine.startable
+            ? machine.name
+            : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
+        excludeSemantics: true,
+        child: AppMenuItem(
+          focusNode: focus,
+          autofocus: chosen,
+          selected: chosen,
+          leading: machine.owner == null
+              ? null
+              : Opacity(
+                  opacity: enabled ? 1 : .55,
+                  child: SuperTabAvatar.person(machine.owner!, size: 16),
+                ),
+          icon: box.app.stateOf(machine.id)?.isLocalMachine == true
+              ? AppIcons.laptop
+              : AppIcons.monitor,
+          label: machine.name,
+          // Enlarged text shortens the word rather than the row overflowing.
+          trailing: status == null
+              ? null
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 90),
+                  child: Text(
+                    status,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: grid.AppType.caption(height: 1.35),
+                  ),
+                ),
+          onPressed: choose,
+        ),
+      ),
+    );
+  }
+
+  /// Both computer menus' width.
+  static const double _machineMenuWidth = AppDropdown.defaultWidth;
+
   Widget _desktopTaskBox() => ListenableBuilder(
     listenable: _taskFocus,
     builder: (context, _) => Material(
@@ -2033,49 +2247,59 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        // The left 6 + the text's 7 puts the line on the 📎's ink, not its hit area.
+        padding: const EdgeInsets.fromLTRB(6, 10, 8, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             FocusTraversalOrder(
               order: const NumericFocusOrder(4),
-              child: TextField(
-                key: const ValueKey('new-harness-task'),
-                controller: _taskText,
-                focusNode: _taskFocus,
-                canRequestFocus: box.takesTask,
-                minLines: 2,
-                maxLines: 7,
-                textInputAction: TextInputAction.send,
-                readOnly: box.locked || !box.takesTask,
-                style: DesktopChrome.text(size: 15),
-                cursorColor: DesktopChrome.accent,
-                onChanged: box.setTask,
-                onSubmitted: (_) {
-                  if (!_isComposing() && !_picking) unawaited(_start());
-                },
-                onTapOutside: (_) {},
-                decoration: InputDecoration(
-                  // An agent that takes no first message is not a terminal: with Kilo chosen
-                  // the box said a terminal would open (a fresh Ubuntu VM, 2026-10-12).
-                  hintText: box.takesTask
-                      ? 'What would you like to work on?'
-                      : box.isTerminal
-                      ? 'Open a terminal in this repo'
-                      : 'Type to ${box.agentLabel} once it opens',
-                  hintStyle: DesktopChrome.text(
-                    size: 15,
-                    color: DesktopChrome.muted,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 7),
+                child: TextField(
+                  key: const ValueKey('new-harness-task'),
+                  controller: _taskText,
+                  focusNode: _taskFocus,
+                  canRequestFocus: box.takesTask,
+                  // As tall as what is typed, with the options under it.
+                  minLines: 1,
+                  maxLines: 7,
+                  textInputAction: TextInputAction.send,
+                  readOnly: box.locked || !box.takesTask,
+                  style: DesktopChrome.text(size: 13),
+                  cursorColor: DesktopChrome.accent,
+                  onChanged: box.setTask,
+                  onSubmitted: (_) {
+                    if (!_isComposing() && !_picking) unawaited(_start());
+                  },
+                  onTapOutside: (_) {},
+                  decoration: InputDecoration(
+                    // An agent that takes no first message is not a terminal: with Kilo chosen
+                    // the box said a terminal would open (a fresh Ubuntu VM, 2026-10-12).
+                    hintText: box.takesTask
+                        ? 'What would you like to work on?'
+                        : box.isTerminal
+                        ? 'Open a terminal in this repo'
+                        : 'Type to ${box.agentLabel} once it opens',
+                    hintStyle: DesktopChrome.text(
+                      size: 13,
+                      color: DesktopChrome.hint,
+                    ),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    isCollapsed: true,
+                    // Else the theme's field padding and minimum height come
+                    // back through applyDefaults and the line sits in a tall box.
+                    contentPadding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.standard,
+                    filled: false,
                   ),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  isCollapsed: true,
-                  filled: false,
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _desktopTaskActions(),
           ],
         ),
@@ -2132,7 +2356,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               anchor: _desktopAnchors[_Row.approvals]!,
               child: _desktopChoiceButton(_Row.approvals, AppIcons.shieldCheck),
             ),
-          if (box.usesProfile)
+          if (box.usesProfile && !box.leadThroughSwarm)
             _desktopField(
               order: 7,
               anchor: _desktopAnchors[_Row.profile]!,
@@ -2144,7 +2368,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (box.canUseWorktree)
+          // A Product Manager always gets its own worktree.
+          if (box.canUseWorktree && !box.placesLead)
             _desktopField(
               order: 8,
               anchor: _desktopAnchors[_Row.worktree]!,
@@ -2170,7 +2395,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           if (!box.isCloud &&
-              (box.isGitProject || box.checkingGit || box.gitError != null))
+              !box.leadThroughSwarm &&
+              (box.choosesBranch || box.checkingGit || box.gitError != null))
             _desktopField(
               order: 9,
               anchor: _desktopAnchors[_Row.branch]!,
@@ -2315,65 +2541,39 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (box.canCancelPending) _cancelPendingButton(),
       if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
-      if (box.integration?.roles case final roles?)
-        roles.isEmpty
-            ? const Text('This project has no Engineer or Reviewer roles.')
-            : SizedBox(
-                width: 180,
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: 'Role'),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      key: const ValueKey('new-harness-role'),
-                      isExpanded: true,
-                      value:
-                          roles.any(
-                            (role) => role.id == box.integration!.roleId,
-                          )
-                          ? box.integration!.roleId
-                          : null,
-                      items: [
-                        for (final role in roles)
-                          DropdownMenuItem(
-                            value: role.id,
-                            child: Text(
-                              role.name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: box.locked
-                          ? null
-                          : (value) => setState(() {
-                              if (value != null) {
-                                box.integration!.chooseRole(value);
-                              }
-                            }),
-                    ),
-                  ),
-                ),
-              ),
+      if (box.integration?.roleSuggestions case final suggestions?)
+        _RoleField(
+          key: const ValueKey('new-harness-role'),
+          suggestions: suggestions,
+          initial: box.integration!.roleName ?? '',
+          enabled: !box.locked,
+          onChanged: (value) {
+            final name = value.trim();
+            box.integration!.roleName = name.isEmpty ? null : name;
+          },
+        ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
-        FocusTraversalOrder(
-          order: const NumericFocusOrder(9.95),
-          child: ProjectVisibility(
-            key: const ValueKey('new-harness-project-visibility'),
-            value: box.integration!.projectVisibility!,
-            disabledReason: box.integration!.projectVisibilityLocked
-                ? 'Project creation has started. Visibility is fixed for this request.'
-                : box.locked
-                ? 'Finish the current request before changing visibility.'
-                : null,
-            onChanged: box.locked || box.integration!.projectVisibilityLocked
-                ? null
-                : (value) => setState(
-                    () => box.integration!.projectVisibility = value,
-                  ),
-          ),
-        ),
+        _desktopProjectVisibility(9.95),
       _desktopStartButton(),
     ],
+  );
+
+  Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
+    order: NumericFocusOrder(order),
+    child: ProjectVisibility(
+      key: const ValueKey('new-harness-project-visibility'),
+      value: box.integration!.projectVisibility!,
+      disabledReason: box.integration!.projectVisibilityLocked
+          ? 'Project creation has started. Visibility is fixed for this request.'
+          : box.locked
+          ? 'Finish the current request before changing visibility.'
+          : null,
+      onChanged: box.locked || box.integration!.projectVisibilityLocked
+          ? null
+          : (value) =>
+                setState(() => box.integration!.projectVisibility = value),
+    ),
   );
 
   Widget _desktopStartButton() => ListenableBuilder(
@@ -2406,11 +2606,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ).copyWith(
                 side: WidgetStateProperty.resolveWith(
-                  (states) => BorderSide(
+                  (states) => const BorderSide(
                     width: grid.AppDesktop.focusWidth,
-                    color: states.contains(WidgetState.focused)
-                        ? Colors.white
-                        : Colors.transparent,
+                    color: Colors.transparent,
                   ),
                 ),
                 backgroundColor: WidgetStateProperty.resolveWith(
@@ -2448,22 +2646,25 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Rect _desktopChooserBounds(BoxConstraints constraints) {
     final preferredWidth = switch (box.field) {
-      NewHarnessField.harness || NewHarnessField.agent => 304.0,
-      NewHarnessField.model => 440.0,
-      NewHarnessField.projectMenu => math.max(
-        400.0,
+      // The computer menus' width: pickers side by side read as one set.
+      NewHarnessField.harness ||
+      NewHarnessField.agent ||
+      NewHarnessField.projectMenu ||
+      NewHarnessField.project ||
+      NewHarnessField.machine => math.max(
+        _machineMenuWidth,
         _desktopTextSize('Search repos', 14).width + 96,
       ),
-      NewHarnessField.project => 400.0,
-      NewHarnessField.mode => 380.0,
-      NewHarnessField.profile => 320.0,
-      _ => 360.0,
+      // Only what must show a second column on one row goes wider.
+      NewHarnessField.model => 340.0,
+      NewHarnessField.mode => 300.0,
+      _ => _machineMenuWidth,
     };
     final width = (constraints.maxWidth - 24).clamp(0.0, preferredWidth);
     final maximum = (constraints.maxHeight - 24).clamp(0.0, 420.0);
     // Include the search controls, its vertical padding, list padding, and rim.
     // Refresh is taller than one text line, even when only two rows remain.
-    var contentHeight = _desktopSearchHeight + 20 + 2;
+    var contentHeight = _desktopSearchHeight + 2 + 2;
     if (!_desktopRepositoryEntry) contentHeight += 12;
     if (box.options.isEmpty && !_desktopRepositoryEntry) contentHeight += 48;
     for (var i = 0; i < box.options.length && contentHeight < maximum; i++) {
@@ -2556,7 +2757,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              // With its rule, one row's height.
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
               child: SizedBox(
                 height: _desktopSearchHeight,
                 child: _searchBar(),
@@ -2745,14 +2947,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       : _desktopLineHeight('Ag', 11) + 12;
   double _desktopHeadingGap(int i) => _desktopModelRows && i > 0 ? 6 : 0;
   double get _desktopSearchHeight =>
-      _desktopLineHeight('Ag', 14).clamp(32.0, double.infinity);
+      _desktopLineHeight('Ag', 14).clamp(28.0, double.infinity);
   bool _desktopRecentDivider(int i) =>
       box.field == NewHarnessField.projectMenu &&
       i > 0 &&
       !box.options[i].synthetic &&
       box.options[i - 1].synthetic;
   double _desktopChoiceHeight(int i) =>
-      (_desktopModelRows ? 20 : 16) +
+      (_desktopModelRows ? 16 : 11) +
       _desktopLineHeight(
         _desktopOptionTitle(box.options[i]),
         _desktopTitleSize,
@@ -2774,7 +2976,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return 'Open Folder…';
     }
     final folder = option.project?.folder;
-    if (box.field == NewHarnessField.projectMenu && folder != null) {
+    if (box.field == NewHarnessField.projectMenu &&
+        folder != null &&
+        option.id != NewHarnessController.pasteOpenId) {
       return folder
               .split(RegExp(r'[/\\]'))
               .where((part) => part.isNotEmpty)
@@ -2836,29 +3040,35 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     };
   }
 
-  Widget _desktopOption(NewHarnessOption option) {
+  Widget _desktopOption(NewHarnessOption option) =>
+      _HoverBuilder(builder: (hovered) => _desktopOptionRow(option, hovered));
+
+  Widget _desktopOptionRow(NewHarnessOption option, bool hovered) {
     final title = _desktopOptionTitle(option);
     final highlighted = identical(option, box.selected);
-    final ink = highlighted
-        ? DesktopChrome.onSelection
-        : DesktopChrome.foreground;
-    final muted = highlighted
-        ? DesktopChrome.selectionDetail
-        : DesktopChrome.muted;
+    // A refused paste is the answer to what was typed, not a choice: its two
+    // lines say why, and it keeps a quiet fill instead of the selection's.
+    final refused = option.id == NewHarnessController.pasteInvalidId;
+    final current = box.isCurrent(option) && !_isDoor(option);
+    // Blue is for the row under the pointer or the arrows, as in every other
+    // dropdown. The current choice wears the quiet wash and its check.
+    final active =
+        !refused && !box.locked && (hovered || (highlighted && !current));
+    final ink = active ? DesktopChrome.onSelection : DesktopChrome.foreground;
+    final muted = active ? DesktopChrome.selectionDetail : DesktopChrome.muted;
     final titleStyle = DesktopChrome.text(
       size: _desktopTitleSize,
       color: option.enabled ? ink : muted,
     );
     final detail = _desktopOptionDetail(option);
     final meta = _desktopModelRows ? option.meta : null;
-    final current = box.isCurrent(option) && !_isDoor(option);
     final note = box.field == NewHarnessField.machine
         ? _unlinked(option)
               ? 'Not linked'
               : box.app.stateOf(option.id)?.isOffline == true
               ? 'Offline'
               : null
-        : !option.enabled
+        : !option.enabled && !refused
         ? option.why
         : null;
     return Semantics(
@@ -2875,8 +3085,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           if (!option.enabled) option.why else ?note,
         ].join('\n'),
         child: Material(
-          color: highlighted
+          color: active
               ? DesktopChrome.activeSelection
+              : current
+              ? DesktopChrome.selection
+              : highlighted
+              ? DesktopChrome.foreground.withValues(alpha: .06)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: InkWell(
@@ -2885,14 +3099,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ? SystemMouseCursors.basic
                 : SystemMouseCursors.click,
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-            hoverColor: DesktopChrome.foreground.withValues(alpha: .06),
+            hoverColor: Colors.transparent,
             splashFactory: NoSplash.splashFactory,
             onTap: !box.locked ? () => _acceptChoice(option) : null,
             child: Padding(
               key: highlighted ? _choiceKey : null,
               padding: EdgeInsets.symmetric(
                 horizontal: 10,
-                vertical: _desktopModelRows ? 10 : 8,
+                vertical: _desktopModelRows ? 8 : 5.5,
               ),
               child: Row(
                 children: [
@@ -3529,11 +3743,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   // Computer selection belongs to the header, independently of repo search.
-  Widget _desktopMachineAnchor({required Widget child}) => MenuAnchor(
+  Widget _desktopMachineAnchor({required Widget child}) => AppDropdown(
     controller: _headerMachineMenu,
     childFocusNode: _headerMachineFocus,
-    consumeOutsideTap: true,
-    alignmentOffset: const Offset(8, 0),
+    width: _machineMenuWidth,
     onOpen: () => setState(() {}),
     onClose: () {
       if (!mounted) return;
@@ -3543,127 +3756,35 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _chooserTraversal = null;
       _focusEditor();
     },
-    style: MenuStyle(
-      alignment: Alignment.bottomLeft,
-      backgroundColor: WidgetStatePropertyAll(DesktopChrome.surface),
-      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-      elevation: const WidgetStatePropertyAll(grid.AppMenu.elevation),
-      maximumSize: const WidgetStatePropertyAll(Size(264, 420)),
-      padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
-      shape: WidgetStatePropertyAll(
-        DesktopChrome.shape(radius: DesktopChrome.menuRadius),
-      ),
-    ),
-    menuChildren: [
+    children: [
       for (final option in box.machineChoices)
-        MenuItemButton(
+        AppMenuItem(
           key: ValueKey('new-harness-machine-option-${option.id}'),
-          autofocus: option.id == box.machineId && option.enabled,
-          onPressed: option.enabled && !box.locked
-              ? () {
-                  _selectRepoMachine(option.id);
-                }
+          autofocus: option.id == box.machineId,
+          selected: option.id == box.machineId,
+          icon: box.app.stateOf(option.id)?.isLocalMachine == true
+              ? AppIcons.laptop
+              : AppIcons.monitor,
+          label: _repoMachineLabel(option.id),
+          detail: !option.enabled
+              ? box.app.stateOf(option.id)?.needsLink == true
+                    ? 'Not linked'
+                    : 'Offline'
+              : box.app.stateOf(option.id)?.isLocalMachine == true
+              ? option.title
               : null,
-          style:
-              MenuItemButton.styleFrom(
-                foregroundColor: DesktopChrome.foreground,
-                disabledForegroundColor: DesktopChrome.muted,
-                enabledMouseCursor: SystemMouseCursors.click,
-                disabledMouseCursor: SystemMouseCursors.basic,
-                side: BorderSide.none,
-                backgroundColor: option.id == box.machineId
-                    ? DesktopChrome.selection
-                    : Colors.transparent,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                textStyle: DesktopChrome.text(size: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                ),
-              ).copyWith(
-                foregroundColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? DesktopChrome.muted
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.onSelection
-                      : DesktopChrome.foreground,
-                ),
-                iconColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? DesktopChrome.muted
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.onSelection
-                      : DesktopChrome.muted,
-                ),
-                backgroundColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? Colors.transparent
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.activeSelection
-                      : option.id == box.machineId
-                      ? DesktopChrome.selection
-                      : Colors.transparent,
-                ),
-              ),
-          child: SizedBox(
-            width: 232,
-            child: Row(
-              children: [
-                Icon(
-                  box.app.stateOf(option.id)?.isLocalMachine == true
-                      ? AppIcons.laptop
-                      : AppIcons.monitor,
-                  size: 16,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _repoMachineLabel(option.id),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (!option.enabled ||
-                          box.app.stateOf(option.id)?.isLocalMachine ==
-                              true) ...[
-                        const SizedBox(height: 3),
-                        Text(
-                          !option.enabled
-                              ? box.app.stateOf(option.id)?.needsLink == true
-                                    ? 'Not linked'
-                                    : 'Offline'
-                              : option.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.caption(height: 1.35),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 16,
-                  child: option.id == box.machineId
-                      ? Icon(AppIcons.check, size: 16)
-                      : null,
-                ),
-              ],
-            ),
-          ),
+          onPressed: option.enabled && !box.locked
+              ? () => _selectRepoMachine(option.id)
+              : null,
         ),
     ],
     child: child,
   );
 
   Widget _searchBar() {
+    // On desktop, the glyph and text stand on the rows' own columns, unless a
+    // Back button needs the glyph's place. The outer 8 is the chooser's padding.
+    final back = widget.desktop && _desktopNestedChooser;
     return Padding(
       key: _searchKey,
       padding: EdgeInsets.symmetric(horizontal: widget.desktop ? 8 : _margin),
@@ -3674,7 +3795,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         textBaseline: TextBaseline.alphabetic,
         children: [
           SizedBox(
-            width: widget.desktop ? 32 : _gutter,
+            width: widget.desktop ? (back ? 32 : 16) : _gutter,
             child: widget.desktop
                 ? _desktopNestedChooser
                       ? ExcludeFocus(
@@ -3700,7 +3821,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                             ),
                           ),
                         )
-                      : Icon(AppIcons.search, size: 16, color: _faint)
+                      : Icon(
+                          AppIcons.search,
+                          size: 16,
+                          color: widget.desktop ? DesktopChrome.hint : _faint,
+                        )
                 : Text(
                     '>',
                     key: const ValueKey('new-harness-prompt'),
@@ -3708,7 +3833,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     style: _ink(_picking ? _theme.foreground : _faint),
                   ),
           ),
-          if (widget.desktop) const SizedBox(width: 8),
+          if (widget.desktop) SizedBox(width: back ? 8 : 10),
           Expanded(
             child: Actions(
               actions: {
@@ -3731,7 +3856,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 focusNode: _inputFocus,
                 readOnly: box.locked,
                 showCursor: _picking,
-                style: _ink(_theme.foreground),
+                style: _queryInk(_theme.foreground),
                 cursorColor: widget.desktop
                     ? DesktopChrome.foreground
                     : _theme.cursor,
@@ -3748,7 +3873,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 onTapOutside: (_) {},
                 decoration: InputDecoration(
                   hintText: _promptHint,
-                  hintStyle: _ink(_faint),
+                  hintStyle: _queryInk(
+                    widget.desktop ? DesktopChrome.hint : _faint,
+                  ),
                   hintMaxLines: 1,
                   isDense: true,
                   isCollapsed: true,
@@ -3776,10 +3903,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 onTap: box.refreshingChoices ? null : box.refreshChoices,
                 child: widget.desktop
                     ? Padding(
-                        padding: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.all(6),
                         child: Icon(
                           AppIcons.refreshCw,
-                          size: 18,
+                          size: 16,
                           color: _faint,
                         ),
                       )
@@ -3957,7 +4084,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _activateRow(
         !box.isTerminal
             ? _Row.model
-            : box.isGitProject
+            : box.choosesBranch
             ? _Row.branch
             : _Row.project,
       );
@@ -4028,6 +4155,27 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
 /// An install's running clock, ticking itself so the form does not rebuild
 /// every second. Disposed with the install pane.
+/// Hands [builder] whether the pointer is on it.
+class _HoverBuilder extends StatefulWidget {
+  const _HoverBuilder({required this.builder});
+
+  final Widget Function(bool hovered) builder;
+
+  @override
+  State<_HoverBuilder> createState() => _HoverBuilderState();
+}
+
+class _HoverBuilderState extends State<_HoverBuilder> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: widget.builder(_hovered),
+  );
+}
+
 class _Elapsed extends StatefulWidget {
   const _Elapsed({required this.run, required this.style});
 
@@ -4113,5 +4261,120 @@ class _LaunchProgressState extends State<_LaunchProgress> {
     softWrap: false,
     overflow: TextOverflow.clip,
     style: widget.style,
+  );
+}
+
+const _roleFieldWidth = 180.0;
+
+/// The server's limit on a role name, in UTF-16 units (`.length` in JavaScript).
+const _roleNameUnits = 40;
+
+/// Keeps text to [max] UTF-16 units as the server counts them, never cutting a
+/// surrogate pair in two.
+class _Utf16Limit extends TextInputFormatter {
+  const _Utf16Limit(this.max);
+  final int max;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text;
+    if (text.length <= max) return newValue;
+    var end = max;
+    if (_isHigh(text.codeUnitAt(end - 1))) end--;
+    return TextEditingValue(
+      text: text.substring(0, end),
+      selection: TextSelection.collapsed(offset: end),
+    );
+  }
+
+  static bool _isHigh(int unit) => unit >= 0xD800 && unit <= 0xDBFF;
+}
+
+/// A joining agent's role: free text, with the project document's role
+/// headings offered as suggestions (all of them on focus, filtered as typed).
+class _RoleField extends StatefulWidget {
+  const _RoleField({
+    super.key,
+    required this.suggestions,
+    required this.initial,
+    required this.enabled,
+    required this.onChanged,
+  });
+  final List<String> suggestions;
+  final String initial;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_RoleField> createState() => _RoleFieldState();
+}
+
+class _RoleFieldState extends State<_RoleField> {
+  late final _text = TextEditingController(text: widget.initial);
+  final _focus = FocusNode(debugLabel: 'New harness role');
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: _roleFieldWidth,
+    child: RawAutocomplete<String>(
+      textEditingController: _text,
+      focusNode: _focus,
+      optionsBuilder: (value) {
+        final typed = value.text.trim().toLowerCase();
+        return [
+          for (final name in widget.suggestions)
+            if (typed.isEmpty || name.toLowerCase().contains(typed)) name,
+        ];
+      },
+      onSelected: widget.onChanged,
+      fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
+        controller: controller,
+        focusNode: focusNode,
+        enabled: widget.enabled,
+        inputFormatters: [_Utf16Limit(_roleNameUnits)],
+        onChanged: widget.onChanged,
+        style: DesktopChrome.control(),
+        decoration: const InputDecoration(
+          labelText: 'Role',
+          hintText: 'Engineer',
+          counterText: '',
+          isDense: true,
+        ),
+      ),
+      optionsViewBuilder: (context, onSelected, options) => Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+          color: grid.AppMenu.fill,
+          elevation: grid.AppMenu.elevation,
+          borderRadius: BorderRadius.all(
+            Radius.circular(grid.AppMenu.panelRadius),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: _roleFieldWidth,
+              maxHeight: grid.AppControl.menuMaxHeight,
+            ),
+            child: LaidOutListView(
+              padding: grid.AppMenu.panelPadding,
+              shrinkWrap: true,
+              children: [
+                for (final name in options)
+                  AppMenuItem(label: name, onPressed: () => onSelected(name)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }

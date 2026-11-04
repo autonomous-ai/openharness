@@ -668,7 +668,7 @@ void main() {
           expect(find.text('Qwen3.8-27B'), findsNothing);
           expect(find.text('gemma-4-12B'), findsNothing);
         }
-        await tester.tap(find.text('Manage models'));
+        await tester.tap(find.text('Your models'));
         expect(manages, 1);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();

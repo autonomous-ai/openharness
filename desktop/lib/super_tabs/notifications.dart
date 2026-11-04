@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../notify/system_notifications.dart';
@@ -9,9 +10,13 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
+import 'message_link.dart';
 import 'model.dart';
-import 'pm_chat.dart';
+import 'private_project_lock.dart';
+import 'reminders.dart';
+import 'reply_notices.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
 class SuperTabMention {
@@ -26,7 +31,9 @@ class SuperTabMention {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String messageId, leadName, text;
 
@@ -36,26 +43,96 @@ class SuperTabMention {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply that lives only in its
+  /// thread: it counts on Threads, not on its chat's row. Null for a tag in
+  /// the main stream, and from a server before it.
+  final String? threadId;
+
+  /// The tagged message's place in its chat: the red number for it clears
+  /// once the reader has read past it, as in Slack. Null from a server
+  /// before it, where it counts until the tag is answered.
+  final int? messageSequence;
 }
+
+/// Whether the menu bar's Harness menu lists the reader's tags and decisions,
+/// with their count on the Dock: the Mac app's. Elsewhere the Swarm's sidebar
+/// keeps its Notifications row.
+bool get superTabNoticesInMenuBar =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
 /// decision 6). The Settings switch for system notifications still applies.
-void Function(SuperTabMention)? superTabMentionNotice(
+/// A click on it opens the tag in its Swarm [tabId], at its message.
+void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
   SystemNotifications system, {
   bool web = kIsWeb,
 }) => web
     ? null
-    : (mention) => system.postNotice(
+    : (tabId, mention) => system.postNotice(
         id: 'harness-mention:${mention.id}',
         title: '${mention.leadName} tagged you',
         body:
             '${mention.projectName} · ${mention.conversationTitle}: '
             '${mention.text}',
+        mention: (tabId: tabId, mentionId: mention.id),
+      );
+
+/// What tells the person about a new message in a chat they set to All new
+/// messages: the operating system, on Desktop only, as tags are. The notice
+/// names the chat, not its newest message, and a click opens that chat in its
+/// Swarm [tabId] (Diego, 2026-11-03: it carried neither, so a click did nothing).
+void Function(String tabId, SuperTabConversation group, int sequence)?
+superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
+    ? null
+    : (tabId, group, sequence) => system.postNotice(
+        id: 'harness-chat:$tabId:${group.id}:$sequence',
+        title: group.title,
+        body: 'New messages',
+        chat: (tabId: tabId, conversationId: group.id),
+      );
+
+/// What tells the person about a new reply in a thread they are in
+/// ([SuperTabReplyNotices]): the operating system, on Desktop only, as tags
+/// are. A click opens the reply as its message link does: in its thread, in
+/// its Swarm [tabId].
+void Function(String tabId, SuperTabReplyRow reply)? superTabReplyNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (tabId, reply) => system.postNotice(
+        id: 'harness-reply:$tabId:${reply.id}',
+        title: '${reply.actorName} replied in a thread',
+        body:
+            '${reply.projectName} · ${reply.conversationTitle}: '
+            '${reply.text}',
+        messageLink: SwarmMessageLink(
+          tabId: tabId,
+          conversationId: reply.conversationId,
+          messageId: reply.messageId,
+        ).url,
+      );
+
+/// What tells the person a reminder they set is due: the operating system, on
+/// Desktop only, as tags are. A click opens its chat in its Swarm [tabId];
+/// Activity holds it until it is opened.
+void Function(String tabId, SuperTabReminder reminder)? superTabReminderNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (tabId, reminder) => system.postNotice(
+        id: 'harness-reminder:$tabId:${reminder.key}',
+        title: reminder.authorName ?? reminder.conversationTitle,
+        body: reminder.text,
+        chat: (tabId: tabId, conversationId: reminder.conversationId),
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
-/// whenever the Swarm changes while a tag waits or the count moves. One per
+/// when the count or the digest of which tags wait moves (or, from a backend
+/// without the digest, whenever the Swarm changes while a tag waits). One per
 /// controller.
 class SuperTabMentions extends ChangeNotifier {
   SuperTabMentions._(this.controller) {
@@ -75,12 +152,20 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
+  String? _digest;
   int _lastChangedAt = -1;
+  int? _epoch;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
+
+  /// Whether the tags have been read once, so an empty list means none.
+  bool get loaded => _seen != null;
   Future<void>? _loading;
   // Something changed while a read was under way: read once more after it.
   bool _dirty = false;
+  // Reads in the order they were asked, and the latest one shown: an older
+  // answer arriving late never replaces a newer one (review of #2088).
+  int _asked = 0, _shown = 0;
 
   /// Starts from tags already announced elsewhere, so they are not news here.
   void seen(Set<String>? ids) {
@@ -90,18 +175,41 @@ class SuperTabMentions extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// A tag can arrive while another is answered, leaving the count as it was,
-  /// so any change of the Swarm is read while a tag waits. With none waiting
-  /// and none answered (an idle Swarm, or a backend before tags) nothing is.
+  /// A tag can arrive while another is answered, leaving the count as it was:
+  /// the digest moves then. A backend without the digest leaves only the
+  /// change of the Swarm to go by, so any is read while a tag waits, and so is
+  /// any after a failed read. With none waiting and none answered (an idle
+  /// Swarm, or a backend before tags) nothing is.
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
+    final epoch = controller.visibilityEpoch;
+    if (epoch != null && epoch != _epoch) {
+      final moved = _epoch != null;
+      _epoch = epoch;
+      if (moved) {
+        // Who may read what changed: no tag read before shows until read
+        // again, even while the count stays, as the decisions do.
+        if (waiting.isNotEmpty || earlier.isNotEmpty) {
+          waiting = earlier = const [];
+          notifyListeners();
+        }
+        _lastChangedAt = controller.lastChangedAt;
+        _count = snapshot.mentionsWaiting;
+        _digest = snapshot.mentionsDigest;
+        unawaited(load());
+        return;
+      }
+    }
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
-    final moved = count != _count;
-    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
+    final digest = snapshot.mentionsDigest;
+    final moved = count != _count || digest != _digest;
+    final changed = controller.lastChangedAt != _lastChangedAt;
+    if (!moved && !(changed && (digest == null || error != null))) return;
     _lastChangedAt = controller.lastChangedAt;
     _count = count;
+    _digest = digest;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};
       return;
@@ -123,6 +231,33 @@ class SuperTabMentions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
+  /// Whether the server lists [mentionId] among the reader's waiting tags
+  /// now. A read that fails or is refused answers false: what was read before
+  /// never stands in for it. A yes shows that same read as [waiting], so what
+  /// opens the tag reads it from the answer that confirmed it, with no second
+  /// read to decide otherwise.
+  Future<bool> waitingNow(String mentionId) async {
+    final epoch = _epoch, asked = ++_asked;
+    final List<SuperTabMention> fresh;
+    try {
+      fresh = await _list('waiting');
+    } catch (_) {
+      return false;
+    }
+    // Who may read what changed while it was on its way: it says nothing now.
+    // A Swarm just loaded learns its first epoch meanwhile; that is no change.
+    final moved = epoch != null && epoch != _epoch;
+    if (moved || !fresh.any((m) => m.id == mentionId)) return false;
+    // A read asked after this one already shows what is newer.
+    if (asked < _shown) return true;
+    _shown = asked;
+    if (!_sameMentions(waiting, fresh)) {
+      waiting = fresh;
+      notifyListeners();
+    }
+    return true;
+  }
+
   Future<List<SuperTabMention>> _list(String state) async {
     final Map<String, dynamic> answer;
     try {
@@ -139,11 +274,26 @@ class SuperTabMentions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    final epoch = _epoch, asked = ++_asked;
     try {
       final [nextWaiting, nextEarlier] = await Future.wait([
         _list('waiting'),
         _list('earlier'),
       ]);
+      // Read before who may read what changed: the read asked again since
+      // replaces it.
+      if (epoch != _epoch) return;
+      // Asked before a read already shown: older news. Read once more, so
+      // both lists and what arrived come from one answer after it.
+      if (asked < _shown) {
+        _dirty = true;
+        return;
+      }
+      _shown = asked;
+      final same =
+          error == null &&
+          _sameMentions(waiting, nextWaiting) &&
+          _sameMentions(earlier, nextEarlier);
       waiting = nextWaiting;
       earlier = nextEarlier;
       error = null;
@@ -154,7 +304,10 @@ class SuperTabMentions extends ChangeNotifier {
           if (!seen.contains(m.id)) onArrived?.call(m);
         }
       }
+      // The same lists again: nothing to show, so nobody is told.
+      if (same) return;
     } catch (_) {
+      if (epoch != _epoch || asked < _shown) return;
       error = 'Could not load notifications. Try again.';
     }
     notifyListeners();
@@ -163,6 +316,36 @@ class SuperTabMentions extends ChangeNotifier {
   /// The reader is finished with [mention]. Any reader of the Swarm may, read
   /// only included, so this does not wait behind the composer's pending send.
   Future<bool> done(SuperTabMention mention) async {
+    if (!await _markDone(mention)) {
+      error = 'Could not mark it read. Try again.';
+      notifyListeners();
+      return false;
+    }
+    await load();
+    unawaited(controller.refresh());
+    return true;
+  }
+
+  /// Marks every unresolved one of [mentions] read, two at a time and read
+  /// back once; how many the backend took. One that failed does not stop the
+  /// rest.
+  Future<int> doneAll(List<SuperTabMention> mentions) async {
+    final sent = await superTabTwoAtATime([
+      for (final m in mentions)
+        if (m.resolvedBy == null) m,
+    ], _markDone);
+    final marked = sent.where((ok) => ok).length;
+    await load();
+    unawaited(controller.refresh());
+    // After the read, which clears the error of an earlier one.
+    if (marked < sent.length) {
+      error = 'Could not mark some as read. Try again.';
+      notifyListeners();
+    }
+    return marked;
+  }
+
+  Future<bool> _markDone(SuperTabMention mention) async {
     try {
       await controller.request(
         'POST',
@@ -172,15 +355,33 @@ class SuperTabMentions extends ChangeNotifier {
           'command': {'type': 'mention.done', 'mentionId': mention.id},
         },
       );
+      return true;
     } catch (_) {
-      error = 'Could not mark it done. Try again.';
-      notifyListeners();
       return false;
     }
-    await load();
-    unawaited(controller.refresh());
-    return true;
   }
+}
+
+/// Whether [a] and [b] show the same tags the same way.
+bool _sameMentions(List<SuperTabMention> a, List<SuperTabMention> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    final (x, y) = (a[i], b[i]);
+    if (x.id != y.id ||
+        x.projectId != y.projectId ||
+        x.projectName != y.projectName ||
+        x.conversationId != y.conversationId ||
+        x.conversationTitle != y.conversationTitle ||
+        x.messageId != y.messageId ||
+        x.leadId != y.leadId ||
+        x.leadName != y.leadName ||
+        x.text != y.text ||
+        x.createdAt != y.createdAt ||
+        x.resolvedBy != y.resolvedBy) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// The reader's tags across the Swarm: Waiting first, then Earlier, newest
@@ -231,13 +432,36 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
 
   Widget _row(SuperTabMention mention, {required bool waiting}) {
     final time = mention.createdAt;
-    // The reader's own chat with the Product Manager is named as the sidebar
-    // names it, not by the reader's own name.
-    final place =
-        widget.mentions.controller.pmChat(mention.projectId)?.id ==
-            mention.conversationId
-        ? kChatWithPm
-        : mention.conversationTitle;
+    // An old Chat with PM an older server still sends opens the project's
+    // chat, and is named so; every other place by its title.
+    final c = widget.mentions.controller;
+    final hidden = c.snapshot?.conversation(mention.conversationId);
+    final legacyChannel = hidden != null && c.hiddenByBuddies(hidden);
+    final project = c.snapshot?.projects
+        .where((p) => p.id == mention.projectId)
+        .firstOrNull;
+    final privateProject = legacyChannel && project?.isPrivate == true;
+    final place = !legacyChannel
+        ? mention.conversationTitle
+        : privateProject
+        ? project!.name
+        : '#${project?.name ?? mention.projectName}';
+    // A person who tagged the reader is named as they are now.
+    final person = c.snapshot?.people
+        .where((p) => p.id == mention.leadId)
+        .firstOrNull;
+    final author = person?.shownName ?? mention.leadName;
+    // Who tagged, a person or a Lead: one face, in one place.
+    final Widget? face = person != null
+        ? SuperTabAvatar.person(person, size: 24)
+        : switch (c.snapshot?.agent(mention.leadId ?? '')) {
+            final lead? => SuperTabAvatar.agent(
+              lead,
+              name: mention.leadName,
+              size: 24,
+            ),
+            null => null,
+          };
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -254,17 +478,10 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (widget.mentions.controller.snapshot?.agent(
-                      mention.leadId ?? '',
-                    )
-                    case final lead?)
+                if (face != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 10, top: 2),
-                    child: SuperTabAvatar.agent(
-                      lead,
-                      name: mention.leadName,
-                      size: 24,
-                    ),
+                    child: face,
                   ),
                 Expanded(
                   child: Column(
@@ -274,7 +491,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         children: [
                           Flexible(
                             child: Text(
-                              mention.leadName,
+                              author,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: DesktopChrome.control(medium: waiting),
@@ -289,8 +506,21 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                           ],
                         ],
                       ),
-                      Text(
-                        '${mention.projectName} · $place',
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(text: '${mention.projectName} · '),
+                            if (privateProject)
+                              WidgetSpan(
+                                alignment: PlaceholderAlignment.middle,
+                                child: PrivateProjectLock(
+                                  size: 12,
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                            TextSpan(text: privateProject ? ' $place' : place),
+                          ],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),
@@ -331,7 +561,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final m = widget.mentions;
-      return ListView(
+      return LaidOutListView(
         padding: const EdgeInsets.only(bottom: 16),
         children: [
           if (m.error case final error?)

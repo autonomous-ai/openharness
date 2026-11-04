@@ -11,6 +11,7 @@ import 'package:harness/state/session_content_search.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:harness/ws/ws_conn.dart' show WsRequestFailure;
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'session_content_search_test.dart' show SearchConnection;
@@ -527,7 +528,19 @@ class TailConnection extends SearchConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    if (type == 'session_tail') return tail(payload);
+    if (type == 'session_tail') {
+      final reply = tail(payload);
+      // A refusal arrives as WsConn's: thrown, its fields on the failure. A
+      // fake that answered it as a reply hid a reader that never saw one.
+      if (reply['error'] != null) {
+        throw WsRequestFailure(
+          responseType: 'session_tail_result',
+          code: '${reply['error']}',
+          payload: Map.unmodifiable(reply),
+        );
+      }
+      return reply;
+    }
     if (type == 'agent_create' && create != null) {
       creates.add(payload);
       return create!(payload);

@@ -2,6 +2,8 @@ import { activeWork, author, stableId, type Agent, type Conversation, type Messa
 import { agentDisplayName } from './agentNames.js'
 import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
+import { workOver } from './decisions.js'
+import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
 // digest time its Lead's poll wakes the Lead with the lists below, built from state; the Lead checks each pull request is
@@ -13,7 +15,7 @@ const IN_PROGRESS: Record<string, string> = { planned: 'planned', working: 'work
 const HELD_UP: Record<string, string> = { blocked: 'stuck', lost: 'lost', needs_human: 'waits for a person' }
 
 /** The project's local date and time ("2026-10-27", "08:00") at `now`. */
-function localNow(timeZone: string, now: number): { date: string; time: string } {
+export function localNow(timeZone: string, now: number): { date: string; time: string } {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
     minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map(p => [p.type, p.value]))
   return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` }
@@ -24,22 +26,39 @@ export function knownTimeZone(timeZone: string): boolean {
   try { localNow(timeZone, 0); return true } catch { return false }
 }
 
+/** Every project's digest unless a person turns it off (Dee, 2026-10-31): 08:00 in the project owner's zone. No owner's
+ *  zone is known to the Swarm yet, so it is Vietnam's, where the team works; a person moves it with project.digest. */
+export const DEFAULT_DIGEST = { time: '08:00', timeZone: DEFAULT_TIME_ZONE } as const
+/** A project that never stored a digest gets its first default one in the hour from 08:00, Vietnam time: no release goes
+ *  out then (releases run 09:00 to 18:00), so a release never sends every project's digest at once, and no poll writes
+ *  anything for it until that send stores it like any other digest. */
+const DEFAULT_UNTIL = '09:00'
+
+/** The digest a project keeps: its own, else the default unless a person turned it off. */
+export const digestOf = (project: SwarmProject): NonNullable<SwarmProject['digest']> | undefined =>
+  project.digest ?? (project.digestOff ? undefined : DEFAULT_DIGEST)
+
 /** The local date of a digest due at `now`, or null: none set, not yet its time today, or today's already sent. */
 export function digestDue(project: SwarmProject, now: number): string | null {
-  const digest = project.digest
+  const digest = digestOf(project)
   if (!digest) return null
   const local = localNow(digest.timeZone, now)
+  if (!project.digest) return local.time >= digest.time && local.time < DEFAULT_UNTIL ? local.date : null
   return local.time >= digest.time && digest.lastOn !== local.date ? local.date : null
 }
 
 /** Where a project's digest starts: its last one, or the day before the first. */
 export const digestSince = (project: SwarmProject, now: number): number => project.digest?.lastAt ?? now - FIRST_SPAN_MS
 
-/** The date a newly set digest counts as sent for: today, when today's time has already passed, so it starts tomorrow. */
-export function digestStartsAfter(time: string, timeZone: string, now: number): string | undefined {
+/** The date a newly set digest counts as sent for: today, when today's time has already passed, so it starts tomorrow, or
+ *  when today's was already sent (`sentOn`): its message has today's id (digestMessageId), so it is never sent twice. */
+export function digestStartsAfter(time: string, timeZone: string, now: number, sentOn?: string): string | undefined {
   const local = localNow(timeZone, now)
-  return local.time >= time ? local.date : undefined
+  return local.time >= time || sentOn === local.date ? local.date : undefined
 }
+
+/** The id of a project's digest wake-up for one local date: one a day. */
+export const digestMessageId = (tabId: string, projectId: string, on: string): string => stableId('digest', tabId, projectId, on)
 
 /**
  * A project's digest: what shipped since `since` (finished with a pull request; the Lead checks each is merged), what is
@@ -78,7 +97,8 @@ export function decisionLines(state: SuperTabState, project: SwarmProject, waiti
   const counts = new Map<string, Map<string, number>>()
   for (const { conversationId, personId, count } of waiting) {
     const group = groups.find(g => g.id === conversationId), asked = state.people.find(p => p.id === personId)
-    if (!group || !asked || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
+    // None waits where the work is over (decisions.ts workOver).
+    if (!group || !asked || workOver(state, group) || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
     const people = counts.get(group.id) ?? new Map<string, number>()
     counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + count))
   }
@@ -93,12 +113,12 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number,
   const project = ledProject(state, target.id)
   const on = project && digestDue(project, now)
   if (!project || !on) return null
-  const digest = project.digest!
+  const digest = digestOf(project)!
   const text = `Morning digest for project ${JSON.stringify(project.name)} (${digest.time}, ${digest.timeZone}). This is a scheduled request, not a new task. `
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'
     + projectDigest(state, project, digestSince(project, now), decisionLines(state, project, waiting))
-  return { id: stableId('digest', state.id, project.id, on), conversationId: project.leadConversationId,
+  return { id: digestMessageId(state.id, project.id, on), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id], source: { kind: 'digest-request', projectId: project.id, on } }
 }

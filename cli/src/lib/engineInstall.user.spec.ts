@@ -170,7 +170,8 @@ describe('engine installation for a fresh OS user', () => {
     expect(result.stderr).toContain('Installing Codex')
     expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
     expect(Date.now() - started).toBeGreaterThanOrEqual(1500)
-  })
+  // A deliberate 2 s sleep plus a real npm install does not fit the default 5 s on a busy CI shard (timed out at 5030 ms).
+  }, 20_000)
 
   it('ends the pane rather than install a second time when the wait for the download is interrupted', async () => {
     const f = fixture()

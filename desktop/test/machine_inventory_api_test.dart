@@ -36,9 +36,10 @@ Future<void> _reply(
   String name, {
   bool stale = false,
   bool fails = false,
+  int status = 503,
 }) async {
   request.response
-    ..statusCode = fails ? 503 : 200
+    ..statusCode = fails ? status : 200
     ..headers.contentType = ContentType.json
     ..write(
       jsonEncode(
@@ -99,14 +100,117 @@ void main() {
     expect(previous.isStale, isFalse);
     expect(latest.isStale, isTrue);
     expect(api.lastMachinesStale, isTrue);
+    api.sharesChanged();
     final fallback = api.machines();
     await _until(() => requests.machines.length == 3);
     await _reply(requests.machines.last, 'owned-next');
     await _until(() => requests.shares.length == 3);
     await _reply(requests.shares.last, 'unused', fails: true);
     final snapshot = await fallback as MachineInventory;
+    // The last shares that were read stand in, as they are: not a stale list that recovery reads again.
     expect(snapshot.map((m) => m.machineId), ['owned-next', 'shared-current']);
-    expect(snapshot.isStale, isTrue);
+    expect(snapshot.isStale, isFalse);
+  });
+
+  group('harness shares, read through the owner daemons in seconds', () {
+    var now = DateTime(2026, 10, 28, 12);
+    setUp(() {
+      now = DateTime(2026, 10, 28, 12);
+      api = ApiClient(
+        config: AppConfig(
+          localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+          apiBaseUrl: 'http://unused.invalid',
+        ),
+        session: AuthSession(storage: MemoryStore()),
+        clock: () => now,
+      );
+    });
+
+    /// One machine read. [shared] answers its shares read with that machine, [status] fails it;
+    /// with neither, no shares read is expected.
+    Future<MachineInventory> load({String? shared, int? status}) async {
+      final machines = requests.machines.length;
+      final shares = requests.shares.length;
+      var done = false;
+      final pending = api.machines().whenComplete(() => done = true);
+      await _until(() => requests.machines.length == machines + 1);
+      await _reply(requests.machines.last, 'owned');
+      final expected = shared != null || status != null;
+      if (expected) {
+        await _until(() => requests.shares.length == shares + 1);
+        await _reply(
+          requests.shares.last,
+          shared ?? 'unused',
+          fails: status != null,
+          status: status ?? 503,
+        );
+      } else {
+        await _until(() => done || requests.shares.length > shares);
+      }
+      expect(requests.shares.length, shares + (expected ? 1 : 0));
+      return await pending as MachineInventory;
+    }
+
+    List<String> ids(MachineInventory list) => [
+      for (final m in list) m.machineId,
+    ];
+
+    test('ten pushes a minute read them once; a push that says they changed reads them again', () async {
+      expect(ids(await load(shared: 's1')), ['owned', 's1']);
+      for (var i = 0; i < 10; i++) {
+        now = now.add(const Duration(seconds: 6));
+        final list = await load();
+        expect(ids(list), ['owned', 's1']);
+        expect(list.isStale, isFalse);
+      }
+      api.sharesChanged();
+      expect(ids(await load(shared: 's2')), ['owned', 's2']);
+      // And at most every five minutes otherwise.
+      now = now.add(const Duration(minutes: 4, seconds: 59));
+      await load();
+      now = now.add(const Duration(seconds: 1));
+      expect(ids(await load(shared: 's3')), ['owned', 's3']);
+    });
+
+    test('a failed read waits 1, 2, then 5 minutes, and keeps the last good shares meanwhile', () async {
+      await load(shared: 's1');
+      api.sharesChanged();
+      // The daemon's 504 after 20 s (Diego's app log, 2026-10-28): every push started the same read again.
+      expect(ids(await load(status: 504)), ['owned', 's1']);
+      for (final wait in const [
+        Duration(minutes: 1),
+        Duration(minutes: 2),
+        Duration(minutes: 5),
+      ]) {
+        now = now.add(wait - const Duration(seconds: 1));
+        final kept = await load();
+        expect(ids(kept), ['owned', 's1']);
+        expect(kept.isStale, isFalse);
+        now = now.add(const Duration(seconds: 1));
+        if (wait.inMinutes < 5) await load(status: 502);
+      }
+      // Told meanwhile, it reads once the wait is over; a read that answers starts the waits over.
+      expect(ids(await load(shared: 's2')), ['owned', 's2']);
+      api.sharesChanged();
+      await load(status: 504);
+      now = now.add(const Duration(seconds: 59));
+      await load();
+      now = now.add(const Duration(seconds: 1));
+      await load(shared: 's3');
+    });
+
+    test('with no shares read yet, a failure is a stale list, and the account changing starts over', () async {
+      final first = await load(status: 504);
+      expect(ids(first), ['owned']);
+      expect(first.isStale, isTrue);
+      expect(
+        (await load()).isStale,
+        isTrue,
+        reason: 'still nothing good to show, and still waiting',
+      );
+      api.resetAccountCache();
+      expect(ids(await load(shared: 'theirs')), ['owned', 'theirs']);
+    });
   });
 
   test('a machine shared whole joins the list once added, and waits under Add machine before', () async {

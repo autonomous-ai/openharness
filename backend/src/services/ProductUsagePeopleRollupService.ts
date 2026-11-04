@@ -13,7 +13,7 @@ export async function rollupPeople(now = new Date()): Promise<number> {
   // ponytail: reads every mark in that window (≤ people × 9 days); use an aggregation pipeline past ~100k rows.
   const marks = await prisma.productUsageActivity.findMany({
     where: { dayUtc: { gte: new Date(today - (ACTIVITY_DAYS - 1) * DAY) } },
-    select: { subject: true, dayUtc: true, surfaces: true, worked: true, signupDay: true, staff: true },
+    select: { subject: true, dayUtc: true, surfaces: true, worked: true, hosting: true, signupDay: true, staff: true },
   })
   const counters = peopleCounters(marks, now)
   for (const { day, metric, value } of counters) {

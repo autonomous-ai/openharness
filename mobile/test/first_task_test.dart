@@ -54,6 +54,8 @@ void main() {
         if (e.value) e.key,
     }, kFirstTaskEngines);
     expect(takesFirstTask('hermes'), isTrue);
+    // The CLI's omp takes one too (the desktop's list has it): New dropped its task here.
+    expect(takesFirstTask('omp'), isTrue);
     // Every engine the phone offers is in the CLI's table, one way or the other.
     for (final engine in allEngines) {
       expect(entries.keys, contains(engine.id), reason: engine.id);

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -38,7 +39,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
           )
           .controller!
@@ -115,7 +116,7 @@ void main() {
       c.select('offline');
       await tester.pumpAndSettle();
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-offline')),
           )
           .controller!
@@ -132,6 +133,82 @@ void main() {
         shown,
         reason: 'the old fling does not move the new chat',
       );
+    },
+  );
+
+  // A thread open beside the chat is what the dial's thread face shows: the dial scrolls the thread, never the chat behind it
+  // (Diego, 2026-11-04).
+  testWidgets(
+    'with a thread open, the dial scrolls the thread and leaves the chat',
+    (tester) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final server = ConversationServer()..threads = true;
+      for (var i = 0; i < 60; i++) {
+        server.append('message $i');
+      }
+      for (var i = 1; i <= 40; i++) {
+        server.append('Reply $i: a long enough answer to fill the pane.');
+        server.messages.last
+          ..['thread'] = 'message-1'
+          ..['replyTo'] = 'message-1';
+      }
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      ScrollPosition chat() => tester
+          .widget<ScrollView>(
+            find.byKey(const PageStorageKey('super-messages-tab-lead')),
+          )
+          .controller!
+          .position;
+      ScrollPosition thread() => tester
+          .widget<ListView>(
+            find.descendant(
+              of: find.byKey(const ValueKey('super-thread-panel')),
+              matching: find.byType(LaidOutListView),
+            ),
+          )
+          .controller!
+          .position;
+      final chatAt = chat().pixels, threadEnd = thread().pixels;
+      expect(threadEnd, greaterThan(100));
+
+      Future<void> dial(Map<String, dynamic> p) => app.handleEventForTest('m', {
+        'type': 'dial_scroll',
+        'payload': {...p, 'superTabId': 'tab'},
+      });
+      await dial({'phase': 'down', 'dy': 0});
+      await dial({'phase': 'move', 'dy': 20});
+      expect(thread().pixels, threadEnd - 50);
+      expect(chat().pixels, chatAt, reason: 'the chat behind the thread stays');
+
+      // Closed, the thread gives the dial back to the chat.
+      c.closeThread();
+      await tester.pumpAndSettle();
+      final back = chat().pixels;
+      await dial({'phase': 'move', 'dy': 20});
+      expect(chat().pixels, back - 50);
+      await dial({'phase': 'up', 'dy': 0, 'velocity': 0});
+      await tester.pumpWidget(const SizedBox());
     },
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from '../machines.js'
-import { createSuperTab, type Assignment, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
-import type { GroupLedger } from './record.js'
+import { createSuperTab, type Agent, type Assignment, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import type { GroupLedger, Run } from './record.js'
 import { leaderboard } from './stats.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 
@@ -30,12 +30,12 @@ const shipped = (requesterId: string, askedAt: number, shippedAt: number, extra:
   group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt }, ...extra })
 const answered = (...unblocks: Array<[personId: string, at: number, waitedMs: number]>) =>
   group({ status: 'working', ledger: { unblocks: unblocks.map(([personId, at, waitedMs]) => ({ personId, at, waitedMs })) } })
-function machine(contributorId: string, lent: Array<[week: number, agentMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
+function machine(contributorId: string, lent: Array<[week: number, busyMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
   return { machineId, name: machineId, contributorId, membershipGeneration: 'g', generation: 'g1', cwd: '/repo', scope: 'swarm', engines: ['claude'],
-    maxAgents: 2, paused: false, lent: lent.map(([week, agentMs]) => ({ week, agentMs })) }
+    maxAgents: 2, paused: false, lent: lent.map(([week, busyMs]) => ({ week, busyMs })) }
 }
-const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? []) =>
-  leaderboard({ state, groups, machines, projectId: 'lead', week, now })
+const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? [], names?: ReadonlyMap<string, string>) =>
+  leaderboard({ state, groups, machines, projectId: 'lead', week, now, names })
 const person = (view: ReturnType<typeof board>, id: string) => view.people.find(p => p.personId === id)!
 
 describe('Shipped: requests a person asked for, done with a linked PR, 3 points each', () => {
@@ -71,15 +71,30 @@ describe('Shipped: requests a person asked for, done with a linked PR, 3 points 
   })
 })
 
-describe('Unblocked: waiting items a person answered, 1 point each plus 1 per 2 agent-hours waited', () => {
-  it('adds the answers and the agent-hours they freed', () => {
+describe('Unblocked: items a person answered, 1 point each plus 1 per 2 hours each waited, at most 3', () => {
+  it('weighs each answer by how long it waited', () => {
     const view = board(swarm(), [answered(['tony', WEEK + HOUR, 3 * HOUR], ['tony', WEEK + 2 * HOUR, 90 * 60_000]), answered(['tony', LAST, 10 * HOUR])])
-    // Two answers this week, 4.5 agent-hours between them: 2 + 2.
-    expect(person(view, 'tony')).toMatchObject({ points: 4, unblocked: { count: 2, agentMs: 4.5 * HOUR, medianAnswerMs: 2.25 * HOUR } })
+    // 3 hours waited: 1 + 1; 1.5 hours: 1 + 0.
+    expect(person(view, 'tony')).toMatchObject({ points: 3, unblocked: { count: 2, agentMs: 4.5 * HOUR, medianAnswerMs: 2.25 * HOUR } })
+  })
+
+  it('caps one answer at 3 points, however long it waited', () => {
+    expect(person(board(swarm(), [answered(['tony', WEEK + HOUR, 30 * HOUR])]), 'tony').points).toBe(3)
+  })
+
+  it('counts approvals and answers in the project\'s Lead conversation, though its work never ships', () => {
+    const lead = group({ id: 'lead', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 0, kind: 'approval', item: 'm1' }] } })
+    expect(person(board(swarm(), [lead]), 'ken')).toMatchObject({ points: 1, unblocked: { count: 1 } })
   })
 })
 
-describe('Lent: agent-hours run on a person\'s machines, 1 point per 10', () => {
+describe('Lent: busy agent-hours run on a person\'s machines for other people\'s work, 1 point per 10', () => {
+  it('leaves out the online hours recorded before only busy hours counted', () => {
+    const state = swarm()
+    state.machines = [{ ...machine('scholes', []), lent: [{ week: WEEK, agentMs: 40 * HOUR }] }]
+    expect(person(board(state, []), 'scholes')).toMatchObject({ points: 0, lent: { machines: 0, agentMs: 0 }, details: { lent: [] } })
+  })
+
   it('counts this week\'s agent-hours on every machine the person contributed', () => {
     const state = swarm()
     state.machines = [machine('scholes', [[WEEK, 14 * HOUR], [LAST, 50 * HOUR]]), machine('scholes', [[WEEK, 7 * HOUR]], 'gpu'), machine('ken', [[LAST, 40 * HOUR]])]
@@ -92,6 +107,59 @@ describe('Lent: agent-hours run on a person\'s machines, 1 point per 10', () => 
     const state = swarm()
     state.machines = [machine('scholes', [[WEEK, 14 * HOUR]]), machine('scholes', [[WEEK, 30 * HOUR]], 'project-mac')]
     expect(person(board(state, [], WEEK, NOW, [state.machines[0]!]), 'scholes').lent).toEqual({ machines: 1, agentMs: 14 * HOUR })
+  })
+})
+
+describe('last week\'s points, names and details', () => {
+  it('scores the week before the same way, for the arrow against last week', () => {
+    const view = board(swarm(), [shipped('dee', LAST, LAST + HOUR), answered(['dee', LAST + HOUR, 3 * HOUR]), shipped('dee', WEEK, WEEK + HOUR)])
+    expect(person(view, 'dee')).toMatchObject({ points: 3, prevWeekPoints: 5 })
+  })
+
+  it('names each person by their profile name, else their email\'s local part', () => {
+    const view = board(swarm(), [], WEEK, NOW, [], new Map([['dee', 'Dee Tran'], ['tony', '   ']]))
+    expect(['dee', 'tony', 'ken'].map(id => person(view, id).displayName)).toEqual(['Dee Tran', 'tony', 'ken'])
+  })
+
+  it('lists the week\'s shipped requests, newest first, with their PR and when they landed', () => {
+    const older = shipped('dee', WEEK, WEEK + HOUR, { title: 'Offline edits', pullRequestUrls: ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2'] })
+    const newer = shipped('dee', WEEK, WEEK + 2 * HOUR, { title: 'Dark mode' })
+    const view = board(swarm(), [older, newer, shipped('dee', LAST, LAST + HOUR)])
+    expect(person(view, 'dee').details.shipped).toEqual([
+      { title: 'Dark mode', prUrl: 'https://github.com/o/r/pull/1', mergedAt: WEEK + 2 * HOUR },
+      { title: 'Offline edits', prUrl: 'https://github.com/o/r/pull/2', mergedAt: WEEK + HOUR }])
+  })
+
+  it('lists the week\'s unblocks, newest first, with their kind and how long each waited', () => {
+    const asked = group({ title: 'Plan', ledger: { unblocks: [{ personId: 'ken', at: WEEK + 2 * HOUR, waitedMs: 90 * 60_000, kind: 'approval', item: 'm' },
+      { personId: 'ken', at: LAST, waitedMs: 0, kind: 'decision', item: 'd' }] } })
+    // An answer recorded before kinds were kept was an answer to waiting work.
+    const old = group({ title: 'Flag', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 20_000 }] } })
+    expect(person(board(swarm(), [asked, old]), 'ken').details.unblocked).toEqual([
+      { title: 'Plan', conversationId: asked.id, kind: 'approval', waitedMinutes: 90 },
+      { title: 'Flag', conversationId: old.id, kind: 'needs_human', waitedMinutes: 0 }])
+  })
+
+  it('lists each machine\'s busy hours this week, busiest first', () => {
+    const state = swarm()
+    state.machines = [machine('scholes', [[WEEK, 2.25 * HOUR]], 'Studio'), machine('scholes', [[WEEK, 14 * HOUR], [LAST, 5 * HOUR]], 'GPU box'),
+      machine('scholes', [[LAST, 5 * HOUR]], 'Laptop')]
+    expect(person(board(state, []), 'scholes').details.lent).toEqual([{ machineName: 'GPU box', busyHours: 14 }, { machineName: 'Studio', busyHours: 2.3 }])
+  })
+
+  it('keeps each list to the 20 newest', () => {
+    const many = Array.from({ length: 25 }, (_, i) => shipped('dee', WEEK, WEEK + i * 60_000, { title: `R${i}` }))
+    const answers = answered(...Array.from({ length: 25 }, (_, i): [string, number, number] => ['dee', WEEK + i * 60_000, 0]))
+    const { details } = person(board(swarm(), [...many, answers]), 'dee')
+    expect(details.shipped.map(s => s.title)).toEqual(Array.from({ length: 20 }, (_, i) => `R${24 - i}`))
+    expect(details.unblocked).toHaveLength(20)
+  })
+
+  it('shows only what is in the groups the reader may read, never a private conversation\'s', () => {
+    const secret = shipped('dee', WEEK, WEEK + HOUR, { title: 'Secret', audience: { people: [{ id: 'dee', generation: 'g' }] } })
+    const chat = group({ title: 'Chat', audience: { people: [{ id: 'ken', generation: 'g' }] },
+      ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 0, kind: 'tag_reply', item: 't' }] } })
+    expect(JSON.stringify(board(swarm(), [secret, chat]))).not.toMatch(/Secret|Chat/)
   })
 })
 
@@ -207,5 +275,291 @@ describe('Models: the share of work on the Swarm\'s grid, and how often it passe
       thisWeek: { attempts: 4, grid: 2, reviewed: { grid: 2, subscription: 1 }, passedFirst: { grid: 1, subscription: 1 } },
       lastWeek: { attempts: 1, grid: 1, reviewed: { grid: 1, subscription: 0 }, passedFirst: { grid: 1, subscription: 0 } },
     })
+  })
+})
+
+describe('Models: temporary workers by engine, model and effort, never by agent (Dee, 2026-10-29)', () => {
+  /** An attempt on [model] at [at]; `firstReview` when its review is on record. */
+  const run = (assignmentId: string, at: number, model = 'opus', effort: string | null = 'high', extra: Partial<Run> = {}): Run =>
+    ({ assignmentId, engine: model.startsWith('gpt') ? 'codex' : 'claude', model, ...effort ? { effort } : {}, at, ...extra })
+  /** A request shipped at [shippedAt] after [runs]. */
+  const landed = (shippedAt: number, runs: Run[], extra: Partial<GroupLedger> = {}) =>
+    shipped('dee', runs[0]?.at ?? shippedAt, shippedAt, { ledger: { askedAt: runs[0]?.at ?? shippedAt, shippedAt, runs, ...extra } })
+  const model = (view: ReturnType<typeof board>, name: string, effort: string | null = 'high') =>
+    view.byModel.find(m => m.model === name && m.effort === effort)!
+
+  it('credits a shipped request to the model of the attempt that shipped it, 3 points, never to earlier attempts', () => {
+    const view = board(swarm(), [landed(WEEK + 5 * HOUR, [run('a1', WEEK, 'gpt-5.5', 'medium'), run('a2', WEEK + 2 * HOUR)])])
+    expect(model(view, 'opus')).toMatchObject({ engine: 'claude', points: 3, shipped: { count: 1 } })
+    expect(model(view, 'gpt-5.5', 'medium')).toMatchObject({ points: 0, shipped: { count: 0 } })
+  })
+
+  it('times each shipped request from its shipping attempt and from its first attempt, as medians', () => {
+    const view = board(swarm(), [
+      landed(WEEK + 5 * HOUR, [run('a1', WEEK), run('a2', WEEK + 4 * HOUR)]),
+      landed(WEEK + 3 * HOUR, [run('b1', WEEK + HOUR)]),
+      landed(WEEK + 10 * HOUR, [run('c1', WEEK + 2 * HOUR)]),
+    ])
+    // Attempts: 1, 2 and 8 hours; requests: 5, 2 and 8 hours.
+    expect(model(view, 'opus').shipped).toEqual({ count: 3, medianAttemptMs: 2 * HOUR, medianRequestMs: 5 * HOUR })
+  })
+
+  it('counts the week\'s attempts with a first review on record, and how many passed it', () => {
+    const view = board(swarm(), [group({ status: 'working', ledger: { runs: [
+      run('a1', WEEK, 'opus', 'high', { firstReview: true }), run('a2', WEEK + HOUR, 'opus', 'high', { firstReview: false }),
+      run('a3', WEEK + 2 * HOUR, 'opus', 'high', { firstReview: true }), run('a4', WEEK + 3 * HOUR),
+      run('a5', LAST, 'opus', 'high', { firstReview: true }),
+    ] } })])
+    expect(model(view, 'opus').firstReview).toEqual({ reviewed: 3, passed: 2 })
+  })
+
+  it('counts each model\'s attempts of the week, reviewed or not, never a review group\'s or another week\'s', () => {
+    const view = board(swarm(), [
+      group({ status: 'working', ledger: { runs: [run('a1', WEEK, 'opus', 'high', { firstReview: true }), run('a2', WEEK + HOUR),
+        run('a3', LAST), run('a4', WEEK + 2 * HOUR, 'gpt-6.1', 'medium')] } }),
+      group({ status: 'done', ledger: { runs: [run('b1', WEEK + 3 * HOUR)] } }),
+      // A review group's attempts are reviews, not tasks.
+      group({ status: 'done', reviewOf: 'g0', ledger: { runs: [run('c1', WEEK + HOUR, 'gpt-6.1', 'medium')] } }),
+    ])
+    expect(model(view, 'opus').attempts).toBe(3)
+    expect(model(view, 'gpt-6.1', 'medium').attempts).toBe(1)
+  })
+
+  it('gives a reviewer model 1 point per finished review verdict of the week', () => {
+    const counted = (week: number, count: number) => ({ week, engine: 'codex', model: 'gpt-5.5', effort: 'medium', count })
+    const view = board(swarm(), [group({ status: 'review', ledger: { reviews: [counted(LAST, 1), counted(WEEK, 2)] } }),
+      group({ status: 'review', ledger: { reviews: [counted(WEEK, 41)] } })])
+    expect(model(view, 'gpt-5.5', 'medium')).toMatchObject({ points: 43, reviews: 43, shipped: { count: 0 } })
+  })
+
+  it('credits the model recorded when the request shipped, though its attempts have aged out since (review of #2097)', () => {
+    const shippedBy = { assignmentId: 'a1', at: WEEK, engine: 'codex', model: 'gpt-5.5', effort: 'medium' }
+    const view = board(swarm(), [landed(WEEK + 2 * HOUR, [], { shippedBy }),
+      landed(WEEK + 2 * HOUR, [run('b1', WEEK + 3 * HOUR)], { shippedBy })])
+    expect(model(view, 'gpt-5.5', 'medium').shipped).toMatchObject({ count: 2, medianAttemptMs: 2 * HOUR })
+    expect(model(view, 'opus').shipped.count).toBe(0)
+  })
+
+  it('never times a ship as negative, when it merged before its attempt started (review of #2097)', () => {
+    const shippedBy = { assignmentId: 'a1', at: WEEK + 2 * HOUR, engine: 'claude', model: 'opus', effort: 'high' }
+    const view = board(swarm(), [landed(WEEK + HOUR, [run('a1', WEEK + 2 * HOUR)], { shippedBy, firstAssignedAt: WEEK + 2 * HOUR })])
+    expect(model(view, 'opus').shipped).toMatchObject({ count: 1, medianAttemptMs: 0, medianRequestMs: 0 })
+  })
+
+  it('times a request recorded before its first assignment was kept from its asked time once 20 attempts are kept', () => {
+    const runs = Array.from({ length: 20 }, (_, i) => run(`a${i}`, WEEK + (i + 1) * HOUR))
+    const view = board(swarm(), [landed(WEEK + 30 * HOUR, runs, { askedAt: WEEK })])
+    expect(model(view, 'opus').shipped.medianRequestMs).toBe(30 * HOUR)
+  })
+
+  it('times the whole request from its first assignment, kept after its first attempt rolled off (review of #2097)', () => {
+    const view = board(swarm(), [landed(WEEK + 5 * HOUR, [run('a21', WEEK + 4 * HOUR)], { firstAssignedAt: WEEK })])
+    expect(model(view, 'opus').shipped).toMatchObject({ medianAttemptMs: HOUR, medianRequestMs: 5 * HOUR })
+  })
+
+  it('keeps each effort apart, and attempts recorded before effort was as their own row', () => {
+    const view = board(swarm(), [landed(WEEK + HOUR, [run('a1', WEEK, 'opus', 'high')]), landed(WEEK + HOUR, [run('b1', WEEK, 'opus', 'xhigh')]),
+      landed(WEEK + HOUR, [run('c1', WEEK, 'opus', null)])])
+    expect(view.byModel.map(m => [m.model, m.effort, m.shipped.count])).toEqual([['opus', null, 1], ['opus', 'high', 1], ['opus', 'xhigh', 1]])
+  })
+
+  it('ranks models by points, ties sharing a place, and says which ran on the grid', () => {
+    const view = board(swarm(), [landed(WEEK + HOUR, [run('a1', WEEK)]), landed(WEEK + HOUR, [run('a2', WEEK)]),
+      landed(WEEK + HOUR, [run('b1', WEEK, 'moonshotai/kimi-k3', null, { grid: true })]),
+      landed(WEEK + HOUR, [run('c1', WEEK, 'gpt-5.5', null)])])
+    expect(view.byModel.map(m => [m.model, m.points, m.rank, m.grid])).toEqual([
+      ['opus', 6, 1, false], ['gpt-5.5', 3, 2, false], ['moonshotai/kimi-k3', 3, 2, true]])
+  })
+
+  it('counts only requests shipped in the week, and nothing from a private conversation', () => {
+    const view = board(swarm(), [landed(LAST + HOUR, [run('a1', LAST)]),
+      landed(WEEK + HOUR, [run('b1', WEEK)]),
+      { ...landed(WEEK + HOUR, [run('c1', WEEK)]), audience: { people: [{ id: 'dee', generation: 'g' }] } }])
+    expect(model(view, 'opus').shipped.count).toBe(1)
+  })
+})
+
+describe('Agents: the permanent agents, the PM and Buddies, by name like people (Dee, 2026-10-29)', () => {
+  /** The project's PM, a Buddy of Dee's, and a builder, in [state]. */
+  function agents(state: SuperTabState) {
+    const agent = (id: string, extra: Partial<Agent> = {}): Agent => ({ id, projectId: 'lead', machineId: `mac-${id}`, harnessId: `h-${id}`,
+      machineOwnerId: 'ken', contributorId: 'ken', membershipGeneration: 'g', name: id, displayName: id[0]!.toUpperCase() + id.slice(1),
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }, ...extra })
+    state.agents.push(agent('river'), agent('sparky', { buddyOf: { personId: 'dee', generation: 'g' } }), agent('builder'))
+    state.conversations.find(c => c.id === 'lead')!.leadId = 'river'
+    return state
+  }
+  const of = (view: ReturnType<typeof board>, id: string) => view.agents.find(a => a.agentId === id)!
+
+  it('lists the PM and the Buddies, never a builder or reviewer', () => {
+    const view = board(agents(swarm()), [])
+    expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.personId, a.machineId])).toEqual([
+      ['river', 'River', 'pm', null, 'mac-river'], ['sparky', 'Sparky', 'buddy', 'dee', 'mac-sparky']])
+  })
+
+  it('gives the PM 3 points per request of a group it led that shipped this week', () => {
+    const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { leadId: 'river' }), shipped('ken', WEEK, WEEK + 2 * HOUR, { leadId: 'river' }),
+      shipped('dee', LAST, LAST + HOUR, { leadId: 'river' }), shipped('dee', WEEK, WEEK + HOUR, { leadId: 'someone-else' })])
+    expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2, rank: 1 })
+  })
+
+  it('credits a group opened from a proposal with no person named as its requester (review of #2097)', () => {
+    const run = { assignmentId: 'a1', engine: 'claude', model: 'opus', effort: 'high', at: WEEK }
+    const fromProposal = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
+      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
+    const view = board(agents(swarm()), [fromProposal])
+    expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
+    expect(of(view, 'river')).toMatchObject({ points: 3, shipped: 1 })
+    expect(view.byModel.find(m => m.model === 'opus')!.shipped.count).toBe(1)
+    // A person's points still need them to have asked.
+    expect(view.people.every(p => p.shipped.count === 0)).toBe(true)
+  })
+
+  it('credits the PM who led the group when it shipped, not whoever leads it now (review of #2097)', () => {
+    const ledger = (shippedLeadId: string | null) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, shippedLeadId })
+    const view = board(agents(swarm()), [
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: 'someone-else', ledger: ledger('river') }),
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: null, ledger: ledger('river') }),
+      // Led by nobody when it shipped: nobody's credit, though River leads it now.
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: 'river', ledger: ledger(null) }),
+    ])
+    expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2 })
+  })
+
+  it('keeps a removed Buddy and a replaced PM on the board for the weeks they earned in (full review of #2097)', () => {
+    const state = agents(swarm())
+    state.agents = state.agents.filter(a => a.id !== 'sparky')
+    state.agents.push({ ...state.agents.find(a => a.id === 'river')!, id: 'old-pm', displayName: 'Atlas' })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const view = board(state, [
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'gone-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'sparky', messageId: 'm1' } }) }),
+    ])
+    expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.points])).toEqual([
+      ['old-pm', 'Atlas', 'pm', 3], ['gone-pm', 'Former PM', 'pm', 3], ['sparky', 'Former Buddy', 'buddy', 3], ['river', 'River', 'pm', 0]])
+    // Last week they earned nothing, and only the current agents are listed.
+    expect(board(state, [], LAST).agents.map(a => a.agentId)).toEqual(['river'])
+  })
+
+  it('never shows who a former agent is now when it was re-added in another project (privacy, review of #2128)', () => {
+    const state = agents(swarm())
+    // The same terminals, removed here and added again in a private project, under new names and owners.
+    const river = state.agents.find(a => a.id === 'river')!
+    state.agents.push({ ...river, id: 'old-pm', projectId: 'secret', displayName: 'Hidden', machineId: 'mac-secret' },
+      { ...river, id: 'old-buddy', projectId: 'secret', displayName: 'Whisper', machineId: 'mac-secret', buddyOf: { personId: 'tony', generation: 'g' } })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const view = board(state, [
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'old-buddy', messageId: 'm1' } }) }),
+    ])
+    const former = view.agents.filter(a => a.agentId.startsWith('old-')).map(a => [a.agentId, a.displayName, a.kind, a.personId, a.machineId])
+    expect(former).toEqual([['old-pm', 'Former PM', 'pm', null, ''], ['old-buddy', 'Former Buddy', 'buddy', null, '']])
+    // Nowhere in the board: the private registration's names and machine (its Buddy's owner is checked above).
+    expect(JSON.stringify(view)).not.toMatch(/Hidden|Whisper|mac-secret/)
+  })
+
+  it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {
+    const fromProposal = { askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId: 'sparky', messageId: 'm1' } }
+    const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: fromProposal }), shipped('dee', WEEK, WEEK + HOUR)])
+    expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
+    expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
+  })
+
+  describe('a person\'s one Swarm Buddy (Diego, 2026-11-02)', () => {
+    /** Dee's one Buddy: Swarm-wide, in no project, on her Mac; and a project session of it. */
+    function oneBuddy(state: SuperTabState) {
+      agents(state)
+      state.agents = state.agents.filter(a => a.id !== 'sparky')
+      const base = state.agents.find(a => a.id === 'river')!
+      const dee = { personId: 'dee', generation: 'g' }
+      state.agents.push({ ...base, id: 'main', name: 'main', displayName: 'Sparky', projectId: undefined, buddyOf: dee, buddyScope: 'swarm',
+        machineOwnerId: 'dee', contributorId: 'dee', machineId: 'mac-dee' },
+      { ...base, id: 'session', name: 'session', displayName: 'Session', projectId: 'lead', buddyOf: dee, buddyScope: undefined,
+        buddySession: { thread: 't', from: 1, projectId: 'lead' }, machineId: 'mac-dee' })
+      return state
+    }
+    const ledger = (buddyId: string) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId, messageId: 'm1' } })
+    const buddies = (view: ReturnType<typeof board>) => view.agents.filter(a => a.kind === 'buddy')
+
+    it('lists it in every project its person reads, with its name and person, and never its sessions', () => {
+      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [machine('dee', [], 'mac-dee')])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Sparky', 'dee', 'mac-dee']])
+    })
+
+    it('credits a proposal its session recorded to the one Buddy, with its own, and shows no Former Buddy', () => {
+      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('session') }),
+        shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.shipped, a.points])).toEqual([['main', 'Sparky', 'dee', 2, 6]])
+    })
+
+    it('shows a session that ended before this change as Former Buddy, with no person', () => {
+      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('ended-session') })])
+      expect(of(view, 'ended-session')).toMatchObject({ displayName: 'Former Buddy', personId: null, machineId: '', shipped: 1 })
+    })
+
+    it('shows only a Former Buddy, with no name, person or Mac, in a private project its person does not read', () => {
+      const state = oneBuddy(swarm())
+      state.projects![0] = { ...state.projects![0]!, visibility: 'private', members: [{ id: 'tony', generation: 'g' }] }
+      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Former Buddy', null, '']])
+      expect(JSON.stringify(view)).not.toMatch(/Sparky|mac-dee/)
+    })
+
+    it('shows a Buddy whose person left or was re-invited (another generation) as Former Buddy', () => {
+      const state = oneBuddy(swarm())
+      state.people.find(p => p.id === 'dee')!.generation = 'g2'
+      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId])).toEqual([['main', 'Former Buddy', null]])
+    })
+
+    it('names its Mac only when the reader sees that Mac', () => {
+      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [])
+      expect(buddies(view).map(a => [a.displayName, a.machineId])).toEqual([['Sparky', '']])
+    })
+
+    it('does not list another project\'s old-style Buddy, nor one with the same name elsewhere', () => {
+      const state = oneBuddy(swarm())
+      const base = state.agents.find(a => a.id === 'river')!
+      state.agents.push({ ...base, id: 'web-buddy', name: 'web-buddy', displayName: 'Sparky', projectId: 'web', buddyOf: { personId: 'tony', generation: 'g' } })
+      expect(buddies(board(state, [])).map(a => a.agentId)).toEqual(['main'])
+    })
+  })
+})
+
+describe('Models, last 7 days: each model\'s tasks over a rolling week, for the sidebar (Dee, 2026-10-30)', () => {
+  const run = (assignmentId: string, at: number, engine: string, model: string | null, extra: Partial<Run> = {}): Run =>
+    ({ assignmentId, engine, model, effort: 'high', at, ...extra })
+  const work = (runs: Run[], extra: Partial<Conversation> = {}) => group({ status: 'working', ledger: { runs }, ...extra })
+
+  it('counts the attempts of the 7 days up to now, across the Monday, never older ones', () => {
+    // Now is Thursday noon: last Friday counts, last Thursday morning does not.
+    const view = board(swarm(), [work([run('a1', NOW - 6 * DAY_MS, 'claude', 'opus'), run('a2', NOW - 7 * DAY_MS - HOUR, 'claude', 'opus'),
+      run('a3', WEEK + HOUR, 'claude', 'opus', { firstReview: true }), run('a4', WEEK + 2 * HOUR, 'codex', 'gpt-6.1-sol', { firstReview: false })])])
+    expect(view.recentModels).toEqual([
+      { engine: 'claude', model: 'opus', attempts: 2, firstReview: { reviewed: 1, passed: 1 } },
+      { engine: 'codex', model: 'gpt-6.1-sol', attempts: 1, firstReview: { reviewed: 1, passed: 0 } },
+    ])
+  })
+
+  it('is the 7 days up to now whichever week the board shows', () => {
+    const view = board(swarm(), [work([run('a1', NOW - DAY_MS, 'claude', 'opus'), run('a2', LAST + HOUR, 'claude', 'sonnet')])], LAST)
+    expect(view.recentModels.map(m => [m.model, m.attempts])).toEqual([['opus', 1]])
+  })
+
+  it('sums one model\'s efforts as one, keeps an attempt with no reported model apart, and counts no review group', () => {
+    const view = board(swarm(), [
+      work([run('a1', WEEK, 'claude', 'opus'), run('a2', WEEK + HOUR, 'claude', 'opus', { effort: 'xhigh' }), run('a3', WEEK + 2 * HOUR, 'codex', null)]),
+      work([run('b1', WEEK + HOUR, 'codex', 'gpt-6.1-sol')], { reviewOf: 'g0' }),
+    ])
+    expect(view.recentModels.map(m => [m.engine, m.model, m.attempts])).toEqual([['claude', 'opus', 2], ['codex', null, 1]])
+  })
+
+  it('never counts a private conversation\'s or another project\'s attempts', () => {
+    const view = board(swarm(), [
+      work([run('a1', WEEK, 'claude', 'opus')], { audience: { people: [{ id: 'dee', generation: 'g' }] } }),
+      work([run('b1', WEEK, 'claude', 'opus')], { projectId: 'other' }),
+    ])
+    expect(view.recentModels).toEqual([])
   })
 })

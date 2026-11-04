@@ -28,6 +28,7 @@ import {
   permissionFlagToVerify,
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
+  engineUpdateCommand,
   unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
@@ -823,6 +824,15 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
+    // An older Claude Buddy's saved mode: relaunched like its owner's own session, in full mode (Ken, 11-04, task #2832).
+    expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
+      .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
+    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2).
+    expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
+      .toEqual([engineBin('claude'), '--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'])
+    // An older Codex Buddy's saved mode: full access, as its owner's own session (task #2832).
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
+      .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
@@ -996,7 +1006,13 @@ describe('a first prompt on launch', () => {
     try { buildEngineCommandArgv('cursor', { firstPrompt: PROMPT }) } catch (error) { refusal = error }
     expect(refusal).toBeInstanceOf(FirstPromptUnsupportedError)
     expect((refusal as FirstPromptUnsupportedError).code).toBe('PROMPT_UNSUPPORTED')
-    expect((refusal as FirstPromptUnsupportedError).message).toContain('cursor')
+    expect((refusal as FirstPromptUnsupportedError).message).toContain('Cursor')
+  })
+
+  // prompt_unsupported, 4 in the Oct 21–27 report: the refusal named the engine but not what to do instead.
+  it('says what to do instead: leave the first message out, or use an agent that takes one', () => {
+    expect(new FirstPromptUnsupportedError('cursor').message).toBe('Cursor cannot start with a first message. Start it without one '
+      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one.')
   })
 
   it('leaves the argv unchanged with no prompt, or an empty one', () => {
@@ -1210,6 +1226,22 @@ describe('the permission gates', () => {
     expect(refusal?.detail).toContain('--auto')
   })
 
+  // The install lines are POSIX shell: on Windows only an npm line runs as written (in PowerShell too).
+  it('names an update command only where it runs as written', () => {
+    expect(engineUpdateCommand('opencode', 'darwin')).toBe('curl -fsSL https://opencode.ai/install | bash')
+    expect(engineUpdateCommand('opencode', 'win32')).toBeNull()
+    expect(engineUpdateCommand('codex', 'win32')).toBe('npm install -g @openai/codex')
+    expect(engineUpdateCommand('terminal', 'darwin')).toBeNull()
+  })
+
+  // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how.
+  it('gives the command that updates the engine', async () => {
+    const shell = withFakeOpencode('--auto-update')
+    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
+    expect(refusal?.detail).toBe('The opencode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
+      + 'Update opencode by running curl -fsSL https://opencode.ai/install | bash, then try again, or choose Ask permissions for this harness.')
+  })
+
   it('lets a create through when the flag is there, and when there is no flag to check', async () => {
     const shell = withFakeOpencode('--auto')
     await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)).resolves.toBeNull()
@@ -1235,8 +1267,20 @@ describe('the permission gates', () => {
     }
     // A create in Ask is told to update, never to choose the Ask it chose.
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
-    expect(refusal?.detail).toContain('Update claude and try again.')
+    expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
+  })
+
+  it('relaunches an older Buddy\'s saved mode as full, never holding it for a flag (task #2832)', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'codex', '--dangerously-bypass-approvals-and-sandbox')
+    const codex = await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'readOnlyAsk', bypassPermission: false }, bashProbeShell())
+    expect([codex.choice.permissionMode, codex.droppedFlag, codex.nativeHold]).toEqual(['readOnlyAsk', null, undefined])
+    fakeEngine(binDir, 'claude', '--dangerously-skip-permissions')
+    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'buddy', bypassPermission: false }, bashProbeShell())
+    expect([claude.choice.permissionMode, claude.droppedFlag, claude.nativeHold]).toEqual(['buddy', null, undefined])
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {

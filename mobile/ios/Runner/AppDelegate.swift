@@ -1,6 +1,9 @@
+import AVFoundation
 import AudioToolbox
 import AuthenticationServices
 import Flutter
+import Network
+import NetworkExtension
 import UIKit
 import UserNotifications
 
@@ -24,6 +27,224 @@ import UserNotifications
     SignInPageChannel.register(with: engineBridge.pluginRegistry)
     HandoffChannel.register(with: engineBridge.pluginRegistry)
     ChimeChannel.register(with: engineBridge.pluginRegistry)
+    AppBadgeChannel.register(with: engineBridge.pluginRegistry)
+    LinkChannel.register(with: engineBridge.pluginRegistry)
+    SetupWifiChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/setup_wifi` — joining a new device's setup hotspot (Dart: `lib/phone/add_device/setup_hotspot.dart`),
+/// as Android does (MainActivity.kt). `join` asks iOS for the open Wi-Fi whose name starts with `prefix`
+/// (`Harness-`, or one device's whole name): iOS finds it and asks "Join Wi-Fi network …?" — the person
+/// no longer goes to Settings ▸ Wi-Fi. It answers `joined` with the address the hotspot gave this phone,
+/// or `unavailable` (cancelled, not found, or iOS stayed on its own Wi-Fi). `leave` forgets the hotspot,
+/// and iOS goes back to the phone's own Wi-Fi by itself.
+///
+/// `wifiOn`: whether the phone is on a Wi-Fi network — with Wi-Fi off, iOS never answers a join at all.
+enum SetupWifiChannel {
+  /// The hotspot's network (os/setup.py ADDRESS 10.42.0.1): this phone's address there is 10.42.0.x.
+  private static let subnet = "10.42.0."
+
+  /// Joins tried before giving up: iOS often answers "not found" first while the hotspot is up
+  /// (ecm-sds-mobile, the lamp's setup, saw the same).
+  private static let attempts = 3
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessSetupWifi")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/setup_wifi", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "join":
+        let prefix = (call.arguments as? [String: Any])?["prefix"] as? String ?? ""
+        guard !prefix.isEmpty else { result(["state": "unavailable"]); return }
+        join(prefix: prefix, attempt: 1, result: result)
+      case "leave":
+        leave { result(true) }
+      case "wifiOn":
+        wifiOn { result($0) }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private static func join(prefix: String, attempt: Int, result: @escaping FlutterResult) {
+    apply(prefix: prefix) { error in
+      if let error {
+        NSLog("[setup_wifi] join \(prefix) #\(attempt): \(error.domain) \(error.code) \(error.localizedDescription)")
+        // Cancelled by the person: asked again, they would only see the same question.
+        if error.code == NEHotspotConfigurationError.userDenied.rawValue || attempt >= attempts {
+          result(["state": "unavailable"])
+          return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { join(prefix: prefix, attempt: attempt + 1, result: result) }
+        return
+      }
+      // A join iOS reports is not yet one the phone is on: it can stay on its own Wi-Fi, which has the
+      // Internet the hotspot lacks, and DHCP takes a moment. Only an address on the hotspot's network
+      // counts; still none after a few seconds, the join is asked for again.
+      awaitAddress(prefix: prefix, start: Date()) { address in
+        result(address == nil ? ["state": "unavailable"] : ["state": "joined", "address": address!])
+      }
+    }
+  }
+
+  /// Open: os/setup.py hosts the hotspot with no password. Once: iOS forgets it when the app leaves the
+  /// front, so a phone is never left on a network with no Internet. Already on it is no error.
+  private static func apply(prefix: String, done: @escaping (NSError?) -> Void) {
+    let configuration = NEHotspotConfiguration(ssidPrefix: prefix)
+    configuration.joinOnce = true
+    NEHotspotConfigurationManager.shared.apply(configuration) { error in
+      let error = error as NSError?
+      done(error?.code == NEHotspotConfigurationError.alreadyAssociated.rawValue ? nil : error)
+    }
+  }
+
+  /// Up to 10 s for an address on the hotspot, asking for the join again at 3 s and 6 s.
+  private static func awaitAddress(prefix: String, start: Date, asked: Int = 0, done: @escaping (String?) -> Void) {
+    if let address = hotspotAddress() { done(address); return }
+    let waited = Date().timeIntervalSince(start)
+    if waited > 10 { done(nil); return }
+    if asked < 2 && waited > Double(3 * (asked + 1)) {
+      NSLog("[setup_wifi] no hotspot address after \(Int(waited)) s: joining \(prefix) again")
+      apply(prefix: prefix) { _ in awaitAddress(prefix: prefix, start: start, asked: asked + 1, done: done) }
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+      awaitAddress(prefix: prefix, start: start, asked: asked, done: done)
+    }
+  }
+
+  /// Whether the phone is on a Wi-Fi network, as its network path says. iOS does not tell an app
+  /// whether the Wi-Fi itself is on, so on but joined to nothing reads off too: both are put right in
+  /// Settings ▸ Wi-Fi.
+  private static func wifiOn(done: @escaping (Bool) -> Void) {
+    let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+    let queue = DispatchQueue(label: "harness.setup_wifi.path")
+    var answered = false
+    monitor.pathUpdateHandler = { path in
+      if answered { return }
+      answered = true
+      monitor.cancel()
+      DispatchQueue.main.async { done(path.status == .satisfied) }
+    }
+    monitor.start(queue: queue)
+  }
+
+  /// This phone's IPv4 address on the hotspot's network, if it has one.
+  private static func hotspotAddress() -> String? {
+    var addresses: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
+    defer { freeifaddrs(addresses) }
+    for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+      guard let socket = entry.pointee.ifa_addr, socket.pointee.sa_family == UInt8(AF_INET) else { continue }
+      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+      if getnameinfo(socket, socklen_t(socket.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+        let address = String(cString: host)
+        if address.hasPrefix(subnet) { return address }
+      }
+    }
+    return nil
+  }
+
+  /// Forgets every setup hotspot this app joined; iOS then goes back to the phone's own Wi-Fi.
+  private static func leave(done: @escaping () -> Void) {
+    NEHotspotConfigurationManager.shared.getConfiguredSSIDs { names in
+      for name in names where name.hasPrefix("Harness-") {
+        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: name)
+      }
+      done()
+    }
+  }
+}
+
+/// `harness/links` — the message links (`harness://swarm/<tab>/<conversation>/<message>`, Desktop's
+/// Copy link to message) this phone was asked to open (Dart: `SwarmLinkChannel` in
+/// `lib/swarm/swarm_message_link.dart`). A link that launches the app comes with the scene's
+/// connection options, one that arrives while it runs through `openURLContexts`; Flutter's scene
+/// delegate passes both to plugins registered for scene events, as this is.
+///
+/// Each link waits here until Dart's `take` answers it (and empties the list), so one that launched
+/// the app, or came before sign-in, waits for the signed-in screen to ask; `arrived` tells a
+/// listening Dart that more wait. At most 20 wait, the newest kept. Only `harness://swarm` links are
+/// taken; any other URL is left to whoever else handles it.
+final class LinkChannel: NSObject, FlutterSceneLifeCycleDelegate {
+  /// Held here: the registrar keeps scene delegates weakly.
+  private static var shared: LinkChannel?
+
+  private let channel: FlutterMethodChannel
+  private var waiting: [String] = []
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let registrar = registry.registrar(forPlugin: "HarnessLinks") else { return }
+    let links = LinkChannel(messenger: registrar.messenger())
+    registrar.addSceneDelegate(links)
+    shared = links
+  }
+
+  private init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "harness/links", binaryMessenger: messenger)
+    super.init()
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "take", let self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(self.waiting)
+      self.waiting.removeAll()
+    }
+  }
+
+  @objc(scene:willConnectToSession:options:)
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions?
+  ) -> Bool {
+    receive(connectionOptions?.urlContexts ?? [])
+  }
+
+  @objc(scene:openURLContexts:)
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+    receive(URLContexts)
+  }
+
+  private func receive(_ contexts: Set<UIOpenURLContext>) -> Bool {
+    let links = contexts.map(\.url)
+      .filter { $0.scheme == "harness" && $0.host == "swarm" }
+      .map(\.absoluteString)
+    if links.isEmpty { return false }
+    waiting = Array((waiting + links).suffix(20))
+    channel.invokeMethod("arrived", arguments: nil)
+    return true
+  }
+}
+
+/// `harness/app_badge` — the app icon's count (Dart: `setSwarmBadge` in `lib/notify/system_notices.dart`):
+/// what the Swarms ask of the person, the drawer's waiting count. `set` takes the count; zero takes it
+/// off. Drawn only where the person allowed badges with the notification prompt.
+enum AppBadgeChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessAppBadge")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/app_badge", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "set" else { result(FlutterMethodNotImplemented); return }
+      guard let count = call.arguments as? Int, count >= 0 else {
+        result(FlutterError(code: "bad_count", message: "A count of zero or more.", details: nil))
+        return
+      }
+      if #available(iOS 16.0, *) {
+        // The completion can run off the main thread; Flutter is answered on it.
+        UNUserNotificationCenter.current().setBadgeCount(count) { error in
+          DispatchQueue.main.async {
+            result(error.map { FlutterError(code: "badge", message: $0.localizedDescription, details: nil) })
+          }
+        }
+      } else {
+        UIApplication.shared.applicationIconBadgeNumber = count
+        result(nil)
+      }
+    }
   }
 }
 

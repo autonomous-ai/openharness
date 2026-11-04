@@ -1,4 +1,4 @@
-import { emptyPorts, type DaemonAddress } from '../core/api.js'
+import { emptyPorts, type BackendNotice, type DaemonAddress } from '../core/api.js'
 import { startSuperTabs } from './superTabs.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
@@ -18,6 +18,9 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
   const ask = (query: string, payload: Record<string, unknown>) => core
     ? core.query(query, payload) : Promise.reject(new Error('Core disconnected'))
   const turns = turnsLink(ask)
+  /** The account's notices the core tells this process (`service_event` kind `notice`): the host hears from them that the
+   *  server says work waits (superTabs/host.ts). */
+  const notices = new Set<(notice: BackendNotice) => void>()
   let reading: Promise<void> | null = null
   const ready = (): Promise<void> => {
     const connection = core
@@ -27,7 +30,8 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
       daemon = daemonIn(address)
     }).finally(() => { reading = null })
   }
-  const base = processCoreApi(options.dataDir, 'superTabs', { live: () => live, ask, deliveries: turns, daemon: () => daemon })
+  const base = processCoreApi(options.dataDir, 'superTabs', { live: () => live, ask, deliveries: turns, daemon: () => daemon,
+    onNotice: listener => { notices.add(listener); return () => { notices.delete(listener) } } })
   // Every authority read also refreshes the native registry. A stopped/replaced
   // harness cannot receive work through a stale process-side snapshot.
   const api = { ...base, account: { ...base.account, backend: async (method: string, path: string, body?: unknown) => {
@@ -39,7 +43,10 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
   const service = (options.run ?? runServiceProcess)({
     name: 'superTabs', socketPath: options.socketPath, machineId: options.machineId, token: options.token,
     requests: { super_tabs: async (payload, asker, closed) => { await ready(); return requests.super_tabs(payload, asker, closed) } },
-    onEvent: payload => { turns.heard(payload) },
+    onEvent: payload => {
+      if (payload.kind !== 'notice') { turns.heard(payload); return }
+      if (payload.notice && typeof payload.notice === 'object') for (const listener of notices) listener(payload.notice as BackendNotice)
+    },
     onConnected: connection => {
       core = connection
       void ready().then(() => { if (core === connection) ports.superTabs?.connected() }).catch(() => {})

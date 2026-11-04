@@ -69,6 +69,10 @@ class _Api extends ApiClient {
   final _Desk board;
   List<Machine> list = const [];
   int machineReads = 0;
+  int sharesTold = 0;
+
+  @override
+  void sharesChanged() => sharesTold++;
 
   @override
   Future<Map<String, dynamic>?> desk() async => board.json();
@@ -406,6 +410,8 @@ void main() {
       await _settle();
 
       expect(api.machineReads, greaterThanOrEqualTo(1));
+      // The grant is a harness share: the read reads the shares, which it otherwise does every few minutes.
+      expect(api.sharesTold, 1);
       expect(app.machineStates['ma']?.machine.isShared, isTrue);
       expect(desk.tab(_deskTab)?.panes.map((p) => p.key), [_key('ma', 'a1')]);
       final placed = jsonDecode(store.values[_placedKey]!) as Map;
@@ -870,6 +876,7 @@ void main() {
       gate.complete();
       await _settle();
       expect(api.machineReads, greaterThanOrEqualTo(1));
+      expect(api.sharesTold, 1, reason: 'the machine is a harness share: the read reads the shares');
       expect(pane.sharedHarness?.agentId, 'a1');
       expect(pane.sharedOwnerName, 'Alice');
     });

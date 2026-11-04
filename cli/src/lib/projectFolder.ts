@@ -4,7 +4,9 @@ import { access, lstat, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promise
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
-import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
+import { GitProjectError, prepareGitProject, stopTree, validGitPath } from './gitProject.js'
+import { cloneAttempts, isGitHubHost, parseGitHubRepository, resolvedRepositoryIdentity } from './githubRepository.js'
+import { githubAliases, resolveHost } from './sshHosts.js'
 import { scmByKind } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 
@@ -29,8 +31,8 @@ export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string, readonly folder?: string) { super(message) }
 }
 
-// Same accepted forms as the existing desktop GitHub clone flow. Neither
-// credentials nor arbitrary local paths/remote helpers are repository URLs.
+// The desktop app's GitHub forms (githubRepository.ts, held to the same vectors). Neither credentials nor arbitrary local
+// paths/remote helpers are repository URLs.
 export function parseProjectFolder(payload: Record<string, unknown>): ProjectFolder | null {
   if (payload.projectSource === undefined) return null
   if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
@@ -74,25 +76,12 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
     throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a project.')
   }
   const raw = payload.repositoryUrl.trim()
-  let path: string
-  const ssh = raw.startsWith('git@github.com:')
-  if (ssh) path = raw.slice('git@github.com:'.length)
-  else {
-    let url: URL
-    try { url = new URL(raw.includes('://') ? raw : `https://github.com/${raw}`) }
-    catch { throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub URL or owner/repository.') }
-    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.username || url.password || url.port || url.search || url.hash) {
-      throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub HTTPS or SSH URL, or owner/repository.')
-    }
-    path = url.pathname.replace(/^\//, '')
+  const repository = parseGitHubRepository(raw)
+  if (!repository) {
+    throw new ProjectFolderError('INVALID_REPOSITORY', raw.includes('://') || raw.startsWith('git@')
+      ? 'Enter a GitHub HTTPS or SSH URL, or owner/repository.' : 'Enter a GitHub URL or owner/repository.')
   }
-  path = path.replace(/\/$/, '').replace(/\.git$/, '')
-  const parts = path.split('/')
-  if (parts.length !== 2 || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(parts[0]!) ||
-      !/^[A-Za-z0-9_.-]{1,100}$/.test(parts[1]!) || parts[1] === '.' || parts[1] === '..') {
-    throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub URL or owner/repository.')
-  }
-  return { source: 'remote', repositoryUrl: ssh ? `git@github.com:${path}.git` : `https://github.com/${path}.git`, name: parts[1]! }
+  return { source: 'remote', repositoryUrl: repository.url, name: repository.name }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -110,37 +99,19 @@ async function openableFolder(path: string): Promise<boolean> {
   } catch { return false }
 }
 
-/**
- * One repository however git spells its address: `github.com/owner/repo` for `https://github.com/Owner/Repo.git/`,
- * `git@github.com:owner/repo`, `ssh://git@github.com:22/owner/repo.git` and `git://github.com/owner/repo`, credentials and
- * ports left out. Lowercased: host names are case-insensitive, and so are GitHub's owner and repository names, the only
- * host a clone is asked for (parseProjectFolder). Null for a local path or anything else that names no host.
- */
-export function repositoryIdentity(address: string): string | null {
-  const raw = address.trim()
-  let host: string, path: string
-  // scp-like `[user@]host:path`, which has no scheme and no slash before its colon.
-  const scp = raw.includes('://') ? null : /^(?:[^@/\s]+@)?([^:/\s]+):([^\s]+)$/.exec(raw)
-  if (scp) { host = scp[1]!; path = scp[2]! }
-  else {
-    let url: URL
-    try { url = new URL(raw) } catch { return null }
-    if (!['https:', 'http:', 'ssh:', 'git:', 'git+ssh:', 'ssh+git:'].includes(url.protocol)) return null
-    host = url.hostname
-    path = url.pathname
-  }
-  path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/i, '')
-  return host && path ? `${host}/${path}`.toLowerCase() : null
-}
+export { repositoryIdentity } from './githubRepository.js'
+
+type HostResolver = (alias: string) => Promise<string | null>
 
 /**
  * Whether [folder] is itself a checkout whose `origin` is [repositoryUrl]. Bounded and local: `.git` is looked for before
  * git runs (on a Mac without the Command Line Tools, `git` is Apple's stub, which opens an install dialog), git may not
  * look above [folder] for a repository (GIT_CEILING_DIRECTORIES), and it gets four seconds, as gitProject.ts's reads do.
- * Anything else — no `.git`, another remote, an origin git cannot read — is not that repository.
+ * Anything else — no `.git`, another remote, an origin git cannot read — is not that repository. An SSH alias on either
+ * side is read as the host it names, so a checkout cloned as `git@gh-work:org/repo` is the browser link's repository.
  */
-async function holdsRepository(folder: string, repositoryUrl: string): Promise<boolean> {
-  const wanted = repositoryIdentity(repositoryUrl)
+async function holdsRepository(folder: string, repositoryUrl: string, resolveAlias: HostResolver): Promise<boolean> {
+  const wanted = await resolvedRepositoryIdentity(repositoryUrl, resolveAlias)
   if (!wanted || !await exists(join(folder, '.git')).catch(() => false)) return false
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0',
     GIT_CEILING_DIRECTORIES: dirname(folder) }
@@ -150,7 +121,7 @@ async function holdsRepository(folder: string, repositoryUrl: string): Promise<b
       { env, timeout: 4000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 },
       (error, stdout) => resolve(error ? null : stdout.trim()))
   })
-  return origin !== null && repositoryIdentity(origin) === wanted
+  return origin !== null && await resolvedRepositoryIdentity(origin, resolveAlias) === wanted
 }
 
 export async function prepareProjectFolder(
@@ -169,6 +140,16 @@ export async function prepareProjectFolder(
      *  branch reports nothing. A callback rather than a wider return so the folder stays the answer
      *  here, for every caller. */
     onPrepared?: (prepared: { cwd: string; scmLaunchRecord: ScmLaunchRecord }) => void
+    /** A clone GitHub refuses tries the other transport, then this computer's SSH aliases for github.com
+     *  (sshHosts.ts), stopping at the first that works: a person who reaches a private repository only over SSH, or
+     *  only through a second account's key, can paste the browser's link. It is also what lets an address name an
+     *  alias at all. Set only for the computer owner's own start (core/agents/launches.ts). Off, one attempt and no
+     *  alias: a Swarm's or a contribution's start, whose address someone else chose, never picks the owner's accounts. */
+    cloneFallback?: boolean
+    /** Told which address a clone used, when it cloned; `alias` when that was an SSH alias. */
+    onCloned?: (clone: { url: string; alias?: string }) => void
+    resolveHost?: HostResolver
+    githubAliases?: () => Promise<string[]>
   } = {},
 ): Promise<string> {
   const root = options.root ?? projectsRoot()
@@ -228,23 +209,62 @@ export async function prepareProjectFolder(
         }
       }
     }
+    const repository = parseGitHubRepository(project.repositoryUrl)
+    if (!repository) throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub URL or owner/repository.')
+    const resolve = options.resolveHost ?? resolveHost
+    // An alias picks one of this computer's GitHub accounts, so only its owner's own start may name one. A Swarm Lead or
+    // a contribution sets the address of a project that starts on someone else's computer: an alias there would choose
+    // that owner's second account, and "isn't a GitHub host" would tell the Lead which aliases exist. Such a start is
+    // refused in the same words as any other address, before ssh is asked anything.
+    if (repository.alias && !options.cloneFallback) {
+      throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub HTTPS or SSH URL, or owner/repository.')
+    }
+    // An alias names a host in THIS computer's SSH configuration, so it is checked here, where git will use it.
+    if (repository.alias && !isGitHubHost(await resolve(repository.alias))) {
+      throw new ProjectFolderError('INVALID_REPOSITORY', `“${repository.alias}” isn't a GitHub host on this machine.`)
+    }
     const destination = join(root, project.name)
     // A checkout of the very repository asked for is that project, already there: started in, never cloned again. It
     // was refused as PROJECT_EXISTS (4 of 7 failed starts on Oct 18, CLI 0.4.18), a failed start for asking twice.
     // Anything else there (another repository, a folder of files) is still the person's, and still refused.
     if (await exists(destination)) {
-      if (await holdsRepository(destination, project.repositoryUrl)) return destination
+      if (await holdsRepository(destination, project.repositoryUrl, resolve)) return destination
       throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
     }
-    staging = await mkdtemp(join(root, '.harness-clone-'))
+    // The aliases are read only once GitHub has refused: a computer that clones at once never runs ssh for them.
+    // cloneAttempts with them keeps the order it had without them, so the attempts so far stay a prefix.
+    let attempts = options.cloneFallback ? cloneAttempts(repository, []) : [repository.url]
+    let aliasesRead = !options.cloneFallback
+    let used = repository.url
+    let hostKeyFailure: RepositoryHostKeyError | undefined
+    for (let index = 0; ; index++) {
+      used = attempts[index]!
+      if (staging) await rm(staging, { force: true, recursive: true }).catch(() => {})
+      staging = await mkdtemp(join(root, '.harness-clone-'))
+      try {
+        await (options.clone ?? cloneRepository)(used, join(staging, 'checkout'), options.gitEnv)
+        if (index > 0) logAttempt(repository.owner, repository.name, used, 'cloned')
+        break
+      } catch (error) {
+        logAttempt(repository.owner, repository.name, used, error instanceof ProjectFolderError ? error instanceof RepositoryAccessError ? 'refused' : error.code : 'failed')
+        // Only a refusal or an untrusted host key is worth another way in: a network failure or a timeout would fail every
+        // one of them. An alias may carry its own HostKeyAlias, and https never looks at ssh's keys.
+        if (error instanceof RepositoryHostKeyError) hostKeyFailure ??= error
+        else if (!(error instanceof RepositoryAccessError)) throw error
+        if (!aliasesRead) { aliasesRead = true; attempts = cloneAttempts(repository, await (options.githubAliases ?? githubAliases)()) }
+        // What the person can act on: a machine that may have access once it trusts the key has not been refused.
+        if (index === attempts.length - 1) throw hostKeyFailure ?? error
+      }
+    }
     const checkout = join(staging, 'checkout')
-    await (options.clone ?? cloneRepository)(project.repositoryUrl, checkout, options.gitEnv)
     if (await exists(destination)) {
       // Another start cloned the same repository meanwhile: that one is kept and this staging goes (below).
-      if (await holdsRepository(destination, project.repositoryUrl)) return destination
+      if (await holdsRepository(destination, project.repositoryUrl, resolve)) return destination
       throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” was created while cloning. Select that folder from your projects.`)
     }
     await rename(checkout, destination)
+    const alias = parseGitHubRepository(used)?.alias
+    options.onCloned?.({ url: used, ...(alias ? { alias } : {}) })
     return destination
   } catch (error) {
     if (error instanceof GitProjectError) throw new ProjectFolderError(error.code, error.message)
@@ -255,36 +275,62 @@ export async function prepareProjectFolder(
   }
 }
 
+/** One line per clone attempt that failed, or that worked after another had: which way in (https, ssh, or the alias) and
+ *  how it ended. Never git's own words, which may quote a credential helper. */
+function logAttempt(owner: string, name: string, url: string, outcome: string): void {
+  const via = url.startsWith('https://') ? 'https' : url.startsWith('git@github.com:') ? 'ssh' : `ssh alias ${parseGitHubRepository(url)?.alias}`
+  console.info(`[project] clone ${owner}/${name} over ${via}: ${outcome}`)
+}
+
+/** Every branch a fetch sees, as a full clone's `origin` has: a single-branch clone writes only its own. */
+const ALL_BRANCHES = '+refs/heads/*:refs/remotes/origin/*'
+
+/** How long a clone may go without git reporting any progress before it is given up. Git reports at least once a second
+ *  while objects arrive (`--progress`); the longest silence measured cloning lampOS was 4.4 s. A clone that keeps
+ *  progressing is never cut off, however long it takes on a slow connection. */
+export const CLONE_STALL_MS = 120_000
+
 /** No shell interpolation or interactive password prompt. Diagnostics stay
- * bounded and private; only actionable, credential-free messages reach the UI. */
-function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
+ * bounded and private; only actionable, credential-free messages reach the UI.
+ *
+ * Blob-less and single-branch: the default branch with its whole history, file contents fetched as they are needed (the
+ * checkout's own, then whatever `blame` or another branch's checkout reads). lampOS (576 MB pack, about 4,400 branches)
+ * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes once allowed on a slower Mac; blob-less, 6 s. The
+ * fetch rule is then widened to every branch, so `git fetch origin X && git checkout X` works as in a full clone.
+ * [options] are for tests: `git` the command, `stallMs` the no-progress window. */
+export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv,
+  options: { git?: string; stallMs?: number } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const base = gitEnv ?? process.env
-    const child = spawn('git', ['clone', '--', url, destination], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
-        GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
+    const git = options.git ?? 'git'
+    const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
+      GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' }
+    // Its own process group, so a stalled clone's remote helper and index-pack stop with it.
+    const child = spawn(git, ['clone', '--progress', '--filter=blob:none', '--single-branch', '--', url, destination], {
+      stdio: ['ignore', 'ignore', 'pipe'], env, detached: process.platform !== 'win32', windowsHide: true,
     })
-    let diagnostic = '', timedOut = false
-    let forceKill: ReturnType<typeof setTimeout> | undefined
-    const deadline = setTimeout(() => {
-      timedOut = true
-      child.kill()
-      forceKill = setTimeout(() => child.kill('SIGKILL'), 2000)
-      forceKill.unref()
-    }, 300_000)
-    deadline.unref()
-    child.stderr?.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 8192) })
+    let diagnostic = '', stalled = false
+    const stall = setTimeout(() => {
+      stalled = true
+      void stopTree(child.pid).then(problem => { if (problem) console.error(`[project] could not stop a stalled clone: ${problem}`) })
+    }, options.stallMs ?? CLONE_STALL_MS)
+    stall.unref()
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (!stalled) stall.refresh()
+      diagnostic = (diagnostic + chunk.toString()).slice(-8192)
+    })
     child.on('error', () => {
-      clearTimeout(deadline)
+      clearTimeout(stall)
       reject(new ProjectFolderError('GIT_UNAVAILABLE', 'Git could not start. Install Git on the selected machine, then retry.'))
     })
     child.on('close', (code) => {
-      clearTimeout(deadline)
-      clearTimeout(forceKill)
-      if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
-      else if (code === 0) resolve()
-      else reject(cloneFailure(diagnostic))
+      clearTimeout(stall)
+      if (stalled) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning stopped making progress. Check the connection and retry.'))
+      else if (code !== 0) reject(cloneFailure(diagnostic))
+      else {
+        execFile(git, ['-C', destination, 'config', 'remote.origin.fetch', ALL_BRANCHES], { env, timeout: 10_000, killSignal: 'SIGKILL' },
+          error => error ? reject(new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')) : resolve())
+      }
     })
   })
 }
@@ -293,8 +339,16 @@ function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.Proce
  *  stays CLONE_FAILED for the apps; a caller that knows another way in can tell the two apart. */
 export class RepositoryAccessError extends ProjectFolderError {}
 
+/** CLONE_FAILED because ssh stopped before GitHub was asked: this machine does not trust the host key it was shown. Not a
+ *  refusal, so the apps never call it "No access", and it may mean the key changed. Another way in checks its own key. */
+export class RepositoryHostKeyError extends ProjectFolderError {}
+
 /** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
 export function cloneFailure(diagnostic: string): ProjectFolderError {
+  // First: ssh's warning about a changed key also says "Password authentication is disabled".
+  if (/host key verification failed/i.test(diagnostic)) {
+    return new RepositoryHostKeyError('CLONE_FAILED', "The selected machine doesn't trust GitHub's SSH host key. Check it by connecting once with ssh -T git@github.com, then retry.")
+  }
   return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
     ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
     : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')

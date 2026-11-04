@@ -8,7 +8,8 @@ String? runtimeModelName(
 
 /// Keep the observed effort with its model and validate both against the same
 /// agent/engine identity. Missing metadata never implies a default effort.
-({String name, String effort})? runtimeModelDetails(
+/// [id] is the model as the engine names it, [name] as people know it.
+({String id, String name, String effort})? runtimeModelDetails(
   Object? value, {
   required String agentId,
   String? engine,
@@ -38,38 +39,42 @@ String? runtimeModelName(
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(model)) {
       return null;
     }
-    // Claude may report only a family alias. Never invent a version for it.
-    final claude = RegExp(
-      r'^(?:claude-)?(fable|opus|sonnet|haiku)(?:-(\d+(?:[-.]\d{1,2})*))?(\[1m\])?$',
-      caseSensitive: false,
-    ).firstMatch(model);
-    if (claude != null) {
-      final family = claude[1]!.toLowerCase();
-      final version = claude[2]?.replaceAll('-', '.');
-      final name =
-          '${family[0].toUpperCase()}${family.substring(1)}'
-          '${version == null ? '' : ' $version'}${claude[3] ?? ''}';
-      return (name: name, effort: match[4]!.toLowerCase());
-    }
-    final gpt = RegExp(
-      r'^gpt-(\d+(?:\.\d+)*)(?:-(astra|sol|terra|luna|codex))?$',
-      caseSensitive: false,
-    ).firstMatch(model);
-    if (gpt != null) {
-      final family = gpt[2]?.toLowerCase();
-      return (
-        name:
-            'GPT-${gpt[1]}${family == null ? '' : ' ${family[0].toUpperCase()}${family.substring(1)}'}',
-        effort: match[4]!.toLowerCase(),
-      );
-    }
-    // Unknown names, dated IDs and local/provider-qualified IDs stay exact.
-    return (name: model, effort: match[4]!.toLowerCase());
+    return (
+      id: model,
+      name: modelDisplayName(model),
+      effort: match[4]!.toLowerCase(),
+    );
   } on ArgumentError {
     return null;
   } on FormatException {
     return null;
   }
+}
+
+/// A model as people know it: "Opus 5.5" for `claude-opus-5-5`, "Opus" for the `opus` alias, "GPT-5.6 Sol" for
+/// `gpt-5.6-sol`. Other names stay exact.
+String modelDisplayName(String model) {
+  // Claude may report only a family alias. Never invent a version for it.
+  final claude = RegExp(
+    r'^(?:claude-)?(fable|opus|sonnet|haiku)(?:-(\d+(?:[-.]\d{1,2})*))?(\[1m\])?$',
+    caseSensitive: false,
+  ).firstMatch(model);
+  if (claude != null) {
+    final family = claude[1]!.toLowerCase();
+    final version = claude[2]?.replaceAll('-', '.');
+    return '${family[0].toUpperCase()}${family.substring(1)}'
+        '${version == null ? '' : ' $version'}${claude[3] ?? ''}';
+  }
+  final gpt = RegExp(
+    r'^gpt-(\d+(?:\.\d+)*)(?:-(astra|sol|terra|luna|codex))?$',
+    caseSensitive: false,
+  ).firstMatch(model);
+  if (gpt != null) {
+    final family = gpt[2]?.toLowerCase();
+    return 'GPT-${gpt[1]}${family == null ? '' : ' ${family[0].toUpperCase()}${family.substring(1)}'}';
+  }
+  // Unknown names, dated IDs and local/provider-qualified IDs stay exact.
+  return model;
 }
 
 /// One compact label for native and Flutter model controls. Unknown effort

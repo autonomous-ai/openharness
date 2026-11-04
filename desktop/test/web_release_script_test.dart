@@ -15,6 +15,7 @@ const _unusedLucide = [
   '$_lucide/Lucide600',
 ];
 const _mono = 'Roboto Mono';
+const _icons = 'Symbols Nerd Font Mono';
 const _others = ['MaterialIcons'];
 
 String _assetOf(String family) => switch (family) {
@@ -48,6 +49,7 @@ for arg in "\$@"; do
   case "\$arg" in --output=*) out="\${arg#--output=}" ;; esac
 done
 mkdir -p "\$out/assets"
+printf '%s\\n' "\$@" > "\$out/build-args.txt"
 printf '%s' '$manifest' > "\$out/assets/FontManifest.json"
 printf '%s' '$_index' > "\$out/index.html"
 for asset in $assets; do
@@ -115,10 +117,22 @@ void main() {
 
   final skip = Platform.isWindows ? 'needs bash and python3' : null;
 
+  test('the build compiles its own version in, for a page an old cache keeps '
+      'to tell it is out of date', () async {
+    await _release(repo, [..._others, _mono, _icons, ..._unusedLucide, _used]);
+
+    final args = File(
+      p.join(repo.path, 'build/web-release/build-args.txt'),
+    ).readAsLinesSync();
+    expect(args, contains('--dart-define=HARNESS_BUILD_VERSION=1.2.3'));
+    expect(args, contains('--build-name=1.2.3'));
+  }, skip: skip);
+
   test('the web release drops the Lucide weights the app never uses', () async {
     final result = await _release(repo, [
       ..._others,
       _mono,
+      _icons,
       ..._unusedLucide,
       _used,
     ]);
@@ -134,7 +148,7 @@ void main() {
   }, skip: skip);
 
   test('the archive carries only the fonts the manifest lists', () async {
-    await _release(repo, [..._others, _mono, ..._unusedLucide, _used]);
+    await _release(repo, [..._others, _mono, _icons, ..._unusedLucide, _used]);
 
     final listing = await Process.run('tar', [
       '-tzf',
@@ -155,6 +169,7 @@ void main() {
       final result = await _release(repo, [
         ..._others,
         _mono,
+        _icons,
         ..._unusedLucide,
         _used,
       ]);
@@ -177,6 +192,7 @@ void main() {
     final result = await _release(repo, [
       ..._others,
       _mono,
+      _icons,
       ..._unusedLucide,
       _used,
     ]);
@@ -205,16 +221,20 @@ void main() {
       final result = await _release(repo, [
         ..._others,
         _mono,
+        _icons,
         ..._unusedLucide,
         _used,
       ]);
 
       expect(result.exitCode, 0, reason: '${result.stderr}');
-      // Nothing waits for it before the first frame: not the engine's font
-      // list, not the page's preloads. The workspace part loads it by name.
+      // Nothing waits for them before the first frame: not the engine's font
+      // list, not the page's preloads. The workspace part loads them by name.
       expect(_manifestFamilies(repo), isNot(contains(_mono)));
+      expect(_manifestFamilies(repo), isNot(contains(_icons)));
       expect(_builtIndex(repo), isNot(contains(_assetOf(_mono))));
+      expect(_builtIndex(repo), isNot(contains(_assetOf(_icons))));
       expect(_shipped(repo, _mono), isTrue);
+      expect(_shipped(repo, _icons), isTrue);
     },
     skip: skip,
   );
@@ -230,6 +250,22 @@ void main() {
 
       expect(result.exitCode, isNot(0));
       expect('${result.stderr}', contains(_mono));
+    },
+    skip: skip,
+  );
+
+  test(
+    'a build with no icon font fails instead of shipping blind',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        _mono,
+        ..._unusedLucide,
+        _used,
+      ]);
+
+      expect(result.exitCode, isNot(0));
+      expect('${result.stderr}', contains(_icons));
     },
     skip: skip,
   );

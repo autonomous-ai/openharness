@@ -77,9 +77,10 @@ These defaults hold for every command; the table adds what is specific.
   `H`, which holds the role sets, so a concurrent `project.role.*` conflicts.
 - **D10 Delivery rows follow group rules (rule b).** `conversation.archive`, `conversation.agent` (`present:false`) and
   `conversation.audience` change what `deliveryAllowed` (`store.ts:1410-1425`) accepts without cancelling rows today.
-  They must bump `updatedAt` on the affected queued/claimed/uncertain delivery rows (no status change; archive keeps
-  today's "comes back when reopened" behavior), so a concurrent claim conflicts on the row (section 3.5).
-  `conversation.audience` additionally cancels rows authored by people it removes.
+  They must write the affected queued/claimed/uncertain delivery rows, so a concurrent claim conflicts on the row
+  (section 3.5). Archive and `present:false` cancel them (2026-10-28: kept for a reopening, deliveries in archived
+  groups waited unread for days; `superTabs/deliverySettle.ts` ends any other open delivery that can no longer move);
+  `conversation.audience` bumps `updatedAt` and additionally cancels rows authored by people it removes.
 - Side writes into existing collections (`SuperTabRun`, session scopes, configurations, role texts, route decisions,
   terminal requests, mentions, attachments, attempts, native contexts) are unchanged from today's `executeOnce`
   (`store.ts:661-838`) and are not repeated below.
@@ -91,7 +92,7 @@ conversations addendum (4.8).
 
 | Command | W (writes) | T (touches) | Invariants and the rule that guards each |
 |---|---|---|---|
-| `machine.contribute` | `Mc(m)`; `Mc` of the Mac's team pools (name, slots, pause, `commands.ts:832`); `S` of abandoned starts (error); `GP` of each project told; `X` when `m` is new | `H` when `m` is new | Not cleaning, no pending start on `m` (`commands.ts:806,823`): every start on `m` writes `Mc(m)`, rule (a). At most 32 machines: a new contribution touches `H`, rule (a). |
+| `machine.contribute` | `Mc(m)`; `Mc` of the Mac's team pools (name, slots, pause, `commands.ts:832`); `S` of abandoned starts (error); `GP` of each project told; `X` when `m` is new | `H` when `m` is new | Not cleaning, no pending start on `m` (`commands.ts:806,823`): every start on `m` writes `Mc(m)`, rule (a). At most 20 machines per person: a new contribution touches `H`, rule (a). |
 | `machine.pause` | `Mc(m)`, `Mc` of team pools | — | Contributor only, not removed: data of `Mc(m)`, written. |
 | `machine.remove` | `Mc(m)` and team pools (removal or cleanup); `A` of every removed agent (tombstone); `G` of every group containing them (D8) with notices; `S` of pending starts on `m` (error); `H` (rules lose `m`, `commands.ts:572-582`); `X`; `Δrows` deliveries cancelled | — | No start dispatched on `m` (`commands.ts:550`): dispatch touches `Mc(m)`, (a). A Lead is never removed (`protectLead`, `commands.ts:307-312`): `agent.add` and `conversation.agent` that make an agent a Lead write or touch its `A`, which conflicts with the tombstone, (a). |
 | `machine.cleaned` | `Mc(m)` (contribution or cleanup dropped); `X` (`cleanupMachineIds`) | — (the host may have left; no `SA`) | Removal id matches: data of `Mc(m)`. |
@@ -565,6 +566,11 @@ stands. Every contributed machine has an entry in `derived.machines`. These are 
 - **The client merges** by `(kind, key)`, keeping the higher `version`. A tombstone removes the part. A dormant stub
   moves the group out of the active list. The client replaces `derived` and moves to the returned `cursor`.
   Overlap duplicates have equal versions and are ignored.
+- **The summary only when it changed** (task #2906, `read/derivedEtag.ts`). Every first load and change read also
+  carries `derivedEtag`, a hash of `derived` without the reader's marks. A client that sends it back as
+  `&derivedEtag=` gets, while it still matches, `derivedUnchanged: true` and a `derived` holding only its moved marks,
+  and keeps the summary it holds. A client that sends none gets `derived` whole. A client refused for the parameter (a
+  backend from before it) reads in full, which holds no etag.
 - **Messages are not in the feed.** A group's `lastMessageSequence` tells the client there is something to read,
   and it pages messages per group as today (4.6).
 
@@ -1127,7 +1133,7 @@ The items as raised:
     wanted.
 - The PM channel UI builds on (a)–(f).
 
-**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 32, projects
+**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 20 per person (Team accounts' entries counted apart, #2637), projects
 ≤ 100 and rules ≤ 50 are guarded by touching or writing `H`. So two `agent.start` calls in one Swarm conflict and
 one retries. **Recommendation:** accept. Starts are rare, and the limit stays exact.
 

@@ -21,11 +21,12 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
-import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv } from './gridBinary.js'
+import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv, gridCommand } from './gridBinary.js'
+import { gridCallStarted } from './gridCalls.js'
 
 // Which `grid` to run is gridBinary.ts's, which the core keeps for its launches; said again here for
 // every grid call that imports it from this module.
-export { GRID_BINARY, GRID_NO_UPDATE_CHECK_VAR, gridAvailable, gridBinaryPath, gridChildEnv, gridCliPresence, managedGridPath, type GridCliPresence } from './gridBinary.js'
+export { GRID_BINARY, GRID_NO_UPDATE_CHECK_VAR, gridAvailable, gridBinaryPath, gridChildEnv, gridCliPresence, gridCommand, managedGridPath, type GridCliPresence } from './gridBinary.js'
 
 /**
  * The oldest `grid` this daemon can drive.
@@ -99,8 +100,11 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
   if (!binaryOnPath(binary, processEnv)) {
     return { code: 'GRID_CLI_MISSING', exitCode: 1, stdout: '', stderr: '', message: MISSING_MESSAGE }
   }
+  // Not while grid's installer replaces the install, and counted so an install waits for this (gridCalls.ts).
+  const ended = await gridCallStarted()
   return await new Promise<GridResult>((resolve) => {
-    const child = spawn(binary, [...args], { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
+    const command = gridCommand(binary, args)
+    const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -108,6 +112,7 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
       if (settled) return
       settled = true
       clearTimeout(timer)
+      ended()
       resolve(result)
     }
     const timer = setTimeout(() => {
@@ -177,6 +182,12 @@ export async function gridVersion(opts: GridExecOptions = {}): Promise<string | 
   if (result.code !== 'OK') return null
   const match = /(\d+\.\d+\.\d+)/.exec(result.stdout)
   return match ? match[1] : null
+}
+
+/** A plain release number such as `0.3.61`: three whole numbers and nothing else (no `-rc1`, no spaces, no quotes). */
+export function isReleaseNumber(value: string): boolean {
+  const parts = value.split('.')
+  return parts.length === 3 && parts.every((part) => String(Number.parseInt(part, 10)) === part)
 }
 
 /** Ordinary three-part semver compare, enough for a floor check. A version that cannot be parsed is

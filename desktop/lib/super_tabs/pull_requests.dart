@@ -3,48 +3,101 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/github_repository.dart';
 import '../core/pull_request_status.dart';
 import '../core/open_in_browser.dart';
 import '../shared/theme/pull_request_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'pull_request_entry.dart';
 import '../shared/theme/app_icons.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
+import '../widgets/laid_out_list.dart';
 
-List<Uri> superTabPullRequestLinks(String text) => {
-  for (final match in RegExp(
-    r'https://github\.com/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b',
-  ).allMatches(text))
-    if (int.tryParse(match.group(3)!) case final number?
-        when number <= 9007199254740991)
-      Uri.parse(match.group(0)!),
-}.toList();
+/// The pull request links in [text], one per owner, repository and number
+/// (GitHub names are not case sensitive), in order.
+List<Uri> superTabPullRequestLinks(String text) {
+  final seen = <String>{};
+  return [
+    for (final match in RegExp(
+      r'https://github\.com/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b',
+    ).allMatches(text))
+      if (int.tryParse(match.group(3)!) case final number?
+          when number <= 9007199254740991 &&
+              seen.add(
+                '${match.group(1)}/${match.group(2)}/$number'.toLowerCase(),
+              ))
+        Uri.parse(match.group(0)!),
+  ];
+}
+
+/// The project's own `owner/repo`, lowercased, when [address] is a GitHub
+/// repository in any form git writes one (core/github_repository.dart).
+String? _ownRepository(String? address) {
+  final identity = address == null ? null : repositoryIdentity(address);
+  if (identity == null) return null;
+  final slash = identity.indexOf('/');
+  return slash > 0 && isGitHubHost(identity.substring(0, slash))
+      ? identity.substring(slash + 1)
+      : null;
+}
+
+/// What each pull request chip says: `repo · PR #n`, with `owner/repo` when
+/// the pull request is not in the project's own repository ([repositoryUrl]),
+/// or, when the project's is unknown, when two owners share a repository name.
+List<String> superTabPullRequestLabels(
+  List<Uri> links, {
+  String? repositoryUrl,
+}) {
+  final own = _ownRepository(repositoryUrl);
+  final owners = <String, Set<String>>{};
+  for (final link in links) {
+    owners
+        .putIfAbsent(link.pathSegments[1].toLowerCase(), () => {})
+        .add(link.pathSegments[0].toLowerCase());
+  }
+  return [
+    for (final link in links)
+      () {
+        final owner = link.pathSegments[0], repo = link.pathSegments[1];
+        final elsewhere = own != null
+            ? '$owner/$repo'.toLowerCase() != own
+            : owners[repo.toLowerCase()]!.length > 1;
+        return '${elsewhere ? '$owner/$repo' : repo} · PR #${link.pathSegments[3]}';
+      }(),
+  ];
+}
 
 class SuperTabPullRequestLinks extends StatelessWidget {
-  const SuperTabPullRequestLinks(this.text, {super.key});
+  const SuperTabPullRequestLinks(this.text, {super.key, this.repositoryUrl});
   final String text;
+
+  /// The project's repository address, when known.
+  final String? repositoryUrl;
   @override
   Widget build(BuildContext context) {
     final links = superTabPullRequestLinks(text);
     if (links.isEmpty) return const SizedBox.shrink();
+    final labels = superTabPullRequestLabels(
+      links,
+      repositoryUrl: repositoryUrl,
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Wrap(
         spacing: 8,
         runSpacing: 6,
         children: [
-          for (final link in links.take(4))
+          for (final (i, link) in links.take(4).indexed)
             OutlinedButton.icon(
               onPressed: () => unawaited(
                 launchUrl(link, mode: LaunchMode.externalApplication),
               ),
               icon: const Icon(AppIcons.externalLink, size: 14),
-              label: Text(
-                '${link.pathSegments[1]} · PR #${link.pathSegments[3]}',
-              ),
+              label: Text(labels[i]),
             ),
         ],
       ),
@@ -87,11 +140,8 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   SuperTabController get c => widget.controller;
   bool get _active =>
       widget.visible && _tickers && (widget.app?.foreground.value ?? true);
-  // The Product Managers' conversation belongs to no project, whatever was
-  // chosen in a workgroup before.
   bool get _projectScope =>
-      c.selectedId != c.snapshot?.leadsConversationId &&
-      (_all || c.snapshot?.isProjectLead(c.selectedId) == true);
+      _all || c.snapshot?.isProjectLead(c.selectedId) == true;
   List<SuperTabConversation> get _groups =>
       c.snapshot?.conversations
           .where(
@@ -270,6 +320,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
           }
         }
         _unsupported = unsupported;
+        if (!unsupported) _localUnavailable = false;
         if (error == 'GH_MISSING' || error == 'GH_SIGNED_OUT') {
           // A changed login must not leave yesterday's private titles under today's account.
           _entries.clear();
@@ -485,20 +536,21 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
               const SizedBox(width: 8),
               if (c.snapshot?.isProjectLead(c.selectedId) == true)
                 Text('This project', style: DesktopChrome.metadata())
-              // The Product Managers' conversation belongs to no project.
-              else if (c.selectedId != c.snapshot?.leadsConversationId)
-                DropdownButton<bool>(
+              else
+                AppSelectField<bool>(
                   value: _all,
-                  underline: const SizedBox.shrink(),
-                  items: const [
-                    DropdownMenuItem(value: false, child: Text('This group')),
-                    DropdownMenuItem(value: true, child: Text('This project')),
+                  width: AppSelectField.fitWidth(
+                    context,
+                    labels: const ['This group', 'This project'],
+                  ),
+                  semanticLabel: 'Show',
+                  options: const [
+                    SelectOption(value: false, label: 'This group'),
+                    SelectOption(value: true, label: 'This project'),
                   ],
                   onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _all = value);
-                      _changed();
-                    }
+                    setState(() => _all = value);
+                    _changed();
                   },
                 ),
             ],
@@ -553,7 +605,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
                     ),
                   ),
                 )
-              : ListView(
+              : LaidOutListView(
                   padding: const EdgeInsets.only(bottom: 16),
                   children: [
                     if (_unsupported)

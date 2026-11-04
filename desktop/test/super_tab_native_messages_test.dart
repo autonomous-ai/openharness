@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -103,11 +104,9 @@ void main() {
           'id': 'lead-agent',
           'name': 'Lead',
         };
-        server.messages.last['source'] = {
-          'kind': 'native',
-          'phase': 'prompt',
-          'operator': {'id': 'leo', 'name': 'leo@example.com'},
-        };
+        // A terminal's answer: what was typed into it is no chat row
+        // (task #2849).
+        server.messages.last['source'] = {'kind': 'native', 'phase': 'answer'};
         if (profile.scale == 1) {
           server.append(
             '@Builder, check persistence. @Reviewer, check account switching.',
@@ -200,10 +199,33 @@ void main() {
         );
         await tester.pumpAndSettle();
         final source = find.text(
-          'Terminal input · session opened by leo@example.com',
+          'Verify offline edits through a restart and reconnect.',
+        );
+        // The first of the chat's messages: with Slack's spacing (Huy,
+        // 2026-11-03) it is above what the chat builds at this window size.
+        await tester.scrollUntilVisible(
+          source,
+          -100,
+          scrollable: find
+              .ancestor(
+                of: find.byType(SuperTabMessageRow).last,
+                matching: find.byType(Scrollable),
+              )
+              .first,
         );
         expect(source, findsOneWidget);
-        await tester.ensureVisible(source);
+        final sourceRow = find.ancestor(
+          of: source,
+          matching: find.byType(SuperTabMessageRow),
+        );
+        expect(
+          find.descendant(
+            of: sourceRow,
+            matching: find.text('Terminal answer'),
+          ),
+          findsOneWidget,
+        );
+        await tester.ensureVisible(sourceRow);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         if (capture != null) {

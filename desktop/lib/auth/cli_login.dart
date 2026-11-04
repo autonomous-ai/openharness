@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../core/harness_cli_runner.dart';
+import '../core/test_run.dart';
 import 'phone_sign_in.dart';
 import 'sign_in_client.dart';
 import 'sign_in_provider.dart';
@@ -46,16 +47,30 @@ class CliNotAvailableException implements Exception {
   String toString() => message;
 }
 
+/// A test signed out through the real Harness CLI: `harness logout` would sign this computer out
+/// for real, and every agent on it with it (10-27). An [Error], not an exception: the test is wrong,
+/// and nothing should catch this and carry on.
+class CliSignOutUnderTestError extends Error {
+  @override
+  String toString() =>
+      'A test signed out through the real Harness CLI, which would sign this computer out for '
+      'real. Give the app a fake sign-in client (AppNotifier(cliLogin: ...)), or CliLogin a fake '
+      'runner.';
+}
+
 /// Talks to the local `harness` CLI for everything auth-related: whether this computer already has a
 /// signed-in session, and driving `harness login --json`'s NDJSON event stream when it does not. The
 /// CLI owns the SSO session end to end (`~/.harness/auth/session.json`) — this app never sees, stores,
 /// or refreshes an access token itself.
-class CliLogin implements SignInClient, PhoneSignInClient {
+class CliLogin implements SignInClient, PhoneSignInClient, CodeSignInClient {
   final HarnessCliRunner _runner;
   Process? _activeProcess;
   int _loginRevision = 0;
 
-  CliLogin({HarnessCliRunner? runner}) : _runner = runner ?? HarnessCliRunner();
+  /// Under flutter test with no [runner], one that runs nothing ([_NoCliUnderTest]): a test must
+  /// not reach this computer's real CLI, whose `harness logout` signs the whole computer out.
+  CliLogin({HarnessCliRunner? runner})
+    : _runner = runner ?? (kUnderTest ? _NoCliUnderTest() : HarnessCliRunner());
 
   /// While a sign-in waits on something before it can start — another sign-in on this computer
   /// still holding the daemon spawn lock — what the CLI said about it (its `waiting` event); null
@@ -101,12 +116,23 @@ class CliLogin implements SignInClient, PhoneSignInClient {
     required Future<bool> Function(String email) onConfirm,
   }) => _login(const ['--qr'], onQr: onQr, onConfirm: onConfirm);
 
+  /// `harness login --code`: a short code another signed-in device types in, in place of the QR;
+  /// each `code` event is the code to show, the account question as for [loginWithPhone].
+  @override
+  Future<void> loginWithCode({
+    required void Function(String code, int expiresIn) onCode,
+    required Future<bool> Function(String email) onConfirm,
+  }) => _login(const ['--code'], onCode: onCode, onConfirm: onConfirm);
+
   Future<void> _login(
     List<String> extra, {
     void Function(String url)? onAuthorizeUrl,
     void Function(String link, int expiresIn)? onQr,
+    void Function(String code, int expiresIn)? onCode,
     Future<bool> Function(String email)? onConfirm,
   }) async {
+    // Approved from another device — a phone's scan, or a code typed there — rather than in a browser.
+    final approval = onQr != null || onCode != null;
     // A cancelled spawn can finish after a replacement login has started.
     // Each process owns only its attempt, including its eventual cleanup.
     final revision = ++_loginRevision;
@@ -159,9 +185,10 @@ class CliLogin implements SignInClient, PhoneSignInClient {
             final note = json['message'];
             if (note is String && note.isNotEmpty) waitingNote.value = note;
           case 'authorize_url':
-            // Asked for a QR and given a browser page: a CLI from before `--qr`, which ignores the
-            // flag and starts SSO. Nothing would ever be shown — stop it and say why.
-            if (onQr != null) {
+            // Asked for a QR or a code and given a browser page: a CLI from before `--qr` or
+            // `--code`, which ignores the flag and starts SSO. Nothing would ever be shown — stop it
+            // and say why.
+            if (approval) {
               tooOld = true;
               process.kill();
               break;
@@ -172,6 +199,11 @@ class CliLogin implements SignInClient, PhoneSignInClient {
             final url = json['url'], expiresIn = json['expiresIn'];
             if (url is String) {
               onQr?.call(url, expiresIn is int ? expiresIn : 120);
+            }
+          case 'code':
+            final shown = json['code'], expiresIn = json['expiresIn'];
+            if (shown is String) {
+              onCode?.call(shown, expiresIn is int ? expiresIn : 120);
             }
           case 'confirm':
             final email = json['email'];
@@ -192,9 +224,9 @@ class CliLogin implements SignInClient, PhoneSignInClient {
         throw StateError('Sign-in was cancelled.');
       }
       if (tooOld) {
-        throw const PhoneSignInException(
+        throw PhoneSignInException(
           'CLI_TOO_OLD',
-          'This computer\'s Harness CLI is too old to sign in with a phone. Continue with Google or Apple, or update Harness.',
+          'This computer\'s Harness CLI is too old to sign in with ${onCode != null ? 'a code' : 'a phone'}. Continue with Google or Apple, or update Harness.',
         );
       }
       if (!gotResult || !success) {
@@ -204,8 +236,13 @@ class CliLogin implements SignInClient, PhoneSignInClient {
                 ? 'Sign-in was cancelled.'
                 : 'Sign-in did not complete.');
         // A phone sign-in says why it ended, so the screen can offer the right next step.
-        if (onQr != null && code != null) {
+        if (approval && code != null) {
           throw PhoneSignInException(code, text);
+        }
+        // A browser one says so too, for the count of why sign-ins did not go through. A CLI that
+        // ended without a result line crashed or was killed: that is a reason of its own.
+        if (!approval && (code != null || !gotResult)) {
+          throw SignInException(code ?? 'NO_RESULT', text);
         }
         throw StateError(text);
       }
@@ -228,11 +265,20 @@ class CliLogin implements SignInClient, PhoneSignInClient {
 
   @override
   Future<void> logout() async {
+    if (_runner is _NoCliUnderTest) {
+      // Reported to the test's zone as well as thrown: the app's sign-out catches what this throws
+      // and shows "could not be cleared", which a test can pass straight through.
+      final error = CliSignOutUnderTestError();
+      Zone.current.handleUncaughtError(error, StackTrace.current);
+      throw error;
+    }
     // Own a process handle: a timed-out logout must not remain alive and erase
     // the credentials saved by the user's next sign-in.
     final Process process;
     try {
-      process = await _runner.start(['logout']);
+      // A person pressed Sign out: the CLI refuses a sign-out nothing says a person asked for (10-27, when
+      // a test's `harness logout` signed a whole Mac out). A CLI from before the flag ignores it.
+      process = await _runner.start(['logout', '--from-sign-out-button']);
     } catch (error) {
       throw CliNotAvailableException('Could not run the harness CLI: $error');
     }
@@ -270,4 +316,22 @@ class CliLogin implements SignInClient, PhoneSignInClient {
     final lines = stdout.trim().split('\n').where((l) => l.trim().isNotEmpty);
     return lines.isEmpty ? null : lines.last.trim();
   }
+}
+
+/// [CliLogin]'s runner under flutter test when a test gives none: the CLI reads as not installed
+/// here, as on a computer without Harness (CI), and nothing is ever run.
+class _NoCliUnderTest extends HarnessCliRunner {
+  ProcessException _refused(List<String> arguments) => ProcessException(
+    'harness',
+    arguments,
+    'The real Harness CLI is never run under flutter test.',
+  );
+
+  @override
+  Future<ProcessResult> run(List<String> arguments) async =>
+      throw _refused(arguments);
+
+  @override
+  Future<Process> start(List<String> arguments) async =>
+      throw _refused(arguments);
 }

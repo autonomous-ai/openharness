@@ -1,53 +1,74 @@
-/** Super Tab routing v1, the pure half (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md), ordered by
- * strength, quota fit and effective cost since phase 1 (docs/plans/2026-10-21-swarm-routing-phase1.md).
- * The system removes what cannot run the task or breaks one of the owner's hard rules, and the first in a fixed order
- * (the owner's soft rules, then the policy order) is the pick (docs/plans/2026-10-22-swarm-rules-routing.md). Jev chose
- * among the candidates until 2026-10-22, when the Lead overrode it about half the time because it did not know the rules. */
+/** Super Tab routing, the pure half (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md).
+ * Since the project instructions (docs/plans/2026-10-30-project-instructions-design.md, Routing) the route is advice: it
+ * leaves out only what cannot run (an offline or paused machine, an engine signed out, a model not served) and shows every
+ * other candidate with its facts: strength, price, quota fit, weekly quota left and its reset, the agents on its machine.
+ * Since task #2901 (Ken, 2026-11-04) it ranks nothing and names no pick: PMs took its top line, nearly always Opus or Astra,
+ * against the instructions' Order and quota. Candidates come by machine name, then engine
+ * (docs/plans/2026-11-04-route-no-ranking-plan.md), and the project's Routing instructions choose. What the route knows beside
+ * the facts (a lost task, a stalled machine, a catalog note, a plug-in's finding) is a note on the candidate. */
 import { isAbsolute } from 'node:path'
 import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
 
+type Json = Record<string, unknown>
 export type Level = 'low' | 'medium' | 'high'
 export type Size = 'small' | 'medium' | 'large'
-/** `kind` is a word the Lead may give (`ui`, `docs`) for the owner's preferred-engine rules; a review group's is `review`. */
-/** `local`: a person asked for a local model by hand, so only models served on the Swarm's grid are considered and the
- * quality floor does not apply (docs/plans/2026-10-23-swarm-local-models.md). */
+/** `kind` is a word the agent may give (`ui`, `docs`), recorded so attempts can be compared by the kind of job they were. */
+/** `local`: a person asked for a local model by hand, so only models served on the Swarm's grid are considered
+ * (docs/plans/2026-10-23-swarm-local-models.md). */
 /** `model`: a model a person named, in their words ("deepseek 4.1 flash"); only candidates running it are considered,
  * whatever their strength (owner, 2026-10-23: a Builder on a named API model was ranked below Opus and never offered). */
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
-/** The owner's rules as the backend keeps them (backend/src/superTabs/rules.ts); only the rule and its words are read here. */
-export type Rule =
-  | { kind: 'forbidModel'; engine?: string; model: string }
-  | { kind: 'machines'; machineIds: string[] }
-  | { kind: 'minEffort'; engine?: string; effort: string }
-  | { kind: 'preferEngine'; taskKind: string | null; engine: string }
-  | { kind: 'preferIdle' }
-  | { kind: 'noGridFirst' }
-export interface SwarmRule { rule: Rule; text: string }
-export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
-export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string;
-  /** How strong a model served on the Swarm's grid counts; absent from a backend before it, which serves none. */
-  localModels?: { quality: number; enabled: boolean } }
+/** `needs.heavy`: the work runs a heavy build or end-to-end tests on its machine, so it needs more free memory and disk than a
+ * start (machineFit.ts). `needs.ci`: the CI jobs the work starts at once, and how many of them on macOS runners, held against
+ * the account's running-jobs limit; a need above that limit counts as the limit and the route says so (machineFit.ts). Both are left out when not given, so a request without them answers as before. */
+export type HeavyWork = 'build' | 'e2e'
+export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
+/** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
+ * when nobody names it. */
+export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; note?: string }
+/** The catalog's models and how strong the models served on the Swarm's grid count: the first named row whose every word is
+ * in a model's name, else `strength`. */
+export interface Catalog { models: CatalogModel[]; grid: { strength: number; models: Array<{ model: string; strength: number }> } }
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
 export interface QuotaWindow { name: string | null; leftPercent: number; resetsAt: number | null }
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
  * account key, which models on one subscription share. `metered` is an engine on an API key or gateway: known, with no
  * usage window to run out. */
-export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true }
-/** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
- * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
+export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
+  /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
+  why?: string
+  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
+   *  the account spends (routeCommand.ts relayedReadings). */
+  from?: string }
+/** The task's folder as the routing agent's machine sees it. `unknown` means it could not be read, `none` that it is not a
+ * repository, `missing` that this machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
 /** What a member's `agents_list` frame says it is working on; every field is null when the frame does not say. */
 export interface MemberFrame { title: string | null; project: string | null; cwd: string | null; root: string | null; remote: string | null; branch: string | null; updatedAt: number | null }
-/** What a machine offers a new agent. Each field is null when it could not be read. */
-export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null }
+/** What a machine offers an agent. Each field is null when it could not be read; `freeDiskBytes` (the project's disk) and
+ * `cpuPercent` are absent where the probe did not read them. */
+/** What a new start on a machine can use, as its host admits it: the Swarm's free agent slots there, and free memory and disk
+ *  less what starts still starting hold (routeCommand.ts heldByStarts). */
+export interface MachineRoom { slots: number | null; freeMemoryBytes: number | null; heldMemoryBytes: number; freeDiskBytes: number | null }
+/** `freeMemoryBytes` and `freeDiskBytes` leave heavy starts in, which the machine fit holds itself (machineFit.ts
+ *  placedHeavyWork); `room` is what a start can use. */
+export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null
+  room?: MachineRoom }
 export interface Probe {
   kind: 'member' | 'new'; agentId?: string; name?: string; machineId: string; machineName: string
+  /** `quality` is the catalog's strength, 1 for a model it does not rate (`unrated`). */
   engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number
-  quota: Quota; activity: string; known: boolean; refusals: string[]
+  quota: Quota; activity: string; known: boolean
+  /** What makes it unable to run: it is left out with these. */
+  refusals: string[]
+  /** What the agent choosing should know of it (a lost task, a stalled machine, the catalog's note): shown, never a filter. */
+  notes: string[]
+  /** A model the catalog does not rate: a person named it, or a member runs it. */
+  unrated?: true
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
   frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
   terminalUnverified?: boolean
-  /** New agents: what the machine has. */
+  /** What the machine has: for new agents, and for members where their machine's reading is known. */
   load?: MachineLoad
   /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
    *  [gridKind]: a member's engine (`local`), a member's API (`api`), or a model shared with this machine's owner. */
@@ -61,14 +82,109 @@ export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | 
 /** A pick still at work: it holds part of its account's quota until its run time is over. */
 export interface Commitment { account: string; spend: Partial<Record<Window, number>>; size: Size; createdAt: number }
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
-/** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
-export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string
-  /** Every candidate left runs on an account the route was asked to avoid (`choose` `avoid`). */
-  avoided?: string }
-export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
+/** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
+export interface Excluded { title: string; reason: string; machine?: string }
+/** `floor` and `belowFloor` are what the decision log still takes (backend routeRecord.ts): there is no floor, so 1 and false.
+ *  `short` says when no candidate is expected to cover the task on its quota. `adjusted`: a plug-in noted a candidate or left
+ *  one out ([RoutePlugin]). `warnings`: the plug-ins that failed and were left out of this route. */
+export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: 1; belowFloor: false; short?: string; adjusted?: true; warnings?: string[] }
+export type NoCandidate = { error: 'NO_CANDIDATE'; excluded: Excluded[]; warnings?: string[] }
+
+/** What a plug-in sees of the route it ranks: the task, the time, the catalog, and the picks still at work. */
+export interface RouteContext { readonly assessment: Assessment; readonly now: number; readonly catalog: Catalog; readonly open: readonly Commitment[] }
+/** A plug-in's word on one candidate. `strength` and `cost` say which way the plug-in's finding leans, in the catalog's units;
+ *  since task #2901 they move nothing (the route ranks nothing), and its `reason` is what the agent choosing reads, on the
+ *  candidate's notes as "name: reason". Neither changes what the candidate is shown and recorded as (its strength, cost and fit
+ *  stay as measured). `refuse` leaves it out, only for a fact that it cannot run there. The reason holds only what every
+ *  reader of the Swarm's route log may see: never one member's raw usage or anything private to a person or chat. */
+export interface Adjustment { reason: string; strength?: number; cost?: number; refuse?: true }
+/** One piece of the route that is not its own (Scholes's goals, pieces 3 to 6: measured cost and results, more model
+ *  candidates, machine fit, window pull). Plug-ins run in their list's order: each `candidates` call sees the probes so far,
+ *  earlier plug-ins' among them, and returns more, which every rule of [choose] then treats like the others; `adjust` judges
+ *  each candidate that can run, after its quota fit is known. A plug-in must be pure and synchronous: what it needs from
+ *  outside is read before the route and given to it when it is made. One that throws, or answers what cannot be ranked, is
+ *  left out of the whole route, so it never judges some candidates and not others, and the answer names it. */
+export interface RoutePlugin {
+  readonly name: string
+  candidates?(probes: readonly Probe[], context: RouteContext): Probe[]
+  adjust?(candidate: Readonly<Probe & { fit: Fit }>, context: RouteContext): Adjustment | null
+}
+/** How long one plug-in may take over a route's candidates, per step. Plug-ins are pure and synchronous, so a route of a few
+ *  dozen candidates takes them well under a millisecond; one over this is doing work it should have done before the route
+ *  (Lead, 10-31: a plug-in that runs too long is skipped). A plug-in that never returns cannot be stopped from inside: that is
+ *  why they must be synchronous and read nothing. */
+export const PLUGIN_BUDGET_MS = 200
+export const pluginSkipped = (name: string, why: string) => `The routing plug-in "${cut(name, 80)}" was skipped: ${why}. The route is shown without it.`
+const FAILED = 'it failed', SLOW = `it took longer than ${PLUGIN_BUDGET_MS} ms`
+/** Runs [step] for one plug-in, timed: its answer, or why it is skipped. Its error text is never kept, since it may hold
+ *  anything (a path, a token). */
+function timed<T>(step: () => T, valid: (answer: T) => boolean): { answer: T } | { why: string } {
+  const started = performance.now()
+  try {
+    const answer = step()
+    if (performance.now() - started > PLUGIN_BUDGET_MS) return { why: SLOW }
+    return valid(answer) ? { answer } : { why: FAILED }
+  } catch { return { why: FAILED } }
+}
+const isProbe = (p: unknown): p is Probe => {
+  const v = object(p)
+  return typeof v.machineId === 'string' && typeof v.machineName === 'string' && ENGINES.includes(String(v.engine)) && typeof v.model === 'string'
+    && typeof v.effort === 'string' && finite(v.quality) && finite(v.cost) && Array.isArray(v.refusals) && Array.isArray(v.notes) && !!v.quota
+}
+const baseKey = (p: Pick<Probe, 'machineId' | 'engine'>) => `${p.machineId}\0${p.engine}`
+/** A plug-in's candidate as the route may consider it: a new agent standing on a machine and engine the route probed itself
+ *  ([bases]), with that probe's refusals, notes, load and quota reading (a model on the grid keeps its own quota, as
+ *  routeCommand.ts localProbes does), so it can never bring back a choice the route rules out. Otherwise why it is left out. */
+function anchored(added: Probe, bases: Map<string, Probe>, name: string): Probe | Excluded {
+  const out = (reason: string): Excluded => ({ title: titleOf(added), reason: `${cut(name, 80)}: ${reason}`, machine: added.machineName })
+  if (added.kind !== 'new') return out('a plug-in adds new agents only; it adjusts the agents the route found.')
+  const base = bases.get(baseKey(added))
+  if (!base) return out(`this route offers no new agent on ${ENGINE[added.engine]} on ${added.machineName}, so one added there is left out.`)
+  const { agentId: _a, name: _n, frame: _f, repo: _r, earlier: _e, terminalUnverified: _t, ...own } = added
+  const more = (theirs: string[], ours: string[]) => [...theirs, ...ours.filter(x => !theirs.includes(x))]
+  return { ...own, kind: 'new', machineName: base.machineName, activity: base.activity, known: base.known, ...(base.load ? { load: base.load } : {}),
+    quota: added.gridModel ? added.quota : base.quota, refusals: more(base.refusals, added.refusals), notes: more(base.notes, added.notes) }
+}
+/** The probes with each plug-in's added candidates ([anchored]), in the plug-ins' order, and those left out. A plug-in whose
+ *  answer is not a list of probes, or that runs too long, adds nothing and is named in [warnings]. */
+function withPluginCandidates(given: Probe[], plugins: readonly RoutePlugin[], context: RouteContext, warnings: string[]): { probes: Probe[]; out: Excluded[] } {
+  const bases = new Map<string, Probe>()
+  for (const p of given) if (p.kind === 'new' && !p.gridModel && !bases.has(baseKey(p))) bases.set(baseKey(p), p)
+  let probes = given
+  const out: Excluded[] = []
+  for (const plugin of plugins) {
+    if (!plugin.candidates) continue
+    const run = timed(() => plugin.candidates!(probes, context) as unknown, added => Array.isArray(added) && added.every(isProbe))
+    if ('why' in run) { warnings.push(pluginSkipped(plugin.name, run.why)); continue }
+    const placed = (run.answer as Probe[]).map(p => anchored(p, bases, plugin.name))
+    probes = [...probes, ...placed.filter((p): p is Probe => 'engine' in p)]
+    out.push(...placed.filter((p): p is Excluded => !('engine' in p)))
+  }
+  return { probes, out }
+}
+const validAdjustment = (x: Adjustment | null): x is Adjustment | null => x === null || (typeof x === 'object' && typeof x.reason === 'string'
+  && !!x.reason.trim() && (x.strength === undefined || finite(x.strength)) && (x.cost === undefined || finite(x.cost))
+  && (x.refuse === undefined || x.refuse === true))
+/** Every plug-in's adjustments of [ranked], plug-in by plug-in in the list's order: one that throws, runs too long or answers
+ *  what cannot be ranked for any candidate is dropped for all of them and named in [warnings]. */
+function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins: readonly RoutePlugin[], context: RouteContext,
+  warnings: string[]): Array<Array<{ name: string; adjustment: Adjustment }>> {
+  const each = ranked.map(() => [] as Array<{ name: string; adjustment: Adjustment }>)
+  for (const plugin of plugins) {
+    if (!plugin.adjust) continue
+    const run = timed(() => ranked.map(p => plugin.adjust!(p, context)), answers => answers.every(validAdjustment))
+    if ('why' in run) { warnings.push(pluginSkipped(plugin.name, run.why)); continue }
+    run.answer.forEach((adjustment, i) => { if (adjustment) each[i]!.push({ name: plugin.name, adjustment }) })
+  }
+  return each
+}
+/** What the route says of its candidates: no pick (task #2901). `via` `instructions`: the project's Routing instructions choose;
+ *  `only`: one candidate can run. */
+export interface Verdict { via: 'instructions' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
-/** Run time and spend per window by task size, for a policy row of cost 2 (owner's table, 2026-10-21); not in the policy yet. */
+const HEAVY_WORK: unknown[] = ['build', 'e2e'] satisfies HeavyWork[]
+/** Run time and spend per window by task size, for a catalog row of cost 2 (owner's table, 2026-10-21). */
 export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number> }> = {
   small: { minutes: 20, spend: { '5-hour': 10, weekly: 1 } },
   medium: { minutes: 60, spend: { '5-hour': 30, weekly: 4 } },
@@ -76,60 +192,40 @@ export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number
 }
 const WINDOWS: Window[] = ['5-hour', 'weekly']
 const MAX_SHOWN = 12
+/** The most rows a decision keeps (backend superTabs/routeRecord.ts), past [MAX_SHOWN] only for every engine on every machine; a
+ *  backend from before them keeps [MAX_SHOWN] (routeCommand.ts routeTask). */
+export const RECORD_MAX = 64
+export const OLD_RECORD_MAX = MAX_SHOWN
 const ENGINE = { claude: 'Claude', codex: 'Codex' } as const
+const ENGINES = Object.keys(ENGINE)
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
+const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-/** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
-const rank = (effort: string) => EFFORTS.indexOf(effort)
-const applies = (rule: { engine?: string }, engine: string) => !rule.engine || rule.engine === engine
-const FAMILY = /haiku|sonnet|opus|fable/
-/** The backend's `modelMatches`: `haiku` matches every Haiku id, `claude-haiku-4-5` also the `haiku` alias, and nothing
- * matches `default`, which is not known. */
-function modelMatches(ruleModel: string, model: string): boolean {
-  const rule = ruleModel.toLowerCase(), target = model.toLowerCase()
-  return target !== 'default' && (target.includes(rule) || (FAMILY.exec(target)?.[0] === target && FAMILY.exec(rule)?.[0] === target))
-}
-
-/** The backend's check (backend/src/superTabs/rules.ts `broken`), so a pick shown here is never refused when it is
- * started, assigned or recorded. */
-export function breaks(rules: SwarmRule[], p: { machineId: string; engine: string; model: string; effort: string }): string | null {
-  const out = rules.find(({ rule }) => rule.kind === 'forbidModel' ? applies(rule, p.engine) && modelMatches(rule.model, p.model)
-    : rule.kind === 'machines' ? !rule.machineIds.includes(p.machineId)
-    : rule.kind === 'minEffort' && applies(rule, p.engine) && rank(p.effort) < rank(rule.effort))
-  return out ? `Breaks the owner's rule: ${out.text}` : null
-}
-/** A new agent whose policy row leaves the effort to the engine starts at the owner's minimum instead (Lead, 2026-10-22), so
- * a minimum does not rule out the Codex `default` row. */
-function lifted(rules: SwarmRule[], p: Probe): Probe {
-  // The same probe when nothing is lifted: `choose` tells a lifted row from its original by identity.
-  const effort = p.kind === 'new' ? liftEffort(rules, p.engine, p.effort) : p.effort
-  return effort === p.effort ? p : { ...p, effort }
-}
-/** The effort a new agent on this row starts at: the row's own, or the owner's minimum when the row leaves it to the engine. */
-export function liftEffort(rules: SwarmRule[], engine: string, effort: string): string {
-  if (rank(effort) >= 0) return effort
-  const least = Math.max(-1, ...rules.flatMap(({ rule }) => rule.kind === 'minEffort' && applies(rule, engine) ? [rank(rule.effort)] : []))
-  return least < 0 ? effort : EFFORTS[least]
-}
-/** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
- * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
-interface Soft { engine: string | null; idle: boolean; grid: boolean }
-function softOf(rules: SwarmRule[], a: Assessment): Soft {
-  const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
-  const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
-  // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
-  // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
-  // rarely picked. Reviews keep the other model family, and the owner can opt out.
-  const grid = a.difficulty === 'low' && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
-  return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
+/** The catalog the tab's routing read serves beside its policy (backend superTabs/catalog.ts catalogRead), or, from an older
+ * backend that serves only the policy, the same models read off it: a row's quality is its strength and `enabled` whether it
+ * is offered. A row of another engine (OpenCode, Kilo) or of no shape is dropped; nothing readable is an empty catalog. */
+export function catalogFrom(effective: Json): Catalog {
+  const catalog = object(effective.catalog), policy = object(effective.policy)
+  const served = Array.isArray(catalog.models)
+  const rows = (served ? catalog.models : Array.isArray(policy.models) ? policy.models : []) as unknown[]
+  const models = rows.map(object).flatMap((m): CatalogModel[] => {
+    const strength = served ? m.strength : m.quality, offered = served ? m.offered : m.enabled
+    if (!ENGINES.includes(String(m.engine)) || typeof m.model !== 'string' || typeof m.effort !== 'string' || !finite(strength) || !finite(m.cost)) return []
+    return [{ engine: m.engine as CatalogModel['engine'], model: m.model, effort: m.effort, strength, cost: m.cost, offered: offered === true,
+      ...(served && typeof m.note === 'string' && m.note ? { note: m.note } : {}) }]
+  })
+  const grid = served ? object(catalog.grid) : object(policy.localModels)
+  const gridRows = (Array.isArray(grid.models) ? grid.models : []) as unknown[]
+  return { models, grid: { strength: finite(served ? grid.strength : grid.quality) ? (served ? grid.strength : grid.quality) as number : 1,
+    models: gridRows.map(object).flatMap(r => { const s = served ? r.strength : r.quality; return typeof r.model === 'string' && finite(s) ? [{ model: r.model, strength: s }] : [] }) } }
 }
 
 export function parseAssessment(value: unknown): Assessment | string {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   if (!LEVELS.includes(v.difficulty as Level)) return 'Set difficulty to low, medium or high.'
   if (!LEVELS.includes(v.risk as Level)) return 'Set risk to low, medium or high.'
-  // Leads from before sizes send none; their tasks are taken for medium.
+  // Agents from before sizes send none; their tasks are taken for medium.
   const size = v.size ?? 'medium'
   if (!Object.hasOwn(SIZES, String(size))) return 'Set size to small, medium or large.'
   const why = typeof v.why === 'string' ? v.why.trim() : ''
@@ -141,12 +237,19 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
   if (v.local !== undefined && typeof v.local !== 'boolean') return 'Set local to true only when a person asked for a local model.'
   if (v.model !== undefined && (typeof v.model !== 'string' || !words(v.model).length || v.model.length > 200)) return 'Set model to the model a person named, in their words.'
+  const heavy = needs.heavy
+  if (heavy !== undefined && (!Array.isArray(heavy) || !heavy.every(h => HEAVY_WORK.includes(h)))) return 'Set needs.heavy to a list of build and e2e.'
+  const ci = needs.ci === undefined ? undefined : object(needs.ci)
+  const count = (n: unknown, max: number) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= max
+  if (ci && (!count(ci.jobs, 100) || (ci.jobs as number) < 1 || (ci.macos !== undefined && !count(ci.macos, ci.jobs as number)))) {
+    return 'Set needs.ci to the CI jobs the work starts, as {"jobs": 1 to 100, "macos": how many of them run on macOS}.'
+  }
   return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
     ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
-    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}) } }
+    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}),
+      ...(Array.isArray(heavy) && heavy.length ? { heavy: [...new Set(heavy as HeavyWork[])] } : {}),
+      ...(ci ? { ci: { jobs: ci.jobs as number, macos: (ci.macos as number | undefined) ?? 0 } } : {}) } }
 }
-
-export const floorFor = (policy: Policy, a: Assessment): number => Math.min(3, policy.floor[a.difficulty] + (a.risk === 'high' ? 1 : 0))
 
 /** Claude sends ISO strings, Codex epoch seconds; anything above 1e10 is already milliseconds. */
 function resetMs(value: unknown): number | null {
@@ -154,9 +257,9 @@ function resetMs(value: unknown): number | null {
   if (typeof value === 'string') { const ms = Date.parse(value); return Number.isFinite(ms) ? ms : null }
   return null
 }
-export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: number; resetsAt: unknown; name?: string }>; account?: string | null }): Quota {
+export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: number; resetsAt: unknown; name?: string }>; account?: string | null; why?: string | null }): Quota {
   const account = q.account ? { account: q.account } : {}
-  if (!q.known) return { known: false, leftPercent: null, resetsAt: null, ...account }
+  if (!q.known) return { known: false, leftPercent: null, resetsAt: null, ...account, ...(q.why ? { why: q.why } : {}) }
   if (!q.windows.length) return { known: true, leftPercent: null, resetsAt: null, metered: true, ...account }
   const tightest = q.windows.reduce((x, y) => y.usedPercent > x.usedPercent ? y : x)
   return { known: true, leftPercent: Math.max(0, 100 - tightest.usedPercent), resetsAt: resetMs(tightest.resetsAt),
@@ -164,14 +267,14 @@ export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: numb
 }
 
 /** Whether a member's checkout is the task's repository: the same remote wherever it lives, else the same root on one
- * machine. Paths on two machines say nothing without a remote. Undefined when the Lead named no folder. */
+ * machine. Paths on two machines say nothing without a remote. Undefined when no folder was named. */
 export function repoMatch(folder: TaskFolder | null, frame: MemberFrame | null, sameMachine: boolean): Probe['repo'] | undefined {
   if (!folder) return undefined
   if (!frame || folder.kind === 'unknown') return 'unknown'
   if (folder.remote && frame.remote) return folder.remote === frame.remote ? 'same' : 'different'
   const theirs = frame.root ?? frame.cwd
-  // A frame that names no checkout says nothing. The folder the Lead named is a path on the machine that will run the
-  // task, so a member standing in exactly it is in it, wherever the Lead is.
+  // A frame that names no checkout says nothing. The folder named is a path on the machine that will run the task, so a
+  // member standing in exactly it is in it, wherever the routing agent is.
   if (!theirs) return 'unknown'
   if (theirs === folder.cwd || frame.cwd === folder.cwd) return 'same'
   // Other paths on two machines say nothing without a remote.
@@ -200,41 +303,63 @@ export function repositoryKey(url: string): string | null {
 }
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
- * Codex's slug (`gpt-5.5`). The policy names Claude families and a Codex `default`, so the id is reduced to its family
- * first, and an id with no row of its own takes the engine's `default` row before the floor. */
-export function rateFor(policy: Policy, engine: string, model: string | null, effort: string | null): { quality: number; cost: number } {
+ * Codex's slug (`gpt-5.5`). The catalog names Claude families and a Codex `default`, so the id is reduced to its family
+ * first. Its row: the exact one, else the model's at another effort, else the engine's `default` row when the agent was
+ * launched on the engine's own model ([engineDefault]) and is no small variant; otherwise none, so a small Codex variant is
+ * never taken for a strong one (review of #2137). */
+export function catalogRow(c: Catalog, engine: string, model: string | null, effort: string | null, engineDefault = false): CatalogModel | null {
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
-  const row = policy.models.find(m => m.engine === engine && m.model === name && m.effort === (effort ?? 'default'))
-    ?? policy.models.find(m => m.engine === engine && m.model === name)
-    ?? policy.models.find(m => m.engine === engine && m.model === 'default')
-  return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
+  const rowOf = (named: string) => c.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
+    ?? c.models.find(m => m.engine === engine && m.model === named)
+  // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+  return rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined) ?? null
 }
+/** How strong the catalog rates a model ([catalogRow]), or null when it does not. */
+export const strengthOf = (c: Catalog, engine: string, model: string | null, effort: string | null, engineDefault = false): number | null =>
+  catalogRow(c, engine, model, effort, engineDefault)?.strength ?? null
+/** A small variant by its name: a mini or a nano (backend superTabs/rules.ts). */
+const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
 export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
 const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */
 const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
+/** How strong a grid model counts: the first of the catalog's named grid rows whose every word is in its id or label (Kimi K3
+ *  and DeepSeek v4.1 at 2), else the grid's own strength. */
+export function gridStrength(c: Catalog, model: string, label = ''): number {
+  const name = words(`${model} ${label}`).join('')
+  return c.grid.models.find(row => words(row.model).every(w => name.includes(w)))?.strength ?? c.grid.strength
+}
 /** Whether [p] runs the model a person named: every word of theirs is in its model's name. */
-function runsNamed(p: Probe, named: string): boolean {
+function runsNamed(p: Pick<Probe, 'engine' | 'model' | 'gridModel' | 'gridLabel'>, named: string): boolean {
   const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')
   return words(named).every(w => name.includes(w))
 }
-const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Manage models), or check its name.`
+const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Your models), or check its name.`
+/** Whether a person's words name [model]: every word of theirs is in its name, or every word of its name is in theirs
+ *  ("Kimi" and "moonshotai/kimi-k3" both name the grid row "kimi k3"). */
+function names(model: string, named: string): boolean {
+  const ours = words(model), theirs = words(named)
+  return !!ours.length && (theirs.every(w => ours.join('').includes(w)) || ours.every(w => theirs.join('').includes(w)))
+}
+/** A named model the catalog does not list is offered unrated, on Claude Code when its name says Claude, else on Codex
+ *  (project instructions, phase 4, decision 15). A third-party model behind Claude Code gets Codex; it can still be started
+ *  by hand. */
+const CLAUDE_NAMES = /claude|opus|sonnet|haiku|fable/i
+export const UNRATED = 'The catalog does not rate this model.'
 
-/** How many Builders may run on one API model a member shares: the share answers four requests at once
+/** How many agents may run on one API model a member shares: the share answers four requests at once
  * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
 export const API_BUILDERS = 4
 
-/** A model served for the Swarm that takes no more Builders, and who is on it, or that Builders are never offered and why
- *  ([refused]: too small or too slow to drive a coding agent) (routeCommand.ts heldLocalModels). */
-export interface HeldModel { model: string; label: string; kind: 'local' | 'api' | 'shared'; holders: string[]; refused?: string }
+/** A model served for the Swarm that takes no more agents, and who is on it (routeCommand.ts heldLocalModels). */
+export interface HeldModel { model: string; label: string; kind: 'local' | 'api' | 'shared'; holders: string[] }
 
 /** Why a held model is not offered, and what frees it: a model in use reads as unshared otherwise (owner, 2026-10-24). */
 function heldReason(m: HeldModel): string {
-  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Manage models).`
-  const who = m.holders.length === 1 ? `Builder ${m.holders[0]} is on it` : `Builders ${m.holders.slice(0, -1).join(', ')} and ${m.holders.at(-1)} are on it`
-  const limit = m.kind === 'api' ? `an API model takes ${API_BUILDERS} Builders at a time` : 'a local model serves one Builder at a time'
-  return `"${m.label}" is shared with the Swarm, but ${who}: ${limit}. Assign the work to ${m.holders.length === 1 ? 'that Builder once it is free, or stop it' : 'one of them once it is free, or stop one'} to free the model.`
+  const who = m.holders.length === 1 ? `${m.holders[0]} is on it` : `${m.holders.slice(0, -1).join(', ')} and ${m.holders.at(-1)} are on it`
+  const limit = m.kind === 'api' ? `an API model takes ${API_BUILDERS} agents at a time` : 'a local model serves one agent at a time'
+  return `"${m.label}" is shared with the Swarm, but ${who}: ${limit}. Assign the work to ${m.holders.length === 1 ? 'that agent once it is free, or stop it' : 'one of them once it is free, or stop one'} to free the model.`
 }
 const titleOf = (p: Probe) => cut(`${p.kind === 'member' ? p.name ?? 'Member' : 'New agent'} · ${runs(p)} · ${p.machineName}`, 160)
 /** A reset or a last activity is told as how far away it is, which reads the same whenever the log is opened. */
@@ -249,16 +374,25 @@ function span(ms: number): string {
   return `${Math.round(ms / 86_400_000)} days`
 }
 const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - now))
+/** When a weekly window resets, to the hour past two days ("6d13h"): the PM paces its own account by the day since its reset
+ *  (project instructions, 2026-11-03), and "7 days", a whole day either way, left it half a day off. */
+function weeklyResetsIn(resetsAt: number, now: number): string {
+  const ms = Math.max(0, resetsAt - now)
+  if (ms < 48 * 3_600_000) return span(ms)
+  const hours = Math.round(ms / 3_600_000), days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d${hours % 24}h` : `${days}d`
+}
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
-  if (!q.known || q.leftPercent === null) return 'quota unknown'
+  if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
+  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }
   if (q.resetsAt === null) return `quota ${Math.round(q.leftPercent)}% left`
   return `quota ${Math.round(q.leftPercent)}% left, resets in ${resetsIn(q.resetsAt, now)}`
 }
-const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
+export const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
 /** What a member is doing and has done, or one phrase saying it is not known. */
 function memberText(p: Probe, now: number): string[] {
   const f = p.frame
@@ -273,10 +407,11 @@ function machineText(load: MachineLoad): string[] {
     load.agents === null ? 'agents running unknown' : `${load.agents} ${load.agents === 1 ? 'agent' : 'agents'} running`,
     load.freeMemoryBytes === null ? 'free memory unknown' : `${bytes(load.freeMemoryBytes)} memory free`]
 }
-/** The most telling parts come first and the least last, because the log's limit cuts the end. */
+/** The most telling parts come first and the least last, because the log's limit cuts the end. The notes come right after
+ *  the fit: they are what a ranking alone does not say. */
 const labelOf = (p: Probe & Sized, now: number) => cut([
-  p.kind === 'member' ? `Member ${cut(p.name ?? '', 40)}`.trim() : 'New agent', runs(p), `quality ${p.quality}, cost ${p.cost}`,
-  p.text, cut(p.machineName, 40), p.activity, ...(p.kind === 'member' ? memberText(p, now) : p.load ? machineText(p.load) : []),
+  p.kind === 'member' ? `Member ${cut(p.name ?? '', 40)}`.trim() : 'New agent', runs(p), `${p.unrated ? 'unrated' : `strength ${p.quality}`}, cost ${p.cost}`,
+  p.text, ...p.notes.map(n => cut(n, 200)), cut(p.machineName, 40), p.activity, ...(p.kind === 'member' ? memberText(p, now) : p.load ? machineText(p.load) : []),
   ...(p.earlier?.length ? [`earlier here: ${p.earlier.slice(0, 3).map(e => `${cut(e.group, 40)} ${e.outcome}`).join('; ')}`] : []), quotaText(p.quota, now),
 ].join(' · '), 640)
 
@@ -291,12 +426,14 @@ export function accountOf(p: Probe): string {
   return p.gridModel ? `local:${p.gridName ?? ''}:${p.gridModel}` : p.quota.account ?? `${p.machineId}:${p.engine}`
 }
 
-const AVOIDED = 'Its account lost this task before (a model that kept failing, a limit or a stall), and another account is free.'
-const AVOIDED_ONLY = 'Every candidate runs on the account that lost this task before; check it is answering before you assign.'
+/** A member builds in its own worktree, so one in another repository would build there (Diego, 2026-10-30, #2377). Both
+ *  checkouts are compared as host and path (repoMatch), so the same repository over SSH and HTTPS is not "different". */
+export const OTHER_REPOSITORY = 'It works in another repository, so it would build this in that repository\'s worktree. A new agent starts in this one.'
 
-/** How the probe's account would carry a task of this size (phase 1 §2–3). */
-function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Commitment[]): Sized {
-  // A local model spends no subscription: it always fits, at its policy cost, and its node is its account.
+/** How the probe's account would carry a task of this size (phase 1 §2–3). Nothing is held in reserve: quota is
+ *  information, so all that is left counts. */
+function sizeUp(p: Probe, a: Assessment, now: number, open: Commitment[]): Sized {
+  // A local model spends no subscription: it always fits, at its catalog cost, and its node is its account.
   if (p.gridModel) {
     return { fit: { status: 'fits', coverage: null, effectiveCost: p.cost, expiring: 0, spend: { '5-hour': 0, weekly: 0 },
       account: accountOf(p) }, tight: null, text: 'fits: a local model on the Swarm\'s grid uses no subscription' }
@@ -313,15 +450,15 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
     if (!w) return []
     const resetsIn = w.resetsAt === null ? null : Math.max(60_000, w.resetsAt - now)
     // A window that refills mid-task carries only the part of the task before its reset.
-    return [{ name, usable: w.leftPercent - policy.quotaReserve - committed(name), resetsIn,
+    return [{ name, usable: w.leftPercent - committed(name), resetsIn,
       needed: resetsIn !== null && resetsIn < runMs ? spend[name] * resetsIn / runMs : spend[name] }]
   })
-  // Every account has a weekly window; a Codex account may have no 5-hour one at all, reporting its weekly alone (2026-10-24),
-  // and that reading is complete.
-  const complete = windows.length === WINDOWS.length || (p.engine === 'codex' && windows.length === 1 && windows[0]!.name === 'weekly')
-  const status = windows.some(w => w.usable < w.needed) ? 'short' : complete ? 'fits' : 'unknown'
-  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
+  // A weekly reading is complete on either engine: the 5-hour window is never what runs out (Ken, 2026-11-03), and a Team
+  // account's Claude, whose host relays no 5-hour window, read as unknown and ranked behind every Codex that fit. A 5-hour
+  // window that is read still counts when it is short.
   const five = windows.find(w => w.name === '5-hour'), week = windows.find(w => w.name === 'weekly')
+  const status = windows.some(w => w.usable < w.needed) ? 'short' : week ? 'fits' : 'unknown'
+  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
   // A 5-hour window that resets before the task ends, or soon after, loses what is left of it: spending it costs nothing.
   const expiring = five && five.resetsIn !== null && five.resetsIn <= runMs + 3_600_000 ? Math.min(1, Math.max(0, five.usable) / five.needed) : 0
   let effectiveCost = p.cost * (1 - expiring)
@@ -332,104 +469,160 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
     + `; weekly ${week ? `${pct(week.needed)} of ${pct(week.usable)}` : 'unknown'}`
   return { fit: { status, coverage: tight && round(tight.usable / tight.needed), effectiveCost: round(effectiveCost), expiring: round(expiring), spend, account }, tight, text }
 }
-const WAY = ['right away', 'about a quarter of the way in', 'about halfway', 'about three quarters of the way in', 'near the end']
-const runsOut = (w: Measured) => `The ${w.name} window is expected to run out ${WAY[Math.round(Math.max(0, w.usable / w.needed) * 4)]}${w.resetsIn === null ? '' : `; resets in ${span(w.resetsIn)}`}.`
-const UNREAD = 'Its quota could not be read in full, and another candidate\'s quota fits this task.'
-export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Manage models, in the Swarm\'s sidebar).'
+export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Your models, in the Swarm\'s sidebar).'
 
-/** The fixed order: the owner's preferred engine, a model on the Swarm's grid for simple work, an idle member before a new
- * agent and a less busy machine first when the owner prefers idle agents; then the policy order: cheaper in effect,
- * stronger, a model that runs on a machine before one reached through a shared API or another grid, more room on the
- * tightest window, an idle member in the task's repository before a new agent, then by title. */
-function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
-  const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
-  const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
-  const subscription = (p: Probe) => soft.grid && !p.gridModel ? 1 : 0
-  const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0
-  const busy = (p: Probe) => soft.idle && p.kind === 'new' ? p.load?.agents ?? 1000 : 0
-  // On-machine first (owner, 2026-10-24): an API spends a member's key and credits, and a model shared on another grid is
-  // someone else's machine; at equal cost and strength the Swarm's own engine goes first.
-  const remote = (p: Probe) => p.gridModel && (p.gridKind === 'api' || p.gridKind === 'shared') ? 1 : 0
-  return preferred(x) - preferred(y) || subscription(x) - subscription(y) || fresh(x) - fresh(y) || busy(x) - busy(y)
-    || x.fit.effectiveCost - y.fit.effectiveCost
-    || y.quality - x.quality
-    || remote(x) - remote(y)
-    || (y.tight?.usable ?? -Infinity) - (x.tight?.usable ?? -Infinity)
-    || placed(x) - placed(y)
+/** The neutral order (task #2901): machine name, then engine (a machine's grid models after its engines), then title, so the
+ *  same candidates come in the same order whatever the machines answered first. Nothing in it is strength, price, quota fit or
+ *  a plug-in's finding: the PM took the top line of the old order, by strength then price, against the project's Routing
+ *  instructions (Ken, 2026-11-04). A member in another repository comes after the others on its machine and engine, with
+ *  OTHER_REPOSITORY as a note (choose): it would build in that repository's worktree (Diego, 2026-10-30, #2377). */
+function compare(x: Probe, y: Probe): number {
+  const grid = (p: Probe) => p.gridModel ? 1 : 0
+  const elsewhere = (p: Probe) => p.kind === 'member' && p.repo === 'different' ? 1 : 0
+  return x.machineName.localeCompare(y.machineName) || x.machineId.localeCompare(y.machineId)
+    || grid(x) - grid(y) || x.engine.localeCompare(y.engine)
+    || elsewhere(x) - elsewhere(y)
     || titleOf(x).localeCompare(titleOf(y))
+    || (x.agentId ?? '').localeCompare(y.agentId ?? '')
 }
 
-/** The rows shown: each machine's best row first (the best-ranked machines, if there are more than the limit), then the rest by rank,
- * all in rank order, so the Lead can always choose another machine. */
-function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
-  const firsts = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(p.machineId)) { seen.add(p.machineId); firsts.add(p) }
-  const keep = new Set([...firsts].slice(0, MAX_SHOWN))
+/** An engine on a machine, or the machine's local models, as a new agent or an idle member: what the project's order picks
+ *  between (an account, then whether to reuse an agent on it). */
+export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
+
+/** The rows shown: the first new agent and the first member of every engine on every machine in the neutral order, up to
+ *  [RECORD_MAX], then the rest up to 12, all in that order. The agent choosing picks between accounts by the project's order;
+ *  one row a machine, cut at 12, hid a Claude account with 99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
+function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
+  const keep = new Set<T>(), seen = new Set<string>()
+  for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
   for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
   return ranked.filter(p => keep.has(p))
 }
 
-/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
-export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
-  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
-  // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
-  // A person asking for a local model considers local models alone, whatever their strength.
-  if (a.local) probes = probes.filter(p => p.gridModel)
-  // A person naming a model considers that model alone.
+/** What the agent choosing reads of a row's machine: whether a start there would be admitted (River, 2026-11-03: starts
+ *  failed on slots, memory and disk the rows did not show). */
+export function machineBrief(room: MachineRoom): string {
+  const slots = room.slots === null ? [] : [`${room.slots} ${room.slots === 1 ? 'slot' : 'slots'} free`]
+  const memory = room.freeMemoryBytes === null ? 'free memory unknown'
+    : `${bytes(Math.max(0, room.freeMemoryBytes))} memory free${room.heldMemoryBytes ? ` (${bytes(room.heldMemoryBytes)} held by starts)` : ''}`
+  const disk = room.freeDiskBytes === null ? [] : [`${bytes(Math.max(0, room.freeDiskBytes))} disk free`]
+  return [...slots, memory, ...disk].join(' · ')
+}
+
+/** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
+export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
+  if (p.gridModel) return 'local model, no subscription'
+  if (p.quota.metered) return 'metered'
+  const week = p.quota.windows?.find(w => w.name === 'weekly')
+  const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
+  const resetsAt = week ? week.resetsAt : p.quota.resetsAt
+  // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
+  if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
+  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
+}
+
+/** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries
+ *  its facts and its quota ([CLAUDE_NAMES]). The person's words are the model's id, in lowercase with no spaces. */
+function unratedProbes(probes: Probe[], named: string): Probe[] {
+  const engine = CLAUDE_NAMES.test(named) ? 'claude' : 'codex', model = named.trim().toLowerCase().replace(/\s+/g, '-')
+  const bases = new Map<string, Probe>()
+  for (const p of probes) if (p.kind === 'new' && !p.gridModel && p.engine === engine && !bases.has(p.machineId)) bases.set(p.machineId, p)
+  return [...bases.values()].map(base => ({ ...base, model, effort: 'default', quality: 1, cost: 1, unrated: true as const, notes: [...base.notes, UNRATED] }))
+}
+
+/** The candidates that can run the task, in the neutral order ([compare]), and those that cannot, with why. A catalog row not offered by
+ *  default (Sonnet, Haiku) is offered when a person names it; its note goes with it, and with a member already on it.
+ *  `held`: models served for the Swarm that take no more agents, to say who holds a named or local model none offers.
+ *  `offline`: models a host now offline served (routeCommand.ts offlineModels), by name. `plugins`: [RoutePlugin]; with none
+ *  the answer is exactly what it was before plug-ins existed (route.spec.ts, route answers without plug-ins). */
+export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: number = Date.now(), open: Commitment[] = [], held: HeldModel[] = [],
+  offline: Array<{ title: string; reason: string }> = [], plugins: readonly RoutePlugin[] = []): Choice | NoCandidate {
   const named = a.model
-  if (named) probes = probes.filter(p => runsNamed(p, named))
-  const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
-  const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
-    .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
-  const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
-  const viable = ruled.filter(p => !p.refusals.length)
-  // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
+  const context: RouteContext = { assessment: a, now, catalog, open }, warnings: string[] = []
+  const { probes, out: addedOut } = withPluginCandidates(given, plugins, context, warnings)
+  const warned = () => warnings.length ? { warnings } : {}
+  const noted = probes.flatMap(p => {
+    const row = p.gridModel ? null : p.kind === 'new' ? catalog.models.find(m => m.engine === p.engine && m.model === p.model && m.effort === p.effort) ?? null
+      : catalogRow(catalog, p.engine, p.model, p.effort)
+    if (row && !row.offered && p.kind === 'new' && !(named && runsNamed(p, named))) return []
+    const rated = row?.note && !p.notes.includes(row.note) ? { ...p, notes: [...p.notes, row.note] } : p
+    if (p.kind !== 'member' || p.repo !== 'different') return [rated]
+    // The task names a repository this member does not work in: it cannot run there, a fact, so it is left out with why.
+    if (a.needs.cwd) return [{ ...rated, refusals: [...rated.refusals, OTHER_REPOSITORY] }]
+    // No repository named: the coordinator knows whether the task needs a worktree, so it is ranked last with a note.
+    return [{ ...rated, notes: [...rated.notes, OTHER_REPOSITORY] }]
+  })
+  // A person asking for a local model considers local models alone, whatever their strength.
+  let considered = a.local ? noted.filter(p => p.gridModel) : noted
+  // A person naming a model considers that model alone; one the catalog does not list is offered unrated.
   const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
-  if (named && !probes.length) {
+  if (named) considered = considered.filter(p => runsNamed(p, named))
+  // A model of the grid (a catalog grid row, or one a host now offline served) is no unknown model to try on Codex: nothing
+  // serves it now, which the answer says, rather than "Codex kimi-k3" unrated (final review).
+  const ofGrid = !!named && (catalog.grid.models.some(row => names(row.model, named)) || offline.some(m => names(m.title, named)))
+  if (named && !considered.length && !heldNamed.length && !a.local && !ofGrid) considered = unratedProbes(probes, named)
+  const excluded: Excluded[] = [...considered.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName })), ...addedOut]
+  const viable = considered.filter(p => !p.refusals.length)
+  // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
+  if (named && !considered.length) {
     if (heldNamed.length) excluded.push(...heldNamed.map(m => ({ title: 'Named model', reason: heldReason(m) })))
     else excluded.push({ title: 'Named model', reason: NAMED_NONE(named) })
-  } else if (a.local && !probes.length) {
+  } else if (a.local && !considered.length) {
     if (held.length) excluded.push(...held.map(m => ({ title: 'Local models', reason: heldReason(m) })))
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
   }
-  if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
-  const floor = floorFor(policy, a)
-  const meeting = a.local || named ? viable : viable.filter(p => p.quality >= floor)
-  const byFloor = meeting.length ? meeting : viable
-  // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.
-  const top = Math.max(...byFloor.map(p => p.quality))
-  const strongest = (a.difficulty === 'high' ? byFloor.filter(p => p.quality === top) : byFloor).map(p => ({ ...p, ...sizeUp(p, policy, a, now, open) }))
-  // An account whose model kept failing this task waits while any other account is offered.
-  const fresh = strongest.filter(p => !avoid.includes(p.fit.account))
-  const sized = fresh.length ? fresh : strongest
-  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED })))
-  // Only the first group that has anyone is shown: those that fit, then those whose quota is not fully known, then the short.
-  const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
-  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
-  // When every candidate is short, the one expected to get furthest goes first.
-  const soft = softOf(rules, a)
-  const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
-  const shown = withEveryMachine(set).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
-  const first = set[0].tight!
-  return { shown, excluded, floor, belowFloor: !meeting.length, ...(avoid.length && !fresh.length && strongest.some(p => avoid.includes(p.fit.account)) ? { avoided: AVOIDED_ONLY } : {}), ...(status === 'short'
-    ? { short: `No candidate is expected to cover this task; its ${first.name} quota is expected to run out partway${first.resetsIn === null ? '' : ` and resets in ${span(first.resetsIn)}`}.` } : {}) }
+  if (!viable.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
+  const sized = viable.map(p => ({ ...p, ...sizeUp(p, a, now, open) }))
+  const adjustments = pluginAdjustments(sized, plugins, context, warnings)
+  const adjusted = adjustments.some(list => list.length)
+  // A plug-in's refusal leaves its candidate out; its strength or cost is a note and moves nothing (task #2901).
+  const listed = sized.flatMap((p, i) => {
+    const mine = adjustments[i]!
+    if (!mine.length) return [p]
+    const reasons = mine.map(({ name, adjustment }) => `${name}: ${adjustment.reason.trim()}`)
+    if (mine.some(m => m.adjustment.refuse)) {
+      excluded.push({ title: titleOf(p), reason: reasons.filter((_, j) => mine[j]!.adjustment.refuse).join(' '), machine: p.machineName })
+      return []
+    }
+    return [{ ...p, notes: [...p.notes, ...reasons] }]
+  }).sort(compare)
+  if (!listed.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
+  const shown = withEveryAccount(listed).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  // With nothing first, only one thing is worth saying of quota beside each row's fit: that none of them covers the task.
+  const none = listed.every(p => p.fit.status === 'short')
+  return { shown, excluded, floor: 1, belowFloor: false, ...(none ? { short: NONE_COVERS } : {}),
+    ...(adjusted ? { adjusted: true as const } : {}), ...warned() }
 }
+export const NONE_COVERS = 'No candidate is expected to cover this task on its quota.'
 
+/** What the route says of its candidates (task #2901): it names no pick, and its why sends the agent choosing to the project's
+ *  Routing instructions, since a list's first row read as the route's choice (River, 2026-11-04: PMs started the machine the
+ *  route listed first). */
+export const CHOOSE_BY_INSTRUCTIONS = 'Not ranked: candidates are listed by machine name, then engine. Choose one by the project\'s Routing instructions '
+  + '(Order and quota), and give the rule that chose it as overrideReason when you start or assign it.'
 export function decide(choice: Choice): Verdict {
-  const pick = choice.shown[0]
-  return choice.shown.length === 1 ? { pick, via: 'only', p: null, why: 'Only candidate that can run this task.' }
-    : { pick, via: 'order', p: null, why: "First by the owner's rules and the policy order." }
+  return choice.shown.length === 1 ? { via: 'only', p: null, why: 'Only candidate that can run this task.' }
+    : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
-/** `v1` leaves out size and fit, for a backend from before phase 1, whose strict schema refuses them. */
-export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, v1 = false): Record<string, unknown> {
+/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts)
+ *  and no pick (task #2901); `picked` for a backend from before that, which takes a record only with a pick, so `c0` stands in
+ *  for one by the old `order`; `unkinded` for a backend from before kinds too, and `v1` without size and fit as well, for one
+ *  from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
+ *  `belowFloor` and `notes` false. The server stamps the instructions' revision the decision relied on (phase 4, decision 12). */
+export type RecordShape = 'current' | 'picked' | 'unkinded' | 'v1'
+export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape: RecordShape = 'current'): Record<string, unknown> {
+  const v1 = shape === 'v1', kinded = shape === 'current' || shape === 'picked'
   return {
-    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }) },
+    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(kinded && a.kind ? { kind: a.kind } : {}),
+      ...(kinded && a.local ? { local: true } : {}), ...(kinded && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
-    floor: choice.floor, notes: policy.notes.length > 0,
-    pick: verdict.pick.id, via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: cut(verdict.why, 300),
+    floor: 1, notes: false,
+    ...(shape === 'current' ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }

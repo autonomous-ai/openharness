@@ -57,7 +57,8 @@ export const DEFAULT_CONFIG: BenchConfig = {
   text: { briefChars: 3_000, resultChars: 600, messageChars: 300 },
 }
 
-export interface Args { config: BenchConfig; out: string | null; driver: string }
+/** The read cache's stamps (src/superTabs/cache.ts): in this process ('memory', one backend process), a Redis URL, or 'off'. */
+export interface Args { config: BenchConfig; out: string | null; driver: string; cache: string }
 
 const NUMBERS: Record<string, (config: BenchConfig, value: number) => void> = {
   '--seed': (c, v) => { c.seed = v },
@@ -83,7 +84,7 @@ function pairs<T extends object>(flag: string, text: string, known: T): Partial<
 
 export function parseArgs(argv: readonly string[]): Args {
   const config: BenchConfig = structuredClone(DEFAULT_CONFIG)
-  let out: string | null = null, driver = 'parts'
+  let out: string | null = null, driver = 'parts', cache = 'memory'
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i]!, value = argv[i + 1]
     if (value === undefined) throw new Error(`${flag} needs a value`)
@@ -97,10 +98,13 @@ export function parseArgs(argv: readonly string[]): Args {
       config.lane = value as Lane
     } else if (flag === '--out') out = value
     else if (flag === '--driver') driver = value
-    else throw new Error(`Unknown option ${flag}`)
+    else if (flag === '--cache') {
+      if (value !== 'memory' && value !== 'off' && !value.startsWith('redis://')) throw new Error('--cache is memory, off or a redis:// URL')
+      cache = value
+    } else throw new Error(`Unknown option ${flag}`)
   }
   validate(config)
-  return { config, out, driver }
+  return { config, out, driver, cache }
 }
 
 export function activeCount(config: BenchConfig): number {

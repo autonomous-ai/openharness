@@ -9,9 +9,9 @@ import '../models/api_connections_controller.dart'
     show ApiConnection, ApiModel, agentOnApiModel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
-import '../models/coding_model.dart';
 import '../models/swarm_models_target.dart';
 import '../usage/models_menu_controller.dart' show subscriptionSearchId;
+import '../usage/usage_account_key.dart';
 import '../core/dsh_catalog.dart';
 import '../store/experimental_harnesses.dart';
 import '../core/machine_resources.dart';
@@ -44,9 +44,14 @@ class HarnessPickerContext {
     required this.description,
     required this.action,
     required this.unavailable,
+    this.hidden,
   });
   final String title, description, action;
   final String? Function(SwarmDestination) unavailable;
+
+  /// Rows the picker never lists, whichever source they come from: a running
+  /// agent on this machine or one the Swarm shares.
+  final bool Function(SwarmDestination)? hidden;
 }
 
 /// The Machines picker's two runs of rows: the account's computers, then its phones and apps.
@@ -531,14 +536,12 @@ class SwarmSearchController extends ChangeNotifier {
           run: ready ? act('stop', forSwarm: true) : null,
         );
       }
-      // Too small or too slow to drive a coding agent: no Builder would be offered it, so neither Get nor Run is
-      // (coding_model.dart; the preview says why).
-      final capable = codingRefusal(local) == null;
+      // A model small or slow for a coding agent is offered all the same; its preview says so (coding_model.dart).
       if (!local.downloaded && !local.canStop) {
         return (
           label: 'Get',
           command: 'picker.model_download',
-          run: ready && capable && local.canStart && owner.supportsDownload
+          run: ready && local.canStart && owner.supportsDownload
               ? act('download')
               : null,
         );
@@ -546,9 +549,7 @@ class SwarmSearchController extends ChangeNotifier {
       return (
         label: 'Run for Swarm',
         command: 'picker.model_start',
-        run: ready && capable && local.canStart
-            ? act('start', forSwarm: true)
-            : null,
+        run: ready && local.canStart ? act('start', forSwarm: true) : null,
       );
     }
     if (entry.apiModel case final model?) {
@@ -560,7 +561,7 @@ class SwarmSearchController extends ChangeNotifier {
         run: () => swarm.share(api.id, model.id, start: !on),
       );
     }
-    // A model shared with the person, on someone else's grid: offering it lets the Lead start Builders on their
+    // A model shared with the person, on someone else's grid: offering it lets agents in this Swarm run on their
     // machines on it (owner, 2026-10-23: a choice, as running a model or sharing an API is).
     if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
         when entry.api == null) {
@@ -1197,15 +1198,29 @@ class SwarmSearchController extends ChangeNotifier {
       ?.agents
       .where((a) => a.id == agentSelectionId)
       .firstOrNull;
+
+  /// The accounts of each engine on the selected agent's machine, read when it is selected.
+  final _agentProfiles = <String, List<AgentProfile>>{};
   void setAgentSelection(String machineId, String agentId) {
     agentSelectionMachineId = machineId;
     agentSelectionId = agentId;
+    _agentProfiles.clear();
     _filter();
     notifyListeners();
+    if (app.isSwarmBuddy(machineId, agentId)) return;
+    for (final engine in const ['claude', 'codex']) {
+      app.agentProfiles(machineId, engine).then((profiles) {
+        if (agentSelectionMachineId != machineId || profiles.isEmpty) return;
+        _agentProfiles[engine] = profiles;
+        _filter(keepOrder: true);
+        notifyListeners();
+      });
+    }
   }
 
   bool canSelectAgent(String engine) =>
       agentSelection != null &&
+      !app.isSwarmBuddy(agentSelectionMachineId!, agentSelection!.id) &&
       app.stateOf(agentSelectionMachineId!)?.machine.isShared == false &&
       app
           .agentSwitchEngines(agentSelectionMachineId!, agentSelection!)
@@ -1639,12 +1654,19 @@ class SwarmSearchController extends ChangeNotifier {
         : history == null
         ? _cache.read(app, projects?.projects ?? const [], recent: recent)
         : [...history!.menuDestinations(app), ...closedWorkDestinations(app)];
-    final next = additionalDestinations.isEmpty
+    final merged = additionalDestinations.isEmpty
         ? base
         : <String, SwarmDestination>{
             for (final row in additionalDestinations) row.id: row,
             for (final row in base) row.id: row,
           }.values.toList();
+    final hidden = harnessContext?.hidden;
+    final next = hidden == null
+        ? merged
+        : [
+            for (final row in merged)
+              if (!hidden(row)) row,
+          ];
     final splitCurrent = split == null || app.isPaneSplitCurrent(split!);
     if (!force &&
         sessionFilter == SessionFilter.all &&
@@ -1698,7 +1720,12 @@ class SwarmSearchController extends ChangeNotifier {
   /// A contribution's permissions and membership can change without changing
   /// the native machine catalog. Keep the person's query and selection intact.
   void refreshAvailability() {
-    if (harnessContext != null) notifyListeners();
+    if (harnessContext == null) return;
+    if (harnessContext!.hidden != null) {
+      _refresh(force: true);
+    } else {
+      notifyListeners();
+    }
   }
 
   void _modelsChanged() {
@@ -1955,30 +1982,96 @@ class SwarmSearchController extends ChangeNotifier {
               ? 1
               : a.label.compareTo(b.label),
         );
+      final current = agentSelection;
+      final isBuddy =
+          current != null &&
+          app.isSwarmBuddy(agentSelectionMachineId!, current.id);
+      // The agent's account id: its folder's, or the engine's default.
+      final currentHome = current?.engine == 'claude'
+          ? current?.claudeHome
+          : current?.codexHome;
+      final currentId = current == null
+          ? null
+          : swarmProfileId(
+              agentSelectionMachineId!,
+              current.engine ?? '',
+              currentHome ?? 'default',
+            );
+      SwarmDestination row(
+        EngineIdentity engine, {
+        AgentProfile? profile,
+        bool several = false,
+      }) {
+        final isCurrent =
+            current?.engine == engine.id &&
+            (!several || profile!.id == currentId);
+        final base = engine.id == 'claude' ? 'Claude Code' : engine.label;
+        return SwarmDestination(
+          id: 'engine:${engine.id}${several ? ':${profile!.key}' : ''}',
+          agentEngine: engine.id,
+          agentProfile: several ? profile!.key : null,
+          engine: engine.id,
+          title: several
+              ? '${engine.id == 'claude' ? 'Claude' : engine.label} · ${profile!.label}'
+              : base,
+          detail: current == null
+              ? 'Focus a harness to change its agent'
+              : isBuddy
+              ? buddyKeepsItsEngine
+              : !canSelectAgent(engine.id)
+              ? 'Not supported by this harness'
+              : several && !profile!.offered
+              ? 'Not offered to the Swarm'
+              : several && profile!.percentLeft != null
+              ? '${profile.percentLeft}% left'
+              : isCurrent
+              ? 'Current agent'
+              : engine.id == 'opencode'
+              ? 'Muse Spark 1.3 · continue with recent context'
+              : supportsAgentHandoff(engine.id)
+              ? 'Continue this project with recent context'
+              : 'New conversation in the same project',
+          swarmId: null,
+          current: isCurrent,
+        );
+      }
+
       rows = [
         for (final engine in engines)
           if ('${engine.label} ${engine.id}'.toLowerCase().contains(
             matchQuery.toLowerCase(),
           ))
-            SwarmDestination(
-              id: 'engine:${engine.id}',
-              agentEngine: engine.id,
-              engine: engine.id,
-              title: engine.id == 'claude' ? 'Claude Code' : engine.label,
-              detail: agentSelection == null
-                  ? 'Focus a harness to change its agent'
-                  : !canSelectAgent(engine.id)
-                  ? 'Not supported by this harness'
-                  : agentSelection?.engine == engine.id
-                  ? 'Current agent'
-                  : engine.id == 'opencode'
-                  ? 'Muse Spark 1.3 · continue with recent context'
-                  : supportsAgentHandoff(engine.id)
-                  ? 'Continue this project with recent context'
-                  : 'New conversation in the same project',
-              swarmId: null,
-              current: agentSelection?.engine == engine.id,
-            ),
+            if ((_agentProfiles[engine.id]?.length ?? 0) > 1)
+              for (final profile in _agentProfiles[engine.id]!)
+                row(engine, profile: profile, several: true)
+            else
+              row(engine),
+        // Only a machine that listed its Claude accounts can open another folder.
+        if (_agentProfiles['claude'] != null &&
+            'add claude account'.contains(matchQuery.toLowerCase()) &&
+            canSelectAgent('claude'))
+          SwarmDestination(
+            id: 'engine:claude:add',
+            agentEngine: 'claude',
+            addsClaudeAccount: true,
+            engine: 'claude',
+            title: 'Add Claude account…',
+            detail: 'Opens Claude to sign in. Yours until you offer it',
+            swarmId: null,
+            current: false,
+          ),
+        if (_agentProfiles.values.any((l) => l.any((p) => p.canOffer)) &&
+            'swarm accounts'.contains(matchQuery.toLowerCase()))
+          SwarmDestination(
+            id: 'engine:swarm-accounts',
+            agentEngine: 'claude',
+            managesSwarmAccounts: true,
+            engine: 'claude',
+            title: 'Swarm accounts…',
+            detail: 'Choose what other people’s PMs can use',
+            swarmId: null,
+            current: false,
+          ),
       ];
       total = engines.length;
       matchCount = rows.length;
@@ -2456,7 +2549,7 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The models list of a Swarm's Manage models, drawn in its own way (`super_tabs/local_models.dart`).
+  /// The models list of a Swarm's Your models, drawn in its own way (`super_tabs/local_models.dart`).
   bool get isSwarmModels => isModelMode && swarmModels != null;
 
   /// How many of the Swarm's APIs' models [row]'s API shares with the Swarm. Null for any row but an API's own.
@@ -2467,7 +2560,7 @@ class SwarmSearchController extends ChangeNotifier {
     return swarm.shares.where((key) => key.startsWith('$id\u0000')).length;
   }
 
-  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Manage models.
+  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Your models.
   ModelSearchSection? modelScope;
 
   void setModelScope(ModelSearchSection? section) {

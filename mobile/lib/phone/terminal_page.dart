@@ -29,6 +29,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/image_transcode.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 import 'package:harness_mobile/terminal/elicitation_press.dart';
@@ -55,6 +56,7 @@ import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
 import 'new_agent_chooser.dart';
+import 'out_of_sight.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
@@ -81,6 +83,7 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
+import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
 
@@ -826,7 +829,6 @@ class _TerminalPageState extends State<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
-    widget.notifier.addListener(_onNotifier);
     // A session already taking input when the page comes ticks nothing to raise from.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _raiseForFirstSession();
@@ -839,6 +841,25 @@ class _TerminalPageState extends State<TerminalPage>
     // Which of the page's rebuilds an inherited widget asked for — against
     // `page.update` (its parent) and `page.build` (all of them).
     if (kTypingTrace) typingCount('page.deps');
+    _listenToApp(!OutOfSight.of(context));
+  }
+
+  /// Whether [_onNotifier] is listening.
+  bool _listeningToApp = false;
+
+  /// Listens to the app only while this page can be seen. Out of sight
+  /// (Harness under Swarm Home, [OutOfSight]) every tick of the app was a
+  /// read of the facts, and a rebuild whenever one moved, for a page nobody
+  /// is looking at. Shown again, the rebuild that brings it back reads the
+  /// facts afresh in [build], so nothing is missed.
+  void _listenToApp(bool on) {
+    if (on == _listeningToApp) return;
+    _listeningToApp = on;
+    if (on) {
+      widget.notifier.addListener(_onNotifier);
+    } else {
+      widget.notifier.removeListener(_onNotifier);
+    }
   }
 
   /// Releases the resize hold when this page is parked mid-animation.
@@ -849,7 +870,7 @@ class _TerminalPageState extends State<TerminalPage>
   void didUpdateWidget(TerminalPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (kTypingTrace) typingCount('page.update');
-    if (!identical(oldWidget.notifier, widget.notifier)) {
+    if (_listeningToApp && !identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.removeListener(_onNotifier);
       widget.notifier.addListener(_onNotifier);
     }
@@ -902,7 +923,7 @@ class _TerminalPageState extends State<TerminalPage>
     _scrollback.dispose();
     _dropFindBack();
     _find?.dispose();
-    widget.notifier.removeListener(_onNotifier);
+    _listenToApp(false);
     _daemon?.noteQuestion(
       this,
       machineId: widget.machineId,
@@ -2502,7 +2523,8 @@ class _TerminalPageState extends State<TerminalPage>
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
+      // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
+      backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
       // ⚠️ No fab. New agent is the `+` in the header — see the note there.
       // A Scaffold fab floats over the body, and the body here is the
       // terminal: it covered the newest line of output, which on a page
@@ -2940,8 +2962,14 @@ class _TerminalPageState extends State<TerminalPage>
                               // The paired daemon at the title's right end: its
                               // sprite, a tap from its sheet. Nothing outside the
                               // signed-in shell (the sample). See `daemon_chip.dart`.
-                              daemon: const DaemonChip(
-                                margin: EdgeInsets.only(left: 12),
+                              // Before it, while Swarm is on: what the Swarms ask of
+                              // the person, a tap from them. See `swarm_mark.dart`.
+                              daemon: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SwarmMark(margin: EdgeInsets.only(left: 12)),
+                                  DaemonChip(margin: EdgeInsets.only(left: 12)),
+                                ],
                               ),
                               // Only over a screen: with none, [_MachineAway] says it
                               // in the terminal's place, and saying it twice is noise.
@@ -3802,8 +3830,11 @@ class _AgentGone extends StatelessWidget {
 
   final VoidCallback onPickAnother;
 
+  // Its tokens read on the terminal's palette, which stays dark in a light app ([TerminalLook]).
   @override
-  Widget build(BuildContext context) => Center(
+  Widget build(BuildContext context) => TerminalLook.read(context, _body);
+
+  Widget _body() => Center(
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
@@ -3986,7 +4017,11 @@ class _ReconnectingState extends State<_Reconnecting> {
                     // Still with animations off: three quarters of a ring, so it reads as waiting.
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: AppPalette.accent,
+                      // The terminal's accent, which stays dark in a light app ([TerminalLook]).
+                      color: TerminalLook.read(
+                        context,
+                        () => AppPalette.accent,
+                      ),
                       value: still ? 0.75 : null,
                     ),
                   ),
@@ -4172,9 +4207,10 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
     // same band. `height` is xterm's line-height multiplier.
     final lineHeight = fontSize * style.height;
     // Resolved exactly as [TerminalPanel] resolves it for the view underneath,
-    // so the skeleton's ground and the terminal's are the same colour.
+    // so the skeleton's ground and the terminal's are the same colour — on the
+    // terminal's palette, as the panel's is ([TerminalLook]).
     final ground = terminalScreenThemeFor(
-      AppTheme.palette.value,
+      TerminalLook.paletteOf(context),
       terminalThemeStore.value,
     ).background;
     // ⚠️ **Mixed against the terminal's OWN ground, not taken from
@@ -4650,15 +4686,37 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   @override
   void initState() {
     super.initState();
-    widget.terminal?.addListener(_output);
     widget.reading.addListener(_toggled);
     terminalFontStore.addListener(_changed);
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _listenToOutput(!OutOfSight.of(context));
+  }
+
+  /// Whether [_output] is listening.
+  bool _listeningToOutput = false;
+
+  /// Follows the output only while the terminal can be seen. Out of sight
+  /// (Harness under Swarm Home, [OutOfSight]) the output stays in the buffer,
+  /// and the rebuild that shows the terminal again places it by what is there
+  /// then.
+  void _listenToOutput(bool on) {
+    if (on == _listeningToOutput) return;
+    _listeningToOutput = on;
+    if (on) {
+      widget.terminal?.addListener(_output);
+    } else {
+      widget.terminal?.removeListener(_output);
+    }
+  }
+
+  @override
   void didUpdateWidget(_AnchoredTerminal old) {
     super.didUpdateWidget(old);
-    if (!identical(old.terminal, widget.terminal)) {
+    if (_listeningToOutput && !identical(old.terminal, widget.terminal)) {
       old.terminal?.removeListener(_output);
       widget.terminal?.addListener(_output);
     }
@@ -4672,7 +4730,7 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   @override
   void dispose() {
-    widget.terminal?.removeListener(_output);
+    _listenToOutput(false);
     widget.reading.removeListener(_toggled);
     terminalFontStore.removeListener(_changed);
     super.dispose();

@@ -213,6 +213,7 @@ class ProjectFolderRequest {
     RepositoryClone Function()? createClone,
     String label = 'harness',
     DateTime Function()? now,
+    void Function(String alias)? onClonedVia,
   }) async {
     final home = maybeHomeDir();
     if (projectHome == null && (home == null || !p.isAbsolute(home))) {
@@ -235,10 +236,10 @@ class ProjectFolderRequest {
       }
       await root.create(recursive: true);
       if (repository case final repo?) {
-        return await (createClone?.call() ?? RepositoryClone()).run(
-          repo,
-          root.path,
-        );
+        final clone = createClone?.call() ?? RepositoryClone();
+        final folder = await clone.run(repo, root.path);
+        if (clone.clonedVia case final alias?) onClonedVia?.call(alias);
+        return folder;
       }
       if (folderName case final named?) {
         // A name somebody chose is never quietly changed: an existing folder

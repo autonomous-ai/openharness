@@ -1373,7 +1373,6 @@ void main() {
       expect(scenario.box.busy, isTrue);
       git.complete({
         'isGit': true,
-        'branch': 'trunk',
         'branches': [
           {'ref': 'refs/heads/trunk', 'name': 'trunk'},
         ],
@@ -1431,7 +1430,7 @@ void main() {
   );
 
   testWidgets(
-    'controller-selected Model opens its row and Manage Models uses the app door',
+    'controller-selected Model opens its row and Your models uses the app door',
     (tester) async {
       final scenario = await _mount(tester, git: false, editProject: false);
       var requests = 0;

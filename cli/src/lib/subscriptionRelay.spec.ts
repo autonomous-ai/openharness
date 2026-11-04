@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { OwnerCredential, OwnerSubscriptions, SubscriptionProvider } from './ownerSubscriptions.js'
 import {
@@ -96,6 +96,32 @@ describe('the guest token', () => {
   it('listens on loopback only', async () => {
     await start(ok, owner({}).subscriptions)
     expect(relay.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+  })
+})
+
+describe('a relay started again on its own port', () => {
+  const start = (port?: number) => startSubscriptionRelay({ owner: owner({}).subscriptions, ...(port ? { port } : {}) })
+  const answers = async (relay: SubscriptionRelay, token: string) => (await fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })).status
+
+  it('listens on the port it is given, and refuses one that is taken', async () => {
+    const first = await start()
+    const taken = await start(first.port).then(() => null, (error: NodeJS.ErrnoException) => error.code)
+    expect(taken).toBe('EADDRINUSE')
+    const { port } = first
+    await first.close()
+    const again = await start(port)
+    expect(again.url).toBe(`http://127.0.0.1:${port}`)
+    await again.close()
+  })
+
+  it('takes a token back as its own, refuses any other, and a revoke cuts it', async () => {
+    const relay = await start()
+    relay.adoptToken('Team@Example.com', 'kept-token-kept-token-kept-token')
+    expect(await answers(relay, 'kept-token-kept-token-kept-token')).not.toBe(401)
+    expect(await answers(relay, 'other-token-other-token-other-tok')).toBe(401)
+    relay.revoke('team@example.com')
+    expect(await answers(relay, 'kept-token-kept-token-kept-token')).toBe(401)
+    await relay.close()
   })
 })
 
@@ -203,6 +229,188 @@ describe('Codex', () => {
     expect(request!.headers.authorization).toBe(`Bearer ${OWNER_CODEX}`)
     expect(request!.headers['chatgpt-account-id']).toBe('acct-owner')
     expect(request!.headers['anthropic-beta']).toBeUndefined()
+  })
+})
+
+/** A request sent with its path exactly as given, which `fetch` would normalize first. */
+function raw(method: string, path: string, token: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: relay.port, method, path, headers: { authorization: `Bearer ${token}` } }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }))
+    })
+    req.on('error', reject)
+    req.end(method === 'GET' || method === 'HEAD' ? undefined : '{}')
+  })
+}
+
+describe('the engine calls, and nothing else', () => {
+  const both = () => owner({ claude: claude(OWNER_CLAUDE), codex: codex(OWNER_CODEX) }).subscriptions
+
+  it('forwards each call Claude Code and Codex make', async () => {
+    await start(ok, both())
+    const token = relay.mintToken('kim@acme.io')
+    const calls: Array<[string, string, string]> = [
+      ['POST', '/claude/v1/messages?beta=true', '/v1/messages?beta=true'],
+      ['POST', '/claude/v1/messages/count_tokens?beta=true', '/v1/messages/count_tokens?beta=true'],
+      ['GET', '/claude/v1/models', '/v1/models'],
+      ['POST', '/codex/responses', '/backend-api/codex/responses'],
+      ['GET', '/codex/models?client_version=0.165.0', '/backend-api/codex/models?client_version=0.165.0'],
+    ]
+    for (const [method, path] of calls) expect((await raw(method, path, token)).status, `${method} ${path}`).toBe(200)
+    expect(upstream.seen.map((s) => `${s.method} ${s.url}`)).toEqual(calls.map(([method, , sent]) => `${method} ${sent}`))
+  })
+
+  it('refuses an account endpoint, whatever the method, and never reaches the vendor', async () => {
+    await start(ok, both())
+    const token = relay.mintToken('kim@acme.io')
+    for (const [method, path] of [
+      ['POST', '/claude/v1/organizations/api_keys'],
+      ['GET', '/claude/api/oauth/profile'],
+      ['POST', '/claude/api/oauth/claude_cli/create_api_key'],
+      ['GET', '/claude/v1/files'],
+      ['POST', '/claude/v1/messages/batches'],
+      ['GET', '/codex/accounts/check'],
+      ['GET', '/codex/wham/usage'],
+      ['POST', '/codex/responses/compact/../../../accounts'],
+      ['GET', '/claude/'],
+      ['GET', '/codex'],
+    ] as const) {
+      const answer = await raw(method, path, token)
+      expect(answer.status, `${method} ${path}`).toBe(404)
+      expect(answer.body).toContain('harness_relay_error')
+    }
+    expect(upstream.seen).toEqual([])
+  })
+
+  it('refuses encoded separators, dot segments and doubled slashes, as sent', async () => {
+    await start(ok, both())
+    const token = relay.mintToken('kim@acme.io')
+    for (const path of [
+      '/claude/v1/messages/..%2f..%2fv1%2forganizations',
+      '/claude/v1/messages%2fcount_tokens',
+      '/claude/v1/%2e%2e/api/oauth/profile',
+      '/claude/v1/messages%2F..%2F..%2Fapi',
+      '/claude/v1/messages%5c..%5c..%5capi',
+      '/claude/v1/messages\\..\\api',
+      '/claude/v1/./messages',
+      '/claude/v1/x/../messages',
+      '/claude//v1/messages',
+      '/claude/v1/messages/',
+      '/claude/v1/Messages',
+      '/codex/responses/..%2f..%2faccounts',
+      '/codex/%72esponses',
+      'http://chatgpt.com/codex/responses',
+    ]) expect((await raw('POST', path, token)).status, path).toBe(404)
+    expect(upstream.seen).toEqual([])
+  })
+
+  it('refuses another method on an engine path', async () => {
+    await start(ok, both())
+    const token = relay.mintToken('kim@acme.io')
+    for (const [method, path] of [
+      ['GET', '/claude/v1/messages'],
+      ['DELETE', '/claude/v1/messages'],
+      ['PUT', '/claude/v1/messages/count_tokens'],
+      ['POST', '/claude/v1/models'],
+      ['GET', '/codex/responses'],
+      ['DELETE', '/codex/models'],
+      ['HEAD', '/codex/models'],
+      ['OPTIONS', '/claude/v1/messages'],
+    ] as const) expect((await raw(method, path, token)).status, `${method} ${path}`).toBe(405)
+    expect(upstream.seen).toEqual([])
+  })
+
+  it('tells the owner what was refused, without the guest\'s path or token', async () => {
+    await start(ok, both())
+    const token = relay.mintToken('kim@acme.io')
+    await raw('POST', '/claude/v1/organizations/secret-path', token)
+    await raw('GET', '/claude/v1/messages', token)
+    await raw('POST', '/claude/v1/organizations/secret-path', 'not-a-token')
+    expect(lines).toEqual([
+      expect.stringMatching(/^claude POST → 404 · not an engine call · guest [0-9a-f]{8}$/),
+      expect.stringMatching(/^claude GET \/claude\/v1\/messages → 405 · not an engine call · guest [0-9a-f]{8}$/),
+      'claude POST → 401 · no guest',
+    ])
+    for (const line of lines) expect(line).not.toContain('secret-path')
+  })
+})
+
+describe('a revoked guest', () => {
+  it('loses the answer it is streaming', async () => {
+    let started!: () => void
+    const streaming = new Promise<void>((resolve) => { started = resolve })
+    await start(async (req, res) => {
+      if (req.method === 'GET') return ok(req, res)
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('event: message_start\ndata: {}\n\n')
+      started()
+      // The vendor keeps the stream open; only the revoke can end it.
+      await new Promise<void>((resolve) => res.on('close', () => resolve()))
+    }, owner({ claude: claude(OWNER_CLAUDE) }).subscriptions)
+    const token = relay.mintToken('kim@acme.io')
+    const other = relay.mintToken('lee@acme.io')
+    const response = await fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })
+    const reader = response.body!.getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('message_start')
+    await streaming
+    relay.revoke('KIM@acme.io')
+    const rest = await (async () => { try { for (;;) if ((await reader.read()).done) return 'ended' } catch { return 'cut' } })()
+    // Cut, not a clean end: the guest cannot mistake a revoked answer for a whole one.
+    expect(rest).toBe('cut')
+    // Another guest is untouched.
+    expect((await raw('GET', '/claude/v1/models', other)).status).toBe(200)
+  })
+
+  it('gets 401, and nothing is sent, when revoked while its request waits on the owner\'s sign-in', async () => {
+    let signIn!: (credential: OwnerCredential) => void
+    let asked!: () => void
+    const reading = new Promise<void>((resolve) => { asked = resolve })
+    const subscriptions: OwnerSubscriptions = {
+      read: () => { asked(); return new Promise((resolve) => { signIn = resolve }) },
+      refresh: async () => null,
+    }
+    await start(ok, subscriptions)
+    const token = relay.mintToken('kim@acme.io')
+    const pending = fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })
+    await reading
+    relay.revoke('kim@acme.io')
+    signIn(claude(OWNER_CLAUDE))
+    const answer = await pending
+    expect(answer.status).toBe(401)
+    expect(upstream.seen).toEqual([])
+  })
+  it('gets 401, not a vendor error, when revoked while the vendor has not answered yet', async () => {
+    let asked!: () => void
+    const waiting = new Promise<void>((resolve) => { asked = resolve })
+    await start(async (_req, res) => {
+      asked()
+      await new Promise<void>((resolve) => res.on('close', () => resolve()))
+    }, owner({ claude: claude(OWNER_CLAUDE) }).subscriptions)
+    const token = relay.mintToken('kim@acme.io')
+    const pending = fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })
+    await waiting
+    relay.revoke('kim@acme.io')
+    expect((await pending).status).toBe(401)
+  })
+
+  it('is not retried with a fresh sign-in when revoked during the refresh after a 401', async () => {
+    let refreshed!: (credential: OwnerCredential) => void
+    let asked!: () => void
+    const refreshing = new Promise<void>((resolve) => { asked = resolve })
+    const subscriptions: OwnerSubscriptions = {
+      read: async () => claude(OWNER_CLAUDE),
+      refresh: () => { asked(); return new Promise((resolve) => { refreshed = resolve }) },
+    }
+    await start((_req, res) => { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{}') }, subscriptions)
+    const token = relay.mintToken('kim@acme.io')
+    const pending = fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })
+    await refreshing
+    relay.revoke('kim@acme.io')
+    refreshed(claude(OWNER_CLAUDE_FRESH))
+    expect((await pending).status).toBe(401)
+    expect(upstream.seen.map((s) => s.headers.authorization)).toEqual([`Bearer ${OWNER_CLAUDE}`])
   })
 })
 

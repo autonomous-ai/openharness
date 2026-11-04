@@ -19,3 +19,16 @@ abstract interface class SignInClient {
 
   Future<void> logout();
 }
+
+/// Why a browser sign-in did not finish, as the CLI coded its result line (`harness login --json`):
+/// `TIMEOUT` (nobody came back from the page within five minutes), `CANCELLED` (the app that
+/// started it stopped it), `CALLBACK_ERROR`, `EXCHANGE_FAILED`, `BACKEND_ERROR`, `DAEMON_BUSY`, ….
+class SignInException implements Exception {
+  const SignInException(this.code, this.message);
+
+  final String code;
+  final String message;
+
+  @override
+  String toString() => message;
+}

@@ -7,6 +7,8 @@ import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/a
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { confidentialSessions } from '../superTabs/confidential.js'
+import { stableId } from '../superTabs/model.js'
 
 const params = z.object({ id: z.string().uuid() })
 const body = z.object({
@@ -19,6 +21,9 @@ const body = z.object({
 export async function recipientLink(id: string, user: AuthUser | null, autonomousEnv: AutonomousEnvironment) {
   const link = await prisma.harnessLink.findFirst({ where: { id, autonomousEnv, revokedAt: null } })
   if (!link || user && user.autonomousEnv !== autonomousEnv) return null
+  // A confidential session's screen holds people's private chats (superTabs/confidential.ts): no link shows it to anyone but
+  // its machine's owner, public or private, invited or not, as no share does (SuperTabStore.mayOpenShare).
+  if (user?.sub !== link.ownerId && (await confidentialSessions(prisma, [stableId(link.machineId, link.agentId)])).size) return null
   if (link.visibility !== 'public') {
     if (!user) return null
     if (user.sub !== link.ownerId && !await prisma.harnessShare.findFirst({ where: {
@@ -30,6 +35,20 @@ export async function recipientLink(id: string, user: AuthUser | null, autonomou
     machineId: link.machineId, userId: link.ownerId, autonomousEnv, ...machineAlive,
   } })
   return machine && machineBillingAllowsDataPlane(machine) ? link : null
+}
+
+/** Sessions that just turned confidential, after the commit (the store's `sessionsConfidential`): every share and link of
+ *  them checks again at once (lib/observerWs.ts), so their viewers are closed within that event rather than the minute's
+ *  re-check. A link or another Swarm's share follows no Swarm of its own to hear it by. Best effort: the re-check stays. */
+export async function tellSessionViewers(sessions: Array<{ machineId: string; harnessId: string; machineOwnerId: string }>): Promise<void> {
+  try {
+    for (const session of sessions) {
+      const where = { machineId: session.machineId, agentId: session.harnessId, ownerId: session.machineOwnerId, revokedAt: null }
+      const [links, shares] = await Promise.all([prisma.harnessLink.findMany({ where, select: { id: true } }),
+        prisma.harnessShare.findMany({ where, select: { id: true } })])
+      for (const { id } of [...links, ...shares]) await publishShareChanged(id)
+    }
+  } catch { /* best effort */ }
 }
 
 export async function harnessLinkRoutes(app: FastifyInstance): Promise<void> {

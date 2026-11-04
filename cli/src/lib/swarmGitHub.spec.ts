@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { GIT_HOOK_NAMES, gitConfigParameters, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, swarmGitPrepareEnv, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
+import { GIT_HOOK_NAMES, gitConfigParameters, revokeGitHubToken, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, swarmGitPrepareEnv, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
 
 // Real git against folders made here, with a home of its own and no system config: never this machine's git settings,
 // and nothing reaches github.com (only `git credential fill` and `git ls-remote --get-url`, which make no connection).
@@ -79,6 +79,23 @@ describe('the shared helper and hooks', () => {
     expect(() => swarmGitPrepareEnv('not a token; rm -rf /')).toThrow('not in the form GitHub gives')
   })
 
+  // MACs-Mac-Studio, 2026-11-03: lampOS keeps CAD files in Git LFS, git-lfs was not installed, and the filter set here anyway
+  // made Apple's git fail the checkout ("git-lfs: command not found", "the remote end hung up unexpectedly", exit 128), which
+  // the start reported as "Could not clone the repository". Without git-lfs those files stay pointer files, as in any clone.
+  it('sets the Git LFS filter only when git-lfs is on the clone\'s PATH', () => {
+    const token = `ghs_${'t'.repeat(36)}`
+    const without = swarmGitPrepareEnv(token, { PATH: fresh('no-lfs'), HOME: home })
+    expect(without.GIT_CONFIG_PARAMETERS).not.toContain('filter.lfs')
+    const tools = fresh('lfs-tools')
+    script(join(tools, 'git-lfs'), 'exit 0')
+    const withLfs = swarmGitPrepareEnv(token, { PATH: `${fresh('empty')}:${tools}`, HOME: home })
+    for (const key of ['filter.lfs.process', 'filter.lfs.clean', 'filter.lfs.smudge']) expect(withLfs.GIT_CONFIG_PARAMETERS).toContain(`'${key}'=`)
+    // A file named git-lfs that cannot run is no git-lfs.
+    const broken = fresh('lfs-broken')
+    writeFileSync(join(broken, 'git-lfs'), 'not a program')
+    expect(swarmGitPrepareEnv(token, { PATH: broken, HOME: home }).GIT_CONFIG_PARAMETERS).not.toContain('filter.lfs')
+  })
+
   it('writes the helper for this daemon\'s CLI and one hook for every hook git runs, private to its user, once', () => {
     const dataDir = fresh('data')
     const { helper, hooks } = writeSwarmGitHubTools({ dataDir, command: "'/opt/node' '/opt/harness/cli.js'", port: 18500, machineId: 'machine-1' })
@@ -104,7 +121,7 @@ describe('commits in a Swarm session', { timeout: 60_000 }, () => {
     const dir = fresh('commit')
     const repo = join(dir, 'repo')
     mkdirSync(repo)
-    const launch = swarmGitHubLaunch(`harness-claude-fixture-${made}`, { dataDir: shared, command: `/bin/sh ${shellWord(cli)}`, port: 18500, machineId: 'machine-1' }, 'darwin')!
+    const launch = swarmGitHubLaunch(`harness-claude-fixture-${made}`, { dataDir: shared, command: `/bin/sh ${shellWord(cli)}`, port: 18500, machineId: 'machine-1' })!
     expect(git(repo, ['init', '-q', '-b', 'main']).status).toBe(0)
     const env = { GIT_CONFIG_PARAMETERS: launch.env.GIT_CONFIG_PARAMETERS!, HARNESS_SWARM_GITHUB_DIR: launch.env.HARNESS_SWARM_GITHUB_DIR! }
     const commit = (args: string[], extra: Record<string, string> = {}) => git(repo, ['commit', '-q', '--allow-empty', ...args], { ...env, ...extra })
@@ -186,29 +203,107 @@ describe('a session\'s gh login and trailers', () => {
     writeSessionGitHub(dir, 'not a token\n    oauth_token: other')
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
   })
+
+  // A Harness Team account has no git identity: its commits read "Harness Team <harnessteam@<host>.local>" (PR #1934).
+  it('makes the session\'s commits the app\'s when the server names its bot account, and git\'s own otherwise', () => {
+    const dir = fresh('identity')
+    // git as the session runs it: no identity in the environment, only what its config says.
+    const env = { PATH: process.env.PATH!, HOME: home, GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_PARAMETERS: gitConfigParameters('/no/helper', join(dir, 'hooks'), join(dir, 'gitconfig')) }
+    const vars = (name: string) => spawnSync('git', ['var', name], { cwd: dir, encoding: 'utf8', env }).stdout
+    writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Owner\n\temail = owner@example.com\n')
+    const ident = () => vars('GIT_AUTHOR_IDENT')
+    expect(ident()).toMatch(/^Owner <owner@example\.com> /)
+    const bot = { name: 'Harness', email: '245891234+harness[bot]@users.noreply.github.com' }
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
+    expect(statSync(join(dir, 'gitconfig')).mode & 0o777).toBe(0o600)
+    expect(ident()).toMatch(/^Harness <245891234\+harness\[bot\]@users\.noreply\.github\.com> /)
+    expect(vars('GIT_COMMITTER_IDENT')).toMatch(/^Harness </)
+    // Dee, task #2136: what a current server names.
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    expect(ident()).toMatch(/^Harness by Autonomous <noreply@autonomous\.ai> /)
+    // An older server names the app's bot account instead (2026-10-28 to 11-02): still taken.
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], { name: 'harness-for-autonomous[bot]', email: '245891234+harness-for-autonomous[bot]@users.noreply.github.com' })
+    expect(ident()).toMatch(/^harness-for-autonomous\[bot\] </)
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
+    // A refusal keeps it; an answer without one (an older server, a person's machine) or with anything else drops it.
+    writeSessionGitHub(dir, null)
+    expect(ident()).toMatch(/^Harness </)
+    for (const other of [null, { name: 'Mallory', email: 'm@example.com' }, { ...bot, name: 'x[bot]\n[core]' }, { ...bot, name: 'Harness\n[core]' }, { name: 'Harness by Autonomous', email: 'noreply@example.com' }, 'bot']) {
+      writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
+      writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], other)
+      expect(existsSync(join(dir, 'gitconfig'))).toBe(false)
+      expect(ident()).toMatch(/^Owner </)
+    }
+    rmSync(join(home, '.gitconfig'))
+  })
 })
 
 describe('a Swarm session\'s launch', () => {
   it('names the session\'s gh folder and Harness\'s git settings, clears inherited GitHub tokens, and starts with no gh login', () => {
     const dataDir = fresh('launch')
-    const launch = swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'linux')!
+    const launch = swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })!
     const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-abc')!
     expect(launch.env).toEqual({
-      GIT_CONFIG_PARAMETERS: gitConfigParameters(join(dataDir, 'swarm-github', 'bin', 'git-credential'), join(dataDir, 'swarm-github', 'hooks')),
+      GIT_CONFIG_PARAMETERS: gitConfigParameters(join(dataDir, 'swarm-github', 'bin', 'git-credential'), join(dataDir, 'swarm-github', 'hooks'), join(dir, 'gitconfig')),
       GIT_TERMINAL_PROMPT: '0', GH_CONFIG_DIR: join(dir, 'gh'), GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', HARNESS_SWARM_GITHUB_DIR: dir,
     })
     expect(launch.clearEnv).toEqual(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
     // A relaunch keeps a login the daemon has written since.
     writeSessionGitHub(dir, 'ghs_fixtureToken0000002')
-    swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'linux')
+    swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toContain('ghs_fixtureToken0000002')
   })
 
-  it('does not apply on Windows or to a key unfit for a path', () => {
+  it('does not apply to a key unfit for a path', () => {
     const dataDir = fresh('none')
-    expect(swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'win32')).toBeNull()
-    expect(swarmGitHubLaunch('../escape', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'darwin')).toBeNull()
+    expect(swarmGitHubLaunch('../escape', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })).toBeNull()
     expect(existsSync(join(dataDir, 'swarm-github'))).toBe(false)
+  })
+
+  // Off, a Windows Team account's agents had no way to push: its owner's git login is not there, and no helper was.
+  it('applies on Windows too', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const launch = swarmGitHubLaunch('harness-codex-win', { dataDir: fresh('windows'), command: 'harness', port: 18473, machineId: 'm1' })
+      expect(launch?.env.GIT_CONFIG_PARAMETERS).toContain('git-credential')
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+})
+
+// Review of #1998: a start held between its launch preparation and its session's registration could look untouched for 15
+// minutes and lose its folder (superTabs/github.ts emptyStopped). Each launch preparation marks the folder as just used.
+describe('a session\'s GitHub folder at launch', () => {
+  it('is marked as just used every time a launch is prepared', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'swarm-github-launch-'))
+    try {
+      const tools = { dataDir, command: 'harness', port: 18473, machineId: 'm1' }
+      expect(swarmGitHubLaunch('harness-codex-held', tools)).not.toBeNull()
+      const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-held')!
+      const old = new Date(Date.now() - 20 * 60_000)
+      utimesSync(dir, old, old)
+      swarmGitHubLaunch('harness-codex-held', tools)
+      expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000)
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+})
+
+describe('revoking a Harness GitHub App token', () => {
+  const token = `ghs_${'a'.repeat(36)}`
+  it('asks GitHub to revoke it with the token itself, and takes a token already gone as revoked', async () => {
+    const sent: Array<[string, RequestInit]> = []
+    const answer = (status: number) => (async (url: string | URL | Request, init?: RequestInit) => {
+      sent.push([String(url), init!]); return new Response(null, { status })
+    }) as typeof fetch
+    await revokeGitHubToken(token, answer(204))
+    expect(sent[0]![0]).toBe('https://api.github.com/installation/token')
+    expect(sent[0]![1]).toMatchObject({ method: 'DELETE', headers: expect.objectContaining({ Authorization: `Bearer ${token}` }) })
+    await revokeGitHubToken(token, answer(401))
+    await expect(revokeGitHubToken(token, answer(500))).rejects.toThrow('GitHub answered 500')
+    // Nothing that is not a token is sent anywhere.
+    await revokeGitHubToken('not a token', answer(204))
+    expect(sent).toHaveLength(3)
   })
 })

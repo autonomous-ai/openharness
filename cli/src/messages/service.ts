@@ -38,11 +38,14 @@ import { agentProject } from '../lib/agentProject.js'
 import { agentSettingsPath, askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { primaryRuntime, sessionForPaneId, terminalRouteKey } from '../lib/terminalRuntime.js'
-import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
+import { type DirectoryTab, MessageDirectory, type Member } from './directory.js'
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
-import { TOLD_TAB, tellRefusal, toldText } from './tell.js'
+import { RELAYED_TAB, relayedText, relayRefusal, TOLD_TAB, tellRefusal, toldText, type RelayTarget } from './tell.js'
+import { buddyGrantLive, buddyReadsOf } from '../lib/buddyGuard.js'
+import { isTeamAccount } from '../team/config.js'
+import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
 import { cleanName, type Roster } from './roster.js'
@@ -87,6 +90,8 @@ export interface MessagesOptions {
   project?: (cwd: string) => Promise<{ branch: string | null } | null>
   /** The shared tabs' tasks (tasks.ts, which runs `gh`); a test's own, so no test starts the real one. */
   tasks?: TaskReader
+  /** Whether a Buddy session here holds its person's live grant (lib/buddyGuard.ts `buddyGrantLive`); a test's own. */
+  buddyGranted?: (session: RegisteredSession) => boolean
   now?: () => number
 }
 
@@ -105,6 +110,8 @@ export interface AgentMessages {
 
 /** How often the service looks at its notes, its outbox and other machines' deliveries. */
 export const TICK_MS = 5_000
+/** How often a tab id this desk does not list may make the desk be read again (`tabActivity`). */
+export const MISSED_TAB_READ_MS = 15_000
 /** How often a message waiting on another machine is asked about. */
 export const REMOTE_STATUS_MS = 15_000
 /** How long another machine's names for its agents are kept. */
@@ -229,6 +236,21 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   /** Whether a harness's starter may tell it more work (`agents-tell-agents`): read at each use, as few as they are, so
    *  a switch turned off stops what still waits at the mailbox's next look. */
   const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
+  /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
+  const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
+  /** A person's Buddy here, by this machine's registry: a Swarm session of role buddy (#2626). */
+  const isBuddy = (session: RegisteredSession | undefined): session is RegisteredSession => session?.swarmSkill?.role === 'buddy'
+  /** Whether that Buddy's person is proven with it on this machine now: never on a Team account, which no person signs in to. */
+  const buddyGranted = options.buddyGranted ?? ((session: RegisteredSession) => !!session.swarmSkill && !!session.cwd && !isTeamAccount()
+    && buddyGrantLive(buddyReadsOf(session.swarmSkill.key), session.cwd, now()))
+  /** What a Buddy would pass words to, from this machine's registry: every live harness, terminals included, so each is named. */
+  const relayTarget = (buddy: RegisteredSession, agentId: string): RelayTarget | null => {
+    const target = core.agents.live().find((s) => s.agentId === agentId)
+    return target ? { swarm: !!target.swarmSkill, startedByAgent: target.startedBy === 'agent' || !!target.parentAgentId, guest: !!target.guest,
+      terminal: target.engine === ('terminal' as string), self: target.agentId === buddy.agentId } : null
+  }
+  /** Why the Buddy [from] may not pass words to [agentId] here now, or null; at the request and at each delivery look. */
+  const relayCheck = (from: RegisteredSession, agentId: string) => relayRefusal({ on: tellOn(), granted: buddyGranted(from), target: relayTarget(from, agentId) })
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -280,6 +302,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     text: (delivery, message) => {
       // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
       if (message.tabId === TOLD_TAB) return toldText(message)
+      if (message.tabId === RELAYED_TAB) return relayedText(message)
+      // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
+      if (message.tabId === REPLIED_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
       const text = rendered(message, account?.accountId)
       return roster && store.state.noted[delivery.agentId] !== roster.signature ? `${roster.text}\n\n${text}` : text
@@ -321,6 +346,15 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
       return refusal ? { refused: refusal.message } : null
     }
+    // A Buddy's words for its person's harness: who it is from, whose the harness is and the grant, again at each look.
+    if (entry.message.tabId === RELAYED_TAB) {
+      const buddy = localAgent(entry.message.from.agentId)
+      if (entry.message.from.machineId !== self() || !isBuddy(buddy)) return { refused: 'its Buddy no longer runs here' }
+      const refusal = relayCheck(buddy, delivery.agentId)
+      return refusal ? { refused: refusal.message } : null
+    }
+    // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
+    if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
     if (!directory.current() && directory.on()) return null
     const key = `${delivery.messageId} ${delivery.agentId}`
     const recipient = { machineId: self(), agentId: delivery.agentId }
@@ -610,11 +644,14 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    */
   async function tell(payload: Record<string, unknown>, local: boolean): Promise<Record<string, unknown>> {
     let from: Member
+    let caller: RegisteredSession | undefined
+    // `harness reply` from a pane: the words of the person, passed on by their Buddy (#2626); never another agent's.
+    const reply = payload.reply === true
     if (local) {
       const pane = typeof payload.pane === 'string' ? payload.pane : ''
-      const session = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
-      if (!session) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
-      from = { machineId: self(), agentId: session.agentId }
+      caller = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
+      if (!caller) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
+      from = { machineId: self(), agentId: caller.agentId }
     } else {
       const claimed = payload.from as Record<string, unknown> | null | undefined
       if (typeof claimed?.machineId !== 'string' || !claimed.machineId || typeof claimed.agentId !== 'string' || !claimed.agentId) {
@@ -630,7 +667,10 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!text.trim()) throw new MessageError('USAGE', 'Say what to do: harness tell <name> -- <work>')
     if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
     const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: (id) => !!localAgent(id) }, from, agentId)
+    // Not a harness it started: a Buddy here may still pass its person's words to their own (relay); nobody else may.
+    if (refusal?.code === 'NOT_YOURS' && local && isBuddy(caller)) return relay(caller, agentId, text, payload, reply)
     if (refusal) throw new MessageError(refusal.code, refusal.message)
+    if (reply) throw new MessageError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
     const key = `${from.machineId}/${from.agentId}`
     const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)
     if (times.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `You told your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
@@ -653,6 +693,81 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
     mailbox.accept(message, agentId)
     // Asleep (Agent Messages off), the mailbox looks only while something waits: this does now.
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
+  /**
+   * A person's Buddy passing their words to their own harness here (tell.ts `relayRefusal`, #2626): checked from this
+   * machine's registry, kept under `relayed`, queued in the mailbox as a tell is, at the same rate and limits. A reply goes
+   * only to an idle harness, as a program's does: one that may wait on a question or a permission is the person's.
+   */
+  async function relay(buddy: RegisteredSession, agentId: string, text: string, payload: Record<string, unknown>, reply: boolean): Promise<Record<string, unknown>> {
+    const refusal = relayCheck(buddy, agentId)
+    if (refusal) throw new MessageError(refusal.code, refusal.message)
+    if (reply) {
+      const activity = (await core.agents.activity([agentId]))[agentId] ?? 'unknown'
+      const busy = replyRefusal({ on: true, live: true, activity })
+      if (busy) throw new MessageError(busy.code, busy.message)
+    }
+    const key = `${self()}/${buddy.agentId}`
+    const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)
+    if (times.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `You passed words to your owner's harnesses ${LIMITS.perSender} times in 10 minutes. Wait for them first.`)
+    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
+      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
+    }
+    const target = localAgent(agentId)!
+    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(self())
+    const message: Message = {
+      id: messageId(), tabId: RELAYED_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: core.agents.displayName(target) || agentId.slice(0, 8) }],
+      from: { machineId: self(), agentId: buddy.agentId, name: core.agents.displayName(buddy) || buddy.agentId.slice(0, 8), engine: buddy.engine, machine },
+    }
+    toldAt.set(key, [...times, now()])
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
+  /** When programs replied to harnesses here, for the rate limit: the same 30 in 10 minutes a `tell` has. */
+  const repliedAt: number[] = []
+
+  /**
+   * `harness reply` to a harness in a pane here (replyLocal.ts), from a program acting for the person: a process of the
+   * owner's on this machine, or another of the owner's machines over the relay. Only an idle harness, only with the
+   * person's switch on; queued in the mailbox, which types it once the composer is free.
+   */
+  async function replyLocal(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId) throw new MessageError('USAGE', 'Name the harness to reply to.')
+    if (!text.trim()) throw new MessageError('USAGE', 'Give the words: harness reply <name> -- <words>')
+    if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
+    const session = localAgent(agentId)
+    const activity = session ? (await core.agents.activity([agentId]))[agentId] ?? 'unknown' : 'unknown'
+    const refusal = replyRefusal({ on: replyOn(), live: !!session, activity })
+    if (refusal) throw new MessageError(refusal.code, refusal.message)
+    while (repliedAt.length && now() - repliedAt[0] >= LIMITS.window) repliedAt.shift()
+    if (repliedAt.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `Programs replied to your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
+    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
+      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
+    }
+    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(self())
+    const message: Message = {
+      id: messageId(), tabId: REPLIED_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: core.agents.displayName(session!) || agentId.slice(0, 8) }],
+      from: { machineId: self(), agentId: PERSON_AGENT_ID, name: 'the person', engine: '', machine },
+    }
+    repliedAt.push(now())
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
     mailbox.resume()
     saveQuietly()
     const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
@@ -1238,9 +1353,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!messagingOn()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)
     const me = await signedInAs()
     const onDesk = (): DirectoryTab | undefined => directory.current()?.tabs.find((t) => t.id === tabId)
-    // A tab it does not know may be new: the desk is read again for it, but not more than once in POLL_MS, so ids a window
+    // A tab it does not know may be new: the desk is read again for it, but not more than once in MISSED_TAB_READ_MS, so ids a window
     // makes up cannot drive reads of the backend.
-    if (!onDesk() && now() - missedTabAt >= POLL_MS) { missedTabAt = now(); await directory.refresh() }
+    if (!onDesk() && now() - missedTabAt >= MISSED_TAB_READ_MS) { missedTabAt = now(); await directory.refresh() }
     const tab = onDesk()
     if (!tab) throw new MessageError('NOT_A_TAB', 'That tab is not on your desk.')
     const foreign = (m: Member): boolean => !!m.accountId && m.accountId !== me.accountId
@@ -1534,8 +1649,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
 
   const stopHearing = core.turns.onDelivery((event: TurnDelivery) => mailbox.observe(event))
   // Asleep, a changed desk is read when it wakes, not now. Shared tabs read theirs after the desk, whose panes they take.
+  // A machine created, renamed or deleted changes the panes and names the directory lists, as a changed desk does.
   const stopNotices = core.account.onNotice((notice) => {
-    if (notice.type === 'desk_changed' && !asleep()) void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    if ((notice.type === 'desk_changed' || notice.type === 'machines_changed') && !asleep()) {
+      void directory.refresh(true).then(() => shared?.refresh()).catch(() => {})
+    }
   })
 
   // Started only as it wakes, when it is stopped: never twice.
@@ -1623,6 +1741,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'started': return started(payload)
           // From a pane here, or another of the owner's machines over the relay: `tell` tells them apart.
           case 'tell': return tell(payload, asker.local)
+          // A program acting for the person, here or on another of the owner's machines (replyLocal.ts).
+          case 'reply_local': return replyLocal(payload)
           case 'history': return history(payload)
           // The windows' sidebar: every harness of a desk tab, shared or not, with its state and one line on what it does.
           case 'tab_activity': return tabActivity(String(payload.tabId))

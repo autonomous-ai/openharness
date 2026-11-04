@@ -3,7 +3,9 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writ
 import { dirname, join, sep, win32 } from 'node:path'
 
 import { env } from '../config/env.js'
-import { gridChildEnv, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { gridAvailable, gridChildEnv, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { installGrid } from './gridInstall.js'
+import { followWindowsGridPin } from './gridWindowsPin.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 
@@ -319,9 +321,23 @@ export async function ensureManagedRuntime(log: (message: string) => void = () =
  * it outranks the pin at resolution, so a pin laid down under it would be work nobody asked for.
  */
 export async function ensureManagedGrid(log: (message: string) => void = () => {}): Promise<string | null> {
-  // Not on Windows (spec section 1): no grid is published for it, and an agent's pane there has no grid to run.
-  if (process.platform === 'win32') return null
   if (process.env.HARNESS_GRID_BIN?.trim()) return null
+  // No managed grid build on Windows: grid's own installer lays the pinned release down there, and there is no
+  // managed binary to return (gridWindowsPin.ts).
+  if (process.platform === 'win32') {
+    await followWindowsGridPin({
+      key: platformKey(),
+      manifest: async () => {
+        const response = await fetch(env.ADAPTER_GRID_RUNTIME_METADATA_URL)
+        if (!response.ok) throw new Error(`manifest answered ${response.status}`)
+        return response.json()
+      },
+      installedVersion: () => gridAvailable() ? gridVersion() : Promise.resolve(null),
+      install: (version) => installGrid(version),
+      log,
+    })
+    return null
+  }
   return ensureManagedArchive({
     name: 'grid',
     label: 'grid',

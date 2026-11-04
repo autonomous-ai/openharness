@@ -1847,7 +1847,18 @@ class _TerminalPanelState extends State<TerminalPanel>
       if (imageBytes != null &&
           imageBytes.isNotEmpty &&
           imageBytes.length <= terminalLocalImagePasteMaxPayloadBytes) {
-        await target.pasteImage(imageBytes);
+        final pasted = await target.pasteImage(imageBytes);
+        final stalled = target.lastStalledUpload;
+        if (!pasted && stalled != null && mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(
+              content: Text(
+                'The image upload stopped at ${(stalled.percent * 100).round()}%: '
+                'part of it never reached the machine. Paste again to retry.',
+              ),
+            ),
+          );
+        }
         return;
       }
     }
@@ -3523,8 +3534,15 @@ class _TerminalHeader extends StatelessWidget {
       // cursor at the same spot on the header it was picked up by.
       dragAnchorStrategy: childDragAnchorStrategy,
       onDragStarted: () => paneDragging.value = handle.ref,
-      onDragEnd: (_) => paneDragging.value = null,
-      onDraggableCanceled: (_, _) => paneDragging.value = null,
+      onDragUpdate: (details) => paneDragPointer.value = details.globalPosition,
+      onDragEnd: (_) {
+        paneDragging.value = null;
+        paneDragPointer.value = null;
+      },
+      onDraggableCanceled: (_, _) {
+        paneDragging.value = null;
+        paneDragPointer.value = null;
+      },
       feedback: _PaneGhost(session: session, size: handle.size, header: strip),
 
       // The header itself does NOT change — the whole tile fades instead, in

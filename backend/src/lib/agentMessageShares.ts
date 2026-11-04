@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma, machineAlive } from './prisma.js'
+import { upsertRacing } from './upsertRace.js'
 
 /**
  * Shared tabs across accounts: the owner's signed roster, stored and never read; invitations by email; and who
@@ -96,12 +97,12 @@ export async function invite(input: { ownerUserId: string; ownerEmail: string; s
     prisma.agentMessageInvite.count({ where: { shareId: share.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } }),
   ])
   if (members + pending >= MAX_MEMBERS) return { error: 'TAB_FULL' as const }
-  const row = await prisma.agentMessageInvite.upsert({
+  const row = await upsertRacing(() => prisma.agentMessageInvite.upsert({
     where: { shareId_email: { shareId: share.id, email } },
     create: { id: randomUUID(), shareId: share.id, ownerUserId: input.ownerUserId, ownerMachineId: share.ownerMachineId,
       email, autonomousEnv: input.autonomousEnv, expiresAt: input.expiresAt, acceptedAt: null, acceptedBy: null, revokedAt: null },
     update: { expiresAt: input.expiresAt, revokedAt: null, acceptedAt: null, acceptedBy: null },
-  })
+  }))
   return { id: row.id }
 }
 
@@ -129,9 +130,10 @@ export async function pendingInvites(email: string, autonomousEnv: string): Prom
   const found = await prisma.agentMessageInvite.findMany({ where: { email: email.trim().toLowerCase(), autonomousEnv,
     acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } })
   // One read for every listed invitation's share: the liveness and the name come from the same rows.
-  const live = new Map((await prisma.agentMessageShare.findMany({ where: { id: { in: found.map(r => r.shareId) }, stoppedAt: null }, select: { id: true, roster: true } })).map(s => [s.id, s.roster]))
+  const shares = found.length ? await prisma.agentMessageShare.findMany({ where: { id: { in: found.map(r => r.shareId) }, stoppedAt: null }, select: { id: true, roster: true } }) : []
+  const live = new Map(shares.map(s => [s.id, s.roster]))
   const rows = found.filter(r => live.has(r.shareId))
-  const owners = await prisma.user.findMany({ where: { id: { in: rows.map(r => r.ownerUserId) } }, select: { id: true, email: true } })
+  const owners = rows.length ? await prisma.user.findMany({ where: { id: { in: rows.map(r => r.ownerUserId) } }, select: { id: true, email: true } }) : []
   const emailOf = new Map(owners.map(o => [o.id, o.email]))
   return rows.map(r => ({ id: r.id, sharedTabId: r.shareId, ownerEmail: emailOf.get(r.ownerUserId) ?? '',
     ownerMachineId: r.ownerMachineId, expiresAt: r.expiresAt.toISOString(), tabName: rosterName(live.get(r.shareId)) }))
@@ -147,9 +149,9 @@ export async function accept(user: { sub: string; email: string; autonomousEnv: 
   if (row.expiresAt <= now) return { error: 'EXPIRED' as const }
   await prisma.agentMessageInvite.update({ where: { id: row.id }, data: { acceptedBy: user.sub, acceptedAt: now } })
   const id = memberId(row.shareId, user.sub)
-  await prisma.agentMessageMember.upsert({ where: { id },
+  await upsertRacing(() => prisma.agentMessageMember.upsert({ where: { id },
     create: { id, shareId: row.shareId, userId: user.sub, email: row.email, inviteId: row.id, acceptedAt: now, removedAt: null },
-    update: { removedAt: null, inviteId: row.id, acceptedAt: now } })
+    update: { removedAt: null, inviteId: row.id, acceptedAt: now } }))
   return { sharedTabId: row.shareId }
 }
 
@@ -194,8 +196,8 @@ export async function moveShare(ownerUserId: string, shareId: string, machineId:
 export async function listShares(userId: string, autonomousEnv: string): Promise<ShareView[]> {
   const memberships = await prisma.agentMessageMember.findMany({ where: { userId, removedAt: null }, select: { shareId: true } })
   const shares = await prisma.agentMessageShare.findMany({ where: { autonomousEnv, stoppedAt: null,
-    OR: [{ ownerUserId: userId }, { id: { in: memberships.map(m => m.shareId) } }] } })
-  const owners = await prisma.user.findMany({ where: { id: { in: shares.map(s => s.ownerUserId) } }, select: { id: true, email: true } })
+    OR: [{ ownerUserId: userId }, ...memberships.length ? [{ id: { in: memberships.map(m => m.shareId) } }] : []] } })
+  const owners = shares.length ? await prisma.user.findMany({ where: { id: { in: shares.map(s => s.ownerUserId) } }, select: { id: true, email: true } }) : []
   const emailOf = new Map(owners.map(o => [o.id, o.email]))
   return Promise.all(shares.map(async (s): Promise<ShareView> => {
     const view = { sharedTabId: s.id, owner: s.ownerUserId === userId, ownerEmail: emailOf.get(s.ownerUserId) ?? '',

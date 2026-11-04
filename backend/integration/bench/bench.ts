@@ -11,6 +11,7 @@ import { legacyDriver } from './legacyDriver.js'
 import { partsDriver } from './drivers/parts.js'
 import { runLoad } from './load.js'
 import { plan, planDigest } from './plan.js'
+import { cpuMicros, isolatedKpis, loadKpis, serverOperations } from './kpi.js'
 import { isolatedPolls } from './probe.js'
 import type { BenchReport } from './report.js'
 import { seedSwarm } from './seed.js'
@@ -43,9 +44,16 @@ export async function runBench(config: BenchConfig, driverName: string, db: Pris
     const { swarm, calls } = await seedSwarm(driver, config, p, people)
     const setupMs = performance.now() - setupStart
     const afterSetup = await driver.stateSize(swarm.tabId)
+    const [operationsBefore, cpuBefore] = [await serverOperations(db), cpuMicros()]
     const load = await runLoad(driver, counter, config, p, swarm)
+    const [operations, cpu] = [await serverOperations(db) - operationsBefore, cpuMicros() - cpuBefore]
     const afterLoad = await driver.stateSize(swarm.tabId)
     const polls = await isolatedPolls(db, load.readers)
+    const desktop = load.readers.find(r => r.label.startsWith('desktop:'))
+    const kpis = {
+      load: loadKpis({ ms: load.actualMs, operations, cpuMicros: cpu, failedAttempts: load.recorder.byOp().reduce((sum, row) => sum + row.conflicts, 0) }),
+      isolated: desktop ? await isolatedKpis(db, driver, swarm, desktop) : null,
+    }
     const readerLabels = new Set(load.readers.map(r => r.label))
     return {
       benchmark: 'swarm-state', version: 1, driver: driver.name, startedAt, commit: commit(),
@@ -57,6 +65,7 @@ export async function runBench(config: BenchConfig, driverName: string, db: Pris
         writers: load.recorder.byWriter().filter(w => !readerLabels.has(w.key)), readers: load.recorder.byWriter().filter(w => readerLabels.has(w.key)) },
       state: { afterSetup, afterLoad },
       isolatedPolls: polls,
+      kpis,
     }
   } finally {
     await driver.close()

@@ -26,6 +26,7 @@ void main() {
     DateTime? Function()? lastHeardFromMachine,
     bool Function()? onTransportSilent,
     Duration resync = const Duration(milliseconds: 40),
+    Duration uploadStall = const Duration(seconds: 30),
     bool disposeAtEnd = true,
   }) {
     final built = TerminalSession(
@@ -40,6 +41,7 @@ void main() {
       lastHeardFromMachine: lastHeardFromMachine,
       onTransportSilent: onTransportSilent,
       resyncTimeout: resync,
+      uploadStallTimeout: uploadStall,
       takeover: takeover,
     );
     if (disposeAtEnd) addTearDown(built.dispose);
@@ -78,8 +80,9 @@ void main() {
     String engine = 'claude',
     String screen = 'prompt> ',
     Duration resync = const Duration(milliseconds: 40),
+    Duration uploadStall = const Duration(seconds: 30),
   }) async {
-    final s = session(engine: engine, resync: resync);
+    final s = session(engine: engine, resync: resync, uploadStall: uploadStall);
     await s.open();
     final streamId = await ready(s);
     await s.handleBinary(_keyframe(streamId, text: screen));
@@ -1677,6 +1680,33 @@ void main() {
       expect(wire.of('terminal_chunked_upload_cancel'), hasLength(1));
     });
 
+    test('cancelling before the daemon answers the announcement settles it at '
+        'once', () {
+      fakeAsync((async) {
+        final s = session(disposeAtEnd: false);
+        s.open();
+        async.flushMicrotasks();
+        s.handleFrame('terminal_ready', {
+          'requestId': wire.last('terminal_open')['requestId'],
+          'agentId': 'a',
+          'protocolVersion': TerminalSession.protocolVersion,
+          'streamId': _streamId(),
+        });
+        s.handleBinary(_keyframe(s.streamId!));
+        async.flushMicrotasks();
+        bool? result;
+        s.pasteImage(Uint8List(3)).then((value) => result = value);
+        async.flushMicrotasks();
+
+        s.cancelUpload();
+        async.flushMicrotasks();
+
+        expect(result, isFalse);
+        expect(wire.of('terminal_chunked_upload_cancel'), hasLength(1));
+        s.dispose();
+      });
+    });
+
     test('a stream lost mid-upload settles it at once', () async {
       final (s, _) = await live();
 
@@ -1745,8 +1775,128 @@ void main() {
         async.elapse(const Duration(seconds: 11));
 
         expect(result, isFalse);
+        // It may have been accepted all the same: the daemon is told to drop it.
+        expect(wire.last('terminal_chunked_upload_cancel'), {
+          'streamId': s.streamId,
+        });
         s.dispose();
       });
+    });
+
+    test(
+      'chunks wait for the daemon to confirm: at most the window is on the way',
+      () async {
+        final (s, _) = await live();
+        final window = terminalUploadWindowBytes ~/ terminalUploadChunkBytes;
+        final image = Uint8List(terminalUploadChunkBytes * (window + 2) + 7);
+        List<int> sent() => [
+          for (final f in wire.binaries)
+            if (f.kind == TerminalBinaryKind.imagePaste) f.seq,
+        ];
+        Future<void> confirm(int bytes) async {
+          await answer(s, 'terminal_chunked_upload_progress', {
+            'bytesWritten': bytes,
+            'totalBytes': image.length,
+          });
+          await Future<void>.delayed(Duration.zero);
+        }
+
+        final pasting = s.pasteImage(image);
+        await Future<void>.delayed(Duration.zero);
+        await answer(s, 'terminal_chunked_upload_begin_result', {
+          'accepted': true,
+        });
+        await Future<void>.delayed(Duration.zero);
+        expect(sent(), hasLength(window));
+
+        await confirm(terminalUploadChunkBytes);
+        expect(sent(), hasLength(window + 1));
+        await confirm(terminalUploadChunkBytes);
+        expect(sent(), hasLength(window + 1));
+        await confirm(terminalUploadChunkBytes * 3);
+        expect(sent(), [for (var seq = 0; seq < window + 3; seq++) seq]);
+
+        await confirm(image.length);
+        await answer(s, 'terminal_paste_image_result');
+        expect(await pasting, isTrue);
+        expect(wire.of('terminal_chunked_upload_cancel'), isEmpty);
+      },
+    );
+
+    for (final waitingForRoom in [true, false]) {
+      test('an upload the daemon stops confirming is given up, here and on the '
+          'daemon (waiting for room: $waitingForRoom)', () async {
+        final (s, streamId) = await live(
+          uploadStall: const Duration(milliseconds: 50),
+        );
+        final window = terminalUploadWindowBytes ~/ terminalUploadChunkBytes;
+        final chunks = waitingForRoom ? window + 3 : 3;
+        final image = Uint8List(terminalUploadChunkBytes * chunks);
+
+        final pasting = s.pasteImage(image);
+        await Future<void>.delayed(Duration.zero);
+        await answer(s, 'terminal_chunked_upload_begin_result', {
+          'accepted': true,
+        });
+        await Future<void>.delayed(Duration.zero);
+        // Part of the picture arrives; the rest was lost on the way.
+        await answer(s, 'terminal_chunked_upload_progress', {
+          'bytesWritten': terminalUploadChunkBytes,
+          'totalBytes': image.length,
+        });
+
+        expect(await pasting, isFalse);
+        expect(
+          wire.binaries.where((f) => f.kind == TerminalBinaryKind.imagePaste),
+          hasLength(waitingForRoom ? window + 1 : 3),
+        );
+        expect(s.uploadProgress, isNull);
+        expect(s.lastStalledUpload!.bytesWritten, terminalUploadChunkBytes);
+        expect(wire.last('terminal_chunked_upload_cancel'), {
+          'streamId': streamId,
+        });
+        expect(s.status, TerminalSessionStatus.controlling);
+
+        final next = s.pasteImage(Uint8List(3));
+        await Future<void>.delayed(Duration.zero);
+        expect(wire.of('terminal_chunked_upload_begin'), hasLength(2));
+        expect(s.lastStalledUpload, isNull);
+        await s.cancelUpload();
+        expect(await next, isFalse);
+      });
+    }
+
+    test('an upload the daemon still holds for this pane is cancelled, and the '
+        'announcement made once more', () async {
+      final (s, streamId) = await live();
+      const stale = {
+        'accepted': false,
+        'reason': 'an upload is already in progress on this pane',
+      };
+
+      final pasting = s.pasteImage(Uint8List(3));
+      await Future<void>.delayed(Duration.zero);
+      await answer(s, 'terminal_chunked_upload_begin_result', stale);
+      await Future<void>.delayed(Duration.zero);
+      expect(wire.of('terminal_chunked_upload_cancel'), [
+        {'streamId': streamId},
+      ]);
+      expect(wire.of('terminal_chunked_upload_begin'), hasLength(2));
+      await answer(s, 'terminal_chunked_upload_begin_result', {
+        'accepted': true,
+      });
+      await Future<void>.delayed(Duration.zero);
+      await answer(s, 'terminal_paste_image_result');
+      expect(await pasting, isTrue);
+
+      // Only once: a daemon that refuses again ends it.
+      final again = s.pasteImage(Uint8List(3));
+      for (var i = 0; i < 2; i++) {
+        await Future<void>.delayed(Duration.zero);
+        await answer(s, 'terminal_chunked_upload_begin_result', stale);
+      }
+      expect(await again, isFalse);
+      expect(wire.of('terminal_chunked_upload_begin'), hasLength(4));
     });
 
     test('frames about an upload on another stream are ignored', () async {

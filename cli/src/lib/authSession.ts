@@ -1,5 +1,5 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 
@@ -46,7 +46,9 @@ export const knownSsoClientId = (raw: unknown): SsoClientId | undefined =>
   Object.values(SSO_CLIENT_IDS).find((id) => id === raw)
 
 export class AuthSessionError extends Error {
-  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE') {
+  /** `SIGN_IN_AGAIN`: a Harness session SSO has not confirmed for longer than its grace (backend lib/ssoSession.ts). The
+   *  person is asked to sign in again; the session is kept, unmarked, so SSO coming back renews it. */
+  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE' | 'SIGN_IN_AGAIN') {
     super(message)
     this.name = 'AuthSessionError'
   }
@@ -87,9 +89,15 @@ function parse(raw: string): AuthSession | null {
  *  made (ms) — the device key log lets a sign-in start its file over only shortly after it was made. */
 export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).toString('hex')}@${now}`
 
-/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in
- *  being made here, so the device key log may take its file over for it but never starts one over. */
+/** How a `signInEpoch` given to a session from before epochs existed starts, and a Team sign-in's ([teamSignInEpoch]): nobody
+ *  saw that sign-in made by hand here, so the device key log may take its file over for it but never starts one over. */
 export const ADOPTED_SIGN_IN = 'adopted:'
+
+/** A Team sign-in's epoch, made as it signs in. Adopted, so the device key log treats it as it always has (a Team session was
+ *  given an adopted epoch at its first read), and can never start over for another account on it; and its own form, as it is a
+ *  new sign-in, never an old session given an epoch meanwhile ([sameSignIn]). */
+const TEAM_SIGN_IN = `${ADOPTED_SIGN_IN}team:`
+export const teamSignInEpoch = (now = Date.now()): string => TEAM_SIGN_IN + newSignInEpoch(now)
 
 /** Give a session from before epochs existed one (`ADOPTED_SIGN_IN`), under the refresh lock so a
  *  rotated refresh token is never written back over. The session's epoch; null when signed out. */
@@ -115,8 +123,35 @@ export function signInOf(epoch: string | undefined | null, acct?: string | null)
   return { epoch, adopted, at: at ? Number(at[1]) : null, ...(acct && !adopted ? { acct } : {}) }
 }
 
+/** A sign-in's signed-out mark ([markSignedOut]): why and since when, and for a refused refresh, when it
+ *  may be tried again and how long the last wait was ([AuthSessionManager.retrySignedOut]). */
+export interface SignedOutMark { at: number; reason: SignedOutReason; retryAt?: number; retryWait?: number }
+
+/** The session on disk, and its signed-out mark when it has one ([markSignedOut]). */
+function readStored(): { session: AuthSession; signedOut: SignedOutMark | null } | null {
+  let raw: string
+  try { raw = readFileSync(AUTH_SESSION_FILE, 'utf8') } catch { return null }
+  const session = parse(raw)
+  if (!session) return null
+  let mark: unknown
+  try { mark = (JSON.parse(raw) as { signedOut?: unknown }).signedOut } catch { mark = undefined }
+  const signedOut = typeof mark === 'object' && mark !== null
+    && ((mark as { reason?: unknown }).reason === 'refresh-refused' || (mark as { reason?: unknown }).reason === 'revoked')
+    ? {
+        at: Number((mark as { at?: unknown }).at) || 0,
+        reason: (mark as { reason: SignedOutReason }).reason,
+        ...(typeof (mark as { retryAt?: unknown }).retryAt === 'number' ? { retryAt: (mark as { retryAt: number }).retryAt } : {}),
+        ...(typeof (mark as { retryWait?: unknown }).retryWait === 'number' ? { retryWait: (mark as { retryWait: number }).retryWait } : {}),
+      }
+    : null
+  return { session, signedOut }
+}
+
+/** This computer's sign-in, or null when it has none, or has one marked signed out ([markSignedOut]): nothing
+ *  acts on that one again until a new sign-in replaces it. */
 export function readAuthSession(): AuthSession | null {
-  try { return parse(readFileSync(AUTH_SESSION_FILE, 'utf8')) } catch { return null }
+  const stored = readStored()
+  return stored && !stored.signedOut ? stored.session : null
 }
 
 export function hasAuthSession(): boolean { return readAuthSession() !== null }
@@ -137,6 +172,88 @@ export function writeAuthSession(session: AuthSession): void {
   } finally {
     try { rmSync(temp, { force: true }) } catch { /* ignore */ }
   }
+}
+
+/** Why a sign-in kept on disk is signed out: its refresh was refused, or it was revoked. */
+export type SignedOutReason = 'refresh-refused' | 'revoked'
+
+/**
+ * Marks this computer's sign-in signed out, and keeps it. 10-27: a sign-out nobody asked for stalled a whole
+ * Mac for hours. Nothing automatic deletes the sign-in any more (a refused refresh, a 401 or 403, a revoke):
+ * it is marked instead, [readAuthSession] reads it as none, and a new sign-in's [writeAuthSession] replaces
+ * it. Only a person deletes it (lib/signOut.ts `removeSignIn`). A refused refresh is tried again
+ * ([AuthSessionManager.retrySignedOut]); a revoked one is not.
+ */
+export function markSignedOut(reason: SignedOutReason, at = Date.now(), lock: Lock = withLock): Promise<void> {
+  // Under the refresh lock: a refresh another process has under way saves its session when it is done, and a
+  // mark written before that save was written over by it, and the revoked sign-in used again (review of #1866).
+  // A lock that cannot be had (another process holding it past its stale time) still marks: a revoke left
+  // unmarked stopped the daemon, and the core that came back used the revoked sign-in until it was refused
+  // again (follow-up to the review of #1866).
+  return lock(async () => markSignedOutHeld(reason, at)).catch((error: unknown) => {
+    if (!(error instanceof AuthSessionError) || error.code !== 'UNAVAILABLE') throw error
+    markSignedOutHeld(reason, at)
+  })
+}
+
+/** How [markSignedOut] and [updateAuthSession] take the refresh lock; a spec's own in place of [withLock]. */
+export type Lock = <T>(action: () => Promise<T>) => Promise<T>
+
+/**
+ * Rewrites this computer's sign-in from the newest one on disk: [change] gives the new one, or null (or the
+ * same one) to leave it. Under the refresh lock, so a refresh's rotated tokens and a signed-out mark are never
+ * written over, and it is read again just before the write: a sign-in marked meanwhile is left marked (follow-up
+ * to the review of #1866). The sign-in written; null when there was none, or it is marked signed out.
+ */
+export function updateAuthSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null> {
+  if (!readAuthSession()) return Promise.resolve(null)
+  return withLock(async () => {
+    const latest = readAuthSession()
+    if (!latest) return null
+    const next = change(latest)
+    if (!next || next === latest) return latest
+    if (readStored()?.signedOut) return null
+    writeAuthSession(next)
+    return next
+  })
+}
+
+/**
+ * A machine id the backend named for the sign-in [startedUnder] (its `signInEpoch` when the lookup began), merged into the
+ * newest session only if that is still the same sign-in. A lookup can outlive a sign-out and a new sign-in, and its answer is
+ * the old account's machine: dropped, as a later lookup finds the new one. A refresh keeps the epoch, so it keeps the answer. A
+ * session from before epochs may only have been given one meanwhile (adopted): still that sign-in. The newest session; null
+ * when there is none, or it is marked signed out.
+ */
+export function recordMachineId(machineId: string, startedUnder: string | undefined): Promise<AuthSession | null> {
+  return updateAuthSession((latest) => !sameSignIn(latest, startedUnder) || latest.machineId === machineId
+    ? null : { ...latest, machineId, updatedAt: Date.now() })
+}
+
+/** Whether [latest] is still the sign-in a lookup started under ([recordMachineId]). */
+export function sameSignIn(latest: AuthSession, startedUnder: string | undefined): boolean {
+  if (latest.signInEpoch === startedUnder) return true
+  return startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true && !latest.signInEpoch?.startsWith(TEAM_SIGN_IN)
+}
+
+/** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
+ *  and each ask must not be a refresh request. */
+const RETRY_FIRST_MS = 60_000
+const RETRY_LONGEST_MS = 60 * 60_000
+
+/** [markSignedOut], by a caller that holds the refresh lock already: the refresh that was refused. */
+function markSignedOutHeld(reason: SignedOutReason, at: number): void {
+  const stored = readStored()
+  if (!stored || stored.signedOut) return
+  const mark: SignedOutMark = reason === 'refresh-refused'
+    ? { at, reason, retryAt: at + RETRY_FIRST_MS, retryWait: RETRY_FIRST_MS }
+    : { at, reason }
+  writeAuthSession({ ...stored.session, signedOut: mark } as AuthSession)
+}
+
+/** Why and since when this computer's sign-in is signed out, kept on disk; null when it is not. */
+export function readSignedOut(): SignedOutMark | null {
+  return readStored()?.signedOut ?? null
 }
 
 export function clearAuthSession(): void {
@@ -203,6 +320,19 @@ async function withLock<T>(action: () => Promise<T>): Promise<T> {
 type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number }
 
 /**
+ * What this computer asks the backend for in place of SSO tokens, when it signs in and when it renews an SSO sign-in:
+ * a Harness session of its own (backend lib/ssoSession.ts), so an ordinary request never waits on the account
+ * service. A backend from before it answers with the SSO tokens as ever, and those are kept.
+ */
+export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
+
+/** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
+ *  session already (`hnr_`, `htr_`) renews as one, and a QR or team sign-in is a session of its own kind. */
+export function asksForHarnessSession(session: AuthSession): boolean {
+  return session.kind !== 'team' && session.method !== 'qr' && !/^(hnr|htr)_/.test(session.refreshToken ?? '')
+}
+
+/**
  * The sentence an `UNAVAILABLE` refresh failure carries — and why it names `harness login` even
  * though it is classified as a service problem.
  *
@@ -241,6 +371,7 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
         refreshToken: current.refreshToken,
         autonomousEnv: current.autonomousEnv,
         ...(current.clientId ? { clientId: current.clientId } : {}),
+        ...(asksForHarnessSession(current) ? { harnessSession: harnessSessionRequest() } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -252,6 +383,10 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
   }
   if (response.status === 401 || body.error?.code === 'REFRESH_TOKEN_INVALID') {
     throw new AuthSessionError('SSO refresh token is invalid. Run `harness login`.', 'INVALID_REFRESH')
+  }
+  if (body.error?.code === 'SIGN_IN_AGAIN') {
+    throw new AuthSessionError('Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account '
+      + 'for 7 days. Run `harness login`.', 'SIGN_IN_AGAIN')
   }
   if (!response.ok || body.success === false || typeof body.data?.token !== 'string' || !body.data.token) {
     throw new AuthSessionError(
@@ -301,7 +436,7 @@ export class AuthSessionManager {
         writeAuthSession(next)
         return next.accessToken
       } catch (err) {
-        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') clearAuthSession()
+        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') markSignedOutHeld('refresh-refused', Date.now())
         throw err
       }
     })
@@ -309,9 +444,40 @@ export class AuthSessionManager {
     try { return await running } finally { if (this.refreshInFlight === running) this.refreshInFlight = null }
   }
 
-  updateMachineId(machineId: string): void {
-    const current = readAuthSession()
-    if (!current || current.machineId === machineId) return
-    writeAuthSession({ ...current, machineId, updatedAt: Date.now() })
+  /**
+   * Tries a refused refresh again: the refusal may have been the service's, not the sign-in's. One that works
+   * signs this computer back in. A revoked sign-in is never tried: it waits for a new one. True when the
+   * computer is signed in again.
+   */
+  async retrySignedOut(now = Date.now()): Promise<boolean> {
+    const due = (mark: SignedOutMark | null | undefined): boolean =>
+      mark?.reason === 'refresh-refused' && now >= (mark.retryAt ?? 0)
+    if (!due(readStored()?.signedOut)) return false
+    return withLock(async () => {
+      const stored = readStored()
+      if (!stored || !stored.signedOut) return stored !== null
+      const mark = stored.signedOut
+      if (!due(mark)) return false
+      try {
+        const refreshed = await refreshRequest(this.backendBaseUrl, stored.session, this.opts.refreshTimeoutMs)
+        writeAuthSession({
+          ...stored.session,
+          accessToken: refreshed.token,
+          ...(refreshed.refreshToken ? { refreshToken: refreshed.refreshToken } : {}),
+          ...(refreshed.expiresIn ? { expiresAt: Date.now() + refreshed.expiresIn * 1000 } : {}),
+          updatedAt: Date.now(),
+        })
+        return true
+      } catch {
+        // Not yet: tried again after twice the last wait, at most an hour on.
+        const wait = Math.min((mark.retryWait ?? RETRY_FIRST_MS) * 2, RETRY_LONGEST_MS)
+        writeAuthSession({ ...stored.session, signedOut: { ...mark, retryAt: now + wait, retryWait: wait } } as AuthSession)
+        return false
+      }
+    })
+  }
+
+  async updateMachineId(machineId: string, startedUnder: string | undefined): Promise<void> {
+    await recordMachineId(machineId, startedUnder)
   }
 }

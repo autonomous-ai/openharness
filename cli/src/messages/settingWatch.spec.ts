@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,7 +12,10 @@ const write = (root: string, agentMessages: boolean) =>
 
 let root: string
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'setting-watch-')) })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+afterEach(() => {
+  vi.useRealTimers()
+  rmSync(root, { recursive: true, force: true })
+})
 
 /** Wait for [check], looking every 20 ms, up to [ms]. */
 const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
@@ -22,6 +25,9 @@ const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
     await new Promise((settle) => setTimeout(settle, 20))
   }
 }
+
+/** A computer with no inotify watches left: the file can only be looked at by time. */
+const noWatches = (): never => { throw Object.assign(new Error('ENOSPC: no inotify watches left'), { code: 'ENOSPC' }) }
 
 /** A watch a test drives: its listener, its close, and its error. */
 class FakeWatch extends EventEmitter {
@@ -63,21 +69,68 @@ describe('the watch on the setting\'s file while Agent Messages are off', () => 
     stop()
   })
 
-  it('looks at the file\'s time where it cannot be watched for another reason, and stops looking once stopped', async () => {
+  it('looks at the file\'s time where it cannot be watched for another reason, and stops looking once stopped', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const changed = vi.fn()
     const path = agentSettingsPath(root)
-    const noWatches = () => { throw Object.assign(new Error('ENOSPC: no inotify watches left'), { code: 'ENOSPC' }) }
-    // Looked at by time, the real way: the file appears, and is heard within a few looks.
+    write(root, false)
+    // Looked at by time, the real way: nothing written, nothing heard.
     const stop = watchSettingFile(path, changed, { watch: noWatches })
-    writeFileSync(path, '{"agentMessages":true}\n')
-    await until(() => changed.mock.calls.length >= 1, POLL_MS * 4)
+    vi.advanceTimersByTime(POLL_MS * 3)
+    expect(changed).not.toHaveBeenCalled()
+    // As the core's sync writes it: whole, renamed into place. Heard at the next look, not before.
+    write(root, true)
+    vi.advanceTimersByTime(POLL_MS - 1)
+    expect(changed).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(changed).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(POLL_MS * 3)
+    expect(changed).toHaveBeenCalledOnce()
     stop()
+    write(root, false)
+    vi.advanceTimersByTime(POLL_MS * 3)
+    expect(changed).toHaveBeenCalledOnce()
     const polls = vi.fn(() => () => {})
     const stopped = vi.fn()
-    watchSettingFile(path, changed, { watch: noWatches, poll: (_p, listener) => { polls(); listener(); return stopped } })()
+    watchSettingFile(agentSettingsPath(root), changed, { watch: noWatches, poll: (_p, listener) => { polls(); listener(); return stopped } })()
     expect(polls).toHaveBeenCalledOnce()
     expect(stopped).toHaveBeenCalledOnce()
-  }, 20_000)
+  })
+
+  it('hears a write made the moment it starts looking by time: it starts from the file as it was, not as it is later', () => {
+    // Node's own looking (fs.watchFile) takes its first look later, off the main thread; a write before it was taken
+    // as where it started, and never heard. On a busy machine that was every time.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const changed = vi.fn()
+    const stop = watchSettingFile(agentSettingsPath(root), changed, { watch: noWatches })
+    writeFileSync(agentSettingsPath(root), '{"agentMessages":true}\n')
+    vi.advanceTimersByTime(POLL_MS)
+    expect(changed).toHaveBeenCalledOnce()
+    stop()
+  })
+
+  it('keeps looking by time through a look that fails, and hears the file once it can be read again', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const changed = vi.fn()
+    const folder = join(root, 'data')
+    const path = agentSettingsPath(folder)
+    mkdirSync(folder)
+    write(folder, false)
+    // The data folder closed to this user: every look fails (EACCES), and must not take the process down.
+    chmodSync(folder, 0o000)
+    let stop: () => void
+    try {
+      stop = watchSettingFile(path, changed, { watch: noWatches })
+      vi.advanceTimersByTime(POLL_MS * 2)
+    } finally {
+      chmodSync(folder, 0o700)
+    }
+    expect(changed).not.toHaveBeenCalled()
+    write(folder, true)
+    vi.advanceTimersByTime(POLL_MS)
+    expect(changed).toHaveBeenCalledOnce()
+    stop()
+  })
 
   it('re-arms before it says the file changed, and never hears a watch it replaced or stopped', async () => {
     const watches: FakeWatch[] = []

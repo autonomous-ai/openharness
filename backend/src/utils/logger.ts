@@ -47,9 +47,7 @@ export class Logger {
   error(message: string, error?: Error | unknown, context?: LogContext): void {
     let errorContext: LogContext
     if (error instanceof Error) {
-      // The cluster keeps the stack: a production 500 with only its message cannot be traced. A terminal
-      // outside development (the tests) leaves it off to keep the output short.
-      errorContext = { ...context, error: error.message, stack: this.asJson || this.isDevelopment ? error.stack : undefined }
+      errorContext = { ...context, error: error.message, stack: this.isDevelopment ? error.stack : undefined }
     } else if (error && typeof error === 'object') {
       const errorObj = error as Record<string, unknown>
       errorContext = { ...context, error: errorObj.message || errorObj.code || JSON.stringify(error) }

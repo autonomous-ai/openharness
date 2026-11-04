@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 ConversationServer projectsServer() {
   final server = ConversationServer();
@@ -55,7 +59,7 @@ void main() {
     c.dispose();
   }
 
-  testWidgets('project rows open lead chats and reveal numbered workgroups', (
+  testWidgets('project rows open lead chats and list no workgroups', (
     tester,
   ) async {
     final server = projectsServer(), c = server.controller();
@@ -69,25 +73,38 @@ void main() {
     );
     expect(find.text('Leads'), findsNothing);
     expect(find.text('Projects'), findsOneWidget);
-    expect(find.text('Humans'), findsOneWidget);
-    expect(find.text('Agents'), findsOneWidget);
+    // The right column opens only from Members (Quiet Swarm).
+    expect(find.text('People'), findsNothing);
+    await openSuperTabMembers(tester);
+    expect(find.text('People'), findsOneWidget);
+    // The roster's heading; the leaderboard's Agents pill is the other one.
+    expect(
+      find.descendant(
+        of: find.byType(SuperTabSectionHeading),
+        matching: find.text('Agents'),
+      ),
+      findsOneWidget,
+    );
     final create = find.byTooltip('New project');
     final project = find.byKey(const ValueKey('super-group-lead'));
     expect(
       tester.getBottomLeft(create).dy,
       lessThan(tester.getTopLeft(project).dy),
     );
+    expect(c.selectedId, 'lead');
+    expect(find.text('12  Offline editing'), findsNothing);
+    // Already open: a click on it keeps its chat, and lists no workgroups:
+    // they are in the project's Tasks view (task #2569).
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
-    expect(find.text('12  Offline editing'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    expect(find.text('12  Offline editing'), findsNothing);
+    await c.select('offline');
     await tester.pumpAndSettle();
     expect(c.selectedId, 'offline');
     await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'design-lead');
-    expect(c.expandedProjects, {'lead', 'design'});
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
@@ -98,57 +115,36 @@ void main() {
     await unmount(tester, c);
   });
 
-  testWidgets(
-    'project and workgroup rows align, and a project row works from the keyboard',
-    (tester) async {
-      final server = projectsServer(), c = server.controller();
-      await mount(tester, c);
-      final project = find.byKey(const ValueKey('super-group-lead'));
-      final projectName = find.descendant(
-        of: project,
-        matching: find.text('Lamp OS'),
-      );
-      // Enter on the open project shows its workgroups.
+  testWidgets('a project row works from the keyboard', (tester) async {
+    final server = projectsServer(), c = server.controller();
+    await mount(tester, c);
+    final projectName = find.descendant(
+      of: find.byKey(const ValueKey('super-group-lead')),
+      matching: find.text('Lamp OS'),
+    );
+    // From a workgroup, Enter on the project opens its chat; → and ← show
+    // nothing more: its workgroups are in its Tasks view (task #2569).
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    Focus.of(tester.element(projectName)).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'lead');
+    for (final arrow in [
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowLeft,
+    ]) {
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(c.expandedProjects, {'lead'});
-      expect(c.selectedId, 'lead');
-
-      final workgroup = find.byKey(const ValueKey('super-group-offline'));
-      final projectBounds = tester.getRect(project);
-      final workgroupBounds = tester.getRect(workgroup);
-      expect(workgroupBounds.left, projectBounds.left);
-      expect(workgroupBounds.right, projectBounds.right);
-      // Workgroups share the project name column in the compact sidebar.
-      expect(
-        tester.getTopLeft(find.text('12  Offline editing')).dx,
-        tester.getTopLeft(projectName).dx,
-      );
-
-      // A child row's formerly empty inset is part of its one click target.
-      await tester.tapAt(workgroupBounds.centerLeft + const Offset(8, 0));
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'offline');
-      // From a workgroup, the project row opens the project's chat and keeps
-      // its workgroups shown; once more, Space hides them.
-      Focus.of(tester.element(projectName)).requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyEvent(arrow);
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
-      expect(c.expandedProjects, {'lead'});
-      Focus.of(tester.element(projectName)).requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'lead');
-      expect(c.expandedProjects, isEmpty);
-      expect(server.posts, isEmpty);
-      await unmount(tester, c);
-    },
-  );
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+    }
+    expect(server.posts, isEmpty);
+    await unmount(tester, c);
+  });
 
   testWidgets('project pull requests include its workgroups and stay scoped', (
     tester,
@@ -163,75 +159,82 @@ void main() {
       conversationId: 'design-lead',
     );
     await mount(tester, c);
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/lamp #12'), findsOneWidget);
     expect(find.text('example/design #8'), findsNothing);
     expect(find.text('This project'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/design #8'), findsOneWidget);
     expect(find.text('example/lamp #12'), findsNothing);
     await unmount(tester, c);
   });
 
-  testWidgets('a collapsed project keeps its workgroup attention visible', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    server.state['agents'] = [
-      {
-        'id': 'worker',
-        'name': 'Builder',
-        'machineId': 'm',
-        'harnessId': 'native',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'codex'},
-      },
-    ];
-    final group = (server.state['conversations'] as List)[1] as Map;
-    group['agentIds'] = ['worker'];
-    group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
-    await mount(tester, c);
-    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-group-lead')),
-        matching: find.byTooltip('Needs a human'),
-      ),
-      findsOneWidget,
-    );
-    await unmount(tester, c);
-  });
+  // Quiet Swarm polish: a project's row says only what opening it shows, and Activity holds what needs you.
+  testWidgets(
+    'a collapsed project\'s waiting workgroup is held by Activity, not by a mark on its row',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      server.state['agents'] = [
+        {
+          'id': 'worker',
+          'name': 'Builder',
+          'machineId': 'm',
+          'harnessId': 'native',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      final group = (server.state['conversations'] as List)[1] as Map;
+      group['agentIds'] = ['worker'];
+      group['assignment'] = {
+        'status': 'needs_human',
+        'agentId': 'worker',
+        // Activity holds a waiting task only when it asked the reader by name.
+        'askedOf': 'owner',
+      };
+      await mount(tester, c);
+      await SuperTabActivity.of(c).decisions.load();
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-group-lead')),
+          matching: find.byTooltip('Needs a human'),
+        ),
+        findsNothing,
+      );
+      expect(
+        SuperTabActivity.of(c).needsYou.map((need) => need.conversationId),
+        contains('offline'),
+      );
+      await unmount(tester, c);
+    },
+  );
 
-  testWidgets('compact project menu changes cadence for only that project', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    await mount(tester, c);
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(AppIcons.ellipsisVertical), findsOneWidget);
-    await tester.tap(find.text('Update cadence'));
-    await tester.pumpAndSettle();
-    expect(find.text('Every 5 minutes'), findsOneWidget);
-    await tester.tap(find.byType(DropdownButton<int>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Every 15 minutes').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(server.posts.single['command'], {
-      'type': 'project.cadence',
-      'projectId': 'lead',
-      'minutes': 15,
-    });
-    expect(c.snapshot!.projectFor('lead')!.updateMinutes, 15);
-    expect(c.snapshot!.projectFor('design-lead')!.updateMinutes, 5);
-    await unmount(tester, c);
-  });
+  testWidgets(
+    'the project menu has no update cadence: progress lives in the status card',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      await mount(tester, c);
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
+      await tester.pumpAndSettle();
+      expect(find.text('Project details'), findsOneWidget);
+      expect(find.text('Update cadence'), findsNothing);
+      expect(find.textContaining('Every 5 minutes'), findsNothing);
+      expect(find.textContaining('task reports'), findsNothing);
+      expect(server.posts, isEmpty);
+      await unmount(tester, c);
+    },
+  );
 
   testWidgets(
     'public means swarm members and private is an explicit project choice',
@@ -268,14 +271,13 @@ void main() {
     },
   );
 
-  test('project revocation removes cached text, drafts, terminals and expanded state', () async {
+  test('project revocation removes cached text, drafts and terminals', () async {
     final server = projectsServer(), c = server.controller();
     server.append('Private design', conversationId: 'design-lead');
     await c.refresh();
     await c.loadMessages('design-lead');
     c.select('design-lead');
     c.setDraft('design-lead', 'Private response');
-    c.toggleProject('design');
     expect(c.messages('design-lead'), hasLength(1));
     (server.state['projects'] as List).removeLast();
     (server.state['conversations'] as List).removeLast();
@@ -285,7 +287,6 @@ void main() {
     expect(c.selectedId, 'lead');
     expect(c.messages('design-lead'), isEmpty);
     expect(c.draft('design-lead'), isEmpty);
-    expect(c.expandedProjects, isNot(contains('design')));
     expect(
       (server.saved!['drafts'] as Map).containsKey('design-lead'),
       isFalse,

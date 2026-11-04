@@ -63,20 +63,42 @@ export function managedGridPath(): string | null {
  * directory holds. The managed runtime outranks it: once the pin is published the installer's
  * copy is only ever a fallback for a machine the pin could not reach.
  */
-export function gridBinaryPath(processEnv: NodeJS.ProcessEnv = process.env): string {
+export function gridBinaryPath(processEnv: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
   const override = processEnv.HARNESS_GRID_BIN?.trim()
   if (override) return override
   const managed = managedGridPath()
   if (managed) return managed
   if (binaryOnPath(GRID_BINARY, processEnv)) return GRID_BINARY
-  // Keyed on the environment's HOME rather than `os.homedir()`, so a caller that hands in an
+  // Keyed on the environment's home rather than `os.homedir()`, so a caller that hands in an
   // environment (the tests, a deliberately bare one) gets exactly what that environment can see.
-  const home = processEnv.HOME?.trim()
+  // Windows has no HOME, and grid's installer there (`install.ps1`) writes `grid.exe` — or, where Smart
+  // App Control blocked that, `grid.cmd` — into `%USERPROFILE%\.local\bin`.
+  const windows = platform === 'win32'
+  const home = (windows ? processEnv.USERPROFILE : processEnv.HOME)?.trim()
   if (home) {
-    const installed = join(home, '.local', 'bin', GRID_BINARY)
-    try { accessSync(installed, constants.X_OK); return installed } catch { /* not there either */ }
+    for (const name of windows ? ['grid.exe', 'grid.cmd'] : [GRID_BINARY]) {
+      const installed = join(home, '.local', 'bin', name)
+      try { accessSync(installed, constants.X_OK); return installed } catch { /* not there either */ }
+    }
   }
   return GRID_BINARY
+}
+
+/**
+ * What to spawn to run [binary] with [args]. Almost always the binary itself. The exception is the
+ * `grid.cmd` that grid's Windows installer writes where Smart App Control blocked its unsigned
+ * `grid.exe`: Node cannot spawn a `.cmd` without a shell, and a shell would have to re-quote every
+ * argument, so the installer's own line — `"<install>\Scripts\python.exe" -m cli %*` — is read and that
+ * signed python is run directly. A `.cmd` that is not that shape is returned as it is, and fails as it did.
+ */
+export function gridCommand(binary: string, args: readonly string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[] } {
+  if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(binary)) {
+    try {
+      const python = /"([^"]+\.exe)" -m cli %\*/.exec(readFileSync(binary, 'utf8'))?.[1]
+      if (python) return { file: python, args: ['-m', 'cli', ...args] }
+    } catch { /* unreadable: spawn reports it */ }
+  }
+  return { file: binary, args: [...args] }
 }
 
 /** Is there a `grid` to run at all? Asked by reading rather than by spawning, so a missing binary is

@@ -17,10 +17,14 @@ class SelectOption<T> {
     this.detail,
     this.leading,
     this.trailing,
+    this.enabled = true,
   });
 
   final T value;
   final String label;
+
+  /// False shows the row but it can't be chosen, as with an offline machine.
+  final bool enabled;
 
   /// A sentence UNDER the label, for a list whose labels alone do not say what
   /// picking one does.
@@ -82,12 +86,50 @@ class AppSelectField<T> extends StatefulWidget {
     this.fillColor,
     this.selected,
     this.emptyLabel,
-    this.filterable = false,
-    this.filterThreshold = 8,
+    this.filterable = true,
+    this.filterThreshold = AppDropdown.defaultSearchAfter,
     this.textStyle,
     this.radius,
     this.semanticLabel,
   });
+
+  /// The gap between the label and the chevron in the closed control.
+  static const double chevronGap = 6;
+
+  /// The width at which the closed control shows its widest of [labels] whole:
+  /// the labels as [textStyle] sets them at the current text scale, then the
+  /// control's own padding, chevron gap, chevron and border. For a field
+  /// that is as wide as its choices (pass it as [width]) rather than its row.
+  static double fitWidth(
+    BuildContext context, {
+    required Iterable<String> labels,
+    TextStyle? textStyle,
+    EdgeInsetsGeometry padding = const EdgeInsets.only(left: 10, right: 8),
+  }) {
+    final style =
+        textStyle ??
+        AppType.label(
+          fontWeight: AppControl.fontWeight,
+          color: AppPalette.textPrimary,
+        );
+    var widest = 0.0;
+    for (final label in labels) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: 1,
+      )..layout();
+      widest = math.max(widest, painter.width);
+      painter.dispose();
+    }
+    final border = MediaQuery.highContrastOf(context) ? 2.0 : 1.5;
+    return widest.ceilToDouble() +
+        padding.horizontal +
+        chevronGap +
+        AppControl.iconSize +
+        2 * border;
+  }
 
   final T value;
   final List<SelectOption<T>> options;
@@ -417,48 +459,75 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   /// lists scroll, and MenuAnchor also constrains them to the available window.
   static const double _maxPanelHeight = 380;
 
-  /// A floor under the panel's width, on top of the field's own.
+  /// The panel when its rows' width can't be known ([AppMenuItem.fitWidth]).
+  static const double _unknownPanelWidth = 240;
+
+  /// The widest a long name widens the panel past its field.
+  static const double _maxFitWidth = 360;
+
+  /// As wide as the field or the widest name, whichever is more.
   ///
   /// A field can be narrow — the font picker's is 188 — while its list holds
   /// names that are not. The panel is where the choosing happens, so it is
   /// allowed to be wider than the box it drops out of; the reverse, a panel
-  /// narrower than its control, is what reads as an unrelated box.
-  static const double _minPanelWidth = 240;
-
+  /// narrower than its control, is what reads as an unrelated box. Neither gets
+  /// a fixed floor: a list of short names would keep an empty side.
   double _rowWidth(double? panelWidth) => math.max(
     math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
-    _minPanelWidth,
+    math.min(_fitWidth ?? _unknownPanelWidth, _maxFitWidth),
   );
+
+  int? _fitKey;
+  double? _fit;
+
+  /// The widest row, measured only when what it says changes: a field rebuilds
+  /// often, closed too, and a list of models can run to hundreds of names. Null
+  /// when a row has a trailing mark, whose width only its own layout decides.
+  double? get _fitWidth {
+    final options = widget.options;
+    if (options.any((option) => option.trailing != null)) return null;
+    final key = Object.hash(
+      Object.hashAll([
+        for (final option in options)
+          Object.hash(option.label, option.note, option.detail),
+      ]),
+      _hasMarks,
+      widget.textStyle,
+      MediaQuery.textScalerOf(context),
+    );
+    if (key == _fitKey) return _fit;
+    _fitKey = key;
+    return _fit = AppMenuItem.fitWidth(context, [
+      for (final option in options)
+        AppMenuItem(
+          label: option.label,
+          note: option.note,
+          detail: option.detail,
+          textStyle: widget.textStyle,
+          leadingSlot: _hasMarks ? true : null,
+          // Its tick: any row in a picker can become the chosen one.
+          selected: true,
+          onPressed: null,
+        ),
+    ]);
+  }
+
+  bool get _hasMarks => widget.options.any((option) => option.leading != null);
 
   /// The search box at the head of a long menu.
   ///
   /// Inside the panel rather than over the closed control: the control is the
   /// answer, this is the question, and a field that replaced the chosen row
   /// would leave the menu saying nothing while it was open.
-  Widget _filterField(double width) => Focus(
-    canRequestFocus: false,
-    skipTraversal: true,
-    onKeyEvent: _filterKeys,
-    child: SizedBox(
-      width: width,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(11, 3, 11, 7),
-        child: TextField(
-          key: const Key('app-select-filter'),
-          controller: _filterController,
-          focusNode: _filterFocus,
-          style: widget.textStyle ?? kFieldTextStyle,
-          decoration: InputDecoration(
-            hintText: 'Search',
-            prefixIcon: Icon(
-              AppIcons.search,
-              size: kFieldIconSize,
-              color: AppPalette.textFaint,
-            ),
-          ),
-          onChanged: (value) => setState(() => _filter = value.trim()),
-        ),
-      ),
+  Widget _filterField(double width) => SizedBox(
+    width: width,
+    child: AppMenuSearchField(
+      fieldKey: const Key('app-select-filter'),
+      controller: _filterController,
+      focusNode: _filterFocus,
+      textStyle: widget.textStyle,
+      onKeyEvent: _filterKeys,
+      onChanged: (value) => setState(() => _filter = value.trim()),
     ),
   );
 
@@ -483,6 +552,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   }
 
   Widget _anchor(SelectOption<T>? current, double? panelWidth) {
+    final rowWidth = _rowWidth(panelWidth);
     return MenuAnchor(
       controller: _controller,
       childFocusNode: _fieldFocus,
@@ -496,9 +566,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // Below the control, by the app's one menu gap — and the panel takes its
       // fill, rim and radius from [AppMenu], the app's single panel recipe.
       alignmentOffset: Offset(
-        widget.menuAlignedToEnd
-            ? math.min(0, (panelWidth ?? 0) - _rowWidth(panelWidth))
-            : 0,
+        widget.menuAlignedToEnd ? math.min(0, (panelWidth ?? 0) - rowWidth) : 0,
         AppControl.menuGap,
       ),
       // ⚠️ The width is set on the ROWS, not with `MenuStyle.minimumSize`.
@@ -511,11 +579,11 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // at.
       style: AppMenu.style(maxHeight: _maxPanelHeight),
       menuChildren: [
-        if (_filtering) _filterField(_rowWidth(panelWidth)),
+        if (_filtering) _filterField(rowWidth),
         if (widget.options.isEmpty && widget.emptyLabel != null)
           SizedBox(
-            width: _rowWidth(panelWidth),
-            height: AppMenuRowMetrics.roomy.extent,
+            width: rowWidth,
+            height: kMenuRowExtent,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
@@ -529,8 +597,8 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           ),
         if (_noMatches)
           SizedBox(
-            width: _rowWidth(panelWidth),
-            height: AppMenuRowMetrics.roomy.extent,
+            width: rowWidth,
+            height: kMenuRowExtent,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
@@ -545,17 +613,14 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
         for (final option in _shownOptions)
           _typingRegion(
             SizedBox(
-              width: _rowWidth(panelWidth),
+              width: rowWidth,
               child: AppMenuItem(
                 textStyle: widget.textStyle,
-                // No glyph of its own: the leading slot belongs to the tick,
-                // and stays empty (not a blank checkbox) on rows without it.
+                // The leading column only when some option has a mark to put
+                // there: empty, it just pushes every label to the right.
                 // `selected` also carries the wash and the heavier label, so the
                 // choice is marked three ways rather than by a tick alone.
-                // A picker's list, not a context menu's: this menu IS the
-                // control, it is read down rather than glanced at, and it is the
-                // only place these choices are ever shown.
-                metrics: AppMenuRowMetrics.roomy,
+                leadingSlot: _hasMarks,
                 focusNode: _controller.isOpen ? _focusFor(option.value) : null,
                 selected: option.value == widget.value,
                 label: option.label,
@@ -563,7 +628,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                 detail: option.detail,
                 leading: option.leading?.call(),
                 trailing: option.trailing?.call(),
-                onPressed: () => _choose(option),
+                onPressed: option.enabled ? () => _choose(option) : null,
               ),
             ),
             key: ValueKey(option.value),
@@ -640,9 +705,8 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                         ),
                         border: Border.all(
                           width: MediaQuery.highContrastOf(context) ? 2 : 1.5,
-                          color: _focused
-                              ? AppDesktop.focus
-                              : widget.selected == true
+                          // No focus line: focus shows in the fill above.
+                          color: widget.selected == true
                               ? AppPalette.accentOnSurface
                               : MediaQuery.highContrastOf(context)
                               ? AppPalette.textSecondary
@@ -689,7 +753,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 6),
+                              const SizedBox(width: AppSelectField.chevronGap),
                               Icon(
                                 AppIcons.chevronDown,
                                 size: AppControl.iconSize,

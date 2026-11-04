@@ -5,6 +5,7 @@ import '../../screens/login_screen.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
+import '../../widgets/account_profile_sheet.dart';
 import 'saved_super_tabs_row.dart';
 
 class AccountSection extends StatelessWidget {
@@ -65,13 +66,31 @@ class AccountSection extends StatelessWidget {
         detail:
             profile?.email ??
             (local ? 'Loopback backend' : 'Profile unavailable'),
-        control: OutlinedButton(
-          key: const Key('settings-sign-out-button'),
-          onPressed: () {
-            Navigator.of(context).pop();
-            notifier.logout();
-          },
-          child: Text(local ? 'Disconnect local session' : 'Sign out'),
+        control: Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            // Profile (task #2654): the same sheet the avatar menu opens.
+            if (!local && profile != null)
+              TextButton(
+                key: const Key('settings-account-edit'),
+                onPressed: () => showAccountProfileSheet(
+                  context,
+                  notifier,
+                  swarm: accountProfileSwarm(notifier),
+                ),
+                child: const Text('Edit'),
+              ),
+            OutlinedButton(
+              key: const Key('settings-sign-out-button'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                notifier.logout();
+              },
+              child: Text(local ? 'Disconnect local session' : 'Sign out'),
+            ),
+          ],
         ),
       );
       return SectionScaffold(
@@ -83,9 +102,8 @@ class AccountSection extends StatelessWidget {
             ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
         child: SingleChildScrollView(
-          // Only the browser's reading, which draws a kept view at once, says
-          // it keeps Super Tabs; Desktop's, drawn once confirmed and another
-          // account's forgotten at sign-in, leaves its page as it was.
+          // Only the browser's reading says it keeps Super Tabs. Desktop's, with
+          // another account's forgotten at sign-in, leaves its page as it was.
           child:
               notifier.superTabs.reading.drawsSaved &&
                   !notifier.superTabs.reading.confirmsSaved

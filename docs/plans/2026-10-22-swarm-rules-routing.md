@@ -1,5 +1,8 @@
 # Swarm rules replace Jev in routing
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 Date: 2026-10-22. Status: approved by the Lead on 2026-10-22 and implemented.
 
 ## Why

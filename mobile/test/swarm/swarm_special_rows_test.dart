@@ -1,0 +1,428 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+// Literal server payloads, as Desktop's rows read them.
+Map<String, dynamic> row(
+  String id,
+  int sequence,
+  String text,
+  Map<String, dynamic> source, {
+  String author = 'River',
+}) => {
+  'id': id,
+  'conversationId': leadChat,
+  'sequence': sequence,
+  'text': text,
+  'author': {'kind': 'agent', 'id': 'agent-$author', 'name': author},
+  'createdAt': DateTime.utc(2026, 11, 2, 17, sequence).toIso8601String(),
+  'source': source,
+};
+
+Map<String, dynamic> routeSource({Object? decision = 'd1'}) => {
+  'kind': 'route',
+  'decisionId': decision,
+  'via': 'order',
+  'why': 'A small fix',
+  'pick': {'id': 'c0', 'title': 'Nico · Claude opus high · Mac Studio'},
+  'alternatives': <Object>[],
+};
+
+const decisions = '/api/super-tabs/$tab/route-decisions/d1';
+
+FakeSwarm backend(List<Map<String, dynamic>> page) {
+  final fake = FakeSwarm();
+  fake.routes['/api/super-tabs/list'] = (_) => {
+    'tabs': [
+      {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+    ],
+    'next': null,
+  };
+  fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+    groups: [
+      groupData(leadChat, title: 'Project chat', lastMessageSequence: 10),
+    ],
+  );
+  fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+  fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
+    'decisions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
+    'mentions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
+      {'messages': page.reversed.toList(), 'threads': <Object>[], 'next': null};
+  return fake;
+}
+
+Future<void> show(WidgetTester tester, FakeSwarm fake) async {
+  await tester.binding.setSurfaceSize(const Size(390, 844));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final account = ValueNotifier<String?>(me);
+  final host = SwarmHost(
+    accountId: () => account.value,
+    account: account,
+    request: fake.request,
+    notices: SilentSystemNotices(),
+    features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+      ..value = {PhoneExperiment.swarm},
+    readMarks: MemoryKeyValueStore(),
+  )..foreground = false;
+  addTearDown(host.dispose);
+  await tester.pumpWidget(
+    MaterialApp(
+      builder: (context, child) => SwarmScope(notifier: host, child: child!),
+      home: const SwarmConversationPage(swarmId: tab, conversationId: leadChat),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+Finder inRow(String id, Finder inner) => find.descendant(
+  of: find.byKey(ValueKey('swarm-message-$id')),
+  matching: inner,
+);
+
+/// The plain text of everything drawn in message [id].
+String textOf(WidgetTester tester, String id) => [
+  for (final text in tester.widgetList<RichText>(
+    inRow(id, find.byType(RichText)),
+  ))
+    text.text.toPlainText(),
+].join('\n');
+
+void main() {
+  group('a route row', () {
+    testWidgets('is a quiet line naming who it went to, with no author', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        backend([row('r1', 2, 'Routed to Nico', routeSource())]),
+      );
+      expect(textOf(tester, 'r1'), contains('Routed to Nico'));
+      expect(inRow('r1', find.text('River')), findsNothing);
+      expect(inRow('r1', find.text('Details')), findsOneWidget);
+    });
+
+    testWidgets('a new agent reads as its engine', (tester) async {
+      await show(
+        tester,
+        backend([
+          row('r1', 2, 'x', {
+            ...routeSource(),
+            'pick': {'id': 'c0', 'title': 'New agent · Codex gpt high · Mac'},
+          }),
+        ]),
+      );
+      expect(textOf(tester, 'r1'), contains('Routed to new Codex agent'));
+    });
+
+    testWidgets('Details reads the decision once, and hides again', (
+      tester,
+    ) async {
+      final fake = backend([row('r1', 2, 'x', routeSource())]);
+      fake.routes[decisions] = (_) => {
+        'record': {
+          'instructionsRevision': 7,
+          'candidates': [
+            {'title': 'Echo · Claude', 'label': 'busy'},
+          ],
+          'excluded': [
+            {'title': 'Mac 3', 'reason': 'offline'},
+          ],
+        },
+      };
+      await show(tester, fake);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      for (final words in const [
+        'Nico · Claude opus high · Mac Studio',
+        'A small fix',
+        'Selection: Ranked by strength, price and quota',
+        'Relied on instructions revision 7',
+        'Considered',
+        'Echo · Claude — busy',
+        'Unavailable: Mac 3 — offline',
+      ]) {
+        expect(inRow('r1', find.text(words)), findsOneWidget, reason: words);
+      }
+      await tester.tap(inRow('r1', find.text('Hide details')));
+      await tester.pumpAndSettle();
+      expect(inRow('r1', find.text('Considered')), findsNothing);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      expect(fake.paths.where((p) => p == decisions), hasLength(1));
+    });
+
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the start's row
+    // names the candidate the instructions chose.
+    testWidgets('Details says the Routing instructions chose', (tester) async {
+      final fake = backend([
+        row('r1', 2, 'x', {...routeSource(), 'via': 'instructions'}),
+      ]);
+      fake.routes[decisions] = (_) => {
+        'record': {'instructionsRevision': 7},
+      };
+      const chosen = 'Chosen by the project\'s Routing instructions';
+      await show(tester, fake);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      expect(inRow('r1', find.text('Selection: $chosen')), findsOneWidget);
+    });
+
+    testWidgets('a failed read says so, and Retry reads again', (tester) async {
+      final fake = backend([row('r1', 2, 'x', routeSource())]);
+      var fails = true;
+      fake.routes[decisions] = (_) {
+        if (fails) throw StateError('offline');
+        return {
+          'record': {'instructionsRevision': 0},
+        };
+      };
+      await show(tester, fake);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      expect(
+        inRow('r1', find.text('Could not load this decision.')),
+        findsOneWidget,
+      );
+      fails = false;
+      await tester.tap(inRow('r1', find.text('Retry')));
+      await tester.pumpAndSettle();
+      expect(
+        inRow('r1', find.text('Relied on the built-in instructions')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('one with no decision is an ordinary message', (tester) async {
+      await show(
+        tester,
+        backend([
+          row('r1', 2, 'Routed somewhere', routeSource(decision: null)),
+        ]),
+      );
+      expect(inRow('r1', find.text('Details')), findsNothing);
+      expect(inRow('r1', find.text('River')), findsOneWidget);
+    });
+  });
+
+  group('a terminal note', () {
+    testWidgets('of input: a quiet line, what was typed in the mono face', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        backend([
+          row('t1', 2, 'River typed `echo `date`` into the terminal', {
+            'kind': 'terminal-input',
+          }),
+        ]),
+      );
+      expect(inRow('t1', find.byIcon(LucideIcons.keyboard300)), findsOneWidget);
+      expect(inRow('t1', find.text('River')), findsNothing);
+      // Only the first and last backtick are the wrapper.
+      final spans = <TextSpan>[];
+      for (final text in tester.widgetList<RichText>(
+        inRow('t1', find.byType(RichText)),
+      )) {
+        text.text.visitChildren((span) {
+          if (span is TextSpan) spans.add(span);
+          return true;
+        });
+      }
+      expect(
+        spans.where((s) => s.text == 'echo `date`').single.style?.fontFamily,
+        isNotNull,
+      );
+    });
+
+    testWidgets('of an alert: a warning mark, and no author', (tester) async {
+      await show(
+        tester,
+        backend([
+          row('t1', 2, 'Nico is waiting at a prompt', {
+            'kind': 'terminal-alert',
+            'alert': 'other',
+          }),
+        ]),
+      );
+      expect(
+        inRow('t1', find.byIcon(LucideIcons.triangleAlert300)),
+        findsOneWidget,
+      );
+      expect(inRow('t1', find.text('River')), findsNothing);
+    });
+
+    testWidgets('of the coordinator\'s usage limit says until when', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        backend([
+          row('t1', 2, 'River hit its usage limit', {
+            'kind': 'terminal-alert',
+            'alert': 'limit',
+            'lead': true,
+            'agentId': 'agent-River',
+            'limitedUntil': DateTime(2026, 11, 3, 18, 5).toIso8601String(),
+          }),
+        ]),
+      );
+      expect(textOf(tester, 't1'), contains('until'));
+      expect(textOf(tester, 't1'), contains('18:05'));
+    });
+  });
+
+  testWidgets('a worker\'s usage limit says only what its text says', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row(
+          't1',
+          2,
+          'Nico hit its usage limit. Routing skips it until 14:30 UTC.',
+          {
+            'kind': 'terminal-alert',
+            'alert': 'limit',
+            'agentId': 'agent-Nico',
+            'limitedUntil': DateTime.utc(2026, 11, 3, 14, 30).toIso8601String(),
+          },
+        ),
+      ]),
+    );
+    expect(textOf(tester, 't1'), endsWith('Routing skips it until 14:30 UTC.'));
+  });
+
+  group('a proposal', () {
+    // A Buddy's proposal from before plain chat (#2294): its whole text, from
+    // the Buddy, rooting its own thread.
+    Map<String, dynamic> proposal() => {
+      ...row(
+        'p1',
+        2,
+        'Asked by dee.\nGoal: Activity read fix\nChanges: more words',
+        {'kind': 'buddy-proposal', 'personId': me},
+        author: 'Buddy',
+      ),
+      'thread': 'p1',
+    };
+
+    testWidgets('reads whole as an ordinary message from its author', (
+      tester,
+    ) async {
+      await show(tester, backend([proposal()]));
+      expect(textOf(tester, 'p1'), contains('Changes: more words'));
+      expect(textOf(tester, 'p1'), isNot(contains('Proposal from ')));
+      expect(inRow('p1', find.text('Buddy')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-proposal-label')), findsNothing);
+    });
+
+    testWidgets(
+      'a plain root names no proposal and opens its thread as any message does',
+      (tester) async {
+        final root = {
+          ...row('p2', 2, "Let's build: Activity read fix", {
+            'kind': 'buddy-proposal',
+            'personId': me,
+            'buddyId': 'buddy-1',
+          }),
+          'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+          'thread': 'p2',
+        };
+        await show(tester, backend([root]));
+        expect(textOf(tester, 'p2'), contains('Activity read fix'));
+        expect(textOf(tester, 'p2'), isNot(contains("Let's build")));
+        expect(textOf(tester, 'p2'), isNot(contains('Proposal from ')));
+        expect(
+          find.byKey(const ValueKey('swarm-proposal-label')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  // Ken, 11-04 (task #2849): what was typed into an agent's terminal (a
+  // scheduled prompt too) is no chat row; the terminal's answer still is.
+  testWidgets('a terminal\'s prompt is no chat row; its answer still is', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row('typed', 2, 'Run the hourly cleanup.', {
+          'kind': 'native',
+          'phase': 'prompt',
+          'operator': {'name': 'ken15@autonomous.ai'},
+        }),
+        row('answered', 3, 'Cleanup done.', {'kind': 'native'}),
+      ]),
+    );
+    expect(find.text('Run the hourly cleanup.'), findsNothing);
+    expect(find.textContaining('Terminal input'), findsNothing);
+    expect(inRow('answered', find.text('Cleanup done.')), findsOneWidget);
+    expect(inRow('answered', find.text('Terminal answer')), findsOneWidget);
+  });
+
+  group('an ordinary message says', () {
+    testWidgets('Terminal answer above a terminal\'s answer', (tester) async {
+      await show(
+        tester,
+        backend([
+          row('n1', 2, 'The build passed.', {'kind': 'native'}),
+        ]),
+      );
+      expect(inRow('n1', find.text('Terminal answer')), findsOneWidget);
+      expect(inRow('n1', find.text('River')), findsOneWidget);
+    });
+
+    testWidgets('Excerpt under a truncated response', (tester) async {
+      await show(
+        tester,
+        backend([
+          row('n1', 2, 'The build…', {'kind': 'native', 'truncated': true}),
+        ]),
+      );
+      expect(
+        inRow(
+          'n1',
+          find.text('Excerpt · open the terminal for the full response'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Response interrupted under an interrupted one', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        backend([
+          row('n1', 2, 'The build', {'kind': 'native', 'interrupted': true}),
+        ]),
+      );
+      expect(inRow('n1', find.text('Response interrupted')), findsOneWidget);
+    });
+  });
+
+  testWidgets('none of them groups with the message before it', (tester) async {
+    await show(
+      tester,
+      backend([
+        row('a', 2, 'Short.', {'kind': 'message'}),
+        row('b', 3, 'Short too.', {'kind': 'native'}),
+      ]),
+    );
+    expect(inRow('b', find.text('River')), findsOneWidget);
+  });
+}

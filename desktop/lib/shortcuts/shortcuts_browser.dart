@@ -11,9 +11,11 @@ import '../widgets/key_hints.dart';
 import 'app_keymap.dart';
 import 'key_cap.dart';
 import 'keymap_commands.dart';
+import 'keymap.dart';
 import 'keymap_settings.dart';
 import 'keyboard_practice.dart';
 import 'shortcut_recorder.dart';
+import '../widgets/laid_out_list.dart';
 
 /// Searchable help built from the same resolved bindings that handle input.
 /// Shared by the shortcut dialog and Settings; no separate shortcut catalog.
@@ -269,12 +271,12 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                       decoration: InputDecoration(
                         hintText: 'Search actions or keys',
                         hintStyle: DesktopChrome.control(
-                          color: DesktopChrome.muted,
+                          color: DesktopChrome.hint,
                         ),
                         prefixIcon: Icon(
                           AppIcons.search,
                           size: 18 * scale,
-                          color: DesktopChrome.muted,
+                          color: DesktopChrome.hint,
                         ),
                         suffixIcon: _query.text.isEmpty
                             ? null
@@ -302,10 +304,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                           borderRadius: BorderRadius.circular(
                             DesktopChrome.controlRadius,
                           ),
-                          borderSide: BorderSide(
-                            color: DesktopChrome.accent,
-                            width: 1.5,
-                          ),
+                          borderSide: BorderSide(color: DesktopChrome.rim),
                         ),
                         fillColor: DesktopChrome.field,
                         filled: true,
@@ -346,7 +345,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                               : 1;
                           return Scrollbar(
                             controller: _scroll,
-                            child: ListView(
+                            child: LaidOutListView(
                               controller: _scroll,
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                               children: [
@@ -498,7 +497,8 @@ class _ShortcutBrowserRow extends StatelessWidget {
       child: Semantics(
         button: true,
         selected: selected,
-        label: '${lesson.label}, $spokenKeys. Practice shortcut',
+        label:
+            '${lesson.label}, $spokenKeys${lesson.context == KeymapContext.swarmChat ? ', in a Swarm tab, outside a terminal' : ''}. Practice shortcut',
         child: TextButton(
           onPressed: onTap,
           style:
@@ -520,12 +520,7 @@ class _ShortcutBrowserRow extends StatelessWidget {
                 splashFactory: NoSplash.splashFactory,
               ).copyWith(
                 side: WidgetStateProperty.resolveWith(
-                  (states) => BorderSide(
-                    width: 1.5,
-                    color: states.contains(WidgetState.focused)
-                        ? DesktopChrome.accent
-                        : Colors.transparent,
-                  ),
+                  (states) => BorderSide(width: 1.5, color: Colors.transparent),
                 ),
                 overlayColor: WidgetStateProperty.resolveWith(
                   (states) => DesktopChrome.foreground.withValues(
@@ -582,9 +577,16 @@ class _ShortcutBrowserRow extends StatelessWidget {
                             ),
                         ],
                       );
-                final label = Text(
-                  lesson.label,
-                  style: DesktopChrome.control(),
+                final label = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(lesson.label, style: DesktopChrome.control()),
+                    if (lesson.context == KeymapContext.swarmChat)
+                      Text(
+                        'In a Swarm tab, outside a terminal',
+                        style: DesktopChrome.metadata(),
+                      ),
+                  ],
                 );
                 if (constraints.maxWidth < 330 * grid.appTextScaleOf(context)) {
                   return Column(

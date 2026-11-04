@@ -67,7 +67,12 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
     }
   }
   if (!deps.current()) return resumeChanged
-  if (!saved) return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'The saved harness is no longer available.' }
+  // An app's list can still show a deleted harness, or one whose conversation another harness took over (4 on Oct 26);
+  // search finds the conversation wherever it is now.
+  if (!saved) {
+    return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'This harness is no longer on this machine: it was deleted, or another '
+      + 'harness now has its conversation. Search for the conversation to open it where it is now.' }
+  }
   // No engine is refused here any more. An engine with a resume argv and a recorded id comes back
   // where it left off; one with neither still comes back — same pane, same folder, same name — as a
   // new conversation, which `resumed: false` and the client's wording say out loud. Refusing the

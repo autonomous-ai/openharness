@@ -32,25 +32,102 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
 | `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
-| `desktop/` | `desktop-tests` (VM suite, four Linux shards) | 5–7 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `ALSO`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
-| `backend/`, `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
+| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
+| `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
 | anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
-run; `ci/required` is the only required check. On a draft PR only those three run
+run (after **Update branch**, untouched components reuse their earlier result: see
+[Reuse after Update branch](#reuse-after-update-branch)); `ci/required` is the only required check. On a draft PR only those three run
 and `ci/required` stays blocked; marking the PR ready runs the component checks.
 Normal merges directly squash the reviewed head after successful PR CI. If GitHub
 requires a merge queue, its runs rerun only the three always-on jobs (about 2 minutes):
 the PR run already tested the change. Queue setup is not required to merge or release.
 
+### Reuse after Update branch
+
+When main moves after a PR's `ci/required` passed, **Update branch** merges main into
+the PR and CI runs again. The new run reuses the earlier result of each selected
+component whose inputs main's new commits left untouched, and runs the rest. `plan`,
+`process-checks` and `ci/required` always run, so an update that touches nothing a
+component reads passes in about two minutes instead of 7–15.
+
+A component's result is reused only when all of these hold; otherwise it runs as before:
+
+- The new head is a merge with exactly two parents: the earlier head, then a commit on
+  the PR's base branch. Any other commit, including one you push by hand, runs everything.
+- The earlier head's latest `ci/required` check passed. The planner follows that check
+  to its exact run and attempt, and reads that run's receipt. A component the run
+  itself reused points at the run where it last ran.
+- Nothing that differs between the tested commit and the new head is a component input:
+  its own directory (by the map above) or a file it reads elsewhere (`DEPENDS` in
+  `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
+  `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
+  style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
+  of the component whose job checks it, and a PR that changes one runs that component.
+- No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
+  helper; apart from the two style allowlists above), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
+  toolchain pin, or any path outside a component other than `docs/` (but `docs/images/`
+  counts) and top-level `.md` files. A shared change reruns every component.
+- The PR itself changes no workflow, script, `Makefile` or Git setting: PR CI runs the
+  PR's own planner.
+- Every GitHub read succeeded within a minute. The plan job has read-only `actions`
+  and `checks` access for these reads.
+
+The `ci/required` receipt lists each reused component with its run id, attempt, link,
+tested commit and tree, and the reason. The run summary also says why each other
+component ran again. `make merge-pr` loads the planner from main's tree, the reviewed
+base, and uses it to re-derive every reuse from Git and from the runs it names. In the
+reviewed checkout it also scans the reused component's sources for reads `DEPENDS` is
+missing: relative paths (`../backend/...`) and quoted paths from the repository root
+(`ROOT / 'cli/src/cable/serial.ts'`), outside comments. A path that could name a file inside
+the component and also a real path elsewhere counts as a read of both, so a look-alike file
+cannot hide a read; every path main changed, deleted ones included, counts as existing, so a
+read of a deleted file is still a read. Strings that only look like paths (test data, scripts
+run by hand) are listed with a reason in `NOT_READS`; a path built from parts must be
+declared by hand. It refuses to merge on any mismatch, or when main's copy cannot verify reuse.
+To run everything again, push a commit to the PR.
+
+`make merge-pr` itself runs from the PR checkout. Any change to the merge helper or the
+planner (`scripts/merge-validated-pr.py`, `scripts/queue-validated-pr.py`,
+`scripts/ci-plan.py`, `scripts/record-ci-validation.py`) needs two independent
+security reviews before it merges.
+
 The `plan` and `ci/required` jobs run `scripts/ci-plan.py` from the PR head. A branch
 created before #991 still carries the old planner, which expects removed jobs and
 fails `ci/required` for CLI, Desktop, workflow and script changes. Update the branch
 from `main` before relying on its CI.
+
+### Reuse in a batch PR
+
+A batch PR (a branch from main with each member PR merged in, as the PM builds them) reuses
+a member PR's passed result the same way. A phone PR batched with unrelated work does not
+run mobile-checks again. The planner reads the members from the batch's own commits, never
+from the PR's text:
+
+- The new head's first-parent line, down to a commit on the base branch, is all
+  two-parent merges. Each second parent is a member PR's tested head; one that is on the
+  base branch is main merged again and brings only main's commits. A commit pushed by hand
+  on that line runs everything. A batch that merged main again after its earlier head ran
+  CI reads its members the same way.
+- Each member's latest `ci/required` check is followed to its exact run, attempt and
+  receipt, as above, and a component that member's run reused points at its original run.
+- A component is reused from the first member whose run covered it and whose tested
+  commit differs from the batch head in none of that component's inputs, with the same
+  shared-input rules. Two members that both change a component's inputs therefore run it:
+  each one's diff holds the other's change. A main change to an input after a member ran
+  runs it too.
+- A member whose run cannot be read is only no candidate. Its changes are still in every
+  other member's diff, so a component it touched runs. With no readable member, every
+  component runs.
+
+The receipt names the batch's members in order, and `make merge-pr`, using main's copy of
+the planner, refuses a receipt whose members differ from the head's merges.
 
 ### What PR CI does not run
 
@@ -67,7 +144,8 @@ from `main` before relying on its CI.
 
 Record what you ran, with run links, in the PR. Release workflows are not a full
 test suite: the CLI release runs typecheck and bundle checks, and the Desktop release
-builds, signs and verifies downloads. A release failure is still a code failure: fix
+builds, signs and verifies downloads. Windows files are signed through Azure Artifact
+Signing once `WINDOWS_SIGNING` is `required` ([Windows code signing](windows-code-signing.md)). A release failure is still a code failure: fix
 it and cut the next version.
 
 Do not add CI runs to a PR. Don't start **CI → Run workflow** for a PR that already has
@@ -84,6 +162,18 @@ runs the same fast jobs as PR CI.
 `desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
 Each shard has four test workers and the bounded runner's ten-minute budget. Logs
 and receipts are retained for seven days.
+
+`backend-integration` runs the backend's Super Tab integration suite (`backend/integration/`,
+`vitest.super-tabs.config.ts`) on four Linux runners. It replaces the full local run every
+backend pull request needed before Ready: CI's run is that evidence, so nobody waits on a
+per-Mac lock for it. Each integration file starts its own MongoDB replica set through
+`mongodb-memory-server-core` (the job caches the downloaded `mongod`), so the shards share no
+database; the suite opens no Redis. `vitest.super-tabs.ci.config.ts` spreads files over the
+shards by `integration/ci-durations.json`, longest first onto the least-loaded shard, as the
+CLI does below; new files get the default cost and the discovered file list stays
+authoritative. Each shard uploads its per-file JSON results (`backend-integration-N`) for
+refreshing the hints. Reproduce one shard locally with `npx vitest run --config
+vitest.super-tabs.ci.config.ts --shard=N/4` in `backend/`.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
 its worker cap and isolation. Shard reports and inventories are retained as
@@ -166,7 +256,9 @@ or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
-on that PR branch alongside its required tests and review. This chooses the next
+on that PR branch alongside its required tests and review. While Windows signing is required, the
+`release` environment must allow that branch, or `sign-windows` fails and no candidate is made
+([Windows code signing](windows-code-signing.md#2-github-repository-admin)). This chooses the next
 version using the same tags/live-manifest rules as a release, then dispatches a
 candidate build. Use an explicit version with `--prepare` when preparing a minor
 bump. The candidate uses the release's normal macOS, Linux and Windows build, signing and

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -9,6 +10,9 @@ import 'package:harness_mobile/api/access_token_source.dart';
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/logging/app_log.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/viewer/direct_auth.dart';
 import 'package:harness_mobile/viewer/direct_auth_api.dart';
 import 'package:harness_mobile/viewer/email_code_api.dart';
@@ -23,6 +27,10 @@ class _Backend implements HttpClientAdapter {
     _,
     _,
   ) => (status: 200, body: {'success': true, 'data': <String, Object?>{}});
+
+  /// Holds a request open until it completes, after its body was read; told
+  /// the request's cancel signal.
+  Future<void> Function(_Request request, Future<void>? cancelled)? hold;
 
   @override
   Future<ResponseBody> fetch(
@@ -42,9 +50,12 @@ class _Backend implements HttpClientAdapter {
       options.uri.queryParameters,
       _Headers(options.headers),
       body,
+      host: options.uri.host,
+      followRedirects: options.followRedirects,
     );
     final index = requests.length;
     requests.add(request);
+    await hold?.call(request, cancelFuture);
     final reply = answer(request, index);
     return ResponseBody.fromString(
       jsonEncode(reply.body),
@@ -60,8 +71,17 @@ class _Backend implements HttpClientAdapter {
 }
 
 class _Request {
-  _Request(this.method, this.path, this.query, this.headers, this.body);
-  final String method, path;
+  _Request(
+    this.method,
+    this.path,
+    this.query,
+    this.headers,
+    this.body, {
+    this.host = '',
+    this.followRedirects = true,
+  });
+  final String method, path, host;
+  final bool followRedirects;
   final Map<String, String> query;
   final _Headers headers;
   final List<int> body;
@@ -79,6 +99,20 @@ class _Headers {
     final type = value('content-type');
     return type == null ? null : ContentType.parse(type);
   }
+}
+
+/// Keeps every log line, with its error.
+class _Log implements AppLog {
+  final lines = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message ${error ?? ''}');
 }
 
 /// Hands out tokens as told, and counts what it was asked.
@@ -115,6 +149,297 @@ void main() {
   );
 
   Map<String, Object?> ok(Object? data) => {'success': true, 'data': data};
+
+  group('the account name (#2655)', () {
+    test('PATCHes /api/auth/me with the name, signed as the phone, and answers the profile', () async {
+      backend.answer = (_, _) => (
+        status: 200,
+        body: ok({'user': {'id': 'u', 'name': 'Ada King', 'email': 'ada@example.com'}}),
+      );
+      final me = await client(_Tokens(['phone-token'])).updateMe(name: 'Ada King');
+      expect((me?['user'] as Map)['name'], 'Ada King');
+      final request = backend.requests.single;
+      expect(request.method, 'PATCH');
+      expect(request.path, '/api/auth/me');
+      expect(request.headers.value('authorization'), 'Bearer phone-token');
+      expect(jsonDecode(utf8.decode(request.body)), {'name': 'Ada King'});
+    });
+
+    test("a refusal comes back in the backend's words, with its status", () async {
+      backend.answer = (_, _) => (
+        status: 400,
+        body: {'success': false, 'error': {'code': 'INVALID_NAME', 'message': 'Use a name, not an email address.'}},
+      );
+      await expectLater(
+        client(_Tokens(['t'])).updateMe(name: 'a@b.c'),
+        throwsA(isA<ApiException>().having((e) => e.message, 'message', 'Use a name, not an email address.').having((e) => e.status, 'status', 400)),
+      );
+    });
+  });
+
+  group('a Swarm read', () {
+    test('answers the value, signed with this sign-in, its query kept', () async {
+      backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));
+
+      final value = await client(_Tokens(['t1'])).swarmRead(
+        '/api/super-tabs/t/changes?cursor=c1',
+      );
+
+      expect(value, {'tabs': <Object>[]});
+      final request = backend.requests.single;
+      expect(request.method, 'GET');
+      expect(request.path, '/api/super-tabs/t/changes');
+      expect(request.query, {'cursor': 'c1'});
+      expect(request.headers.value('authorization'), 'Bearer t1');
+    });
+
+    test('with no credentials never reaches the backend', () async {
+      final api = ApiClient(
+        config: const AppConfig(apiBaseUrl: 'https://api.invalid'),
+        session: AuthSession(storage: MemoryKeyValueStore()),
+        httpClientAdapter: backend,
+      );
+      await expectLater(api.swarmRead('/api/super-tabs/list'), throwsStateError);
+      expect(backend.requests, isEmpty);
+    });
+
+    Matcher failure(String code, int status, [String? message]) =>
+        isA<SuperTabFailure>()
+            .having((f) => f.code, 'code', code)
+            .having((f) => f.statusCode, 'statusCode', status)
+            .having(
+              (f) => f.message,
+              'message',
+              message ?? isNotEmpty,
+            );
+
+    test("a refusal carries the backend's code, status and words", () async {
+      backend.answer = (_, _) => (
+        status: 403,
+        body: {
+          'success': false,
+          'error': {'code': 'FORBIDDEN', 'message': 'Not a member.'},
+        },
+      );
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/t/parts'),
+        throwsA(failure('FORBIDDEN', 403, 'Not a member.')),
+      );
+    });
+
+    test('426 asks for an update, whatever the body says', () async {
+      backend.answer = (_, _) => (status: 426, body: {'success': false});
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('UPDATE_REQUIRED', 426)),
+      );
+    });
+
+    test('a 502 from a proxy, not JSON, keeps its status', () async {
+      backend.answer = (_, _) => (status: 502, body: '<html>Bad gateway</html>');
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('BACKEND_UNAVAILABLE', 502)),
+      );
+    });
+
+    test('a 200 that does not say success is no answer', () async {
+      backend.answer = (_, _) => (status: 200, body: {'data': 'stray'});
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('BACKEND_UNAVAILABLE', 200)),
+      );
+    });
+  });
+
+  group('a Swarm write', () {
+    const path = '/api/super-tabs/tab-1/commands';
+    const body = {
+      'operationId': 'one-command',
+      'command': {
+        'type': 'message.send',
+        'conversationId': 'chat-1',
+        'text': 'private phone message',
+      },
+    };
+
+    test(
+      'posts JSON as the phone with its environment and returns the result',
+      () async {
+        backend.answer = (_, _) => (
+          status: 200,
+          body: ok({
+            'result': {'messageId': 'm1'},
+          }),
+        );
+
+        expect(
+          await client(_Tokens(['phone-token'])).swarmWrite(path, body: body),
+          {
+            'result': {'messageId': 'm1'},
+          },
+        );
+
+        final request = backend.requests.single;
+        expect(request.method, 'POST');
+        expect(request.path, path);
+        expect(request.host, 'api.invalid');
+        expect(request.headers.value('authorization'), 'Bearer phone-token');
+        expect(request.headers.value('x-autonomous-env'), 'stag');
+        expect(jsonDecode(utf8.decode(request.body)), body);
+        expect(request.followRedirects, isFalse);
+      },
+    );
+
+    test(
+      'refreshing a bearer retries the same decision and operation ID once',
+      () async {
+        final tokens = _Tokens(['expired-phone-token', 'fresh-phone-token']);
+        backend.answer = (_, i) => i == 0
+            ? (
+                status: 401,
+                body: {
+                  'success': false,
+                  'error': {'code': 'UNAUTHORIZED'},
+                },
+              )
+            : (
+                status: 200,
+                body: ok({
+                  'result': {'answered': true},
+                }),
+              );
+        const answer = {
+          'operationId': 'one-answer',
+          'command': {
+            'type': 'decision.answer',
+            'decisionId': 'd1',
+            'choice': 1,
+          },
+        };
+
+        expect(await client(tokens).swarmWrite(path, body: answer), {
+          'result': {'answered': true},
+        });
+
+        expect(backend.requests, hasLength(2));
+        expect(backend.requests.map((r) => jsonDecode(utf8.decode(r.body))), [
+          answer,
+          answer,
+        ]);
+        expect(backend.requests.map((r) => r.headers.value('authorization')), [
+          'Bearer expired-phone-token',
+          'Bearer fresh-phone-token',
+        ]);
+        expect(
+          tokens.asks.where((a) => a.force).single.failedToken,
+          'expired-phone-token',
+        );
+      },
+    );
+
+    test('with no credentials never writes to the backend', () async {
+      final api = ApiClient(
+        config: const AppConfig(apiBaseUrl: 'https://api.invalid'),
+        session: AuthSession(storage: MemoryKeyValueStore()),
+        httpClientAdapter: backend,
+      );
+      await expectLater(api.swarmWrite(path, body: body), throwsStateError);
+      expect(backend.requests, isEmpty);
+    });
+
+    for (final status in [401, 403, 404, 426, 429, 503]) {
+      test('preserves a backend refusal with status $status', () async {
+        backend.answer = (_, _) => (
+          status: status,
+          body: {
+            'success': false,
+            'error': {'code': 'REFUSED', 'message': 'Cannot write here.'},
+          },
+        );
+        await expectLater(
+          client(_Tokens(['token'])).swarmWrite(path, body: body),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.statusCode, 'status', status)
+                .having(
+                  (f) => f.code,
+                  'code',
+                  status == 426 ? 'UPDATE_REQUIRED' : 'REFUSED',
+                ),
+          ),
+        );
+      });
+    }
+
+    test('a redirect is a refusal with no command body forwarded', () async {
+      backend.answer = (_, _) => (status: 307, body: '<html>Redirect</html>');
+      await expectLater(
+        client(_Tokens(['token'])).swarmWrite(path, body: body),
+        throwsA(
+          isA<SuperTabFailure>().having((f) => f.statusCode, 'status', 307),
+        ),
+      );
+      expect(backend.requests.single.followRedirects, isFalse);
+    });
+
+    test('cancelling an in-flight write prevents a later 401 replay', () async {
+      final tokens = _Tokens(['old-account', 'new-account']);
+      final reached = Completer<void>();
+      final release = Completer<void>();
+      backend.hold = (_, _) async {
+        reached.complete();
+        await release.future;
+      };
+      backend.answer = (_, _) => (status: 401, body: {'success': false});
+      final cancel = CancelToken();
+      final writing = client(tokens)
+          .swarmWrite(path, body: body, cancel: cancel);
+      final stopped = expectLater(writing, throwsA(isA<DioException>()));
+      await reached.future;
+      cancel.cancel('account changed');
+      release.complete();
+      await stopped;
+      await Future<void>.delayed(Duration.zero);
+      expect(backend.requests, hasLength(1));
+      expect(tokens.asks.where((a) => a.force), isEmpty);
+    });
+
+    for (final path in [
+      'https://elsewhere.invalid/api/super-tabs/t/commands',
+      '//elsewhere.invalid/api/super-tabs/t/commands',
+      '/api/super-tabs/../auth/logout',
+      '/api/super-tabs/%2e%2e/auth/logout',
+      '/api/machines',
+    ]) {
+      test('rejects an unsafe Swarm write path before using credentials: $path', () async {
+        final tokens = _Tokens(['token']);
+        await expectLater(client(tokens).swarmWrite(path, body: body), throwsArgumentError);
+        expect(tokens.asks, isEmpty);
+        expect(backend.requests, isEmpty);
+      });
+    }
+
+    test(
+      'logs contain neither the bearer nor the private command text',
+      () async {
+        final before = appLog;
+        final log = _Log();
+        appLog = log;
+        addTearDown(() => appLog = before);
+
+        await client(_Tokens(['secret-phone-bearer']))
+            .swarmWrite(path, body: body);
+
+        expect(log.lines.join('\n'), isNot(contains('secret-phone-bearer')));
+        expect(log.lines.join('\n'), isNot(contains('private phone message')));
+      },
+    );
+  });
 
   group('signing', () {
     test(
@@ -356,12 +681,569 @@ void main() {
       },
     );
 
+    test(
+      "a Swarm avatar goes up as one PNG of its own and answers the upload's id",
+      () async {
+        backend.answer = (_, _) => (
+          status: 200,
+          body: ok({
+            'avatar': {'id': 'up-1'},
+          }),
+        );
+        final png = Uint8List.fromList(List.generate(32, (i) => i));
+        expect(
+          await client(_Tokens(['t'])).uploadSwarmAvatar('tab/1', png),
+          'up-1',
+        );
+        final sent = backend.requests.single;
+        expect(sent.path, '/api/super-tabs/tab%2F1/avatars');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final body = latin1.decode(sent.body);
+        expect(body, contains('filename="avatar.png"'));
+        expect(body, contains('Content-Type: image/png'));
+      },
+    );
+
+    test('a Swarm avatar the server refuses says why', () async {
+      backend.answer = (_, _) => (
+        status: 503,
+        body: {
+          'success': false,
+          'error': {
+            'code': 'AVATARS_UNAVAILABLE',
+            'message': 'Uploading pictures is not set up on this server yet.',
+          },
+        },
+      );
+      await expectLater(
+        client(_Tokens(['t'])).uploadSwarmAvatar('tab-1', Uint8List(4)),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 503)
+              .having(
+                (e) => e.message,
+                'message',
+                'Uploading pictures is not set up on this server yet.',
+              ),
+        ),
+      );
+    });
+
     test('no transcript is an empty one', () async {
       backend.answer = (_, _) => (status: 200, body: ok(<String, Object?>{}));
       expect(
         await client(_Tokens(['t'])).transcribeVoice(Uint8List(4), lang: 'en'),
         '',
       );
+    });
+  });
+
+  group('a Swarm chat file', () {
+    Future<Map<String, dynamic>> upload(
+      ApiClient api, {
+      String name = 'shot.jpg',
+      String mime = 'image/jpeg',
+      Uint8List? bytes,
+      SwarmOutgoingFile? file,
+      CancelToken? cancel,
+      bool Function()? stillWanted,
+      void Function(double sent)? onProgress,
+    }) => api.uploadSwarmAttachment(
+      tabId: 'tab-1',
+      conversationId: 'conv-1',
+      name: name,
+      mime: mime,
+      file:
+          file ??
+          SwarmOutgoingFile(name, bytes ?? Uint8List.fromList([1, 2, 3])),
+      cancel: cancel ?? CancelToken(),
+      stillWanted: stillWanted,
+      onProgress: onProgress ?? (_) {},
+    );
+
+    /// A file said to be [size] bytes that is three: no test holds hundreds of
+    /// megabytes.
+    SwarmOutgoingFile sized(String name, int size) =>
+        SwarmOutgoingFile.streamed(
+          name,
+          size,
+          () => Stream.value(Uint8List.fromList([1, 2, 3])),
+        );
+
+    test(
+      'goes straight to the backend as the conversation, then one file',
+      () async {
+        final attachment = {
+          'id': 'att-1',
+          'name': 'shot.jpg',
+          'mime': 'image/jpeg',
+          'size': 3,
+          'url': 'https://cdn.harness.autonomous.ai/x/shot.jpg',
+        };
+        backend.answer = (_, _) =>
+            (status: 200, body: ok({'attachment': attachment}));
+
+        final answer = await upload(client(_Tokens(['t1'])));
+
+        expect(answer, {'attachment': attachment});
+        final sent = backend.requests.single;
+        expect(sent.method, 'POST');
+        expect(sent.path, '/api/super-tabs/tab-1/attachments');
+        expect(sent.headers.value('authorization'), 'Bearer t1');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final boundary = sent.headers.contentType!.parameters['boundary']!;
+        expect(
+          sent.body,
+          [
+            ...utf8.encode(
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="conversationId"\r\n\r\n'
+              'conv-1\r\n'
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="file"; filename="shot.jpg"\r\n'
+              'Content-Type: image/jpeg\r\n\r\n',
+            ),
+            1, 2, 3,
+            ...utf8.encode('\r\n--$boundary--\r\n'),
+          ],
+        );
+      },
+    );
+
+    test('a name cannot break out of its header', () async {
+      backend.answer = (_, _) =>
+          (status: 200, body: ok({'attachment': <String, Object?>{}}));
+
+      await upload(client(_Tokens(['t'])), name: 'a"b\r\nc.jpg');
+
+      expect(
+        utf8.decode(backend.requests.single.body, allowMalformed: true),
+        contains('filename="a%22b%0D%0Ac.jpg"'),
+      );
+    });
+
+    test('says how much has gone up, up to all of it', () async {
+      backend.answer = (_, _) =>
+          (status: 200, body: ok({'attachment': <String, Object?>{}}));
+      final told = <double>[];
+
+      await upload(
+        client(_Tokens(['t'])),
+        bytes: Uint8List(200 * 1024),
+        onProgress: told.add,
+      );
+
+      expect(told, isNotEmpty);
+      expect(told.last, 1.0);
+    });
+
+    test('a refusal carries the backend\'s code and words', () async {
+      backend.answer = (_, _) => (
+        status: 403,
+        body: {
+          'success': false,
+          'error': {'code': 'FORBIDDEN', 'message': 'Not a writer here.'},
+        },
+      );
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'FORBIDDEN')
+              .having((f) => f.message, 'message', 'Not a writer here.')
+              .having((f) => f.statusCode, 'status', 403),
+        ),
+      );
+    });
+
+    test('a refusal without words says the desktop\'s', () async {
+      backend.answer = (_, _) => (
+        status: 413,
+        body: {
+          'success': false,
+          'error': {'code': 'ATTACHMENT_TOO_LARGE'},
+        },
+      );
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'ATTACHMENT_TOO_LARGE')
+              .having(
+                (f) => f.message,
+                'message',
+                'Files can be up to 256 MB.',
+              ),
+        ),
+      );
+    });
+
+    test('an answer that is no envelope is a failed upload', () async {
+      backend.answer = (_, _) => (status: 502, body: 'Bad Gateway');
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'UPLOAD_FAILED')
+              .having(
+                (f) => f.message,
+                'message',
+                'Could not upload the file. Try again.',
+              )
+              .having((f) => f.statusCode, 'status', 502),
+        ),
+      );
+    });
+    test('one of exactly 10 MB still goes as one form', () async {
+      backend.answer = (_, _) =>
+          (status: 200, body: ok({'attachment': <String, Object?>{}}));
+
+      await upload(
+        client(_Tokens(['t'])),
+        name: 'edge.zip',
+        file: sized('edge.zip', 10 * 1024 * 1024),
+      );
+
+      final sent = backend.requests.single;
+      expect(sent.path, '/api/super-tabs/tab-1/attachments');
+      expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+    });
+
+    group('over 10 MB, by a link straight to storage', () {
+      const big = 10 * 1024 * 1024 + 1;
+      const link =
+          'https://storage.googleapis.com/harness-files/x/AC4.step'
+          '?X-Goog-Signature=s3cr3t&X-Goog-Credential=c';
+      final signed = {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment; filename="AC4.step"',
+        'cache-control': 'private, max-age=0',
+        'x-goog-content-length-range': '$big,$big',
+        'x-goog-if-generation-match': '0',
+      };
+      final attachment = {
+        'id': 'up-1',
+        'name': 'AC4.step',
+        'mime': 'application/octet-stream',
+        'size': big,
+        'url': 'https://cdn.harness.autonomous.ai/x/AC4.step',
+      };
+
+      /// The backend's link, then storage's [storage] status, then the
+      /// finished attachment.
+      void answers({int storage = 200, Map<String, Object?>? upload}) {
+        backend.answer = (request, _) {
+          if (request.host == 'storage.googleapis.com') {
+            return (status: storage, body: '<Error>AccessDenied</Error>');
+          }
+          if (request.path.endsWith('/complete')) {
+            return (status: 200, body: ok({'attachment': attachment}));
+          }
+          return (
+            status: 200,
+            body: ok({
+              'upload':
+                  upload ??
+                  {
+                    'id': 'up-1',
+                    'url': link,
+                    'method': 'PUT',
+                    'headers': signed,
+                    'expiresAt': 1793436000000,
+                  },
+            }),
+          );
+        };
+      }
+
+      test('asks for a link, sends the file to storage with exactly the signed '
+          'headers and no token, then completes', () async {
+        answers();
+        final told = <double>[];
+
+        final answer = await upload(
+          client(_Tokens(['t1'])),
+          name: 'AC4.step',
+          mime: 'application/octet-stream',
+          file: sized('AC4.step', big),
+          onProgress: told.add,
+        );
+
+        expect(answer, {'attachment': attachment});
+        final [ask, put, done] = backend.requests;
+        expect(ask.method, 'POST');
+        expect(ask.host, 'api.invalid');
+        expect(ask.path, '/api/super-tabs/tab-1/attachments/uploads');
+        expect(ask.headers.value('authorization'), 'Bearer t1');
+        expect(jsonDecode(utf8.decode(ask.body)), {
+          'conversationId': 'conv-1',
+          'name': 'AC4.step',
+          'mime': 'application/octet-stream',
+          'size': big,
+        });
+
+        expect(put.method, 'PUT');
+        expect(put.host, 'storage.googleapis.com');
+        expect(put.path, '/harness-files/x/AC4.step');
+        expect(put.query['X-Goog-Signature'], 's3cr3t');
+        expect(put.headers.values, {...signed, 'content-length': '$big'});
+        expect(put.headers.value('authorization'), isNull);
+        expect(put.body, [1, 2, 3]);
+        expect(told, isNotEmpty);
+
+        expect(done.method, 'POST');
+        expect(
+          done.path,
+          '/api/super-tabs/tab-1/attachments/uploads/up-1/complete',
+        );
+        expect(done.headers.value('authorization'), 'Bearer t1');
+        expect(jsonDecode(utf8.decode(done.body)), <String, Object?>{});
+      });
+
+      test('over 256 MB is refused before anything is sent', () async {
+        answers();
+
+        await expectLater(
+          upload(
+            client(_Tokens(['t'])),
+            name: 'huge.step',
+            file: sized('huge.step', 256 * 1024 * 1024 + 1),
+          ),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.code, 'code', 'ATTACHMENT_TOO_LARGE')
+                .having(
+                  (f) => f.message,
+                  'message',
+                  'Files can be up to 256 MB.',
+                ),
+          ),
+        );
+        expect(backend.requests, isEmpty);
+      });
+
+      test('exactly 256 MB goes', () async {
+        answers();
+
+        await upload(
+          client(_Tokens(['t'])),
+          name: 'AC4.step',
+          file: sized('AC4.step', 256 * 1024 * 1024),
+        );
+
+        expect(backend.requests, hasLength(3));
+        expect(
+          backend.requests[1].headers.value('content-length'),
+          '${256 * 1024 * 1024}',
+        );
+      });
+
+      test('storage refusing the file names it, never the link, completes '
+          'nothing, and the next try asks for a new link', () async {
+        final log = _Log();
+        final before = appLog;
+        appLog = log;
+        addTearDown(() => appLog = before);
+        answers(storage: 412);
+        final api = client(_Tokens(['t']));
+
+        Object? failure;
+        try {
+          await upload(api, name: 'AC4.step', file: sized('AC4.step', big));
+        } catch (error) {
+          failure = error;
+        }
+
+        expect(
+          failure,
+          isA<SuperTabFailure>()
+              .having(
+                (f) => f.message,
+                'message',
+                'Could not upload AC4.step. Try again.',
+              )
+              .having((f) => f.statusCode, 'status', 412),
+        );
+        expect('$failure', isNot(contains('googleapis')));
+        expect([
+          for (final r in backend.requests) r.path,
+        ], isNot(contains(endsWith('/complete'))));
+        expect(log.lines.join('\n'), contains('412'));
+        expect(log.lines.join('\n'), isNot(contains('googleapis')));
+        expect(log.lines.join('\n'), isNot(contains('s3cr3t')));
+
+        answers();
+        await upload(api, name: 'AC4.step', file: sized('AC4.step', big));
+        expect([
+          for (final r in backend.requests)
+            if (r.path.endsWith('/uploads')) r.path,
+        ], hasLength(2));
+      });
+
+      test('a transfer that breaks names the file, never the link', () async {
+        answers();
+        final api = client(_Tokens(['t']));
+        final breaking = SwarmOutgoingFile.streamed(
+          'AC4.step',
+          big,
+          () => Stream.error(const SocketException('Broken pipe')),
+        );
+
+        Object? failure;
+        try {
+          await upload(api, name: 'AC4.step', file: breaking);
+        } catch (error) {
+          failure = error;
+        }
+
+        expect(
+          failure,
+          isA<SuperTabFailure>().having(
+            (f) => f.message,
+            'message',
+            'Could not upload AC4.step. Try again.',
+          ),
+        );
+        expect('$failure', isNot(contains('s3cr3t')));
+        expect([
+          for (final r in backend.requests) r.path,
+        ], isNot(contains(endsWith('/complete'))));
+      });
+
+      test('given up while it goes to storage: nothing is completed, and the '
+          'link is in nothing the caller is handed', () async {
+        answers();
+        final cancel = CancelToken();
+        backend.hold = (request, cancelled) async {
+          if (request.host != 'storage.googleapis.com') return;
+          cancel.cancel('closed');
+          await cancelled;
+        };
+
+        Object? failure;
+        try {
+          await upload(
+            client(_Tokens(['t'])),
+            name: 'AC4.step',
+            file: sized('AC4.step', big),
+            cancel: cancel,
+          );
+        } catch (error) {
+          failure = error;
+        }
+
+        expect(
+          failure,
+          isA<DioException>()
+              .having((e) => e.type, 'type', DioExceptionType.cancel)
+              .having(
+                (e) => '${e.requestOptions.uri}',
+                'uri',
+                isNot(contains('googleapis')),
+              ),
+        );
+        expect('$failure', isNot(contains('s3cr3t')));
+        expect([
+          for (final r in backend.requests) r.path,
+        ], isNot(contains(endsWith('/complete'))));
+      });
+
+      test(
+        'given up while the link is asked for: storage gets nothing',
+        () async {
+          answers();
+          final cancel = CancelToken();
+          backend.hold = (request, cancelled) async {
+            if (request.path.endsWith('/uploads')) cancel.cancel('closed');
+          };
+
+          await expectLater(
+            upload(
+              client(_Tokens(['t'])),
+              name: 'AC4.step',
+              file: sized('AC4.step', big),
+              cancel: cancel,
+            ),
+            throwsA(isA<DioException>()),
+          );
+          expect(backend.requests.map((r) => r.host), ['api.invalid']);
+        },
+      );
+
+      test('the account changed once the link came: nothing goes to '
+          'storage', () async {
+        answers();
+        var current = true;
+        backend.hold = (request, _) async {
+          if (request.path.endsWith('/uploads')) current = false;
+        };
+
+        await expectLater(
+          upload(
+            client(_Tokens(['t'])),
+            name: 'AC4.step',
+            file: sized('AC4.step', big),
+            stillWanted: () => current,
+          ),
+          throwsA(isA<DioException>()),
+        );
+        expect(backend.requests.map((r) => r.host), ['api.invalid']);
+      });
+
+      test('a link that is not https gets no file', () async {
+        answers(
+          upload: {
+            'id': 'up-1',
+            'url': 'http://storage.googleapis.com/x',
+            'method': 'PUT',
+            'headers': signed,
+          },
+        );
+
+        await expectLater(
+          upload(
+            client(_Tokens(['t'])),
+            name: 'AC4.step',
+            file: sized('AC4.step', big),
+          ),
+          throwsA(
+            isA<SuperTabFailure>().having(
+              (f) => f.code,
+              'code',
+              'UPLOAD_FAILED',
+            ),
+          ),
+        );
+        expect(backend.requests, hasLength(1));
+      });
+
+      test('a refused link request says the backend\'s words', () async {
+        backend.answer = (_, _) => (
+          status: 429,
+          body: {
+            'success': false,
+            'error': {'code': 'RATE_LIMITED', 'message': 'Slow down.'},
+          },
+        );
+
+        await expectLater(
+          upload(
+            client(_Tokens(['t'])),
+            name: 'AC4.step',
+            file: sized('AC4.step', big),
+          ),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.code, 'code', 'RATE_LIMITED')
+                .having((f) => f.message, 'message', 'Slow down.')
+                .having((f) => f.statusCode, 'status', 429),
+          ),
+        );
+        expect(backend.requests, hasLength(1));
+      });
     });
   });
 

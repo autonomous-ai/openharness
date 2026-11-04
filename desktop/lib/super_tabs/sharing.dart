@@ -7,8 +7,8 @@ import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/desktop_prompt_surface.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'join_link.dart';
 import 'model.dart';
@@ -43,6 +43,10 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
       _saving = false,
       _peopleExpanded = false,
       _copied = false;
+
+  /// With `domain`: the owner's own domain rather than a typed one, and
+  /// whether people there are added automatically.
+  bool _own = false, _autoJoin = false;
   String? _sharingError, _emailError;
   Map<String, dynamic>? _settings, _pending;
   Timer? _copyFeedback;
@@ -51,23 +55,42 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
   bool get _current => mounted && !c.accessRevoked && c.isOwner;
   bool get _busy =>
       _saving || c.saving || c.hasPendingAction || _pending != null;
+
+  /// The owner's own email domain, as the server read it; null from an older
+  /// server, which takes only a typed domain and knows no automatic joins.
+  String? get _ownDomain => switch (_settings?['ownDomain']) {
+    final String domain when domain.isNotEmpty => domain,
+    _ => null,
+  };
+
+  /// The owner's domain is one anyone can make an address at (gmail.com):
+  /// nobody is let in by it.
+  bool get _ownPublic => _settings?['ownDomainPublic'] == true;
+  bool get _ownUsable => _ownDomain != null && !_ownPublic;
+  String get _typedDomain => _domain.text.trim().toLowerCase();
   Map<String, dynamic> get _access => {
     'mode': _mode,
     'role': _role,
-    if (_mode == 'domain') 'domain': _domain.text.trim().toLowerCase(),
+    if (_mode == 'domain') 'domain': _own ? _ownDomain : _typedDomain,
+    // Sent every time, so turning it off is never left to the saved value.
+    if (_mode == 'domain' && _ownDomain != null) 'autoJoin': _own && _autoJoin,
   };
   bool get _changed {
     if (_settings == null) return false;
     final saved = superTabMap(_settings!['access']);
     return _mode != saved['mode'] ||
         _role != saved['role'] ||
-        (_mode == 'domain' && _access['domain'] != saved['domain']);
+        (_mode == 'domain' && _access['domain'] != saved['domain']) ||
+        (_mode == 'domain' &&
+            _ownDomain != null &&
+            _access['autoJoin'] != (saved['autoJoin'] == true));
   }
 
   bool get _domainValid =>
       _mode != 'domain' ||
+      _own ||
       RegExp(r'^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
-          .hasMatch(_domain.text.trim().toLowerCase());
+          .hasMatch(_typedDomain);
   String? get _joinUrl {
     final value = _settings?['joinUrl'];
     if (value is! String) return null;
@@ -111,7 +134,10 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     _settings = reply;
     _mode = access['mode'] as String;
     _role = access['role'] as String;
-    _domain.text = access['domain'] as String? ?? '';
+    final domain = access['domain'] as String? ?? '';
+    _own = _mode == 'domain' && _ownUsable && domain == _ownDomain;
+    _autoJoin = _own && access['autoJoin'] == true;
+    _domain.text = _own ? '' : domain;
     _copied = false;
   }
 
@@ -245,8 +271,9 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
         requireWrite: false,
         child: AlertDialog(
           title: Text(leaving ? 'Leave Swarm?' : 'Remove ${person.email}?'),
-          content: const Text(
+          content: superTabLeaveWords(
             'Swarm access and agent contributions will be withdrawn. Running harnesses stay on their machines.',
+            autoJoin: leaving && c.snapshot?.autoJoin == true,
           ),
           actions: [
             TextButton(
@@ -317,6 +344,45 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     );
   }
 
+  /// The email, its access and Invite on one line; with enlarged text, the email above the other two.
+  Widget _inviteRow(Widget email, Widget role, Widget invite) => LayoutBuilder(
+    builder: (context, constraints) {
+      final roomy =
+          constraints.maxWidth >= 360 &&
+          MediaQuery.textScalerOf(context).scale(13) <= 20;
+      return roomy
+          ? Row(
+              children: [
+                Expanded(child: email),
+                const SizedBox(width: DesktopChrome.controlGap),
+                role,
+                const SizedBox(width: DesktopChrome.controlGap),
+                invite,
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                email,
+                const SizedBox(height: DesktopChrome.controlGap),
+                Row(
+                  children: [
+                    Flexible(child: role),
+                    const Spacer(),
+                    invite,
+                  ],
+                ),
+              ],
+            );
+    },
+  );
+
+  static Widget _explained(String? why, Widget control) =>
+      why == null ? control : Tooltip(message: why, child: control);
+
+  /// A row's own control: text with no pill, its fill only on hover.
+  static final _quiet = superTabQuietAction;
+
   static const _roles = [
     SelectOption(value: 'collaborator', label: 'Can collaborate'),
     SelectOption(value: 'viewer', label: 'Can view'),
@@ -343,19 +409,28 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                           : 'Can collaborate',
                       style: DesktopChrome.metadata(),
                     ),
-                    if (_removeReason(person) case final reason?)
-                      Text(reason, style: DesktopChrome.metadata()),
+                    if (person.joinedVia == 'domain' &&
+                        person.email.contains('@'))
+                      Text(
+                        'Joined with @${person.email.split('@').last}',
+                        style: DesktopChrome.metadata(),
+                      ),
                   ],
                 ),
               ),
               if (person.role != 'owner' &&
                   (c.isOwner || person.id == c.accountId)) ...[
                 const SizedBox(width: 8),
-                TextButton(
-                  onPressed: _busy || _removeReason(person) != null
-                      ? null
-                      : () => _remove(person),
-                  child: Text(person.id == c.accountId ? 'Leave' : 'Remove'),
+                // Quiet, and why it is unavailable on hover rather than as a sentence in the list (Ken, 2026-10-28).
+                _explained(
+                  _removeReason(person),
+                  TextButton(
+                    style: _quiet,
+                    onPressed: _busy || _removeReason(person) != null
+                        ? null
+                        : () => _remove(person),
+                    child: Text(person.id == c.accountId ? 'Leave' : 'Remove'),
+                  ),
                 ),
               ],
             ],
@@ -381,6 +456,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
               if (c.isOwner) ...[
                 const SizedBox(width: 8),
                 TextButton(
+                  style: _quiet,
                   onPressed: _busy
                       ? null
                       : () => c.command({
@@ -396,277 +472,312 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     ],
   );
 
+  /// Under Invited people: a share the server turned off, and Everyone at a
+  /// public domain shown unavailable.
+  List<Widget> _invitedNotes() => [
+    if (_settings?['turnedOffDomain'] case final String domain) ...[
+      const SizedBox(height: 8),
+      Text(
+        'Sharing with @$domain was turned off: anyone can make an address there.',
+        style: DesktopChrome.metadata(),
+      ),
+    ],
+    if (_ownPublic && _ownDomain != null) ...[
+      const SizedBox(height: 8),
+      Text(
+        'Everyone at @$_ownDomain',
+        style: DesktopChrome.control(color: DesktopChrome.muted),
+      ),
+      Text(
+        'Not available for @$_ownDomain: anyone can make an address there. Invite people or share a link.',
+        style: DesktopChrome.metadata(),
+      ),
+    ],
+  ];
+
+  /// Add them automatically: only at the owner's own domain.
+  List<Widget> _autoJoinChoice() {
+    final own = _ownDomain!, typed = _typedDomain;
+    return [
+      const SizedBox(height: 8),
+      CheckboxListTile(
+        key: const Key('swarm-sharing-auto-join'),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        title: Text(
+          'Add them automatically',
+          style: DesktopChrome.control(
+            color: _own ? null : DesktopChrome.muted,
+          ),
+        ),
+        subtitle: _own
+            ? Text(
+                'Anyone who signs in with an @$own email joins this Swarm. You can remove anyone.',
+                style: DesktopChrome.metadata(),
+              )
+            : typed.isEmpty
+            ? null
+            : Text(
+                'Automatic joins work only for @$own, your own domain. People at $typed join with the link.',
+                style: DesktopChrome.metadata(),
+              ),
+        value: _own && _autoJoin,
+        onChanged: !_own || _busy
+            ? null
+            : (value) => setState(() => _autoJoin = value == true),
+      ),
+      if (_own && _autoJoin && _settings?['autoJoinFull'] == true)
+        Text(
+          'Automatic joins stopped: this Swarm has 200 people.',
+          style: DesktopChrome.metadata(),
+        ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
-    builder: (context, _) => Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      shape: DesktopChrome.bareDialogShape,
-      child: DesktopDialogSurface(
-        child: SizedBox(
-          width: 460,
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                DesktopDialogHeader(
-                  title: 'Share Swarm',
-                  padding: EdgeInsets.zero,
-                  onClose: () => Navigator.pop(context),
-                ),
-                const SizedBox(height: 16),
-                Flexible(
-                  child: DesktopPromptScrollBody(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (c.isOwner) ...[
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  key: const Key('swarm-invite-email'),
-                                  controller: _email,
-                                  autofocus: true,
-                                  enabled: !_busy,
-                                  keyboardType: TextInputType.emailAddress,
-                                  textInputAction: TextInputAction.send,
-                                  decoration: const InputDecoration(
-                                    hintText: 'Email address',
-                                  ),
-                                  onSubmitted: (_) => _invite(),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton(
-                                key: const Key('swarm-invite-send'),
-                                onPressed: _busy || _email.text.trim().isEmpty
-                                    ? null
-                                    : _invite,
-                                child: const Text('Invite'),
-                              ),
-                            ],
-                          ),
-                          if (_emailError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                _emailError!,
-                                style: DesktopChrome.metadata(),
-                              ),
-                            ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: _select(
-                              key: const Key('swarm-invite-role'),
-                              value: _inviteRole,
-                              label: 'Invitation access',
-                              options: _roles,
-                              quiet: true,
-                              onChanged: (value) =>
-                                  setState(() => _inviteRole = value),
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          Text(
-                            'General access',
-                            style: DesktopChrome.control(medium: true),
-                          ),
-                          const SizedBox(height: 8),
-                          if (_loading)
-                            const LinearProgressIndicator()
-                          else if (_settings != null) ...[
-                            _select(
-                              key: const Key('swarm-general-access'),
-                              value: _mode,
-                              label: 'General access',
-                              options: const [
-                                SelectOption(
-                                  value: 'invited',
-                                  label: 'Invited people',
-                                ),
-                                SelectOption(
-                                  value: 'domain',
-                                  label: 'Anyone at a domain',
-                                ),
-                                SelectOption(
-                                  value: 'link',
-                                  label: 'Anyone with the link',
-                                ),
-                              ],
-                              onChanged: (value) => setState(() {
-                                _mode = value;
-                                _copied = false;
-                                if (value == 'domain' && _domain.text.isEmpty) {
-                                  final email = c.snapshot!.people
-                                      .where((p) => p.id == c.accountId)
-                                      .firstOrNull
-                                      ?.email;
-                                  if (email != null && email.contains('@')) {
-                                    _domain.text = email.split('@').last;
-                                  }
-                                }
-                              }),
-                            ),
-                            if (_mode == 'domain') ...[
-                              const SizedBox(height: 8),
-                              TextField(
-                                key: const Key('swarm-sharing-domain'),
-                                controller: _domain,
-                                enabled: !_busy,
-                                keyboardType: TextInputType.url,
-                                decoration: const InputDecoration(
-                                  hintText: 'example.com',
-                                ),
-                              ),
-                            ],
-                            if (_mode != 'invited') ...[
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: _select(
-                                  key: const Key('swarm-sharing-role'),
-                                  value: _role,
-                                  label: 'General access role',
-                                  options: _roles,
-                                  quiet: true,
-                                  onChanged: (value) =>
-                                      setState(() => _role = value),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Private projects stay private.',
-                                style: DesktopChrome.metadata(),
-                              ),
-                            ],
-                          ],
-                          if (_sharingError != null) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                              _sharingError!,
-                              style: DesktopChrome.metadata(),
-                            ),
-                            if (_settings == null)
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: TextButton(
-                                  onPressed: _load,
-                                  child: const Text('Retry'),
-                                ),
-                              ),
-                          ],
-                          const SizedBox(height: 24),
-                        ],
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const Key('swarm-sharing-people'),
-                            style: TextButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              side: BorderSide.none,
-                              padding: EdgeInsets.zero,
-                            ),
-                            onPressed: () => setState(
-                              () => _peopleExpanded = !_peopleExpanded,
-                            ),
-                            icon: Icon(
-                              _peopleExpanded
-                                  ? AppIcons.chevronDown
-                                  : AppIcons.chevronRight,
-                              size: 16,
-                            ),
-                            label: const Text('People with access'),
-                          ),
-                        ),
-                        if (_peopleExpanded) _people(),
-                        if (c.operationError != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              c.operationError!,
-                              style: DesktopChrome.metadata(),
-                            ),
-                          ),
-                        if (c.hasPendingAction)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              onPressed: c.saving ? null : c.retry,
-                              child: const Text('Check pending invitation'),
-                            ),
-                          ),
-                      ],
+    builder: (context, _) => SuperTabDetailDialog(
+      title: 'Share Swarm',
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (c.isOwner) ...[
+            _inviteRow(
+              TextField(
+                key: const Key('swarm-invite-email'),
+                controller: _email,
+                autofocus: true,
+                enabled: !_busy,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.send,
+                decoration: const InputDecoration(hintText: 'Email address'),
+                onSubmitted: (_) => _invite(),
+              ),
+              _select(
+                key: const Key('swarm-invite-role'),
+                value: _inviteRole,
+                label: 'Invitation access',
+                options: _roles,
+                quiet: true,
+                onChanged: (value) => setState(() => _inviteRole = value),
+              ),
+              // One primary action at a time: while a sharing change waits for Save, Invite steps back.
+              (_pending != null || _changed
+                  ? OutlinedButton.new
+                  : FilledButton.new)(
+                key: const Key('swarm-invite-send'),
+                onPressed: _busy || _email.text.trim().isEmpty ? null : _invite,
+                child: const Text('Invite'),
+              ),
+            ),
+            if (_emailError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(_emailError!, style: DesktopChrome.metadata()),
+              ),
+            const SizedBox(height: 24),
+            Text('General access', style: DesktopChrome.control(medium: true)),
+            const SizedBox(height: 8),
+            if (_loading)
+              const LinearProgressIndicator()
+            else if (_settings != null) ...[
+              if (_ownDomain case final own?)
+                _select(
+                  key: const Key('swarm-general-access'),
+                  value: _mode != 'domain'
+                      ? _mode
+                      : _own
+                      ? 'own'
+                      : 'other',
+                  label: 'General access',
+                  options: [
+                    const SelectOption(
+                      value: 'invited',
+                      label: 'Invited people',
                     ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    if (_joinUrl != null)
-                      TextButton.icon(
-                        key: const Key('swarm-copy-link'),
-                        onPressed: _busy || _changed ? null : _copyLink,
-                        icon: Icon(
-                          _copied ? AppIcons.check : AppIcons.link2,
-                          size: 16,
-                        ),
-                        label: Text(_copied ? 'Copied' : 'Copy link'),
-                      )
-                    else
-                      const SizedBox.shrink(),
-                    if (_mode == 'link' && !_changed && _joinUrl != null)
-                      Tooltip(
-                        message: 'Replace the link. The previous link will stop working.',
-                        child: TextButton(
-                          key: const Key('swarm-reset-link'),
-                          style: TextButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            side: BorderSide.none,
-                          ),
-                          onPressed: _busy ? null : () => _save(rotate: true),
-                          child: const Text('Reset link'),
-                        ),
-                      ),
-                    if (_pending != null || _changed)
-                      FilledButton(
-                        key: const Key('swarm-sharing-save'),
-                        onPressed:
-                            _saving ||
-                                c.saving ||
-                                c.hasPendingAction ||
-                                !_domainValid
-                            ? null
-                            : () => _save(),
-                        child: Text(
-                          _saving
-                              ? 'Saving…'
-                              : _pending != null
-                              ? 'Retry'
-                              : 'Save',
-                        ),
-                      )
-                    else
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Done'),
-                      ),
+                    // No row that does nothing: at a public domain the
+                    // choice is shown unavailable below instead.
+                    if (!_ownPublic)
+                      SelectOption(value: 'own', label: 'Everyone at @$own'),
+                    const SelectOption(value: 'other', label: 'Other domain…'),
+                    const SelectOption(
+                      value: 'link',
+                      label: 'Anyone with the link',
+                    ),
                   ],
+                  onChanged: (value) => setState(() {
+                    _mode = const {'own', 'other'}.contains(value)
+                        ? 'domain'
+                        : value;
+                    _own = value == 'own';
+                    if (!_own) _autoJoin = false;
+                    _copied = false;
+                  }),
+                )
+              else
+                _select(
+                  key: const Key('swarm-general-access'),
+                  value: _mode,
+                  label: 'General access',
+                  options: const [
+                    SelectOption(value: 'invited', label: 'Invited people'),
+                    SelectOption(value: 'domain', label: 'Anyone at a domain'),
+                    SelectOption(value: 'link', label: 'Anyone with the link'),
+                  ],
+                  onChanged: (value) => setState(() {
+                    _mode = value;
+                    _copied = false;
+                    if (value == 'domain' && _domain.text.isEmpty) {
+                      final email = c.snapshot!.people
+                          .where((p) => p.id == c.accountId)
+                          .firstOrNull
+                          ?.email;
+                      if (email != null && email.contains('@')) {
+                        _domain.text = email.split('@').last;
+                      }
+                    }
+                  }),
+                ),
+              if (_mode == 'invited') ..._invitedNotes(),
+              if (_mode == 'domain' && !_own) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  key: const Key('swarm-sharing-domain'),
+                  controller: _domain,
+                  enabled: !_busy,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(hintText: 'example.com'),
                 ),
               ],
+              if (_mode != 'invited') ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _select(
+                    key: const Key('swarm-sharing-role'),
+                    value: _role,
+                    label: 'General access role',
+                    options: _roles,
+                    quiet: true,
+                    onChanged: (value) => setState(() => _role = value),
+                  ),
+                ),
+                if (_mode == 'domain' && _ownUsable) ..._autoJoinChoice(),
+                const SizedBox(height: 8),
+                Text(
+                  'Private projects stay private.',
+                  style: DesktopChrome.metadata(),
+                ),
+              ],
+            ],
+            if (_sharingError != null) ...[
+              const SizedBox(height: 8),
+              Text(_sharingError!, style: DesktopChrome.metadata()),
+              if (_settings == null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _load,
+                    child: const Text('Retry'),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 24),
+          ],
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('swarm-sharing-people'),
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                side: BorderSide.none,
+                padding: EdgeInsets.zero,
+              ),
+              onPressed: () =>
+                  setState(() => _peopleExpanded = !_peopleExpanded),
+              icon: Icon(
+                _peopleExpanded ? AppIcons.chevronDown : AppIcons.chevronRight,
+                size: 16,
+              ),
+              label: const Text('People with access'),
             ),
           ),
-        ),
+          if (_peopleExpanded) _people(),
+          if (c.operationError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(c.operationError!, style: DesktopChrome.metadata()),
+            ),
+          if (c.hasPendingAction)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: c.saving ? null : c.retry,
+                child: const Text('Check pending invitation'),
+              ),
+            ),
+        ],
       ),
+      leadingActions: [
+        if (_joinUrl != null)
+          TextButton.icon(
+            key: const Key('swarm-copy-link'),
+            onPressed: _busy || _changed ? null : _copyLink,
+            icon: Icon(_copied ? AppIcons.check : AppIcons.link2, size: 16),
+            label: Text(_copied ? 'Copied' : 'Copy link'),
+          ),
+        if (_mode == 'link' && !_changed && _joinUrl != null)
+          Tooltip(
+            message: 'Replace the link. The previous link will stop working.',
+            child: TextButton(
+              key: const Key('swarm-reset-link'),
+              style: _quiet,
+              onPressed: _busy ? null : () => _save(rotate: true),
+              child: const Text('Reset link'),
+            ),
+          ),
+      ],
+      actions: [
+        if (_pending != null || _changed)
+          FilledButton(
+            key: const Key('swarm-sharing-save'),
+            onPressed:
+                _saving || c.saving || c.hasPendingAction || !_domainValid
+                ? null
+                : () => _save(),
+            child: Text(
+              _saving
+                  ? 'Saving…'
+                  : _pending != null
+                  ? 'Retry'
+                  : 'Save',
+            ),
+          )
+        else
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+      ],
     ),
   );
 }
+
+/// A leave or remove confirmation's words. Leaving a Swarm that adds people
+/// at its owner's domain automatically also says the person is not added back.
+Widget superTabLeaveWords(String words, {required bool autoJoin}) => autoJoin
+    ? Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(words),
+          const SizedBox(height: 8),
+          const Text(
+            "You won't be added back automatically. Ask the owner to invite you if you want to return.",
+          ),
+        ],
+      )
+    : Text(words);

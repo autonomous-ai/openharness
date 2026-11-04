@@ -37,6 +37,21 @@ class AppDelegate: FlutterAppDelegate {
     UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
   }
 
+  // Hidden or covered, Harness would be App Napped: its timers stall for minutes, the daemon drops
+  // its idle local socket and the Swarm tabs empty. This keeps it awake but still lets the Mac sleep.
+  // FlutterAppDelegate implements neither callback, so there is no super to call.
+  private(set) var appNapActivity: NSObjectProtocol?
+
+  override func applicationDidFinishLaunching(_ notification: Notification) {
+    appNapActivity = ProcessInfo.processInfo.beginActivity(
+      options: .userInitiatedAllowingIdleSystemSleep, reason: "Keep agents and Swarm updates live while hidden")
+  }
+
+  override func applicationWillTerminate(_ notification: Notification) {
+    if let activity = appNapActivity { ProcessInfo.processInfo.endActivity(activity) }
+    appNapActivity = nil
+  }
+
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     return true
   }

@@ -14,7 +14,7 @@ import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { AgentRestartCoordinator, type RestartAgentDeps } from '../../lib/restartAgent.js'
+import { AgentRestartCoordinator, type RelaunchArgvOptions, type RestartAgentDeps } from '../../lib/restartAgent.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
@@ -65,12 +65,17 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
      *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
     permissionMode: string | null = session.permissionMode ?? null,
     current?: () => boolean,
+    /** The conversation the relaunch reopens when it is not the row's own: a retarget home reopening the one a
+     *  fresh move left (retarget.ts). The process stopped is still the row's. */
+    reopens?: string,
   ): RestartAgentDeps => {
     const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
+    // Found by its id when it is another conversation: the row's transcript is the one it is leaving.
+    const conversation = reopens && reopens !== session.sessionId ? { ...session, sessionId: reopens, transcriptPath: null } : session
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
-    const relaunchOptions = (opts: { bypassPermission: boolean; resumeSessionId?: string }) => ({
+    const relaunchOptions = (opts: RelaunchArgvOptions) => ({
       ...opts,
       ...(launch.native ? { native: launch.native } : {}),
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
@@ -92,9 +97,9 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     })
     return {
       ...(current ? { isCurrent: current } : {}),
-      prepareResume: () => prepareSessionResume(session),
-      // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
-      keepAbandoned: () => keepAbandonedConversation(session),
+      prepareResume: () => prepareSessionResume(conversation),
+      // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
+      keepAbandoned: () => keepAbandonedConversation(conversation),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.
       ...(backend.respawnRefusal ? { respawnRefusal: () => backend.respawnRefusal!(launch.env ? { env: launch.env } : {}) } : {}),
       holdOpen: async () => {
@@ -172,7 +177,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
         // The exact environment the pane is about to get, the same way `respawn` above builds it: `launch.env`
         // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges `native.environment`
         // into it), and `engineLaunchEnv` adds Windows's own-process variables.
-        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: session.sessionId,
+        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: conversation.sessionId,
           env: { ...process.env, ...launch.env, ...engineLaunchEnv(session.engine, launch.native) } }) } : {}),
       log: (message) => console.log(message),
     }

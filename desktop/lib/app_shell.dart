@@ -8,7 +8,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show kIsWeb, LicenseRegistry, LicenseEntryWithLineBreaks;
+    show kIsWeb, LicenseEntry, LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -22,8 +22,10 @@ import 'core/windows_status_tray.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
+import 'screens/swarm_menu_bus.dart';
 import 'state/app_state.dart';
 import 'stats/stats_lifecycle.dart';
+import 'super_tabs/team_account_setup.dart';
 import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
@@ -42,6 +44,7 @@ import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
+import 'shortcuts/keymap_native.dart';
 import 'shortcuts/keyboard_practice.dart';
 import 'widgets/shortcuts_sheet.dart';
 import 'widgets/new_device_notice.dart';
@@ -87,11 +90,7 @@ Future<void> startHarness({
   // erase the share's pinned identity on the first navigation or window resize.
   if (kIsWeb) setUrlStrategy(null);
   WidgetsFlutterBinding.ensureInitialized();
-  LicenseRegistry.addLicense(() async* {
-    yield LicenseEntryWithLineBreaks([
-      'Roboto Mono',
-    ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
-  });
+  LicenseRegistry.addLicense(bundledFontLicenses);
   harnessTransportPlugins = transportPlugins;
   // Before anything else can fail. The file sinks come first so CrashLog's own
   // install has somewhere to mirror to — see CrashLog.record.
@@ -149,10 +148,11 @@ class HarnessApp extends StatelessWidget {
       // 2026-09-16). It never appears in a release build whatever this says.
       // A preview capture that wants a clean corner passes
       // `--dart-define=HARNESS_CLEAN_PREVIEW=true` instead of turning it off
-      // for everyone.
-      debugShowCheckedModeBanner: !const bool.fromEnvironment(
-        'HARNESS_CLEAN_PREVIEW',
-      ),
+      // for everyone. Not on Windows, where the corner it covers is the window's
+      // close button.
+      debugShowCheckedModeBanner:
+          !RuntimePlatform.isWindows &&
+          !const bool.fromEnvironment('HARNESS_CLEAN_PREVIEW'),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
       // The chosen palette owns the appearance; platform text scaling remains
@@ -166,7 +166,7 @@ class HarnessApp extends StatelessWidget {
       // surfaces own their no-scaling boundary alongside terminal zoom.
       builder: (context, child) {
         final app = child ?? const SizedBox.shrink();
-        final framed = frame?.call(app) ?? app;
+        final framed = _TeamSetupHold(child: frame?.call(app) ?? app);
         return _GridTokenScope(
           child: keymap == null
               ? framed
@@ -178,6 +178,19 @@ class HarnessApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The whole window, every route and dialog included, waits while this
+/// computer's Harness Team account must be set up after it joined a Swarm
+/// (super_tabs/team_account_setup.dart).
+class _TeamSetupHold extends ConsumerWidget {
+  const _TeamSetupHold({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) =>
+      TeamAccountSetupLock(app: ref.watch(appStateProvider), child: child);
 }
 
 /// Carries Grid's design tokens past this app's `const` chrome.
@@ -202,6 +215,26 @@ class _GridTokenScope extends StatelessWidget {
   }
 }
 
+/// The licenses page's entries for the fonts this app bundles.
+Stream<LicenseEntry> bundledFontLicenses() async* {
+  yield LicenseEntryWithLineBreaks([
+    'Roboto Mono',
+  ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
+  // Nerd Fonts' MIT terms, then the glyph sets it collects and their licenses.
+  for (final file in const [
+    'LICENSE',
+    'NOTICE',
+    'CC-BY-4.0.txt',
+    'Apache-2.0.txt',
+    'OFL.txt',
+  ]) {
+    yield LicenseEntryWithLineBreaks(
+      ['Symbols Nerd Font Mono'],
+      await rootBundle.loadString('assets/fonts/symbols-nerd-font-mono/$file'),
+    );
+  }
+}
+
 /// Carries "Check for Updates…" from the macOS application menu into Dart.
 ///
 /// The item is installed natively (MainFlutterWindow.swift) so the rest of the
@@ -220,6 +253,30 @@ class RootShell extends ConsumerStatefulWidget {
 class _RootShellState extends ConsumerState<RootShell>
     with WidgetsBindingObserver {
   bool _menuDialogOpen = false;
+
+  /// Whether the workspace is the window's screen: it then owns what AppKit
+  /// hands to Flutter ([_handSignedOutKeymap] otherwise).
+  bool _home = false;
+
+  /// Before a workspace (signed out), AppKit's File menu keeps ⌘W for Close
+  /// Tab, which is off there, so Settings over the sign-in page never hears
+  /// it. Hand AppKit the keymap with Close Tab's keys alone going to Flutter:
+  /// ⌘, ⌘H and ⌘M stay with the menu. Also on leaving the workspace, whose
+  /// keymap handed Flutter every key.
+  void _handSignedOutKeymap() {
+    if (!mounted) return;
+    final keymap = KeymapTheme.of(context, listen: false);
+    if (keymap == null) return;
+    unawaited(
+      swarmMenuBus
+          .send(
+            'keymapState',
+            nativeKeymapSnapshot(keymap, inputOnly: const {'swarm.close'}),
+          )
+          .catchError((Object _) {}),
+    );
+  }
+
   SharedAgentLocation? _sharedLocation;
 
   @override
@@ -228,6 +285,10 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // The Windows tab strip's ☰ is built below this shell, so it dispatches
+    // through the sink instead of a callback threaded through three
+    // constructors (desktop/design/windows-app-menu.md).
+    appMenuActionSink = runAppMenuAction;
     // Available from startup, including sign-in and setup.
     if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
@@ -237,6 +298,7 @@ class _RootShellState extends ConsumerState<RootShell>
     flushAppLog();
     WidgetsBinding.instance.removeObserver(this);
     _appMenuChannel.setMethodCallHandler(null);
+    appMenuActionSink = null;
     super.dispose();
   }
 
@@ -275,10 +337,15 @@ class _RootShellState extends ConsumerState<RootShell>
   /// ([InWindowMenuBar]) fires the same strings directly, so one switch serves
   /// every platform.
   Future<void> runAppMenuAction(String action) async {
-    if (!mounted) return;
+    // The Harness Team account's setup holds the whole window
+    // (super_tabs/team_account_setup.dart). AppKit's own Quit and About panel
+    // never come here; every action that does waits, the Linux and Windows
+    // strip's About included.
+    if (!mounted || ref.read(appStateProvider).teamSetupLocked) return;
     switch (action) {
       case 'settings':
         final app = ref.read(appStateProvider);
+        if (!_home) _handSignedOutKeymap();
         await _menuDialog(
           () => showSettingsScreen(
             context,
@@ -406,6 +473,12 @@ class _RootShellState extends ConsumerState<RootShell>
         // of inside each of them.
         final home =
             app.status == AppStatus.authenticated && !touring && !signInStep;
+        if (_home && !home) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handSignedOutKeymap(),
+          );
+        }
+        _home = home;
         final framed = home ? screen : FullWindowScreen(child: screen);
         // The band takes a row of its own rather than floating over one. As an
         // overlay it landed on the rail's head — covering the wordmark and the
@@ -418,10 +491,14 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux and Windows; macOS
-            // carries them in its native menu bar, and this renders nothing
-            // there).
-            InWindowMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip. Linux always (on GNOME it
+            // is the title bar); macOS carries them in its native menu bar and
+            // renders nothing. Windows draws a ☰ in the workspace tab strip
+            // instead, but the screens before it — sign-in, setup, the tour —
+            // have no tab strip, so they keep the strip until the workspace is
+            // up.
+            if (!RuntimePlatform.isWindows || !home)
+              InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

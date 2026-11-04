@@ -1077,6 +1077,23 @@ mod tests {
         assert_eq!(app.fleet.agent("local", "chosen").unwrap().status, "active");
     }
     #[tokio::test]
+    async fn closing_a_buddy_on_a_picked_session_returns_the_pane_to_its_shell() {
+        // A Swarm Buddy keeps running (the daemon answers keptRunning): no stop is sent, and the pane goes back to its
+        // shell as Close pane after a refused stop does. Before, the close skipped the stop and left the pane as it was.
+        let (mut app, token, pane) = visit_fixture(false);
+        let chosen = app.fleet.agents.get_mut(&("local".into(), "chosen".into())).unwrap();
+        chosen.close_supported = true;
+        chosen.created_at_wire = "2026-10-05T00:00:00.123Z".into();
+        chosen.terminal_available = true;
+        app.session_close.replies.extend([Ok(json!({"activity":"idle", "keptRunning":true}))]);
+        crate::session_close::pane(&mut app, pane);
+        assert_eq!(app.session_close.sent.len(), 1, "only the inspect; no stop");
+        assert!(app.modal.is_none());
+        assert_eq!(app.panes[&app.focused().unwrap()].agent_id, "shell");
+        assert!(app.shell_context.contexts[&token].visit.is_none());
+        assert_eq!(app.fleet.agent("local", "chosen").unwrap().status, "active");
+    }
+    #[tokio::test]
     async fn retired_source_returns_to_its_surviving_shell_even_after_archive_is_removed() {
         let (mut app,token,_) = visit_fixture(false);
         let original = app.fleet.agents.get_mut(&("local".into(),"shell".into())).unwrap();

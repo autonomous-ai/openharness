@@ -10,6 +10,16 @@ const permissionModes = {
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
   full: ['--dangerously-skip-permissions'],
+  // An older Buddy's saved mode, from when a guard held it read-only. A Buddy is its owner's right hand now (Ken, 11-04, task
+  // #2832): relaunched like their own session, in full mode. After `full`, so a process's argv reads back as `full`
+  // (lib/processTable.ts). Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
+  buddy: ['--dangerously-skip-permissions'],
+  // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2): full mode, and nothing the
+  // branch carries. `user` and not `local`: a branch can commit `.claude/settings.local.json`. Harness's hooks are in the user
+  // settings. Claude Code 2.1.316, tried: planted settings.json, settings.local.json and .mcp.json each ran in a trusted
+  // folder without these flags, and none with them. With no trust record the session stops at the trust question, so the record
+  // stays and the flags are the barrier; a Yes on the main repository answers for its worktrees anyway.
+  teamWritten: ['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'],
 }
 export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,

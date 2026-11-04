@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart'
     show TerminalSessionStatus;
 
@@ -360,8 +361,13 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// Every pager currently mounted — what [_detachAll] asks before closing a pane it attached.
   static final Set<_AgentSwipeHostState> _livePagers = {};
 
+  /// The terminal's page keeps the terminal's palette whatever the app wears — dark, while
+  /// Settings' Theme is chosen — around every page of the pager, which is every way a terminal is
+  /// shown ([TerminalLook]).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => TerminalLook(child: _pages(context));
+
+  Widget _pages(BuildContext context) {
     final neighbours = _neighbours;
     final controller = _controller;
     if (neighbours == null || controller == null || neighbours.isEmpty) {

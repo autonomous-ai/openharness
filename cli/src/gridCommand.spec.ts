@@ -18,6 +18,7 @@ import { delimiter, join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { useBundledCli } from './__fixtures__/bundledCli.js'
+import { SIGN_OUT_BUTTON_FLAG } from './lib/signOut.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const cli = useBundledCli()
@@ -141,6 +142,7 @@ function envFor(root: string, backendUrl?: string, extra: NodeJS.ProcessEnv = {}
   return {
     ...inherited,
     HOME: root,
+    USERPROFILE: root, // Windows' HOME: the resolver's last stop is `%USERPROFILE%\.local\bin`
     HARNESS_AUTH_DIR: join(root, 'auth'),
     ADAPTER_DATA_DIR: join(root, 'data'),
     ADAPTER_CLI_DIR: join(root, 'cli'),
@@ -735,7 +737,8 @@ function seedGridCredentials(dir: string): string {
  *  `undefined` drops the variable from the child's environment altogether, which is the state the
  *  `~/.grid` default is for. */
 function runLogout(root: string, gridHome?: string, grid: GridOnPath = 'runnable'): Promise<Run> {
-  return run(root, ['logout'], 'http://127.0.0.1:1', { GRID_HOME: gridHome }, grid)
+  // As the desktop app's Sign out runs it: with no terminal, a sign-out needs the button's flag (lib/signOut.ts).
+  return run(root, ['logout', SIGN_OUT_BUTTON_FLAG], 'http://127.0.0.1:1', { GRID_HOME: gridHome }, grid)
 }
 
 describe('harness grid logout', () => {
@@ -909,7 +912,7 @@ describe('harness logout — the grid sign-out it now performs', () => {
     seedSession(root)
     // `grid logout` refuses over a serve child it cannot confirm stopped. That must be reported and
     // never propagated: a grid condition cannot block a harness sign-out.
-    const result = await run(root, ['logout'], 'http://127.0.0.1:1', {
+    const result = await run(root, ['logout', SIGN_OUT_BUTTON_FLAG], 'http://127.0.0.1:1', {
       FAKE_GRID_EXIT: '1',
       FAKE_GRID_STDERR: 'dt-edge: still serving on pid 4242. Stop it, or sign out with --force.\n',
     })
@@ -993,7 +996,7 @@ describe('harness reset — the second door onto the same sign-out', () => {
     // `reset` clears the SSO session exactly as `logout` does, and more besides — so somebody who
     // runs it is if anything likelier to believe nothing is left behind. A warning written at one
     // door and not the other is a warning the other silently does without.
-    const result = await run(root, ['reset'], 'http://127.0.0.1:1', { GRID_HOME: undefined })
+    const result = await run(root, ['reset', SIGN_OUT_BUTTON_FLAG], 'http://127.0.0.1:1', { GRID_HOME: undefined })
 
     expect(result.status).toBe(0)
     expect(result.stderr).toContain('harness grid logout')
@@ -1005,7 +1008,7 @@ describe('harness reset — the second door onto the same sign-out', () => {
     const root = tempRoot()
     seedSession(root)
 
-    const result = await run(root, ['reset'], 'http://127.0.0.1:1', { GRID_HOME: undefined })
+    const result = await run(root, ['reset', SIGN_OUT_BUTTON_FLAG], 'http://127.0.0.1:1', { GRID_HOME: undefined })
 
     expect(result.status).toBe(0)
     expect(result.stderr).not.toContain('grid logout')

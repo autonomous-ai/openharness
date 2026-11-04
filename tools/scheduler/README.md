@@ -1,6 +1,8 @@
 # Swarm scheduler (prototype)
 
-Places every task on a machine and a model at once. Quality floors are a hard limit; it minimises finish time, then
+Places every task on a machine and a model at once. Quality floors are a hard limit (since the project instructions a
+live Swarm's task asks the strength its difficulty does, low 1, medium 2, high 3, capped at the strongest model that can run
+it, with no reserve and no machines rule; a snapshot's tasks have floor 1; bench instances keep theirs); it minimises finish time, then
 cost, and proves the result optimal with OR-Tools CP-SAT. It does not route anything yet. Formulation and results:
 [docs/plans/2026-10-27-swarm-scheduler.md](../../docs/plans/2026-10-27-swarm-scheduler.md).
 
@@ -15,7 +17,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m scheduler compare data/2026-10-26-night.json [--max-slots 1]
 # A Swarm status snapshot and the Lead's route log, cut to what convert reads, without emails or people's names
 .venv/bin/python -m scheduler redact STATUS.json ROUTE_LOG.json STATUS_OUT.json ROUTE_LOG_OUT.json
-# Those inputs to a night file (this reproduces data/2026-10-26-night.json)
+# Those inputs to a night file (data/2026-10-26-night.json was made before floors, reserve and rules left the snapshot)
 .venv/bin/python -m scheduler convert data/2026-10-26-status.redacted.json data/2026-10-26-route-log.redacted.json \
   data/2026-10-26-night.config.json OUT.json
 ```
@@ -25,8 +27,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 A Lead runs `harness super-tab plan [JSON]` to get the best plan for all of its open groups at once: per group the machine,
 engine, model and effort, start order and expected finish, with the finish time and cost against routing one group at a
 time. It is advice only: the route still decides, and the Lead starts the plan's pick with `overrideReason "scheduler plan"`.
-The CLI builds the input from the live Swarm (`cli/src/superTabs/planInput.ts`), with the route's hard rules and readiness
-checks, and runs this package with the Lead's `python3` (`cli/src/superTabs/planCommand.ts`). The release carries the
+The CLI builds the input from the live Swarm (`cli/src/superTabs/planInput.ts`), with the route's readiness checks (no
+rules or reserve; floors by difficulty; no grid model too small to drive a coding agent), and runs this package with the Lead's `python3` (`cli/src/superTabs/planCommand.ts`). The release carries the
 package's files inside `cli.js` (`cli/build-bundle.mjs`). Without Python or OR-Tools the command says how to install them:
 `python3 -m pip install ortools==9.15.6755`.
 

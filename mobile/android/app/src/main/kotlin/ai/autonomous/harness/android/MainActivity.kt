@@ -15,6 +15,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.PatternMatcher
 import android.os.Build
@@ -125,7 +126,7 @@ class MainActivity : FlutterActivity() {
     // `Harness-…`; Android shows its own sheet listing those nearby and the person picks one.
     // The app's traffic is then bound to that Wi-Fi — it has no Internet, and Android would
     // otherwise send 10.42.0.1 over mobile data. `leave` drops it, and the phone
-    // returns to its own Wi-Fi by itself.
+    // returns to its own Wi-Fi by itself. `wifiOn`: whether the phone's Wi-Fi is on.
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/setup_wifi")
       .setMethodCallHandler { call, result ->
         when (call.method) {
@@ -134,9 +135,45 @@ class MainActivity : FlutterActivity() {
             joinSetupWifi(prefix, result)
           }
           "leave" -> { leaveSetupWifi(); result.success(true) }
+          "wifiOn" -> result.success(wifiManager().isWifiEnabled)
           else -> result.notImplemented()
         }
       }
+
+    // `harness/links` — the message links (`harness://swarm/<tab>/<conversation>/<message>`,
+    // Desktop's Copy link to message) this phone was asked to open (Dart: `SwarmLinkChannel` in
+    // `lib/swarm/swarm_message_link.dart`). Each waits here until Dart's `take` answers it, so one
+    // that launched the app, or came before sign-in, waits for the signed-in screen to ask;
+    // `arrived` tells a listening Dart that more wait. At most 20 wait, the newest kept.
+    links = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/links").also {
+      it.setMethodCallHandler { call, result ->
+        if (call.method != "take") { result.notImplemented(); return@setMethodCallHandler }
+        result.success(ArrayList(waitingLinks))
+        waitingLinks.clear()
+      }
+    }
+    receiveLink(intent)
+  }
+
+  private var links: MethodChannel? = null
+  private val waitingLinks = mutableListOf<String>()
+
+  // singleTop: a link opened while the app runs comes here, not to a new activity.
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    receiveLink(intent)
+  }
+
+  private fun receiveLink(intent: Intent?) {
+    if (intent == null) return
+    val data = intent.data ?: return
+    // Reopened from Recents, Android hands back the intent that first started the app: that link
+    // was opened then.
+    if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+    if (intent.action != Intent.ACTION_VIEW || data.scheme != "harness" || data.host != "swarm") return
+    waitingLinks.add(data.toString())
+    while (waitingLinks.size > 20) waitingLinks.removeAt(0)
+    links?.invokeMethod("arrived", null)
   }
 
   private var setupNetwork: ConnectivityManager.NetworkCallback? = null
@@ -179,6 +216,8 @@ class MainActivity : FlutterActivity() {
     connectivity.bindProcessToNetwork(null)
     try { connectivity.unregisterNetworkCallback(callback) } catch (e: IllegalArgumentException) {}
   }
+
+  private fun wifiManager() = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
   /** Plays the Flutter asset [asset] once, as a sonification — the system's own sounds' stream —
    *  and only while the ringer is on: muted means silent, and the haptic Dart plays beside it is

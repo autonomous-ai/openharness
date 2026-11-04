@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ensureTeamTmux, tmuxBuildFor, untarGz, type TeamTmuxDeps } from './tmux.js'
+import { ensureTeamTmux, systemTar, tmuxBuildFor, untarGz, type TeamTmuxDeps } from './tmux.js'
 
 const SHA = 'a'.repeat(64)
 const manifest = { tmux: {
@@ -64,6 +64,31 @@ describe('the Harness Team account\'s own tmux', () => {
     const { d } = deps({ runs: async () => true })
     expect(await ensureTeamTmux(d)).toBe('present')
     expect(d.download).not.toHaveBeenCalled()
+  })
+
+  it('unpacks with the system\'s tar: /usr/bin/tar, or on Linux without merged /usr (Debian 10 and 11) /bin/tar', () => {
+    expect(systemTar('darwin', () => false)).toBe('/usr/bin/tar')
+    expect(systemTar('linux', () => true)).toBe('/usr/bin/tar')
+    expect(systemTar('linux', (path) => path === '/bin/tar')).toBe('/bin/tar')
+  })
+
+  it('on Linux, uses the system\'s tmux and never downloads one', async () => {
+    const manifest = vi.fn(async () => { throw new Error('never read') })
+    const present = deps({ platform: 'linux', candidates: () => ['/usr/bin/tmux'], runs: vi.fn(async (b: string) => b === '/usr/bin/tmux'), manifest })
+    expect(await ensureTeamTmux(present.d)).toBe('present')
+    const missing = deps({ platform: 'linux', candidates: () => [], manifest })
+    expect(await ensureTeamTmux(missing.d)).toBe('unsupported')
+    expect(missing.d.log).toHaveBeenCalledWith('team: no tmux every account can run here: install it (apt install tmux / dnf install tmux)')
+    for (const f of [present, missing]) expect(f.d.download).not.toHaveBeenCalled()
+    expect(manifest).not.toHaveBeenCalled()
+  })
+
+  it('on Windows, needs no tmux: agents run in its own terminal host', async () => {
+    const manifest = vi.fn(async () => { throw new Error('never read') })
+    const windows = deps({ platform: 'win32', candidates: () => [], manifest })
+    expect(await ensureTeamTmux(windows.d)).toBe('present')
+    expect(windows.d.download).not.toHaveBeenCalled()
+    expect(windows.d.log).not.toHaveBeenCalled()
   })
 
   it('says so when no build is published for this Mac, and fails without throwing', async () => {

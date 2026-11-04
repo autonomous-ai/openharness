@@ -82,3 +82,18 @@ it('uses the real service wrapper and process runner by default without connecti
   expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'superTabs' }))
   handle.stop()
 })
+
+// Stability roadmap 2.4: the server's word that work waits reaches the host in this process as the core's notice.
+it('hands the account\'s notices the core tells it to the host, and nothing else', () => {
+  const t = setup()
+  const heard: unknown[] = []
+  const unsubscribe = t.api().account.onNotice(notice => { heard.push(notice) })
+  t.wire().onEvent!({ kind: 'notice', notice: { type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' } })
+  t.wire().onEvent!({ kind: 'notice', notice: 'not a notice' })
+  t.wire().onEvent!({ kind: 'delivery', event: { deliveryId: 'd', sessionId: 'one', state: 'queued' } })
+  expect(heard).toEqual([{ type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' }])
+  unsubscribe()
+  t.wire().onEvent!({ kind: 'notice', notice: { type: 'super_tab_deliveries' } })
+  expect(heard).toHaveLength(1)
+  t.process.stop()
+})

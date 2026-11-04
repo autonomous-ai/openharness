@@ -13,6 +13,9 @@ class DesktopChrome extends InheritedWidget {
 
   static Color get foreground => grid.AppPalette.textPrimary;
   static Color get muted => grid.AppPalette.textSecondary;
+
+  /// Every field's placeholder, as the dropdowns' search line draws it.
+  static Color get hint => grid.AppPalette.textFaint;
   static Color get surface => grid.AppDesktop.surface;
   static Color get rim => grid.AppDesktop.rim;
   static Color get field => grid.AppDesktop.field;
@@ -21,7 +24,11 @@ class DesktopChrome extends InheritedWidget {
   static Color get activeSelection => grid.AppDesktop.selection;
   static Color get onSelection => grid.AppDesktop.onSelection;
   static Color get selectionDetail => grid.AppDesktop.selectionDetail;
-  static Color get focusRing => grid.AppDesktop.focus;
+
+  /// A focused control's rim: the ordinary hairline. The app draws no colored
+  /// focus lines (owner, 2026-11-04); focus shows as the control's fill and a
+  /// text field's caret.
+  static Color get focusRing => grid.AppDesktop.rim;
   static const dialogRadius = grid.AppDesktop.dialogRadius;
   static const menuRadius = grid.AppDesktop.menuRadius;
   static const rowRadius = grid.AppDesktop.rowRadius;
@@ -137,18 +144,24 @@ class DesktopPill extends StatelessWidget {
     this.foregroundColor,
     this.surfaceColor,
     this.compact = false,
+    this.choice = false,
     this.quiet = false,
     this.capsule = true,
     this.textSize = 13,
     this.truncateFromStart = false,
     this.menuIcon = AppIcons.chevronDown,
     this.highlightFocus = false,
+    this.leadingGap = 7,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
   final Widget? leading;
+
+  /// The space between [leading] (or [icon]) and the label: a narrow row's
+  /// on/off choice (a reply box's options) sets it tighter.
+  final double leadingGap;
   final bool menu, monospace;
   final bool? selected;
   final String? tooltip;
@@ -160,6 +173,11 @@ class DesktopPill extends StatelessWidget {
   /// An opaque base for pills that float directly above workspace content.
   final Color? surfaceColor;
   final bool compact;
+
+  /// An on/off choice that shares a narrow row with other controls (a reply
+  /// box's send row): the quiet pill's side padding, and only its outline
+  /// while off, in either appearance.
+  final bool choice;
   final bool quiet, capsule;
   final double textSize;
   final bool truncateFromStart;
@@ -191,7 +209,7 @@ class DesktopPill extends StatelessWidget {
                   : 34,
             ),
             padding: EdgeInsets.symmetric(
-              horizontal: quiet
+              horizontal: quiet || choice
                   ? 6
                   : compact
                   ? 9
@@ -211,9 +229,12 @@ class DesktopPill extends StatelessWidget {
               (states) => BorderSide(
                 // Reserve the same rim in every state; focus never moves text.
                 width: grid.AppDesktop.focusWidth,
-                color:
-                    states.contains(WidgetState.disabled) ||
-                        (quiet && !highContrast)
+                color: choice && states.contains(WidgetState.disabled)
+                    // A choice that can't be made now keeps its outline,
+                    // greyed, so it still reads as the same control.
+                    ? ink.withValues(alpha: highContrast ? .25 : .06)
+                    : states.contains(WidgetState.disabled) ||
+                          (quiet && !highContrast)
                     ? Colors.transparent
                     : states.contains(WidgetState.focused) || highlightFocus
                     ? (highContrast
@@ -233,7 +254,7 @@ class DesktopPill extends StatelessWidget {
                     : states.contains(WidgetState.focused) &&
                           !states.contains(WidgetState.disabled)
                     ? ink.withValues(alpha: .10)
-                    : quiet
+                    : quiet || choice
                     ? Colors.transparent
                     : ink.withValues(alpha: .055),
               ),
@@ -253,7 +274,7 @@ class DesktopPill extends StatelessWidget {
         children: [
           if (leading != null || icon != null) ...[
             leading ?? Icon(icon, size: 16),
-            const SizedBox(width: 7),
+            SizedBox(width: leadingGap),
           ],
           Flexible(
             child: truncateFromStart
@@ -266,6 +287,9 @@ class DesktopPill extends StatelessWidget {
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    strutStyle: monospace
+                        ? null
+                        : grid.AppType.controlStrut(size: textSize),
                     style: monospace ? grid.AppType.mono() : null,
                     semanticsLabel: semanticLabel,
                   ),
@@ -287,56 +311,104 @@ class DesktopPill extends StatelessWidget {
 
 /// The same heading and dismiss control for every list or task dialog.
 /// A form can omit Close when its Cancel action already provides dismissal.
+/// [leading] is an identity beside the title (an avatar); [trailing] are icon
+/// controls that belong to the whole dialog, placed before Close.
 class DesktopDialogHeader extends StatelessWidget {
   const DesktopDialogHeader({
     super.key,
     required this.title,
     this.detail,
     this.onClose,
+    this.leading,
+    this.trailing = const [],
     this.padding = const EdgeInsets.fromLTRB(24, 24, 16, 16),
   });
 
   final String title;
   final String? detail;
   final VoidCallback? onClose;
+  final Widget? leading;
+  final List<Widget> trailing;
   final EdgeInsets padding;
 
+  /// The icon controls' target, centred on the title's first line.
+  static const _control = 32.0;
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: padding,
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Semantics(
-                header: true,
-                child: Text(title, style: DesktopChrome.heading()),
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.heading();
+    final measure = TextPainter(
+      text: TextSpan(text: title, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final line = measure.height;
+    measure.dispose();
+    final controls = trailing.isNotEmpty || onClose != null;
+    // Whichever is shorter, the title line or a control, moves down to share the other's centre.
+    final titleTop = controls ? ((_control - line) / 2).clamp(0.0, 99.0) : 0.0;
+    final controlsTop = ((line - _control) / 2).clamp(0.0, 99.0);
+    return Padding(
+      padding: padding,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (leading case final leading?) ...[
+            leading,
+            const SizedBox(width: 12),
+          ],
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: titleTop),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Semantics(header: true, child: Text(title, style: style)),
+                  if (detail != null) ...[
+                    const SizedBox(height: 4),
+                    Text(detail!, style: DesktopChrome.metadata()),
+                  ],
+                ],
               ),
-              if (detail != null) ...[
-                const SizedBox(height: 4),
-                Text(detail!, style: DesktopChrome.metadata()),
-              ],
-            ],
+            ),
           ),
-        ),
-        if (onClose != null) ...[
-          const SizedBox(width: 12),
-          IconButton(
-            tooltip: 'Close',
-            onPressed: onClose,
-            icon: const Icon(AppIcons.close, size: 16),
-            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-            padding: const EdgeInsets.all(8),
-            visualDensity: VisualDensity.standard,
-          ),
+          if (controls)
+            Padding(
+              padding: EdgeInsets.only(top: controlsTop),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (trailing.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    ...trailing,
+                  ],
+                  if (onClose != null) ...[
+                    SizedBox(width: trailing.isEmpty ? 12 : 4),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: onClose,
+                      icon: const Icon(AppIcons.close, size: 16),
+                      constraints: const BoxConstraints.tightFor(
+                        width: _control,
+                        height: _control,
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      visualDensity: VisualDensity.standard,
+                      // The 32-point target itself, not padded to 48 below the title.
+                      style: const ButtonStyle(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
 /// Keep the identifying end of a branch name without reversing its text

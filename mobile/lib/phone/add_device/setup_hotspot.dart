@@ -7,9 +7,10 @@ import 'package:flutter/services.dart';
 
 /// A new device's setup hotspot, `Harness-XXXX`, and the page it answers on (os/setup.py).
 ///
-/// It is open. On Android the app joins it itself (`harness/setup_wifi` in MainActivity): Android lists
-/// the `Harness-…` Wi-Fi nearby for the person to pick. Elsewhere the person picks it in Settings ▸ Wi-Fi and
-/// comes back; the app notices by reaching the page.
+/// It is open. On Android and iOS the app joins it itself (`harness/setup_wifi`: MainActivity, and
+/// `SetupWifiChannel` in AppDelegate.swift): Android lists the `Harness-…` Wi-Fi nearby for the person to
+/// pick, iOS finds it and asks to join it. Elsewhere the person picks it in Settings ▸ Wi-Fi and comes
+/// back; the app notices by reaching the page.
 class SetupHotspot {
   SetupHotspot({Dio? dio})
     : _dio =
@@ -31,7 +32,7 @@ class SetupHotspot {
   final Dio _dio;
 
   /// Whether this phone joins the hotspot by itself, or the person does in Settings.
-  static bool get joinsByItself => Platform.isAndroid;
+  static bool get joinsByItself => Platform.isAndroid || Platform.isIOS;
 
   /// `joined` (with the address the hotspot gave this phone), `unavailable` (the person cancelled,
   /// or no device was found), or `unsupported`. Android's list shows only the `Harness-…` Wi-Fi, or
@@ -50,6 +51,19 @@ class SetupHotspot {
       return (state: 'unavailable', address: null);
     } on MissingPluginException {
       return (state: 'unsupported', address: null);
+    }
+  }
+
+  /// Whether the phone's Wi-Fi is on (iOS: whether it is on a Wi-Fi network). Asked before a join:
+  /// with it off, iOS never answers the join. True when it cannot be told: no setup waits on a guess.
+  Future<bool> wifiOn() async {
+    if (!joinsByItself) return true;
+    try {
+      return await _channel.invokeMethod<bool>('wifiOn') ?? true;
+    } on PlatformException {
+      return true;
+    } on MissingPluginException {
+      return true;
     }
   }
 
@@ -89,7 +103,7 @@ class SetupHotspot {
     );
     final list = (res.data is Map ? (res.data as Map)['networks'] : null);
     if (res.statusCode != 200 || list is! List) {
-      throw const SetupException('The device did not send its Wi-Fi list.');
+      throw const SetupException('Intern 3 did not send its Wi-Fi list.');
     }
     return [
       for (final row in list)
@@ -119,13 +133,13 @@ class SetupHotspot {
       );
     } on DioException {
       throw const SetupException(
-        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+        'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
       );
     }
     if (res.statusCode == 200) return null;
     final body = res.data is Map ? res.data as Map : const {};
     return body['message'] as String? ??
-        'The device said no (${res.statusCode}).';
+        'Intern 3 said no (${res.statusCode}).';
   }
 
   /// The computer's password, for a device still locked as it starts: its disk opens with it, and
@@ -155,7 +169,7 @@ class SetupHotspot {
       // The page could not even be reached: the phone is off its hotspot.
       if (e.type == DioExceptionType.connectionTimeout) {
         throw const SetupException(
-          'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+          'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
         );
       }
       // Sent, and the hotspot went before the answer: most likely it opened, and the device is
@@ -165,7 +179,7 @@ class SetupHotspot {
     if (res.statusCode == 200) return null;
     final body = res.data is Map ? res.data as Map : const {};
     return body['message'] as String? ??
-        'The device said no (${res.statusCode}).';
+        'Intern 3 said no (${res.statusCode}).';
   }
 
   /// Hands the device the Wi-Fi and the ticket, or on a cable ([ssid] empty) the ticket alone.
@@ -185,13 +199,13 @@ class SetupHotspot {
       );
     } on DioException {
       throw const SetupException(
-        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+        'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
       );
     }
     final body = res.data is Map ? res.data as Map : const {};
     if (res.statusCode != 202) {
       throw SetupException(
-        body['message'] as String? ?? 'The device said no (${res.statusCode}).',
+        body['message'] as String? ?? 'Intern 3 said no (${res.statusCode}).',
       );
     }
     return (body['run'] as num?)?.toInt() ?? 0;

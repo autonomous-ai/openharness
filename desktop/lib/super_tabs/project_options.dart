@@ -4,10 +4,117 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'project_github.dart';
 import 'project_visibility.dart';
-import 'roles_editor.dart';
+
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
+/// A project's details, read only: its description, repository, coordinator and whether teammates' agents can
+/// push there, in the shared details frame (Ken, 2026-10-28).
+Future<void> _showProjectDetails(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: project.id,
+    requireWrite: false,
+    child: ListenableBuilder(
+      listenable: c,
+      builder: (context, _) {
+        final current = c.snapshot?.projects
+            .where((p) => p.id == project.id)
+            .firstOrNull;
+        final group = c.snapshot?.conversation(project.leadConversationId);
+        final brief = group?.brief.trim() ?? '';
+        return SuperTabDetailDialog(
+          title: current?.name ?? project.name,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: _gap + _halfGap),
+                child: brief.isEmpty
+                    ? Text(
+                        'No description yet',
+                        style: DesktopChrome.metadata(),
+                      )
+                    : SelectableText(brief, style: DesktopChrome.text()),
+              ),
+              SuperTabDetailRow(
+                label: 'Repository',
+                child: SelectableText(
+                  current?.repository?['repositoryUrl'] as String? ??
+                      current?.repository?['cwd'] as String? ??
+                      'Not set',
+                  style: DesktopChrome.control(),
+                ),
+              ),
+              SuperTabDetailRow(
+                label:
+                    c.snapshot?.coordinatorNameOf(project.id) ??
+                    kDefaultCoordinatorName,
+                value: group?.leadId == null
+                    ? 'Starting…'
+                    : c.snapshot!.agentName(group!.leadId!),
+              ),
+              // Whether teammates' agents can push to its repository, and what to do about it.
+              ProjectGitHubAccess(
+                controller: c,
+                projectId: project.id,
+                detailRow: true,
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  ),
+);
+
+/// The project menu's Project settings… (Quiet Swarm, screen 9): the rows the
+/// reader may use, each closing the dialog and then doing its work.
+Future<void> showProjectSettings(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+  List<(String, VoidCallback)> rows, {
+  double rowHeight = 32,
+}) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: project.id,
+    requireWrite: false,
+    child: SuperTabDetailDialog(
+      title: 'Project settings',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (label, action) in rows)
+            InkWell(
+              onTap: () {
+                Navigator.of(context).pop();
+                action();
+              },
+              child: Container(
+                constraints: BoxConstraints(minHeight: rowHeight),
+                alignment: Alignment.centerLeft,
+                child: Text(label, style: DesktopChrome.control()),
+              ),
+            ),
+        ],
+      ),
+    ),
+  ),
+);
 
 Future<void> showProjectAction(
   BuildContext context,
@@ -19,18 +126,20 @@ Future<void> showProjectAction(
     await _deleteProject(context, c, project);
     return;
   }
+  if (action == 'details') {
+    await _showProjectDetails(context, c, project);
+    return;
+  }
   var name = project.name;
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
-  var minutes = project.updateMinutes;
-  var mode = project.skillSet;
   var busy = false;
   await showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
       controller: c,
       projectId: project.id,
-      requireWrite: action != 'details',
+      requireWrite: true,
       child: StatefulBuilder(
         builder: (context, update) => ListenableBuilder(
           listenable: c,
@@ -38,17 +147,9 @@ Future<void> showProjectAction(
             final current = c.snapshot?.projects
                 .where((p) => p.id == project.id)
                 .firstOrNull;
-            final group = c.snapshot?.conversation(project.leadConversationId);
             final canManage = current?.ownerId == c.accountId;
-            final readOnly = action == 'details';
             return AlertDialog(
-              title: Text(switch (action) {
-                'rename' => 'Rename project',
-                'sharing' => 'Sharing',
-                'skills' => 'Instructions for this project',
-                'cadence' => 'Project updates',
-                _ => 'Project details',
-              }),
+              title: Text(action == 'rename' ? 'Rename project' : 'Sharing'),
               content: SizedBox(
                 width: 400,
                 child: SingleChildScrollView(
@@ -105,144 +206,6 @@ Future<void> showProjectAction(
                                     ),
                             ),
                       ],
-                      if (action == 'cadence') ...[
-                        Text(
-                          'The product manager consolidates new workgroup reports while work is active.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButton<int>(
-                          value: minutes,
-                          items: [
-                            for (final value in const [1, 5, 15, 30])
-                              DropdownMenuItem(
-                                value: value,
-                                child: Text(
-                                  'Every $value ${value == 1 ? 'minute' : 'minutes'}',
-                                ),
-                              ),
-                          ],
-                          onChanged: busy
-                              ? null
-                              : (value) => update(() => minutes = value!),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Questions, blockers and completion are reported immediately. No new progress means no update.',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ],
-                      if (action == 'skills')
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Instructions',
-                              style: DesktopChrome.metadata(),
-                            ),
-                            const SizedBox(height: 8),
-                            RadioGroup<String>(
-                              groupValue: mode,
-                              onChanged: (value) {
-                                if (busy ||
-                                    !canManage ||
-                                    value == null ||
-                                    (value == 'custom' &&
-                                        current?.roles == null)) {
-                                  return;
-                                }
-                                update(() => mode = value);
-                              },
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  RadioListTile<String>(
-                                    value: 'default',
-                                    enabled: !busy && canManage,
-                                    contentPadding: EdgeInsets.zero,
-                                    title: const Text(
-                                      'Default — the team process; agents otherwise work their usual way',
-                                    ),
-                                  ),
-                                  RadioListTile<String>(
-                                    value: 'orchestration',
-                                    enabled: !busy && canManage,
-                                    contentPadding: EdgeInsets.zero,
-                                    title: const Text(
-                                      'Harness orchestration — adds Harness practices: plans, test-first, review rounds',
-                                    ),
-                                  ),
-                                  RadioListTile<String>(
-                                    value: 'custom',
-                                    enabled:
-                                        !busy &&
-                                        canManage &&
-                                        current?.roles != null,
-                                    contentPadding: EdgeInsets.zero,
-                                    title: const Text('Custom'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (canManage)
-                              current?.roles == null
-                                  ? OutlinedButton(
-                                      onPressed:
-                                          busy || c.saving || c.hasPendingAction
-                                          ? null
-                                          : () async {
-                                              update(() => busy = true);
-                                              await c.command({
-                                                'type': 'project.roles.create',
-                                                'projectId': project.id,
-                                                'roles': defaultProjectRoles(),
-                                              });
-                                              if (context.mounted) {
-                                                update(() => busy = false);
-                                              }
-                                            },
-                                      child: const Text('Create custom set'),
-                                    )
-                                  : TextButton(
-                                      onPressed: busy
-                                          ? null
-                                          : () => showRolesEditor(
-                                              context,
-                                              c,
-                                              project.id,
-                                            ),
-                                      child: const Text('Edit custom roles'),
-                                    ),
-                          ],
-                        ),
-                      if (readOnly) ...[
-                        Text(
-                          current?.name ?? project.name,
-                          style: DesktopChrome.text(medium: true),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          group?.brief.isNotEmpty == true ? group!.brief : 'Discuss the project with its product manager to define the work.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 16),
-                        Text('Repository', style: DesktopChrome.metadata()),
-                        SelectableText(
-                          current?.repository?['repositoryUrl'] as String? ??
-                              current?.repository?['cwd'] as String? ??
-                              'Not set',
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Product Manager',
-                          style: DesktopChrome.metadata(),
-                        ),
-                        Text(
-                          group?.leadId == null
-                              ? 'Starting…'
-                              : c.snapshot!.agentName(group!.leadId!),
-                        ),
-                      ],
                       if (c.operationError != null) ...[
                         const SizedBox(height: 12),
                         Text(c.operationError!),
@@ -259,49 +222,38 @@ Future<void> showProjectAction(
               actions: [
                 TextButton(
                   onPressed: busy ? null : () => Navigator.pop(context),
-                  child: Text(readOnly ? 'Close' : 'Cancel'),
+                  child: const Text('Cancel'),
                 ),
-                if (!readOnly)
-                  FilledButton(
-                    onPressed:
-                        busy ||
-                            c.saving ||
-                            c.hasPendingAction ||
-                            name.trim().isEmpty ||
-                            (action == 'skills' &&
-                                mode == 'custom' &&
-                                current?.roles == null) ||
-                            (action != 'cadence' && !canManage)
-                        ? null
-                        : () async {
-                            update(() => busy = true);
-                            final result = await c.command({
-                              'type':
-                                  'project.${action == 'rename'
-                                      ? 'rename'
-                                      : action == 'sharing'
-                                      ? 'sharing'
-                                      : action == 'skills'
-                                      ? 'skills'
-                                      : 'cadence'}',
-                              'projectId': project.id,
-                              if (action == 'rename') 'name': name.trim(),
-                              if (action == 'sharing') ...{
-                                'visibility': visibility,
-                                'memberIds': members.toList(),
-                              },
-                              if (action == 'cadence') 'minutes': minutes,
-                              if (action == 'skills') 'mode': mode,
-                            });
-                            if (!context.mounted) return;
-                            if (result != null) {
-                              Navigator.pop(context);
-                            } else {
-                              update(() => busy = false);
-                            }
-                          },
-                    child: const Text('Save'),
-                  ),
+                FilledButton(
+                  onPressed:
+                      busy ||
+                          c.saving ||
+                          c.hasPendingAction ||
+                          name.trim().isEmpty ||
+                          !canManage
+                      ? null
+                      : () async {
+                          update(() => busy = true);
+                          final result = await c.command({
+                            'type': action == 'rename'
+                                ? 'project.rename'
+                                : 'project.sharing',
+                            'projectId': project.id,
+                            if (action == 'rename') 'name': name.trim(),
+                            if (action == 'sharing') ...{
+                              'visibility': visibility,
+                              'memberIds': members.toList(),
+                            },
+                          });
+                          if (!context.mounted) return;
+                          if (result != null) {
+                            Navigator.pop(context);
+                          } else {
+                            update(() => busy = false);
+                          }
+                        },
+                  child: const Text('Save'),
+                ),
               ],
             );
           },
@@ -356,7 +308,7 @@ Future<void> _deleteProject(
                       children: [
                         Text(
                           available
-                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its Product Manager’s session will close too. This can’t be undone.'
+                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its ${c.snapshot?.coordinatorNameOf(project.id) ?? kDefaultCoordinatorName}’s session will close too. This can’t be undone.'
                               : 'This project is no longer available.',
                           style: DesktopChrome.text(),
                         ),

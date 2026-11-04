@@ -27,6 +27,13 @@ meaning: a warning triangle remains a triangle, a chevron remains a chevron.
 - AppKit controls use `HarnessControlSymbols`: regular monochrome SF Symbols
   at the shared 16-point size. Native menu items and the title bar share this
   factory. Native tab close is the optically matched 8-point regular `xmark`.
+- One exception draws SF Symbols inside Flutter: a Swarm's machine rows lead
+  with each Mac's own shape (`laptopcomputer`, `macstudio`, `macmini`,
+  `desktopcomputer`, else `display`; `super_tabs/machine_icon.dart`). AppKit
+  draws the symbol as a one-ink PNG over `harness/system_symbols`, and Flutter
+  tints it with the row's ink. Off a Mac, for a symbol this macOS lacks, and
+  when the call fails, the row draws `AppIcons.laptop` or `AppIcons.monitor`,
+  never nothing. No Apple artwork ships with the app.
 
 Add a missing semantic symbol to the catalogue, then reuse it. Do not create
 a local font alias or duplicate a drawing. A new optical variant belongs in
@@ -48,6 +55,10 @@ not mean a small click target. Keep the target fixed on hover, focus, selection
 and disablement. Platform text scaling may grow the containing control; terminal
 font size never changes the surrounding app icons. Identity artwork and
 illustrations have their own layout dimensions.
+
+On the phone, icons beside text draw at 20 points and standalone icons at 24,
+each with a 44-point touch target; see Phone in the
+[desktop design system](desktop-design-system.md#phone).
 
 The pane close target has a 4-point trailing inset. Tabs retain their 8-point
 inset. Glyphs stay centered inside the target; do not move the drawing itself
@@ -92,6 +103,11 @@ These are content or identities, not a second action-icon library:
   same `activityColor`, including the monochrome preference. Do not substitute
   SF Symbols or add status pills to a different Harness surface. A notification
   mark describes its unread receipt; a tab/pane mark describes current activity.
+- A rank is its numeral. The #1 crown and badges are content artwork beside
+  it, never a replacement for it; see
+  [Team and celebration](desktop-design-system.md#team-and-celebration). A
+  trend is `AppIcons.arrowUp` or `arrowDown` with its number; see
+  [Numbers and rankings](desktop-design-system.md#numbers-and-rankings).
 - QR codes, companion artwork, explanatory diagrams, wallpaper, terminal
   output and user-selected status/Powerline artwork are content. Keep their
   function and authorship; do not round QR modules or replace terminal glyphs.

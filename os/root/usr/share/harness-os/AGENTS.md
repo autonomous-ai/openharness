@@ -116,6 +116,14 @@ is required.
 - Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
   `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
   "the screenshot", read the newest file there. `grim` and `slurp` are installed.
+- To try what you build as a person would, use computer use when you have it:
+  `playwright` for a website (it opens it in a Chromium window of its own, clicks,
+  types, and reads the page and its console) and `desktop` for a desktop app
+  (`screenshot`, `click`, `drag`, `scroll`, `type`, `key`, each answered with the
+  screen afterwards; refused while the screen is locked). They are off until the
+  person turns them on, from their phone (the computer's Computer use) or with
+  `harness computer-use on` in a terminal outside Harness, and a running harness gets
+  them when it restarts. Never turn them on yourself: suggest it instead.
 - On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
   `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact

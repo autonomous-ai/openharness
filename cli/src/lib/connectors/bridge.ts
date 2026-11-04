@@ -4,18 +4,27 @@
  * the answer back (event streams included). A service reached by REST (no MCP server the grant can use) is
  * answered here instead, its REST tools served as MCP (rest.ts). Runs in the daemon (services/connectors.ts).
  *
- * Two more addresses serve Harness's own cloud agents (services/cloud.ts), which hold no credential either:
+ * MCP clients come through a stdio shim (mcpShimSource.ts) to a second listener on a 0600 socket (serveBridgeSocket), or on Windows
+ * a pipe that proves a token both ways (serveBridgePipe), so no tool call goes to a port another account can hold. The port stays
+ * for clients still running on it and a folder too long for a socket.
+ *
+ * Two more addresses serve Harness's own cloud agents (services/cloud.ts), over the socket where one can be, which hold no credential either:
  * - `/<key>/connections`: what is connected, by address and with no secret, so the service finds the
  *   connection that signs in Fo or Devin by where it points rather than by what the person named it;
  * - `/<key>/<code>/api/<path>`: one request to a key-only connection's own API (`api_entry`), with its key.
  */
-import { timingSafeEqual } from 'node:crypto'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { chmodSync, mkdirSync } from 'node:fs'
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
+import { listenLocalSocket, type LocalSocketServer } from '../localSocket.js'
 import { label } from './catalog.js'
-import { bearer, needsRefresh, refreshable, type Store, type Token } from './store.js'
+import { bearer, locked, needsRefresh, refreshable, writePrivate, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
 import { answer as answerRest, transport } from './rest.js'
+import { peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
+import { newPipePath } from '../windows/pipeAuth.js'
 
 /** Headers an MCP client sends that the service must see. Authorization never comes from the agent. */
 const FORWARD = ['accept', 'content-type', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']
@@ -50,11 +59,63 @@ export interface BridgeOptions {
   /** Harness's own capability (agents.ts harnessKey), never in an agent's configuration: only it lists the
    *  connections or calls a key-only connection's API. Absent, those two addresses answer nothing. */
   harnessKey?: () => string
+  /** Served on the 0600 socket, whose peers have no address: the filesystem has already said who they are. */
+  socket?: boolean
+  /** Whether a caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
 }
 
 type Target = { kind: 'mcp'; code: string } | { kind: 'api'; code: string; path: string } | { kind: 'list' }
 
+/** What stands for the capability on the socket, where reaching it is the credential: the filesystem lets only this account. */
+export const SOCKET_KEY = 'local'
+
 export function createBridge(vault: Store, options: BridgeOptions): Server {
+  return createServer(bridgeHandler(vault, options))
+}
+
+/** On the socket or the pipe: for MCP clients, their MCP servers only, as an agent's key reaches; for Harness's own key, what it reaches. */
+function localOptions(vault: Store): BridgeOptions {
+  return { key: () => SOCKET_KEY,
+    // Harness's own calls (cloud/bridge.ts) come here too: its key never crosses the port where this listener can be.
+    // An unreadable key refuses Harness's calls only: agents' MCP calls never needed this file.
+    harnessKey: () => { try { return String(vault.file('harness-key.json').key ?? '') } catch { return '' } }, socket: true }
+}
+
+/** The bridge on its 0600 socket. */
+export async function serveBridgeSocket(vault: Store, path: string): Promise<LocalSocketServer> {
+  // The socket's privacy rests on this folder too, which may be older than this code.
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  chmodSync(dirname(path), 0o700)
+  const listening = await listenLocalSocket(bridgeHandler(vault, localOptions(vault)), path)
+  listening.server.unref()
+  return listening
+}
+
+/** The record of the bridge's pipe in the vault's private folder (agents.ts `readBridgePipe`, the shim). */
+export const BRIDGE_PIPE_FILE = 'bridge-pipe.json'
+
+/**
+ * The bridge on Windows (task #2162): a pipe of a new name, `\\.\pipe\harness-<id>`, whose every request must prove a token new
+ * at each start, and whose every answer proves it back (lib/windows/pipeAuth.ts, as the daemon's own pipe does). Node cannot set a
+ * pipe's DACL, so reaching it is no credential, and once this process is gone any account can make a pipe of the name. The pipe,
+ * this process and the token are recorded in [BRIDGE_PIPE_FILE], private to this account in its profile, once it listens.
+ */
+export async function serveBridgePipe(vault: Store, path: string = newPipePath()): Promise<LocalSocketServer> {
+  const token = randomBytes(32)
+  const listening = await listenLocalSocket(bridgeHandler(vault, localOptions(vault)), path, { token })
+  listening.server.unref()
+  try {
+    locked(vault.root, () => { writePrivate(join(vault.root, BRIDGE_PIPE_FILE), { pipe: path, pid: process.pid, token: token.toString('hex') }) })
+  } catch (error) {
+    // Unrecorded, nothing can reach it: listening on would only hold the name.
+    listening.closeSync()
+    throw error
+  }
+  return listening
+}
+
+function bridgeHandler(vault: Store, options: BridgeOptions): RequestListener {
   const target = (url: string): Target | null => {
     const parts = new URL(url, 'http://127.0.0.1').pathname.replace(/^\/|\/$/g, '').split('/')
     const given = Buffer.from(parts[0])
@@ -146,11 +207,17 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
 
   const relay = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     // Only a process on this computer that knows this user's key gets through; never a web page.
-    if (request.headers.origin || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
+    if (request.headers.origin || (!options.socket && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))) {
       fail(response, 403, 'Forbidden.'); return
     }
     const address = target(request.url ?? '/')
-    if (!address) { fail(response, 404, 'Unknown connection address. Run harness connections sync.'); return }
+    // An MCP client can only speak HTTP to the address in its configuration, so it cannot check who holds this port,
+    // and another account that took it during a restart hears the key (audit H1). A key heard must open nothing. Answered
+    // as an unknown key is, so the answer does not say the key was right.
+    // On the 0600 socket the filesystem has already said who the caller is, and a socket's peer has no port to look up.
+    if (!address || (!options.socket && !await (options.peerAccount ?? peerIsThisAccount)(request.socket))) {
+      fail(response, 404, 'Unknown connection address. Restart this agent, or run harness connections sync.'); return
+    }
     if (address.kind === 'list') { list(response); return }
     const code = address.code
     if (request.headers['transfer-encoding'] && !request.headers['content-length']) { fail(response, 411, 'Send the request with a Content-Length.'); return }
@@ -193,7 +260,7 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
     Readable.fromWeb(answer.body as import('node:stream/web').ReadableStream).on('error', () => response.destroy()).pipe(response)
   }
 
-  return createServer((request, response) => {
+  return (request, response) => {
     relay(request, response).catch(() => { if (!response.headersSent) fail(response, 500, 'The bridge failed.'); else response.destroy() })
-  })
+  }
 }

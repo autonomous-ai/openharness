@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 // A browser leaves the Finder out of main.dart.js until a Finder tile is drawn.
 import '../finder/widgets/finder_pane_panel.dart'
     if (dart.library.js_interop) '../web/parts/finder_pane_panel.dart';
@@ -16,6 +18,7 @@ import 'package:xterm/xterm.dart';
 import 'window_chrome.dart';
 
 import '../clipboard/image_bytes.dart';
+import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
 import '../core/models.dart' show Agent, ConnectionStatus, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
@@ -47,10 +50,11 @@ import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
+import 'transient_menus.dart';
 import 'pane_resize_handle.dart';
 import 'pane_split_edges.dart';
 import '../agent_messages/pane_shared_chips.dart';
-import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder, PaneOpacity;
+import 'box_chrome.dart' show kPaneInset, terminalPaneBorder, PaneOpacity;
 import 'desktop_chrome.dart';
 
 /// The view drawn alone when only one fits (a phone): the real zoom, else the
@@ -312,6 +316,14 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   late Object _lastInputDestination;
   final _resizeFocus = FocusNode(debugLabel: 'Resize focused harness');
   final _resizeHelp = OverlayPortalController();
+  VoidCallback? _unregisterResizeHelp;
+
+  void _hideResizeHelp() {
+    if (_resizeHelp.isShowing) _resizeHelp.hide();
+    _unregisterResizeHelp?.call();
+    _unregisterResizeHelp = null;
+  }
+
   late int _resizeRequest;
   late String _activeId;
   late int _focusRequest;
@@ -343,6 +355,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     _focusRequest = widget.notifier.paneFocusRequest;
     widget.notifier.addListener(_onAppChanged);
     terminalFontStore.addListener(_onFontChanged);
+    appearancePrefsStore.addListener(_onFontChanged);
   }
 
   @override
@@ -371,9 +384,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       _resizeRequest = app.paneResizeRequest;
       _resizeFocus.requestFocus();
       _resizeHelp.show();
+      _unregisterResizeHelp ??= registerTransientMenu(_hideResizeHelp);
     }
     if (_activeId != app.activeSwarmId) {
-      if (_resizeHelp.isShowing) _resizeHelp.hide();
+      _hideResizeHelp();
       _offsets[_activeId] = Offset(
         _horizontalScroll.hasClients ? _horizontalScroll.offset : 0,
         _scroll.hasClients ? _scroll.offset : 0,
@@ -482,7 +496,9 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   @override
   void dispose() {
     widget.notifier.removeListener(_onAppChanged);
+    _unregisterResizeHelp?.call();
     terminalFontStore.removeListener(_onFontChanged);
+    appearancePrefsStore.removeListener(_onFontChanged);
     _resizeFocus.dispose();
     _idleFocus.dispose();
     _scroll.dispose();
@@ -709,6 +725,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         .where((divider) => divider.touches(focused))
         .firstOrNull;
     final extent = Size(layout.width + kPaneGap, layout.height + kPaneGap);
+    final reach = math.max(kPaneGap, _kDividerReach);
     final floor = _MinTile.of();
     final minimum = Size(
       (floor.width + kPaneGap) / extent.width,
@@ -769,7 +786,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       ),
       child: FocusScope(
         onFocusChange: (focused) {
-          if (!focused && _resizeHelp.isShowing) _resizeHelp.hide();
+          if (!focused) _hideResizeHelp();
         },
         child: Stack(
           children: [
@@ -778,17 +795,19 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                 key: ValueKey('resize:$swarmId:${layout.key}:${divider.id}'),
                 rect: divider.axis == PaneResizeAxis.x
                     ? Rect.fromLTWH(
-                        divider.position * extent.width - kPaneGap,
+                        divider.position * extent.width -
+                            (kPaneGap + reach) / 2,
                         divider.start * extent.height,
-                        kPaneGap,
+                        reach,
                         (divider.end - divider.start) * extent.height -
                             kPaneGap,
                       )
                     : Rect.fromLTWH(
                         divider.start * extent.width,
-                        divider.position * extent.height - kPaneGap,
+                        divider.position * extent.height -
+                            (kPaneGap + reach) / 2,
                         (divider.end - divider.start) * extent.width - kPaneGap,
-                        kPaneGap,
+                        reach,
                       ),
                 child: PaneResizeHandle(
                   arrangement: arrangement,
@@ -1216,7 +1235,10 @@ class _MinTile {
 }
 
 /// Pane gaps share the outer workspace inset in both directions.
-const double kPaneGap = kWorkspaceInset;
+double get kPaneGap => kPaneInset;
+
+/// A divider's reach when panes touch: the Compact style has no gap to grab.
+const double _kDividerReach = 8;
 
 /// What shows through the gaps.
 ///
@@ -1309,9 +1331,16 @@ class _Gap extends StatelessWidget {
 /// [kPaneGap] is: the rail is a card now, and two places typing 10 is how they drift apart.
 const double kPaneRadius = grid.AppDesktop.paneRadius;
 
+/// Whether panes are drawn square and touching.
+bool get _compactPanes =>
+    appearancePrefsStore.value.panes.style == PaneStyle.compact;
+
 /// How round a pane's corners are — the shared card radius, so a terminal does not read as a different
-/// KIND of surface from the rail beside it.
-const double _paneRadius = kPaneRadius;
+/// KIND of surface from the rail beside it. Square in the Compact style.
+double get _paneRadius => _compactPanes ? 0 : kPaneRadius;
+
+/// How much of a faded pane's content still shows.
+const double _fadedContent = .55;
 
 class _PaneCell extends StatelessWidget {
   const _PaneCell({
@@ -1366,69 +1395,101 @@ class _PaneCell extends StatelessWidget {
     );
   }
 
+  /// Focus Follows Mouse, only while the keyboard is already in the grid: with
+  /// a menu, a dialog or a field elsewhere holding it, the pointer crossing a
+  /// pane must not take the keys away.
+  void _followMouse(BuildContext context) {
+    if (!visible || dragging != null || paneDragging.value != null) return;
+    if (notifier.isPaneFocused(pane.id)) return;
+    final holder = FocusManager.instance.primaryFocus;
+    final inGrid =
+        holder == null ||
+        holder == FocusManager.instance.rootScope ||
+        holder.context?.findAncestorWidgetOfExactType<PaneGrid>() != null;
+    if (inGrid) notifier.focusPane(pane.id, reveal: true);
+  }
+
   Widget _build(BuildContext context, AppearancePrefs prefs) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
     final remote = notifier.stateOf(pane.machineId)?.isLocalMachine == false;
     // Keep the selected harness's terminal and viewers clear, including while
     // a menu owns input. This changes paint, never the keyboard's destination.
-    final dimmed =
-        prefs.shadeInactivePanes &&
-        !_single &&
-        !notifier.isPaneEmphasized(pane);
+    final panes = prefs.panes;
+    final faded = !_single && !notifier.isPaneEmphasized(pane);
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
         notifier.questionFor(pane.machineId, agentId) != null;
-    return Listener(
-      // The same press selects the pane and reaches its terminal or viewer.
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) => notifier.focusPane(pane.id),
-      child: ValueListenableBuilder<PaneDragRef?>(
-        valueListenable: paneDragging,
-        builder: (context, inFlight, child) => PaneSplitEdges(
-          enabled:
-              swarmMode &&
-              visible &&
-              !solo &&
-              agentId != null &&
-              pane.sharedHarness == null &&
-              onSplitPane != null &&
-              !notifier.activeSwarm.isUtility &&
-              !notifier.activeSwarm.isOrchestrator &&
-              notifier.zoomedPaneId == null &&
-              notifier.canAddPane &&
-              dragging == null &&
-              inFlight == null,
-          canSplitRight:
-              notifier.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) !=
-              null,
-          canSplitDown:
-              notifier.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) !=
-              null,
-          onSplit: (axis) => onSplitPane?.call(pane.id, axis),
-          child: child!,
-        ),
-        // Passthrough: the frame keeps the exact constraints the grid gives it. The landing is ALWAYS
-        // here, painting nothing between landings, so a landing never reparents the terminal.
-        child: Stack(
-          fit: StackFit.passthrough,
-          children: [
-            _frame(
-              prefs,
-              focused: focused,
-              remote: remote,
-              dimmed: dimmed,
-              blocked: blocked,
-            ),
-            Positioned.fill(
-              child: IgnorePointer(
-                child: _PaneLanding(notifier: notifier, pane: pane),
+    return MouseRegion(
+      opaque: false,
+      onEnter: (_) {
+        if (panes.focusFollowsMouse) _followMouse(context);
+      },
+      child: Listener(
+        // The same press selects the pane and reaches its terminal or viewer.
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => notifier.focusPane(pane.id),
+        child: ValueListenableBuilder<PaneDragRef?>(
+          valueListenable: paneDragging,
+          builder: (context, inFlight, child) => PaneSplitEdges(
+            enabled:
+                swarmMode &&
+                visible &&
+                !solo &&
+                agentId != null &&
+                pane.sharedHarness == null &&
+                onSplitPane != null &&
+                !notifier.activeSwarm.isUtility &&
+                !notifier.activeSwarm.isOrchestrator &&
+                notifier.zoomedPaneId == null &&
+                notifier.canAddPane &&
+                dragging == null &&
+                inFlight == null,
+            canSplitRight:
+                notifier.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) !=
+                null,
+            canSplitDown:
+                notifier.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) !=
+                null,
+            onSplit: (axis) => onSplitPane?.call(pane.id, axis),
+            child: child!,
+          ),
+          // Passthrough: the frame keeps the exact constraints the grid gives it. The landing is ALWAYS
+          // here, painting nothing between landings, so a landing never reparents the terminal.
+          child: Stack(
+            fit: StackFit.passthrough,
+            children: [
+              _frame(
+                prefs,
+                focused: focused,
+                remote: remote,
+                fadeSurface: faded && panes.fade.fadesSurface,
+                fadeContent: faded && panes.fade.fadesContent,
+                highlight: focused && !_single && panes.highlightActive,
+                blocked: blocked,
               ),
-            ),
-          ],
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: _PaneLanding(notifier: notifier, pane: pane),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _clipContent({required Widget child}) {
+    // GTK overlays cannot render under a rounded Flutter clip.
+    if (RuntimePlatform.isLinux && pane.isWeb) {
+      return ClipRect(child: child);
+    }
+    // Keep terminal backgrounds inside the pane rim.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(math.max(0, _paneRadius - 1)),
+      child: child,
     );
   }
 
@@ -1436,9 +1497,17 @@ class _PaneCell extends StatelessWidget {
     AppearancePrefs prefs, {
     required bool focused,
     required bool remote,
-    required bool dimmed,
+    required bool fadeSurface,
+    required bool fadeContent,
+    required bool highlight,
     required bool blocked,
   }) {
+    final compact = prefs.panes.style == PaneStyle.compact;
+    final rim = terminalPaneBorder(focused: focused, remote: remote);
+    // Touching panes share one line: each draws only its right and bottom, so
+    // two neighbours make one line rather than two. A border that isn't the
+    // same on every side can't carry a radius, and has none to carry here.
+    final radius = compact ? null : BorderRadius.circular(_paneRadius);
     return Builder(
       builder: (context) => Container(
         key: ValueKey('pane-frame:${pane.id}'),
@@ -1453,43 +1522,44 @@ class _PaneCell extends StatelessWidget {
           // the frame adds none (two would stack); a status pane has only this.
           color: PaneOpacity.of(context) < 1 && pane.session != null
               ? null
-              : PaneOpacity.fill(context, grid.AppPalette.windowBg),
-          borderRadius: BorderRadius.circular(_paneRadius),
+              : PaneOpacity.fill(
+                  context,
+                  pane.isDevices
+                      ? grid.AppPalette.swarmWelcome
+                      : grid.AppPalette.windowBg,
+                ),
+          borderRadius: radius,
           // The rim is always drawn — it is what gives an unfocused card its
-          // edge, now that no shared line does. It only CHANGES COLOUR on
-          // focus, so nothing resizes as focus moves.
-          border: Border.fromBorderSide(
-            // Keep the location cue when a pane is alone or zoomed, too.
-            terminalPaneBorder(focused: focused, remote: remote),
-          ),
+          // edge, now that no shared line does. Devices is a page, not a card
+          // among cards: a ring around all of it says nothing.
+          border: pane.isDevices
+              ? const Border.fromBorderSide(BorderSide.none)
+              : compact
+              ? Border(right: rim, bottom: rim)
+              : Border.fromBorderSide(rim),
         ),
         // A neutral gray veil lifts inactive backgrounds and softens their text
         // without changing terminal colors. Paint attention above the veil so
         // a waiting question keeps its full-strength amber rim. Keep this
         // decoration present even when clear: inserting/removing it would
         // reparent the terminal and lose its input, scroll and selection state.
+        // The active pane's highlight is here too, not on the rim: painted over
+        // the pane, it can't resize anything as focus moves.
         foregroundDecoration: BoxDecoration(
-          color: dimmed ? const Color(0xFF9D9D9D).withValues(alpha: .30) : null,
+          color: fadeSurface
+              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
+              : null,
           border: blocked
               ? Border.all(color: grid.AppPalette.warn, width: 2)
+              : highlight
+              ? Border.all(color: AppColors.accent)
               : null,
-          borderRadius: BorderRadius.circular(_paneRadius),
+          borderRadius: radius,
         ),
         // Keeps a terminal's constant repainting inside its own layer instead
         // of dirtying the whole grid. No key: nothing reads this boundary, it
         // only has to exist.
-        child: ClipRRect(
-          // Clipped HERE rather than through Container's own clipBehavior.
-          //
-          // Both clip, but they clip to different shapes: Container's is the
-          // decoration's OUTER edge, so the child fills the full radius and
-          // paints under the rim, leaving a square-shouldered corner peeking
-          // through the 1px the rim occupies. This one takes the rim's pixel
-          // off the radius, so the fill stops exactly where the rim starts.
-          //
-          // TerminalPanel opens with a ColoredBox across its whole box, and
-          // that is what was reaching the corners.
-          borderRadius: BorderRadius.circular(_paneRadius - 1),
+        child: _clipContent(
           child: RepaintBoundary(
             child: _FileDropZone(
               notifier: notifier,
@@ -1507,7 +1577,11 @@ class _PaneCell extends StatelessWidget {
                     // The tile being carried fades where it sits, so the grid shows
                     // where it came FROM while the ghost shows where it is going.
                     builder: (context, inFlight, child) => Opacity(
-                      opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
+                      opacity: inFlight?.paneId == pane.id
+                          ? 0.35
+                          : fadeContent
+                          ? _fadedContent
+                          : 1,
                       child: child,
                     ),
                     child: pane.isDevices
@@ -2497,13 +2571,14 @@ class _FileDropZoneState extends State<_FileDropZone> {
   }
 }
 
-/// Where a dragged pane may be dropped to trade places with this one.
+/// Where a dragged pane may be dropped: on an edge it lands beside this one, as
+/// in the TUI, and in the middle the two trade places.
 ///
 /// A sibling of [_DropZone] rather than a branch inside it: they are live at
 /// different times and mean different things at the same pixel — a rail row
-/// landing here REPLACES what this tile shows, a pane landing here SWAPS the
-/// two. `DragTarget<T>` keeps them apart by generic, so neither has to ask what
-/// kind of drag is in flight.
+/// landing here REPLACES what this tile shows, a pane landing here MOVES.
+/// `DragTarget<T>` keeps them apart by generic, so neither has to ask what kind
+/// of drag is in flight.
 class _SwapZone extends StatelessWidget {
   const _SwapZone({
     required this.notifier,
@@ -2514,6 +2589,83 @@ class _SwapZone extends StatelessWidget {
   final AppNotifier notifier;
   final int paneId;
   final Widget child;
+
+  /// The edge the hand is over, read from the zone's own box.
+  PaneSide? _edge(BuildContext context) {
+    final pointer = paneDragPointer.value;
+    final box = context.findRenderObject();
+    if (pointer == null || box is! RenderBox || !box.hasSize) return null;
+    return paneSideAt(box.globalToLocal(pointer), box.size);
+  }
+
+  void _drop(BuildContext context, int moving) {
+    final edge = _edge(context);
+    if (edge == null) {
+      notifier.reorderPane(moving, paneId);
+    } else if (notifier.canMovePaneBeside(moving, paneId, edge)) {
+      notifier.movePaneBeside(moving, paneId, edge);
+    } else if (!notifier.isPaneBeside(moving, paneId, edge)) {
+      // This layout can't take a pane out cleanly: trade places instead, which
+      // is what the preview said.
+      notifier.reorderPane(moving, paneId);
+    }
+  }
+
+  /// What the drop would do, drawn where it would happen.
+  Widget _preview(BuildContext zone, int moving) {
+    return ValueListenableBuilder<Offset?>(
+      valueListenable: paneDragPointer,
+      // The zone's box, which exists: this builder's own has no render object
+      // on the frame the hand arrives, and would read as the middle.
+      builder: (_, _, _) {
+        final edge = _edge(zone);
+        if (edge != null && notifier.isPaneBeside(moving, paneId, edge)) {
+          return const SizedBox.expand();
+        }
+        if (edge != null && notifier.canMovePaneBeside(moving, paneId, edge)) {
+          return Align(
+            alignment: switch (edge) {
+              PaneSide.left => Alignment.centerLeft,
+              PaneSide.right => Alignment.centerRight,
+              PaneSide.top => Alignment.topCenter,
+              PaneSide.bottom => Alignment.bottomCenter,
+            },
+            child: FractionallySizedBox(
+              widthFactor: edge.axis == PaneResizeAxis.x ? .5 : 1,
+              heightFactor: edge.axis == PaneResizeAxis.y ? .5 : 1,
+              child: Container(
+                key: ValueKey('pane-drop-${edge.name}'),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.16),
+                  border: Border.all(color: AppColors.accent),
+                ),
+              ),
+            ),
+          );
+        }
+        return Container(
+          color: AppColors.accent.withValues(alpha: 0.16),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: grid.AppPalette.panelBg,
+                border: Border.all(color: AppColors.accent),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Swap with this pane',
+                style: grid.AppType.mono(
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2534,34 +2686,14 @@ class _SwapZone extends StatelessWidget {
                     notifier.activeSwarm.isDevices ||
                     dragging == null ||
                     dragging.paneId == paneId,
-                child: DragTarget<PaneDragRef>(
-                  onAcceptWithDetails: (details) =>
-                      notifier.reorderPane(details.data.paneId, paneId),
-                  builder: (context, candidate, _) => candidate.isEmpty
-                      ? const SizedBox.expand()
-                      : Container(
-                          color: AppColors.accent.withValues(alpha: 0.16),
-                          child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: grid.AppPalette.panelBg,
-                                border: Border.all(color: AppColors.accent),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                'Swap with this pane',
-                                style: grid.AppType.mono(
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                child: Builder(
+                  builder: (zone) => DragTarget<PaneDragRef>(
+                    onAcceptWithDetails: (details) =>
+                        _drop(zone, details.data.paneId),
+                    builder: (context, candidate, _) => candidate.isEmpty
+                        ? const SizedBox.expand()
+                        : _preview(zone, candidate.first!.paneId),
+                  ),
                 ),
               ),
             ),

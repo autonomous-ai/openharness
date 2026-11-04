@@ -10,6 +10,7 @@ import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.j
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { TurnRecaps } from '../turns/recaps.js'
+import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
 import { sid } from '../../lib/log.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { RegisteredSession, registry } from '../../lib/registry.js'
@@ -33,6 +34,8 @@ export interface ForgetDeps {
   normalizers: Pick<SessionNormalizers, 'forget'>
   forgetAttach: (sessionId: string) => void
   turnStartedAt: Map<string, number>
+  /** The short-turn guard's count and hold for each session (turns/shortTurnGuard.ts): gone with the session. */
+  shortTurns?: Pick<ShortTurnGuard, 'forget'>
   /** Each agent's kept prompt (turns/funnel.ts), by agent: gone with the agent. */
   prompts: Map<string, string>
   /** Attach's two per-session marks (core/transcripts/attach.ts). */
@@ -57,7 +60,7 @@ export interface ForgetDeps {
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, input,
-  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved, owners,
+  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved, owners, shortTurns,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
@@ -103,6 +106,7 @@ export function createForgetSession({
     normalizers.forget(sessionId)
     forgetAttach(sessionId)
     turnStartedAt.delete(sessionId)
+    shortTurns?.forget(sessionId)
     neverFoldedHistory.delete(sessionId)
     // Both sets are per-session and must die with it: left behind they grow without bound in a daemon
     // that runs for days, and a session forgotten then re-registered under the same id would inherit a

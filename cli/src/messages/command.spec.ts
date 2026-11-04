@@ -168,7 +168,7 @@ describe('a message file', () => {
       symlinkSync(join(outside, 'secret'), join(temp, 'link'))
       linkSync(join(temp, 'note.md'), join(temp, 'second-name'))
       for (const path of [join(outside, 'secret'), join(temp, 'link'), join(temp, 'second-name'), temp]) {
-        expect(() => readMessageFile(path, [temp]), path).toThrow('Write the message to a file in the temporary folder (/tmp) first')
+        expect(() => readMessageFile(path, [temp]), path).toThrow(`Write the message to a file in the temporary folder (${temp}) first`)
       }
       expect(() => readMessageFile(join(temp, 'missing'), [temp])).toThrow(`There is no file at ${join(temp, 'missing')}.`)
       expect(() => readMessageFile(join(temp, 'note.md'), [join(temp, 'gone')])).toThrow(MessageError)

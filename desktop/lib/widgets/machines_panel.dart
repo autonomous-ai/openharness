@@ -1,3 +1,5 @@
+import 'browser_menu_guard.dart';
+
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -321,6 +323,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
 
   @override
   void dispose() {
+    BrowserMenuGuard.release(_rowMenus);
     WidgetsBinding.instance.removeObserver(this);
     app.removeListener(_machinesChanged);
     _resourceTimer?.cancel();
@@ -536,25 +539,24 @@ class _MachinesPanelState extends State<_MachinesPanel>
     }
 
     // Anchor the context menu inside this overlay so it stays above the list.
-    return MenuAnchor(
+    return AppDropdown(
       controller: controller,
+      consumeOutsideTap: false,
       onOpen: () {
         if (!identical(_openRowMenu, controller)) _openRowMenu?.close();
         _openRowMenu = controller;
+        BrowserMenuGuard.hold(_rowMenus);
       },
       onClose: () {
-        if (identical(_openRowMenu, controller)) _openRowMenu = null;
+        if (identical(_openRowMenu, controller)) {
+          _openRowMenu = null;
+          BrowserMenuGuard.release(_rowMenus);
+        }
         _restoreFocus();
       },
-      menuChildren: [
+      children: [
         if (onEditPassword != null)
-          AppMenuItem(
-            label: 'Change password',
-            onPressed: () {
-              controller.close();
-              onEditPassword();
-            },
-          ),
+          AppMenuItem(label: 'Change password', onPressed: onEditPassword),
         AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
         if (!machine.isLocalMachine)
           AppMenuItem(
@@ -1116,14 +1118,17 @@ class _MachineRow extends StatelessWidget {
                   }
                   return KeyEventResult.ignored;
                 },
-                child: InkWell(
-                  onTap: onTap,
-                  onSecondaryTapDown: menu == null
-                      ? null
-                      : (details) => openMenu(details.localPosition),
-                  onLongPress: menu == null ? null : openMenu,
-                  borderRadius: BorderRadius.circular(8),
-                  child: row,
+                child: BrowserMenuOff(
+                  active: menu != null,
+                  child: InkWell(
+                    onTap: onTap,
+                    onSecondaryTapDown: menu == null
+                        ? null
+                        : (details) => openMenu(details.localPosition),
+                    onLongPress: menu == null ? null : openMenu,
+                    borderRadius: BorderRadius.circular(8),
+                    child: row,
+                  ),
                 ),
               );
         return Semantics(

@@ -2,14 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
 const m = vi.hoisted(() => ({
-  prisma: { harnessLink: { findFirst: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
-    harnessShare: { findFirst: vi.fn() }, machine: { findFirst: vi.fn() } },
-  auth: vi.fn(), presence: vi.fn(), changed: vi.fn(),
+  prisma: { harnessLink: { findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
+    harnessShare: { findFirst: vi.fn(), findMany: vi.fn() }, machine: { findFirst: vi.fn() } },
+  auth: vi.fn(), presence: vi.fn(), changed: vi.fn(), confidential: vi.fn(),
 }))
 vi.mock('../lib/prisma.js', () => ({ prisma: m.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: m.presence, publishShareChanged: m.changed }))
+vi.mock('../superTabs/confidential.js', () => ({ confidentialSessions: m.confidential }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: m.auth }))
-import { harnessLinkRoutes, recipientLink } from './harnessLinks.js'
+import { harnessLinkRoutes, recipientLink, tellSessionViewers } from './harnessLinks.js'
+import { stableId } from '../superTabs/model.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
@@ -30,6 +32,7 @@ describe('public/private browser links', () => {
     m.prisma.harnessLink.updateMany.mockResolvedValue({ count: 1 })
     m.prisma.machine.findFirst.mockResolvedValue(machine)
     m.presence.mockResolvedValue(new Map([['m1', true]]))
+    m.confidential.mockResolvedValue(new Set())
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, m.auth)
     await app.register(harnessLinkRoutes); await app.ready()
   })
@@ -68,6 +71,31 @@ describe('public/private browser links', () => {
     expect((await get(auth)).statusCode).toBe(200)
     m.prisma.harnessShare.findFirst.mockResolvedValue(null)
     expect(await recipientLink(id, ken, 'prod')).toBeNull()
+  })
+  it('opens a link to a confidential session for its machine\'s owner alone, public or private, invited or not', async () => {
+    // A Lead, or an agent in a private chat, in some Swarm (superTabs/confidential.ts): its screen holds people's private chats.
+    m.confidential.mockImplementation(async (_db: unknown, ids: string[]) => new Set(ids))
+    expect((await get()).statusCode).toBe(401)
+    expect(m.confidential).toHaveBeenCalledWith(m.prisma, [stableId('m1', 'agent-1')])
+    m.auth.mockResolvedValue(ken)
+    m.prisma.harnessShare.findFirst.mockResolvedValue({ id: 'invitation' })
+    for (const visibility of ['public', 'private']) {
+      m.prisma.harnessLink.findFirst.mockResolvedValue({ ...link, visibility })
+      expect((await get(auth)).statusCode).toBe(403)
+    }
+    m.auth.mockResolvedValue(owner)
+    expect((await get(auth)).statusCode).toBe(200)
+  })
+  it('tells every share and link of a session that turned confidential to check again, and never fails for it', async () => {
+    m.prisma.harnessLink.findMany.mockResolvedValue([{ id: 'link-1' }])
+    m.prisma.harnessShare.findMany.mockResolvedValue([{ id: 'share-1' }, { id: 'share-2' }])
+    await tellSessionViewers([{ machineId: 'm1', harnessId: 'agent-1', machineOwnerId: 'owner' }])
+    const where = { machineId: 'm1', agentId: 'agent-1', ownerId: 'owner', revokedAt: null }
+    expect(m.prisma.harnessLink.findMany).toHaveBeenCalledWith({ where, select: { id: true } })
+    expect(m.prisma.harnessShare.findMany).toHaveBeenCalledWith({ where, select: { id: true } })
+    expect(m.changed.mock.calls).toEqual([['link-1'], ['share-1'], ['share-2']])
+    m.prisma.harnessLink.findMany.mockRejectedValue(new Error('db down'))
+    await expect(tellSessionViewers([{ machineId: 'm1', harnessId: 'agent-1', machineOwnerId: 'owner' }])).resolves.toBeUndefined()
   })
   it('fails closed across deletion, revocation, environments and billing', async () => {
     m.prisma.harnessLink.findFirst.mockResolvedValue(null)

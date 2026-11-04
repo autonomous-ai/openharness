@@ -175,12 +175,24 @@ export interface RegisteredSession {
    */
   subscriptionModel?: string | null
   /**
+   * The conversation this agent was in on its own login when a fresh move took it onto a grid
+   * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
+   * home reopens it instead of the grid's, and forgets it once home. Absent when there is none.
+   */
+  subscriptionSessionId?: string
+  /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
    * process — a running agent cannot be moved to a different profile the way it can be retargeted
    * to a different grid.
    */
   codexHome?: string | null
+  /**
+   * The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if one was chosen instead of
+   * `~/.claude`. Claude only. Chosen once at creation like `codexHome`; the row is the relaunch source, so restart and
+   * resume come back in the same account.
+   */
+  claudeHome?: string | null
   /**
    * The Hermes home this session's history lives in — `~/.hermes/profiles/<name>` for an agent started
    * with `hermes -p <name>`, null for this machine's default home.
@@ -658,14 +670,18 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
+  // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
+  // review), and is kept as this release keeps it (project instructions, phase 4).
+  const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
+    ...(swarmSkill ? { swarmSkill } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -1340,6 +1356,7 @@ class Registry {
           gateway: raw.gateway === 'ori' ? 'ori' : null,
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
+          claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
@@ -1355,6 +1372,9 @@ class Registry {
           // it looks like "the setter never ran" rather than like a missing line here.
           ...(typeof raw?.subscriptionModel === 'string' && raw.subscriptionModel
             ? { subscriptionModel: raw.subscriptionModel }
+            : {}),
+          ...(typeof raw?.subscriptionSessionId === 'string' && raw.subscriptionSessionId
+            ? { subscriptionSessionId: raw.subscriptionSessionId }
             : {}),
           ...(raw.bypassPermission === true ? { bypassPermission: true } : {}),
           ...(permissionModeName(raw.permissionMode) ? { permissionMode: raw.permissionMode } : {}),
@@ -1505,6 +1525,7 @@ class Registry {
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
+    claudeHome?: string | null
     /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
     dsh?: string | null
   }):
@@ -1569,6 +1590,7 @@ class Registry {
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
+      if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
@@ -1614,6 +1636,7 @@ class Registry {
       gridWebSearch: null,
       codexHome: input.codexHome ?? null,
       hermesHome: input.hermesHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       dsh: input.dsh ?? null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
       // row cannot relaunch it as one. Fill-only, like `dsh`.
@@ -1653,6 +1676,7 @@ class Registry {
     /** What the prepared workspace's SCM needs on every relaunch — see RegisteredSession.scmLaunch. */
     scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
+    claudeHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
     swarmSkill?: SwarmSkill
@@ -1699,6 +1723,7 @@ class Registry {
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
       codexHome: input.codexHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
       hermesHome: null,
@@ -2029,6 +2054,8 @@ class Registry {
       // memory the moment the engine reports in. The symptom is a move back to the engine's own
       // login landing on a house default — the remembered model was there, then a hook bind ate it.
       ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
+      // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
+      ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2048,6 +2075,7 @@ class Registry {
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
       codexHome: existing?.codexHome ?? null,
+      claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
@@ -2527,6 +2555,18 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session) return false
     session.subscriptionModel = model
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Remember the conversation a fresh move onto a grid left on the own login, or forget it (null) once
+   *  the agent is back in it. Kept while the agent is on a grid, across moves between grids. */
+  setSubscriptionSession(agentId: string, sessionId: string | null): boolean {
+    const session = this.agents.get(agentId)
+    if (!session) return false
+    if (sessionId) session.subscriptionSessionId = sessionId
+    else delete session.subscriptionSessionId
     session.touchedAt = Date.now()
     this.save()
     return true

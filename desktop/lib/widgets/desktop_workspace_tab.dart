@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +10,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/workspace_chrome.dart';
 import 'box_chrome.dart';
+import 'browser_menu_guard.dart';
 import 'desktop_chrome.dart';
 
 /// The Flutter counterpart of the AppKit tab: a centered name/status group
@@ -43,6 +43,7 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.activity,
     this.activityLabel,
     this.highlighted = false,
+    this.attention = false,
     this.onRename,
     this.shortcutHint,
     this.sharedCount,
@@ -57,6 +58,10 @@ class DesktopWorkspaceTab extends StatefulWidget {
 
   final String id, label;
   final bool selected, highlighted;
+
+  /// Something there needs the person: the name is bold, and nothing counts
+  /// it (Quiet Swarm, screen 0).
+  final bool attention;
   final ValueListenable<bool> showShortcuts;
   final VoidCallback? onSelect, onClose;
   final VoidCallback? onRename;
@@ -225,17 +230,12 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   /// right-click. It is off only while the pointer is over a tab that has a
   /// menu, so a right-click anywhere else (a terminal, a text field) keeps the
   /// browser's Copy and Paste.
-  bool _browserMenuOff = false;
-
   void _syncBrowserMenu() {
-    final off = kIsWeb && _hovered && _hasMenu && mounted;
-    if (off == _browserMenuOff) return;
-    _browserMenuOff = off;
-    unawaited(
-      off
-          ? BrowserContextMenu.disableContextMenu()
-          : BrowserContextMenu.enableContextMenu(),
-    );
+    if (_hovered && _hasMenu && mounted) {
+      BrowserMenuGuard.hold(this);
+    } else {
+      BrowserMenuGuard.release(this);
+    }
   }
 
   @override
@@ -246,10 +246,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
 
   @override
   void dispose() {
-    if (_browserMenuOff) {
-      _browserMenuOff = false;
-      unawaited(BrowserContextMenu.enableContextMenu());
-    }
+    BrowserMenuGuard.release(this);
     super.dispose();
   }
 
@@ -477,9 +474,13 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: DesktopChrome.control(
-                                          color: ink,
-                                        ),
+                                        strutStyle: grid.AppType.controlStrut(),
+                                        style: DesktopChrome.control(color: ink)
+                                            .copyWith(
+                                              fontWeight: widget.attention
+                                                  ? grid.AppFont.semibold
+                                                  : null,
+                                            ),
                                       ),
                                     ),
                                   ),
@@ -608,7 +609,13 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
     );
     // Always the anchor, menu or not: a tab whose share arrives keeps its
     // subtree (and keyboard focus); [_openMenu] opens nothing without rows.
-    return MenuAnchor(controller: _menu, menuChildren: _menuRows(), child: tab);
+    return AppDropdown(
+      controller: _menu,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: _menuRows(),
+      child: tab,
+    );
   }
 }
 

@@ -373,22 +373,22 @@
     "harness/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/heldBy": "other",
     "unverified/open": {
@@ -508,22 +508,22 @@
     "owned/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/heldBy": "free",
     "saved-alias/open": {},
@@ -532,22 +532,22 @@
     "saved-alias/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/heldBy": "free",
     "profile/open": {},
@@ -983,22 +983,22 @@
     "harness/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "harness/heldBy": "other",
     "unverified/open": {
@@ -1118,22 +1118,22 @@
     "owned/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "owned/heldBy": "free",
     "saved-alias/open": {},
@@ -1142,22 +1142,22 @@
     "saved-alias/null": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/idle": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/now": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/wait": {
       "ok": false,
       "error": "SESSION_IN_HARNESS",
-      "detail": "This conversation is already a harness here."
+      "detail": "This conversation is already open in a harness on this machine. Open that harness instead."
     },
     "saved-alias/heldBy": "free",
     "profile/open": {},

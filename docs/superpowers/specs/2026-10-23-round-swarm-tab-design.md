@@ -41,7 +41,10 @@ answering or posting to a Lead on another machine; answering a Super Tab wait on
 
 1. **The Swarm tab looks like any tab.** Same font and colour in TABS. No badge, capsule or colour of its own; people
    tell it apart by its name (1a–1c).
-2. **Swarms not open on the desktop are listed too**, after the desktop's tabs (1d).
+2. **TABS mirrors the desktop's tabs exactly.** A Swarm with no desk tab is never listed, with or without a desktop
+   window. Changed 2026-10-27 (Diego), replacing "Swarms not open on the desktop are listed too" (1d): the desktop
+   opens a tab for every Super Tab its owner has not closed, so a Swarm with no desk tab is a closed one, and the dial
+   kept showing closed tabs ("PR merge"; 2 app tabs gave about 5 dial tabs). Screen 1d is dropped.
 3. **Projects keep a fixed order**: the Swarm's project order, the same as in the app, never sorted by state. Swiping
    never jumps (2a–2h, 3a–3c).
 4. **A Lead on another machine that needs you, or is stuck, also beeps** (2e′, 4e).
@@ -101,7 +104,6 @@ under the 512-token guard on both dials. The Pro reads Lead fields by name (`pro
 | Screen | Data | On the wire today? |
 | --- | --- | --- |
 | 1a–1c Swarm in TABS | `swarms` rows (desk tabs) + `supertab.tab` linking a Swarm to its desk tab | Yes |
-| 1d Swarm not open | `supertabs.ids` + `supertab.tab:""` | Yes; firmware rule (§3) |
 | 2a–2h Swarm pane | `supertab.leads[i]` {project, engine, owner, local, state, since} | Yes |
 | 2, 3 Fixed order | `leads[i].order` | **New** (daemon) |
 | 2 Recap card | `supertab.recap` ← `supertab.recap.get`, pushed for the Lead named by `supertab.open` | Yes |
@@ -127,17 +129,23 @@ It lives in PSRAM (`EXT_RAM_BSS_ATTR`, like the UI state `s`). The worst case is
 about 54 KB, plus one 1.5 KB recap. A `supertab` frame for an id not in the last `supertabs` list is dropped. A
 `supertabs` list drops the records whose ids left it.
 
-### 3. TABS (screens 1a–1d)
+### 3. TABS (screens 1a–1c)
 
 The TABS carousel lists, in order:
 
 1. The desk tabs, as today, from `swarms`. A desk tab linked to a Swarm (some Swarm's `tab` equals its id) stays at its
    desk position and keeps its name. It is listed even when its `agents` is 0 (today `ui_swarms_replace` hides such a
    tab; a Swarm tab whose selected project's Lead runs elsewhere may report 0).
-2. Then every Swarm whose `tab` is empty, in `supertabs.ids` order (1d), drawn with the Swarm's `name`.
+2. Nothing else (decision 2). A Swarm whose `tab` is empty or names no listed desk tab is not listed; with no desktop
+   window (an empty `swarms` list) TABS is empty. The `supertabs` and `supertab` frames are unchanged: the dial still
+   needs the cards to enter a Swarm from its desk tab and to follow the desktop.
+
+When the desktop closes the desk tab of the Swarm on the dial's face, the dial leaves that Swarm (`supertab.open` with
+no Lead) for TABS, on the app's current tab, or onto the empty list with no window. A Swarm entered from the inbox (§5)
+that has no desk tab is not one the desktop closed, and stays on the face.
 
 Every entry uses the same `tab_name`/`tab_split` drawing, the same ink and the same fade (decision 1). The list can
-hold 24 desk tabs + 16 Swarms; the carousel takes the count and needs no paging.
+hold 24 desk tabs; the carousel takes the count and needs no paging.
 
 Opening a tab (tap on its name, or ✓):
 
@@ -151,6 +159,10 @@ Opening a tab (tap on its name, or ✓):
 Hold on the face still opens TABS (`tabs_open`); the carousel opens on the current tab or Swarm.
 
 ### 4. Inside a Swarm tab (screens 2a–2h, 3a–3c)
+
+> A dial whose hello says `swarmChat: "v1"` (round firmware after 0.0.94) follows the chat instead: each Lead's face is
+> the chat the desktop has open in its project (Lead, Chat with PM or a group, named on an inner arc under the project),
+> its recap is that chat's, and it works only for a working group. See [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2–§3.
 
 While the dial is in a Swarm tab, its panes are that Swarm's Leads in `order`, not the desk roster (`s.agents`). A
 desk roster that arrives for the linked desk tab (the Lead's terminal pane) does not replace them. Decision 6: one
@@ -198,6 +210,10 @@ to TABS.
 
 ### 5. Needs you / stuck: beep and inbox (screens 4a–4f, 2e′)
 
+> With `swarmChat: "v1"` no Lead reads `ask` or `stuck`: the dial alerts only on the Lead's new messages in its Lead
+> conversation or Chat with PM (`supertab.notice`, read with `supertab.notice.read`), and a Lead's own terminal wait
+> still alerts as below. See [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2–§3.
+
 There is no toast. A Lead entering `ask` or `stuck` gets the existing alert path: a beep (`audio_notify_done`, at most
 one per 30 s), a display wake, and one inbox entry. The face changes only as it does today: the green bell pill at
 y 400 with the unread count, or the pet's bell bubble while the pet is working (4a, 4b). Pull down from the face, or tap
@@ -229,6 +245,9 @@ Swipe pages through entries as today. Tapping the entry enters that Swarm at tha
 shows 2c / 2d / 2e′ instead of the agent open path. 4f "No notification" is the existing empty inbox.
 
 ### 6. Talk (screens 5a–5e)
+
+> With `swarmChat: "v1"` the words go to the chat on the face, not always the Lead conversation. See
+> [2026-10-28-round-dial-swarm-chat-design.md](2026-10-28-round-dial-swarm-chat-design.md) §2.
 
 A tap on the face of a Lead with `local` talks to it exactly as to any pane: the existing listening, sending and back
 flow, with `cable_client_voice_begin(local, …)` (5a–5d). An engine without a listening scene uses the seven bars (5e).
@@ -298,7 +317,6 @@ is no reply path in v1 (decision 5).
 | Mockup | Section |
 | --- | --- |
 | 1a, 1b, 1c | §3 TABS, decision 1 |
-| 1d | §3 item 2, decision 2 |
 | 2a | §4 face (work, local) |
 | 2b, 2g | §4 face (done, recap), §2 recap slot |
 | 2c | §4 face (ask, local), §5 wait text |

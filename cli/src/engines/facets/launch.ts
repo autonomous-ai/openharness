@@ -284,9 +284,14 @@ export interface EngineLaunch {
   envArgs?: EnvArgsTemplate
   sharedServer?: SharedServerContract
   ownProvider?: OwnProviderContract
+  /** A conversation stays on the provider it was started on: the engine refuses to resume it on another, so a move
+   *  between a grid and the engine's own login continues it in a fork (`forkArgs`) instead (core/agents/retarget.ts). */
+  providerBoundConversations?: true
   startup?: StartupContract
   /** The screen the engine's TUI runs on, where Harness chooses it; applied to every launch (kit/launchScreen.ts). */
   screen?: ScreenContract
+  /** Arguments for a session the Swarm started, never for a person's own (lib/swarmEngineArgs.ts). */
+  swarmArgs?: readonly string[]
   /** The instruction file Harness writes its own notes into (a harness's bootstrap, the saved APIs); else AGENTS.md. */
   instructionFile?: string
   /** The line, in that file, that has the engine read `file` too (Claude Code's `@AGENTS.md` import). */

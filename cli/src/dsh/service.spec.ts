@@ -12,6 +12,9 @@ vi.mock('./catalog.js', () => ({
 }))
 vi.mock('./install.js', async original => ({ ...await original<typeof import('./install.js')>(), installDsh: vi.fn() }))
 vi.mock('./update.js', () => ({ updateDsh: vi.fn() }))
+// Where Git for Windows' bash is, as the lookup would find it on disk: none, unless a test installs it.
+const gitBash = vi.hoisted(() => ({ path: null as string | null }))
+vi.mock('../lib/windows/gitBash.js', async original => ({ ...await original<typeof import('../lib/windows/gitBash.js')>(), findGitBash: () => gitBash.path }))
 
 const success: DshInstallResult = { ok: true, installed: {
   id: 'acme/thing', dir: '/fixture', realDir: '/fixture', source: 'https://example.com/thing',
@@ -50,6 +53,51 @@ describe('daemon package mutations', () => {
     expect(await mutateDsh({ id: 'acme/missing' }, () => {})).toMatchObject({ ok: false, error: 'INVALID_DSH' })
     expect(await mutateDsh({}, () => {})).toMatchObject({ ok: false, error: 'INVALID_DSH' })
     expect(installDsh).not.toHaveBeenCalled()
+  })
+
+  describe('on a computer with no shell for a package\'s scripts (Windows)', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
+    afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+    // Scripts run in Git Bash on Windows; this computer, taken for Windows, has none (no Program Files, no git.exe on PATH).
+    const detail = 'This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.'
+
+    it('refuses from the catalog entry, before downloading anything, a package or its viewer that runs one', async () => {
+      // 2026-10-28 review of #2026: refused only after the download was placed, its files stayed on disk.
+      catalog.entries = [
+        { id: 'acme/thing', name: 'Thing', engine: 'claude', repo: 'https://example.com/thing', runsScripts: true },
+        { id: 'acme/drawing', name: 'Drawing', engine: 'claude', repo: 'https://example.com/drawing', viewerUse: 'acme/viewer' },
+        { id: 'acme/viewer', kind: 'viewer', name: 'Viewer', repo: 'https://example.com/viewer', runsScripts: true },
+      ]
+      for (const id of ['acme/thing', 'acme/drawing', 'acme/viewer']) {
+        expect(await mutateDsh({ id }, () => {}), id).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
+      }
+      // The download is installDsh's: it never started.
+      expect(installDsh).not.toHaveBeenCalled()
+    })
+
+    it('installs a package with no scripts, and leaves a link install to its check after the download', async () => {
+      catalog.entries = [{ id: 'acme/plain', name: 'Plain', engine: 'claude', repo: 'https://example.com/plain' }]
+      expect(await mutateDsh({ id: 'acme/plain' }, () => {})).toMatchObject({ ok: true })
+      expect(await mutateDsh({ url: 'https://example.com/unlisted' }, () => {})).toMatchObject({ ok: true })
+      expect(installDsh).toHaveBeenCalledTimes(2)
+    })
+
+    it('installs a package that runs scripts once Git for Windows is there, since they run in its Git Bash', async () => {
+      gitBash.path = 'C:\\Program Files\\Git\\bin\\bash.exe'
+      try {
+        catalog.entries = [{ id: 'acme/thing', name: 'Thing', engine: 'claude', repo: 'https://example.com/thing', runsScripts: true }]
+        expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toMatchObject({ ok: true })
+        expect(installDsh).toHaveBeenCalledTimes(1)
+      } finally {
+        gitBash.path = null
+      }
+    })
+  })
+
+  it('a package that runs scripts installs where a shell runs them', async () => {
+    catalog.entries = [{ id: 'acme/thing', name: 'Thing', engine: 'claude', repo: 'https://example.com/thing', runsScripts: true }]
+    expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toMatchObject({ ok: true })
   })
 
   it('throttles output, immediately sends doctor lines, and discards lines after terminal phases', async () => {

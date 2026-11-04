@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
+import { setAgentAvatar } from './profile.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -63,6 +64,33 @@ describe('status line', () => {
   })
 })
 
+describe('time zone', () => {
+  it('sets and clears the person’s own zone, read by members', () => {
+    const f = fixture()
+    f.invite()
+    f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' })
+    expect(f.member('owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
+    expect(visibleState(f.state, peer).people.find(p => p.id === 'owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
+    f.run({ type: 'member.timeZone', timeZone: null })
+    expect(f.member('owner')!.timeZone).toBeUndefined()
+  })
+
+  it('refuses an unknown zone and an agent', () => {
+    const f = fixture()
+    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Mars/Base' })).toThrow(expect.objectContaining({ code: 'TIME_ZONE' }))
+    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' }, { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' }))
+      .toThrow()
+    expect(f.member('owner')!.timeZone).toBeUndefined()
+  })
+
+  it('a viewer may set their own', () => {
+    const f = fixture()
+    f.invite('viewer')
+    f.run({ type: 'member.timeZone', timeZone: 'Europe/Berlin' }, peer)
+    expect(f.member('peer')!.timeZone).toBe('Europe/Berlin')
+  })
+})
+
 describe('avatars', () => {
   const upload = { id: 'u1', key: 'avatars/tab/0123abcd/avatar' }
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -95,7 +123,7 @@ describe('avatars', () => {
     expect(f.member('owner')!.avatar).toBeUndefined()
   })
 
-  it('lets the project’s Lead or the agent’s contributor change an agent’s avatar, nobody else', () => {
+  it('lets the project’s Lead or the agent’s contributor change an agent’s avatar, and no other person', () => {
     const f = agentFixture()
     const avatarOf = (id: string) => f.state.agents.find(a => a.id === id)!.avatar
     f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'owl' } }, f.as(f.lead))
@@ -104,10 +132,25 @@ describe('avatars', () => {
     expect(avatarOf(f.worker)).toEqual({ kind: 'upload', key: upload.key })
     expect(() => f.run({ type: 'agent.avatar', agentId: f.lead, avatar: { kind: 'preset', key: 'cat' } }, peer))
       .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    expect(() => f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'cat' } }, f.as(f.worker)))
-      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     f.run({ type: 'agent.avatar', agentId: f.worker, avatar: null }, f.as(f.lead))
     expect(avatarOf(f.worker)).toBeUndefined()
+  })
+
+  // Naming and picturing the project's agents is workflow (project instructions, phase 4), never another project's.
+  it('lets any agent of the project set an agent\'s avatar', () => {
+    const f = agentFixture()
+    const avatarOf = (id: string) => f.state.agents.find(a => a.id === id)!.avatar
+    f.run({ type: 'agent.avatar', agentId: f.lead, avatar: { kind: 'preset', key: 'owl' } }, f.as(f.worker))
+    expect(avatarOf(f.lead)).toEqual({ kind: 'preset', key: 'owl' })
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'cat' } }, f.as(f.worker))
+    expect(avatarOf(f.worker)).toEqual({ kind: 'preset', key: 'cat' })
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result.conversationId as string
+    const outsider = f.run({ type: 'agent.add', conversationId: other, machineId: 'host', harnessId: 'outsider', name: 'outsider', configuration: config, lead: false },
+      owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    expect(() => setAgentAvatar(f.state, f.as(outsider), f.worker, { kind: 'preset', key: 'fox' }, undefined))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'fox' } }, f.as(outsider))).toThrow()
+    expect(avatarOf(f.worker)).toEqual({ kind: 'preset', key: 'cat' })
   })
 
   it('shows avatars to members only', () => {

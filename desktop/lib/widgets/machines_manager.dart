@@ -391,9 +391,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
                           Text(
                             entry.title,
                             style: boxMonoStyle(
-                              color: entry.danger
-                                  ? boxErrorText
-                                  : boxText(1),
+                              color: entry.danger ? boxErrorText : boxText(1),
                               weight: selected ? FontWeight.w600 : null,
                             ),
                           ),
@@ -487,7 +485,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
                           hintText: _machineId == null
                               ? 'find a machine / link another'
                               : 'find an action',
-                          hintStyle: boxMonoStyle(color: kBoxFaint),
+                          hintStyle: boxMonoStyle(color: kBoxHint),
                           isDense: true,
                           filled: false,
                           border: InputBorder.none,

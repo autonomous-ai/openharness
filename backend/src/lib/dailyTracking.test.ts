@@ -1,10 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const record = vi.hoisted(() => vi.fn())
 const mark = vi.hoisted(() => vi.fn())
+const machineUpdate = vi.hoisted(() => vi.fn())
+const swarmAgentFind = vi.hoisted(() => vi.fn())
+const warn = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
-import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
+vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate }, swarmAgent: { aggregateRaw: swarmAgentFind } } }))
+vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
+import { CLIENT_SURFACES, TUI_SURFACES, machineConnectChanges, mobileOpenMetrics, presenceStateFromRow, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
-beforeEach(() => { record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined) })
+beforeEach(() => {
+  record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
+  machineUpdate.mockReset(); machineUpdate.mockResolvedValue({})
+  swarmAgentFind.mockReset(); swarmAgentFind.mockResolvedValue([]); warn.mockReset()
+})
 it('forwards only the choice identity and a fixed metric, never device, agent or location', async () => {
   const now = new Date('2026-10-13T12:00:00Z')
   await touchUserOnlineDay('account', 'PRIVATE_MACHINE', now, { isNewConnection: true })
@@ -71,6 +80,46 @@ it('idle heartbeats add no relay totals but keep the person active', async () =>
   await touchMachineOnlineDay('a', 'm', now, { isNewConnection: false })
   expect(record).not.toHaveBeenCalled()
   expect(mark.mock.calls).toEqual([['a', now, { surface: 'desktop' }], ['a', now, { surface: 'tui' }]])
+})
+
+describe('a machine\'s last-seen time', () => {
+  const now = new Date('2026-10-28T09:00:00Z')
+
+  it('is stamped on the machine\'s own record on a connect and on every write after it', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, countryCode: 'VN' })
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })
+    expect(machineUpdate.mock.calls).toEqual([
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+    ])
+  })
+
+  it('rejects when the stamp fails, so the socket\'s next heartbeat tries again', async () => {
+    machineUpdate.mockRejectedValue(new Error('mongo down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })).rejects.toThrow('mongo down')
+  })
+
+  it('writes the changed connection facts and the stamp in one update', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: { clientVersion: '0.5.14' } })
+    expect(machineUpdate.mock.calls).toEqual([[{ where: { machineId: 'machine-1' }, data: { clientVersion: '0.5.14', lastSeenAt: now } }]])
+  })
+
+  it('writes nothing to the machine when no fact changed and its stamp is not due, and still counts the connect', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: {}, stamp: false })
+    expect(machineUpdate).not.toHaveBeenCalled()
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_machine_connections'])
+  })
+
+  it('writes a changed fact without a stamp when the stamp is not due', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: { hostname: 'new-host' }, stamp: false })
+    expect(machineUpdate.mock.calls).toEqual([[{ where: { machineId: 'machine-1' }, data: { hostname: 'new-host' } }]])
+  })
+
+  it('is stamped even when the connect total fails', async () => {
+    record.mockRejectedValue(new Error('totals down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true })).rejects.toThrow('totals down')
+    expect(machineUpdate).toHaveBeenCalledWith({ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } })
+  })
 })
 
 it('marks the person, not the machine, agent or device', async () => {
@@ -162,6 +211,34 @@ describe('presenceWriteDue', () => {
   })
 })
 
+describe('a machine row read at a connect', () => {
+  const FIVE_MIN = 5 * 60_000
+  const stamped = new Date('2026-11-04T05:00:00.000Z')
+
+  it('floors a new socket\'s stamps on the row\'s last stamp, not on the socket\'s start', () => {
+    const state = presenceStateFromRow(stamped)
+    expect(state).toEqual({ dayKey: '2026-11-04', wroteAt: stamped.getTime() })
+    expect(presenceWriteDue(state, new Date(stamped.getTime() + 60_000), FIVE_MIN)).toBe(false)
+    expect(presenceWriteDue(state, new Date(stamped.getTime() + FIVE_MIN), FIVE_MIN)).toBe(true)
+  })
+
+  it('is due at once for a row never stamped', () => {
+    for (const lastSeenAt of [null, undefined]) expect(presenceStateFromRow(lastSeenAt)).toEqual({ dayKey: null, wroteAt: 0 })
+  })
+
+  it('rewrites only the connection facts that differ from the row', () => {
+    const row = { hostname: 'mac', name: 'Mac', clientVersion: '0.5.13', computerId: 'c1', countryCode: 'VN', sessionKind: 'computer' }
+    expect(machineConnectChanges(row, { hostname: 'mac', clientVersion: '0.5.13', computerId: 'c1', countryCode: 'VN', sessionKind: 'computer' })).toEqual({})
+    expect(machineConnectChanges(row, { hostname: 'mac', clientVersion: '0.5.14', computerId: 'c1', sessionKind: 'computer' })).toEqual({ clientVersion: '0.5.14' })
+    expect(machineConnectChanges({ ...row, sessionKind: null, countryCode: null }, { sessionKind: 'computer', countryCode: 'SG' }))
+      .toEqual({ sessionKind: 'computer', countryCode: 'SG' })
+  })
+
+  it('leaves out a fact the connect did not send', () => {
+    expect(machineConnectChanges({ hostname: 'mac' }, { hostname: undefined, sessionKind: 'team' })).toEqual({ sessionKind: 'team' })
+  })
+})
+
 it('keeps Harness OS and Orange Pi connections separate without storing identity', async () => {
   expect([...TUI_SURFACES]).toEqual(['tui', 'harness-os', 'harness-os-pi'])
   for (const surface of TUI_SURFACES) expect(CLIENT_SURFACES.has(surface)).toBe(true)
@@ -172,4 +249,43 @@ it('keeps Harness OS and Orange Pi connections separate without storing identity
   expect(record.mock.calls).toEqual([
     ['account', now, 'relay_harness-os_opens'], ['account', now, 'relay_harness-os-pi_opens'],
   ])
+})
+
+// A Swarm agent's turn on someone's Mac is hosting, never that person working (Dee, 2026-11-04).
+describe('a turn is marked by who started it', () => {
+  const now = new Date('2026-11-04T12:00:00Z')
+
+  it('marks an own session\'s turn as worked', async () => {
+    await recordTurnStarted('owner', 'mac', 'own-session', now)
+    expect(mark.mock.calls).toEqual([['owner', now, { worked: true }]])
+  })
+
+  it('marks a Swarm agent\'s turn as hosting, not worked, found by its machine and current terminal', async () => {
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
+    await recordTurnStarted('owner', 'mac', 'swarm-session', now)
+    expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
+    expect(swarmAgentFind.mock.calls[0]![0].pipeline[0]).toEqual({ $match: { machineId: 'mac', deleted: false, 'data.harnessId': 'swarm-session' } })
+  })
+
+  it('marks a Team account\'s turn as hosting without reading anything: it runs only Swarm agents', async () => {
+    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
+    expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
+    expect(swarmAgentFind).not.toHaveBeenCalled()
+  })
+
+  it('marks neither when it cannot tell, says so without ids, and still counts the turn', async () => {
+    swarmAgentFind.mockRejectedValue(new Error('down'))
+    await expect(recordTurnStarted('PRIVATE_OWNER', 'PRIVATE_MACHINE', 'PRIVATE_AGENT', now)).resolves.toBeUndefined()
+    expect(mark).not.toHaveBeenCalled()
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started'])
+    expect(warn).toHaveBeenCalledOnce()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE_')
+  })
+
+  it('counts the turn in the relay total whichever mark it gets', async () => {
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
+    await recordTurnStarted('owner', 'mac', 'swarm-session', now)
+    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started', 'relay_turns_started'])
+  })
 })

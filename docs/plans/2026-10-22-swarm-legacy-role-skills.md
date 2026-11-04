@@ -1,5 +1,8 @@
 # Adopt role skills when old Swarm sessions restart
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 Approved by the project Lead after #1533 merged. The owner reversed the earlier fresh-launch-only scope.
 
 Goal: an existing Claude Code or Codex Swarm session without stored role metadata gains the correct built-in skill when restarted or resumed on its own machine. Current group Leads receive Lead; assigned/member workers receive DEV. A personal session, missing roster entry or unsupported engine receives nothing. Existing role metadata stays unchanged.

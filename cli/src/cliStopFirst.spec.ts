@@ -32,14 +32,14 @@ function at(text: string, call: string, after = 0): number {
 
 /** What changes the computer's state, or starts Harness: none of it may run before a stop's outcome is known. */
 const MUTATING = [
-  'clearAdapterState(', 'clearAuthSession(', 'writeAuthSession(', 'saveAuthSession(', 'rmSync(', 'writeFileSync(', 'renameSync(',
+  'clearAdapterState(', 'clearAuthSession(', 'removeSignIn(', 'writeAuthSession(', 'saveAuthSession(', 'rmSync(', 'writeFileSync(', 'renameSync(',
   'launch(', 'relaunch(', 'passThroughToGridLogout(', 'runUpdateSteps(', 'signIn(', 'resolveMachineIfUnknown(',
 ]
 
 describe('commands that stop Harness first (cli.ts)', () => {
   it.each([
-    ['resetCommand', ['clearAdapterState(', 'clearAuthSession(']],
-    ['logout', ['passThroughToGridLogout(', 'clearAuthSession(', 'launch(']],
+    ['resetCommand', ['clearAdapterState(', 'removeSignIn(']],
+    ['logout', ['passThroughToGridLogout(', 'removeSignIn(', 'launch(']],
     ['updateCommand', ['runUpdateSteps(', 'relaunch()']],
   ])('%s goes on only once Harness has stopped', (name, after) => {
     const text = body(name)

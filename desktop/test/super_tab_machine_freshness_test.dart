@@ -240,7 +240,7 @@ void main() {
       expect(tipOf(tester, 'm'), tip);
       expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
       // Collapsed: name and owner avatar, with readings reserved for disclosure.
-      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
+      expect(textsOf('m'), ['Studio Mac', 'O']);
       expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
       expect(find.byType(SuperTabMachinesPill), findsNothing);
 
@@ -264,7 +264,7 @@ void main() {
         labelOf(tester, 'm'),
         startsWith('Studio Mac, Late, Owned by owner'),
       );
-      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
+      expect(textsOf('m'), ['Studio Mac', 'O']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -294,7 +294,7 @@ void main() {
     );
 
     testWidgets(
-      'offline: a direct row with a hollow ring, muted name, and no stale readings',
+      'offline: a direct row with a hollow ring, muted name, and only its last allowances, said to be old',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -307,9 +307,25 @@ void main() {
         expect(rowOf('m'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('super-machine-m')));
         await tester.pump();
+        // Opened offline, only Subscriptions shows: the last figures, said to be old; no Hardware.
+        final readings = find.byKey(const ValueKey('super-machine-readings-m'));
         expect(
-          find.byKey(const ValueKey('super-machine-readings-m')),
+          find.descendant(of: readings, matching: find.text('Hardware')),
           findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: readings,
+            matching: find.textContaining('offline, read 3 min ago'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
+            matching: find.text('90%'),
+          ),
+          findsOneWidget,
         );
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
@@ -318,7 +334,7 @@ void main() {
         const tip = 'Offline · Owned by owner';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
-        expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
+        expect(textsOf('m'), ['Studio Mac', 'O']);
         expect(find.byType(SuperTabMachinesPill), findsNothing);
 
         // Opened, it stays open: saved with the Swarm's other sidebar state.
@@ -429,7 +445,7 @@ void main() {
         const tip = 'Refreshing… · Owned by owner';
         expect(tipOf(tester, 'far'), tip);
         expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['~', 'Far Mac', 'O']);
+        expect(textsOf('far'), ['Far Mac', 'O']);
 
         gate.complete();
         await landed(tester);

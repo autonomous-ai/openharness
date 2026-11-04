@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../logging/cli_transcript.dart';
 import 'hidden_process.dart';
 import 'home_dir.dart';
+import 'test_run.dart';
 import 'windows_layout.dart';
 
 /// Runs the Harness CLI owned by this desktop app without depending on a
@@ -86,7 +87,26 @@ class HarnessCliRunner {
              ),
            ),
        _runProcess = runProcess ?? runHidden,
-       _startProcess = startProcess ?? startHidden;
+       _startProcess = startProcess ?? startHidden,
+       _realRun = runProcess == null,
+       _realStart = startProcess == null;
+
+  /// Whether [run] and [start] would spawn the real CLI: no process functions were given. Under
+  /// flutter test they refuse instead ([_refuseUnderTest]).
+  final bool _realRun, _realStart;
+
+  /// 10-27: a test reached this computer's real CLI, and its `harness logout` signed the whole
+  /// computer out. A test supplies its own process functions, or gets what a computer without the
+  /// CLI gives (CI): a [ProcessException].
+  void _refuseUnderTest(bool real, List<String> arguments) {
+    if (!real || !kUnderTest) return;
+    throw ProcessException(
+      'harness',
+      arguments,
+      'The real Harness CLI is never run under flutter test: give the runner its own process '
+          'functions.',
+    );
+  }
 
   Directory get _runtimeDirectory =>
       Directory('${harnessHome.path}${Platform.pathSeparator}runtime');
@@ -190,6 +210,7 @@ class HarnessCliRunner {
   }
 
   Future<ProcessResult> run(List<String> arguments) async {
+    _refuseUnderTest(_realRun, arguments);
     final invocation = await resolve(arguments);
     return logProcessRun(
       _displayLine(arguments),
@@ -212,6 +233,7 @@ class HarnessCliRunner {
   }
 
   Future<Process> start(List<String> arguments) async {
+    _refuseUnderTest(_realStart, arguments);
     final invocation = await resolve(arguments);
     return logProcessStart(
       _displayLine(arguments),

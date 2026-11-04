@@ -1,7 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
+import { gzipSync } from 'node:zlib'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, directUploads, formFileBody, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, MemoryAttachmentStore,
+  MemoryAvatarStore, objectKeyFor, served, serviceAccountFrom, SharedAvatarStore, typeFromHead, unpackFailed, UPLOAD_LINK_MS, type AttachmentStore } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
@@ -50,9 +52,31 @@ describe('attachment bucket credentials', () => {
     expect(attachmentsFromEnv({ ...env(''), NODE_ENV: 'production' })?.publicBase).toBe('https://cdn.example.test')
   })
 
-  it('keeps avatars off without a private bucket, and never in the public one', () => {
-    expect(attachmentsFromEnv(env(encoded(key)))?.avatars).toBeNull()
-    expect(attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))?.avatars).toBeInstanceOf(GcsAvatarStore)
+  // Prod has the attachments bucket only (Ken, 2026-10-28): avatars live there under their own folder and are linked as chat
+  // files are, by signed links (fileLinks.ts), so they keep opening once the bucket is no longer public, and a copied link stops.
+  it('keeps avatars in the attachments bucket under avatars/, by signed links, without a bucket of their own', async () => {
+    const shared = attachmentsFromEnv(env(encoded(key)))!
+    expect(shared.avatarPrefix).toBe('avatars')
+    const link = new URL(await shared.avatars!.signedUrl('avatars/tab/0123/avatar', Date.now() + 3_600_000))
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/avatars/tab/0123/avatar')
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
+    const bucket = await (shared.avatars as unknown as { store: { files(): Promise<import('@google-cloud/storage').Bucket> } }).store.files()
+    expect(bucket.name).toBe('attachments')
+  })
+
+  it('lets a dedicated avatar bucket win, under the attachments prefix as before', () => {
+    const dedicated = attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))!
+    expect(dedicated.avatars).toBeInstanceOf(GcsAvatarStore)
+    expect(dedicated.avatarPrefix).toBe('super-tabs')
+  })
+
+  it('refuses at startup a chat-file prefix that would put chat files in the avatar folder', () => {
+    for (const prefix of ['avatars', '/avatars/', 'avatars/chat']) {
+      expect(() => attachmentsFromEnv({ ...env(''), SUPER_TAB_ATTACHMENTS_PREFIX: prefix })).toThrow('SUPER_TAB_ATTACHMENTS_PREFIX')
+    }
+    // With a bucket of their own, the folders never meet.
+    expect(attachmentsFromEnv({ ...env('', 'attachments', 'pictures'), SUPER_TAB_ATTACHMENTS_PREFIX: 'avatars' })).not.toBeNull()
   })
 
   it('signs an avatar link with the configured key, for a limited time, without a network call', async () => {
@@ -63,6 +87,35 @@ describe('attachment bucket credentials', () => {
     expect(link.pathname).toBe('/avatars/super-tabs/tab/0123/avatar')
     expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
     expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
+  })
+
+  it('signs an upload link for one new object of one exact size, as a download, for minutes, without a network call', async () => {
+    const store = attachmentsFromEnv(env(encoded(key)))!.store as GcsAttachmentStore
+    const expires = Date.now() + UPLOAD_LINK_MS
+    const { url, headers } = await store.uploadLink('super-tabs/tab/0123/AC4.step', { name: 'AC4 - 26 Oct v2.step' }, 150 * 1024 * 1024, expires)
+    const link = new URL(url)
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/super-tabs/tab/0123/AC4.step')
+    expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(600)
+    // Every rule is a signed header: storage refuses a request that drops or changes one.
+    expect(link.searchParams.get('X-Goog-SignedHeaders')!.split(';')).toEqual(['cache-control', 'content-disposition', 'content-type', 'host',
+      'x-goog-content-length-range', 'x-goog-if-generation-match'])
+    expect(headers).toEqual({ 'content-type': 'application/octet-stream', 'content-disposition': "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step",
+      'cache-control': 'private, max-age=600', 'x-goog-content-length-range': '157286400,157286400', 'x-goog-if-generation-match': '0' })
+    expect(directUploads(store)).toBe(store)
+  })
+
+  // Each read of a chat file hands one of these (fileLinks.ts): a GET of one object, for minutes, opening whether or not the
+  // bucket is public.
+  it('signs a chat file read link with the configured key, for minutes, without a network call', async () => {
+    const store = attachmentsFromEnv(env(encoded(key)))!.store
+    const link = new URL(await store.signedUrl('super-tabs/tab/0123/notes.txt', Date.now() + 600_000))
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/super-tabs/tab/0123/notes.txt')
+    expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(600)
+    expect(link.searchParams.get('X-Goog-SignedHeaders')).toBe('host')
   })
 
   it('builds the storage client from the configured key, without a network call', async () => {
@@ -132,5 +185,80 @@ describe('attachment files', () => {
     expect(store.objects.get('k1')).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''x.html" })
     await expect(store.put('k2', { name: 'b.bin', mime: 'application/octet-stream' }, Readable.from([Buffer.alloc(6)]), 5)).rejects.toBeInstanceOf(AttachmentTooLarge)
     expect(store.objects.has('k2')).toBe(false)
+  })
+  it('deletes an object, and counts one already gone as deleted, in each store', async () => {
+    const shared = new MemoryAttachmentStore(), pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const stores: Array<[AttachmentStore, MemoryAttachmentStore]> = [[shared, shared], [pictures, pictures],
+      [new SharedAvatarStore(shared), shared]]
+    for (const [store, bucket] of stores) {
+      await store.put('avatars/k', { name: 'a.txt', mime: 'text/plain' }, Readable.from([Buffer.from('a')]), 5)
+      await store.put('avatars/other', { name: 'b.txt', mime: 'text/plain' }, Readable.from([Buffer.from('b')]), 5)
+      await store.delete('avatars/k')
+      expect([bucket.objects.has('avatars/k'), bucket.objects.has('avatars/other')]).toEqual([false, true])
+      await expect(store.delete('avatars/k')).resolves.toBeUndefined()
+    }
+  })
+})
+
+describe('upload links on the memory bucket, with storage\'s rules', () => {
+  const at = 1_800_000_000_000
+  it('writes the linked object once, of exactly its size, before it expires, with its headers unchanged', async () => {
+    let now = at
+    const store = new MemoryAttachmentStore(() => now)
+    const link = await store.uploadLink('k/big.bin', { name: 'big.bin' }, 5, at + UPLOAD_LINK_MS)
+    expect(await store.receive(link.url, link.headers, Buffer.alloc(6))).toBe(400)
+    expect(await store.receive(link.url, link.headers, Buffer.alloc(4))).toBe(400)
+    expect(await store.receive(link.url, { ...link.headers, 'content-type': 'text/html' }, Buffer.alloc(5))).toBe(403)
+    const { 'x-goog-if-generation-match': _, ...overwriting } = link.headers
+    expect(await store.receive(link.url, overwriting, Buffer.alloc(5))).toBe(403)
+    expect(await store.receive(link.url.replace('k%2Fbig.bin', 'k%2Fother.bin'), link.headers, Buffer.alloc(5))).toBe(403)
+    expect(await store.stored('k/big.bin')).toBeNull()
+    expect(await store.receive(link.url, link.headers, Buffer.from('hello'))).toBe(200)
+    expect(store.objects.get('k/big.bin')).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''big.bin" })
+    expect(await store.receive(link.url, link.headers, Buffer.from('HELLO'))).toBe(412)
+    expect((await store.head('k/big.bin', 16)).toString()).toBe('hello')
+    now = at + UPLOAD_LINK_MS
+    const late = await store.uploadLink('k/late.bin', { name: 'late.bin' }, 1, at + UPLOAD_LINK_MS)
+    expect(await store.receive(late.url, late.headers, Buffer.alloc(1))).toBe(403)
+    await store.delete('k/big.bin')
+    expect(await store.stored('k/big.bin')).toBeNull()
+  })
+  it('keeps a declared image only when its first bytes are one', () => {
+    expect(typeFromHead('image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe('image/png')
+    expect(typeFromHead('image/png', Buffer.from('<html>'))).toBe('application/octet-stream')
+    expect(typeFromHead('model/step', Buffer.from('ISO-10303-21;'))).toBe('model/step')
+  })
+  it('caps a file at 256 MB, and a form at 10 MB, with the message that names the limit', () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(256 * 1024 * 1024)
+    expect(MAX_FORM_ATTACHMENT_BYTES).toBe(10 * 1024 * 1024)
+    expect(new AttachmentTooLarge().message).toBe('Files can be up to 256 MB.')
+  })
+})
+
+// A form file may come gzipped, so a gateway's content filter in front of the backend never reads a transcript's shell
+// lines as an attack (task #2737). The store gets the original bytes.
+describe('a form file sent gzipped', () => {
+  const read = async (body: Readable) => { const parts: Buffer[] = []; for await (const part of body) parts.push(Buffer.from(part)); return Buffer.concat(parts) }
+  const text = Buffer.from('$ rm -rf build && curl https://example.test/install.sh | sh\n'.repeat(200))
+
+  it('unpacks gzip as it streams, and leaves a plain file as it is', async () => {
+    expect((await read(formFileBody(Readable.from([gzipSync(text)]), 'gzip'))).equals(text)).toBe(true)
+    const plain = Readable.from([text])
+    expect(formFileBody(plain, null)).toBe(plain)
+  })
+
+  it('fails corrupt gzip with a zlib error, which reads as the client\'s', async () => {
+    const body = formFileBody(Readable.from([Buffer.from('not gzip at all')]), 'gzip')
+    await expect(read(body)).rejects.toMatchObject({ code: expect.stringMatching(/^Z_/) })
+    expect(unpackFailed(body)).toBe(true)
+    expect(unpackFailed(Readable.from([text]))).toBe(false)
+  })
+
+  it('passes the request stream\'s own failure on, so a cut form never hangs', async () => {
+    const source = new Readable({ read() {} })
+    const body = formFileBody(source, 'gzip')
+    source.destroy(Object.assign(new Error('cut'), { code: 'FST_REQ_FILE_TOO_LARGE' }))
+    await expect(read(body)).rejects.toMatchObject({ code: 'FST_REQ_FILE_TOO_LARGE' })
+    expect(unpackFailed(body)).toBe(false)
   })
 })

@@ -12,7 +12,7 @@ import { env } from '../config/env.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
-import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { windowsEngineArgv } from './windows/launch.js'
@@ -20,7 +20,7 @@ import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from '
 import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
 import { launchModelArgs, type LaunchModel } from './launchModel.js'
-import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { engineInstallPaths, engineInstallRecipe, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
 import { engineLabel } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
@@ -75,6 +75,11 @@ export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Rec
   opencode: { auto: ['--auto'], ask: [] },
 }
 
+/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: Team-written work,
+ *  whose default would read the branch's own settings (audit H2). The relaunch is held. A Buddy's were kept too, until a
+ *  Buddy ran in full mode like its owner's own session (task #2832). */
+const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['teamWritten'])
+
 /** The argv of [mode] for [engine], or null when the engine has no such mode. */
 export function permissionModeFlags(engine: AgentEngine, mode: string): readonly string[] | null {
   const modes = PERMISSION_MODES[engine]
@@ -83,7 +88,7 @@ export function permissionModeFlags(engine: AgentEngine, mode: string): readonly
 
 /** Whether [mode] lets the agent act without stopping to ask — what `bypassPermission` records. */
 export function permissionModeApproves(mode: string): boolean {
-  return mode === 'auto' || mode === 'full'
+  return mode === 'auto' || mode === 'full' || mode === 'teamWritten'
 }
 
 /**
@@ -129,7 +134,10 @@ export const MAX_FIRST_PROMPT_CHARS = 2000
 export class FirstPromptUnsupportedError extends Error {
   readonly code = 'PROMPT_UNSUPPORTED' as const
   constructor(readonly engine: AgentEngine) {
-    super(`${engine} has no documented way to start with a first prompt, so the agent was not created.`)
+    // What to do instead, not only what is missing (prompt_unsupported, Oct 21–27).
+    const takers = PROCESS_ENGINES.filter(supportsFirstPrompt).map(engineLabel)
+    super(`${engineLabel(engine)} cannot start with a first message. Start it without one and type the message once it opens, `
+      + `or choose ${takers.slice(0, -1).join(', ')} or ${takers.at(-1)} to start with one.`)
     this.name = 'FirstPromptUnsupportedError'
   }
 }
@@ -1537,6 +1545,13 @@ export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchMode
   return null
 }
 
+/** The line that updates [engine]: its install line, which fetches the latest. Those are POSIX shell lines, so on
+ *  Windows only an npm one, which PowerShell runs as written, is named. */
+export function engineUpdateCommand(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string | null {
+  const command = engineInstallRecipe(engine)?.command
+  return command && (platform !== 'win32' || command.startsWith('npm ')) ? command : null
+}
+
 /**
  * For a launch somebody is waiting on — create, fork. Refusing is kinder than opening a pane that
  * the engine will fill with its own help text and leave: the person is here, and Ask works today.
@@ -1560,10 +1575,13 @@ export async function refusePermissionFlagIfUnsupported(
   }
   const flag = native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!flag) return null
+  const update = engineUpdateCommand(engine)
   return {
     error: 'CODEX_CLI_TOO_OLD',
     detail: `The ${engine} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
-      + `Update ${engine} and try again${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
+      // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day).
+      + `Update ${engine}${update ? ` by running ${update}, then try again` : ' and try again'}`
+      + `${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
   }
 }
 
@@ -1583,6 +1601,11 @@ export async function dropPermissionFlagIfUnsupported<T extends PermissionLaunch
   if (support === 'unknown') return { choice, droppedFlag: null, nativeHold: 'Waiting to confirm the selected executable’s permission flags.' }
   const droppedFlag = support === 'supported' ? null : native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!droppedFlag) return { choice, droppedFlag: null }
+  if (choice.permissionMode && KEPT_PERMISSION_MODES.has(choice.permissionMode)) {
+    const update = engineUpdateCommand(engine)
+    return { choice, droppedFlag: null, nativeHold: `The ${engine} CLI on this machine does not support ${droppedFlag}, which this harness's `
+      + `permission mode needs. It stays stopped until ${engine} is updated${update ? ` (${update})` : ''}.` }
+  }
   // Ask in its place, launched with no flag at all: Claude Code's Ask names its mode with the very flag a build
   // this old may lack, so it goes as the engine's own default, which asked before auto mode existed.
   return { choice: { ...choice, permissionMode: permissionModeFlags(engine, 'ask')?.length ? null : 'ask', bypassPermission: false }, droppedFlag }

@@ -181,6 +181,21 @@ describe('the pane-process swap', () => {
     expect(setup().swap.restartJobs).toBeDefined()
   })
 
+  // A move home after a fresh move reopens the conversation the agent left, not the one it is in (retarget.ts).
+  it('prepares, frees and on a fallback keeps the conversation it reopens, while it still stops the process it found', async () => {
+    const { deps, swap } = setup(session({ sessionId: 'S2', transcriptPath: '/t/S2.jsonl' }))
+    const swapDeps = swap.paneSwapDeps(session({ sessionId: 'S2', transcriptPath: '/t/S2.jsonl' }), place(), {}, null, undefined, 'S1')
+    swapDeps.prepareResume?.()
+    // Found by its id: the row's transcript is the other conversation's.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S1', transcriptPath: null }))
+    swapDeps.keepAbandoned?.()
+    expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S1', transcriptPath: null }))
+    await swapDeps.stopConflictingJob!()
+    expect(stopConflictingBackgroundJob).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'S1' }))
+    expect(await swapDeps.terminate()).toEqual({ ok: true })
+    expect(terminateDeletedAgent).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'S2' }), expect.anything(), undefined)
+  })
+
   it('prepares the resume, holds the pane open and respawns it in the home folder, saying why when tmux will not', async () => {
     const { deps, tmuxBackend, swap } = setup()
     const swapDeps = swap.paneSwapDeps(session(), place(), { env: { GRID_KEY: 'k' } })

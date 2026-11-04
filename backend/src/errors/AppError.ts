@@ -18,7 +18,8 @@ export class NotFoundError extends AppError {
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string) {
+  /** `fields`: the names of the fields refused, for the log; never their values. */
+  constructor(message: string, readonly fields: string[] = []) {
     super(message, 400, 'VALIDATION_ERROR')
     this.name = 'ValidationError'
   }

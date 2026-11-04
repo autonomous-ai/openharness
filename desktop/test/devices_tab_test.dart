@@ -18,27 +18,21 @@ void main() {
         newHarnessOpensInBox = composerInBox;
         addTearDown(() => newHarnessOpensInBox = false);
         final storage = MemoryStore();
-        final app = createApp(store: storage);
+        final app = createApp(store: storage)
+          ..currentUser = const CurrentUserProfile(
+            name: 'Dee Example',
+            email: 'dee@example.com',
+          );
         await mount(tester, app);
-        final button = find.byKey(const ValueKey('swarm-devices-button'));
-        expect(button, findsOneWidget);
+        // In the avatar's menu, not on the bar (Quiet Swarm, screen 0).
         expect(
-          tester.getCenter(button).dx,
-          greaterThan(
-            tester
-                .getCenter(find.byKey(const ValueKey('swarm-search-button')))
-                .dx,
-          ),
+          find.byKey(const ValueKey('swarm-devices-button')),
+          findsNothing,
         );
-        expect(
-          tester.getCenter(button).dx,
-          lessThan(
-            tester
-                .getCenter(find.byKey(const ValueKey('swarm-store-button')))
-                .dx,
-          ),
-        );
-        await tester.tap(button);
+        await tester.tap(find.byKey(const ValueKey('swarm-account-button')));
+        await tester.pump();
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('account-menu-devices')));
         await tester.pumpAndSettle();
         expect(app.activeSwarm.isDevices, isTrue);
         app.openDevices();
@@ -77,6 +71,36 @@ void main() {
       },
     );
   }
+
+  // Task #2195: Offstage mutes nothing, so a Swarm hidden behind the Store would keep its timers.
+  testWidgets('a canvas behind the Store runs no timers until it returns', (
+    tester,
+  ) async {
+    final app = createApp(store: MemoryStore());
+    await mount(tester, app);
+    bool canvasTicks() => tester
+        .widget<TickerMode>(
+          find
+              .descendant(
+                of: find.byKey(
+                  const ValueKey('workspace-canvas'),
+                  skipOffstage: false,
+                ),
+                matching: find.byType(TickerMode, skipOffstage: false),
+                skipOffstage: false,
+              )
+              .first,
+        )
+        .enabled;
+    expect(canvasTicks(), isTrue);
+    app.openStore();
+    await tester.pumpAndSettle();
+    expect(canvasTicks(), isFalse);
+    app.openDevices();
+    await tester.pumpAndSettle();
+    expect(canvasTicks(), isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   test(
     'restoring a Devices tab reserves chat before its conversation loads',

@@ -151,6 +151,11 @@ class Machine {
   /// Set when another account shares this whole machine with this one; null for the account's own.
   final MachineShare? machineShare;
 
+  /// How its computer signed in on its last connect, as the machine list says
+  /// (`team` for a Harness Team account, `computer` otherwise, null when an
+  /// older backend sends none).
+  final String? sessionKind;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -164,7 +169,13 @@ class Machine {
     this.sharedHarnesses = const [],
     this.status,
     this.machineShare,
+    this.sessionKind,
   });
+
+  /// A Harness Team account's machine: the account's, but its daemon signs in
+  /// with a team session, which the server never lets act as the person. The
+  /// person's own Swarm requests never go through it.
+  bool get isTeamAccount => sessionKind == 'team';
 
   /// Another account's machine, shared with this one: this account is a guest there, with its own space and
   /// harnesses; the machine is managed (renamed, removed, shared on) by its owner alone.
@@ -214,6 +225,7 @@ class Machine {
     machineShare: j['share'] is Map
         ? MachineShare.fromJson(Map<String, dynamic>.from(j['share'] as Map))
         : null,
+    sessionKind: j['sessionKind'] as String?,
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -229,6 +241,7 @@ class Machine {
     sharedHarnesses: sharedHarnesses,
     status: status,
     machineShare: machineShare,
+    sessionKind: sessionKind,
   );
 }
 
@@ -416,12 +429,18 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// The Claude account folder (`CLAUDE_CONFIG_DIR`) this agent runs in; null for the default account.
+  final String? claudeHome;
+
   /// Model observed in this session by the daemon, when available. Independent
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
 
   /// Effort reported with [modelName], never inferred from a model default.
   final String? modelEffort;
+
+  /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
+  final String? modelId;
 
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
@@ -447,6 +466,15 @@ class Agent {
   /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
   final GridNote? gridNote;
   final String? parentAgentId;
+
+  /// `agent` when another agent started this harness, wherever that agent
+  /// runs; null when the person did (cli lib/agentFrame.ts `startedBy`).
+  final String? startedBy;
+
+  /// Started by the Swarm: by an agent, from no harness on this machine, as
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
+  /// Buddy is one.
+  bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
   AgentProject? get displayProject =>
@@ -550,14 +578,17 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.claudeHome,
     this.modelName,
     this.modelEffort,
+    this.modelId,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
     this.gridState,
     this.gridNote,
     this.parentAgentId,
+    this.startedBy,
     this.project,
     this.gitContext,
     this.lastActivityAt,
@@ -715,14 +746,19 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      claudeHome: j['engine'] == 'claude'
+          ? _safeCodexHome(j['claudeHome'])
+          : null,
       modelName: model?.name,
       modelEffort: model?.effort,
+      modelId: model?.id,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
+      startedBy: j['startedBy'] == 'agent' ? 'agent' : null,
       project: AgentProject.fromJson(j['project']),
       gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
@@ -795,14 +831,17 @@ class Agent {
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
+    modelId: modelId,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,
     gridState: gridState,
     gridNote: gridNote,
     parentAgentId: parentAgentId,
+    startedBy: startedBy,
     project: project,
     gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
@@ -1202,6 +1241,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -1210,6 +1250,12 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/api` is `github.com/acme/api`, cli agentProject.ts
+  /// `aliasRepository`). Null when [remote] names its real host, and from an
+  /// older daemon.
+  final String? repository;
   final String? branch;
 
   /// In a linked worktree rather than the repository's own checkout.
@@ -1268,12 +1314,21 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
+      repository == other.repository &&
       branch == other.branch &&
       worktree == other.worktree &&
       branchPending == other.branchPending;
   @override
-  int get hashCode =>
-      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
+  int get hashCode => Object.hash(
+    name,
+    cwd,
+    root,
+    remote,
+    repository,
+    branch,
+    worktree,
+    branchPending,
+  );
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -1295,6 +1350,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

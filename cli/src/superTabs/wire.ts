@@ -16,6 +16,10 @@ export const ENDED_WORK = ['done', 'stopped', 'cancelled', 'lost']
 export class SuperTabHostError extends Error {
   constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
 }
+/** A request the backend would not validate: the next, older form of it is tried (an older backend refusing a newer field). */
+export const fieldRefused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
+/** How long a field an older backend refused is left out. */
+export const FIELD_REFUSED_MS = 10 * 60_000
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. HTTP 426 is a server that no
  *  longer serves this client's reads: whatever it says, the person is told to update Harness (design 4.11, 5.1). */

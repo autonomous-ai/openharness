@@ -25,12 +25,29 @@ enum HarnessControlSymbols {
 
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
+/// One point of the workspace's color. Takes no clicks, so the title bar under
+/// it still drags the window.
+private final class SwarmRuleLead: NSView {
+  var color: NSColor = .clear {
+    didSet { needsDisplay = true }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    color.setFill()
+    bounds.fill()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private weak var window: NSWindow?
   private let channel: FlutterMethodChannel
   private let appMenuChannel: FlutterMethodChannel
   private let accessory = NSTitlebarAccessoryViewController()
   private let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
+  /// The strip's bottom rule, carried on under the traffic lights.
+  private let ruleLead = SwarmRuleLead()
   private var statusMenu: HarnessStatusMenu?
   private var statusBarHeight: NSLayoutConstraint?
   private var observers: [NSObjectProtocol] = []
@@ -112,6 +129,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.statusMenu?.update(state)
+        // What needs the person in their Swarms; none, or no workspace, clears it.
+        let badge = state["dockBadge"] as? Int ?? 0
+        let label: String? = badge > 0 ? String(badge) : nil
+        if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
         self.statusBarHeight?.constant = self.strip.preferredStatusBarHeight
         // A new background repaints the whole window, title bar included: only on a change.
         if let window = self.window, window.backgroundColor != self.strip.palette.tabBar {
@@ -248,6 +269,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     if let palette {
       strip.updatePalette(palette)
       window?.backgroundColor = strip.palette.tabBar
+      ruleLead.color = strip.palette.workspace
     }
     guard let window, !configured else { return }
     configured = true
@@ -270,6 +292,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     accessory.layoutAttribute = .right
     accessory.view = strip
     window.addTitlebarAccessoryViewController(accessory)
+    ruleLead.color = strip.palette.workspace
+    window.contentView?.superview?.addSubview(ruleLead)
     if let content = window.contentView {
       let footer = strip.statusBar
       footer.translatesAutoresizingMaskIntoConstraints = false
@@ -306,6 +330,17 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     let leading = max(76, trafficLightEdge + 10)
     strip.setFrameSize(NSSize(width: max(200, window.frame.width - leading), height: strip.frame.height))
     strip.needsLayout = true
+    // The accessory starts after the traffic lights, and the strip's rule with
+    // it. Left alone, the title bar's own gray shows in that last point under
+    // the lights, a notch where the rule begins. Just above the content.
+    if let frame = ruleLead.superview {
+      let content = window.contentLayoutRect
+      ruleLead.frame = frame.convert(
+        NSRect(x: 0, y: content.maxY, width: leading, height: 1),
+        from: nil
+      )
+      ruleLead.autoresizingMask = frame.isFlipped ? [.maxYMargin] : [.minYMargin]
+    }
   }
 
   private func installWorkspaceMenus() {
@@ -1140,9 +1175,12 @@ private final class SwarmStoreButton: SwarmIconButton {
     let emphasized = hovered || hasKeyboardFocus || isHighlighted
     let iconRect = NSRect(x: (bounds.width - markSize) / 2, y: (bounds.height - markSize) / 2,
       width: markSize, height: markSize)
+    // The hint must be an NSNumber: a bare NSImageInterpolation reaches AppKit
+    // as a boxed __SwiftValue, and macOS 13 throws on it (SIGILL at launch).
     image?.draw(in: iconRect,
       from: .zero, operation: .sourceOver, fraction: !isEnabled ? 0.45 : emphasized ? 1 : 0.82,
-      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+      respectFlipped: true,
+      hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
     if hasKeyboardFocus && isEnabled {
       let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 7, yRadius: 7)
       palette.accent.withAlphaComponent(0.85).setStroke()
@@ -2404,6 +2442,9 @@ private final class SwarmTabStrip: NSView {
     // was before the key existed.
     phoneButton.isHidden = state["addPhoneVisible"] as? Bool == false
     phoneButton.setAccessibilityHidden(phoneButton.isHidden)
+    // Absent is shown, as for Add Phone. They moved into the avatar menu.
+    storeButton.isHidden = state["storeVisible"] as? Bool == false
+    storeButton.setAccessibilityHidden(storeButton.isHidden)
     // The row's last control: Sign in, or whose account this is. Absent (a
     // viewer build, teardown), nothing is drawn.
     let account = state["account"] as? [String: Any]
@@ -2436,7 +2477,7 @@ private final class SwarmTabStrip: NSView {
     children.append(searchButton)
     if !phoneButton.isHidden { children.append(phoneButton) }
     if !devicesButton.isHidden { children.append(devicesButton) }
-    children.append(storeButton)
+    if !storeButton.isHidden { children.append(storeButton) }
     if !accountButton.isHidden { children.append(accountButton) }
     if !(statusBar.isHidden || passiveFooter) { children.append(statusBar) }
     setAccessibilityChildren(children)
@@ -2456,7 +2497,7 @@ private final class SwarmTabStrip: NSView {
       control.isEnabled = actionsEnabled
     }
     storeButton.font = navigationFont
-    storeButton.isEnabled = actionsEnabled
+    storeButton.isEnabled = actionsEnabled && !storeButton.isHidden
     devicesButton.isEnabled = actionsEnabled && !devicesButton.isHidden
     accountButton.isEnabled = actionsEnabled && !accountButton.isHidden
     searchButton.foreground = palette.navigationForeground
@@ -2559,6 +2600,7 @@ private final class SwarmTabStrip: NSView {
       tab.selected = id == activeId
       tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
+      tab.quiet = row["quiet"] as? Bool == true
       tab.attention = (row["attention"] as? Int ?? 0) > 0
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
@@ -2715,7 +2757,7 @@ private final class SwarmTabStrip: NSView {
     accountButton.frame = NSRect(x: bounds.width - trailing - accountWidth,
       y: (bounds.height - capsuleHeight) / 2, width: accountWidth, height: capsuleHeight)
     let actionsEdge = accountButton.isHidden ? bounds.width - trailing : accountButton.frame.minX - 8
-    let storeWidth = min(storeButton.preferredWidth, max(0, actionsEdge))
+    let storeWidth = storeButton.isHidden ? 0 : min(storeButton.preferredWidth, max(0, actionsEdge))
     storeButton.frame = NSRect(x: actionsEdge - storeWidth,
       y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
     let devicesWidth = devicesButton.isHidden ? 0 : devicesButton.preferredWidth
@@ -3046,6 +3088,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var preferredWidth: CGFloat { Self.maximumLayoutWidth }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
+  /// A Swarm's tab: its name alone, bold while something there needs you.
+  var quiet = false { didSet { if quiet != oldValue { invalidateLabel(); updateAccessibility() } } }
   var activity: HarnessNativeActivity? {
     didSet { if activity != oldValue { invalidateLabel(); updateAccessibility() } }
   }
@@ -3057,6 +3101,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   // Keep the old question payload useful for an older Flutter fixture/runner.
   private var activityLabel: String? { activity?.label ?? (attention ? "Needs your input" : nil) }
   private var activityMark: String? {
+    if quiet { return nil }
     if let activity { return activity.symbol(frame: activityFrame) }
     return attention ? "?" : nil
   }
@@ -3262,7 +3307,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = .center
     let label = MeasuredLabel(NSAttributedString(string: displayLabel,
-      attributes: [.font: labelFont,
+      attributes: [.font: quiet && attention
+          ? NSFont.systemFont(ofSize: labelFont.pointSize, weight: .semibold) : labelFont,
         .foregroundColor: foreground, .paragraphStyle: paragraph]))
     cachedLabel = label
     return label

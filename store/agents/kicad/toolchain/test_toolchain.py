@@ -51,14 +51,14 @@ class ManifestTest(unittest.TestCase):
             self.assertTrue(rel.startswith(UPSTREAM_PKG + "/"), rel)
         self.assertEqual(m["workspace"]["marker"], "project.json")
 
-    def test_the_tile_runs_astra_with_the_upstream_hooks(self):
+    def test_the_tile_runs_sol_with_the_upstream_hooks(self):
         # The same engine and arguments as upstream harness/kicad/harness.json: a person who installs
         # the tile from the store gets what the team runs, including the Stop hook that finishes a
         # build and asks once for the firmware. Claude would run without any hook at all.
         m = manifest()
         self.assertEqual(m["engine"], "codex")
         args = m["agent"]["args"]
-        self.assertEqual(args[:2], ["-m", "gpt-6-astra"])
+        self.assertEqual(args[:2], ["-m", "gpt-6.1-sol"])
         self.assertIn("approval_policy=never", args)
         self.assertIn("sandbox_mode=danger-full-access", args)
         for event in ("Stop", "Interrupt"):
@@ -84,6 +84,10 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(env["KICAD_HARNESS_NINJA"], "${dsh}/upstream/toolchain/pico/tools/bin/ninja")
         # setup hands the package its venv Python for the cmake/ninja wheels
         self.assertIn('PICO_TOOLS_PYTHON="$PWD/.venv/bin/python"', (PACKAGE / "toolchain" / "setup.sh").read_text())
+        # The Case phase's CadQuery Python, the package's own entry point into upstream/toolchain/case.
+        self.assertEqual(env["KICAD_CASE_PYTHON"], "${dsh}/" + UPSTREAM_PKG + "/toolchain/case-python")
+        # setup puts uv on PATH so the package's install-cadquery.sh can build that venv on a new Mac
+        self.assertIn("harness_uv || exit 1", (PACKAGE / "toolchain" / "setup.sh").read_text())
         expected = ".agents/skills" if manifest()["engine"] == "codex" else ".claude/skills"
         self.assertTrue(env["CIRCUIT_SKILLS_DIR"].endswith(expected))
 
@@ -137,6 +141,15 @@ class HandoffTest(unittest.TestCase):
         shutil.copy(TOOLCHAIN / "kicad.sh", self.install / "toolchain" / "kicad.sh")
         self.fake_kicad(versions_value("KICAD_VERSION"))
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("HARNESS_", "CIRCUIT_"))}
+        # A Codex on PATH that has `exec --output-schema`, the team's job runner.
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.fake_codex("--output-schema <FILE>")
+        self.env["PATH"] = f"{self.bin}:{self.env.get('PATH', '')}"
+
+    def fake_codex(self, exec_help):
+        (self.bin / "codex").write_text(f'#!/bin/sh\n[ "$1" = --version ] && echo "codex-cli 0.0.0"\necho "{exec_help}"\n')
+        (self.bin / "codex").chmod(0o755)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -185,6 +198,13 @@ class HandoffTest(unittest.TestCase):
         (self.install / "upstream" / ".harness-commit").write_text("0" * 40)
         out = self.run_script("doctor.sh")
         self.assertIn("warn autonomous-circuit @ 000000000000, VERSIONS pins", out.stdout)
+
+    def test_doctor_with_a_codex_too_old_for_the_team_is_a_miss(self):
+        self.fake_codex("--json")
+        out = self.run_script("doctor.sh")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("has no `exec --output-schema`", out.stdout)
+        self.assertIn("doctor.sh dsh=", out.stdout)
 
     def test_doctor_relays_the_packages_failure(self):
         out = self.run_script("doctor.sh", STUB_EXIT="1")

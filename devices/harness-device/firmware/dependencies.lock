@@ -70,7 +70,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.0
+    version: 5.5.4
   waveshare/esp_lcd_touch_cst9217:
     component_hash: f755f8e3ae61df23413256a6a447e367a4b844538229c183ff0e89dbbdc15319
     dependencies:

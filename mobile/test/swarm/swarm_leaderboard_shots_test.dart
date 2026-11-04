@@ -1,0 +1,244 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/color_palette.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+/// Set to a folder to write the phone leaderboard's screenshots there, light
+/// and dark, over a scripted backend: never a real Swarm.
+final shots = Platform.environment['SWARM_LEADERBOARD_SHOTS'];
+
+void main() {
+  const path = '/api/super-tabs/$tab/leaderboard?projectId=$project';
+  final now = DateTime.utc(2026, 10, 28, 2);
+  final monday = DateTime.utc(2026, 10, 26).millisecondsSinceEpoch;
+
+  setUpAll(() async {
+    if (shots == null || !Platform.isMacOS) return;
+    final sf = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+    );
+    for (final family in ['.AppleSystemUIFont', 'Roboto']) {
+      await (FontLoader(family)..addFont(Future.value(sf))).load();
+    }
+    // The title's monospace, as the other shots tests load it.
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    for (final family in ['.AppleSystemUIFontMonospaced', 'monospace']) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
+    }
+    final manifest =
+        jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
+    for (final entry in manifest.cast<Map<String, dynamic>>()) {
+      final loader = FontLoader(entry['family'] as String);
+      for (final font in (entry['fonts'] as List).cast<Map>()) {
+        loader.addFont(rootBundle.load(font['asset'] as String));
+      }
+      await loader.load();
+    }
+  });
+
+  FakeSwarm backend() {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(),
+      'members': [
+        part(me, 1, person(me)),
+        part('diego', 1, person('diego', role: 'collaborator')),
+        part('ken', 1, person('ken', role: 'collaborator')),
+        part('tony', 1, person('tony', role: 'collaborator')),
+        part('maximilian', 1, person('maximilian', role: 'collaborator')),
+      ],
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes[path] = (_) => leaderboardData(
+      week: monday,
+      people: [
+        {
+          ...scoreData(
+            'diego',
+            points: 28,
+            rank: 1,
+            shipped: 8,
+            unblocked: 1,
+            lentMs: 40 * 3600000,
+          ),
+          'displayName': 'Diego',
+          'prevWeekPoints': 20,
+          'details': {
+            'shipped': [
+              for (final (i, title) in [
+                'Phone: the leaderboard shows what each number is made of',
+                'Desktop: a machine shows its agents as one count',
+                'Swarm digest pauses with the Swarm',
+                'CLI: resume keeps the last model',
+                'Backend: the board reads only what changed',
+                'Phone: Undo after answering a decision',
+                'Desktop: Models list leaves out unnamed records',
+                'Daemon: idle timers stop while nothing changed',
+              ].indexed)
+                {
+                  'title': title,
+                  'prUrl': 'https://github.com/o/r/pull/${2800 - i}',
+                },
+            ],
+            'unblocked': [
+              {
+                'title': 'Which sign-in page ships first?',
+                'conversationId': 'c1',
+                'kind': 'decision',
+                'waitedMinutes': 96,
+              },
+            ],
+            'lent': [
+              {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 31.5},
+              {'machineName': 'build-box', 'busyHours': 8.5},
+            ],
+            // A server that reads Brought shows it in place of Lent.
+            'brought': [
+              {
+                'machineId': 'studio',
+                'machineName': 'MACs-Mac-Studio.local',
+                'shipped': 5,
+                'busyHours': 31.5,
+                'subscriptions': [
+                  {
+                    'engine': 'claude',
+                    'usedPercent': 38,
+                    'resetsAt': DateTime.now()
+                        .add(const Duration(days: 3, hours: 2))
+                        .millisecondsSinceEpoch,
+                  },
+                  {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+                ],
+              },
+              {
+                'machineId': 'box',
+                'machineName': 'build-box',
+                'shipped': 0,
+                'busyHours': 8.5,
+                'subscriptions': <Object>[],
+              },
+            ],
+          },
+        },
+        {
+          ...scoreData('ken', points: 21, rank: 2, shipped: 3, unblocked: 4),
+          'displayName': 'Ken',
+          'prevWeekPoints': 25,
+        },
+        {
+          ...scoreData(me, points: 6, rank: 3, unblocked: 2),
+          'displayName': 'Dee',
+          'prevWeekPoints': 6,
+        },
+        scoreData('tony', points: 2, rank: 4, shipped: 1),
+        scoreData('maximilian', points: 0, rank: 5),
+      ],
+    );
+    return fake;
+  }
+
+  testWidgets('screenshots for review', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // A palette carries its brightness: the shell's default dark one, and
+    // the neutral light one.
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: backend().request,
+        notices: SilentSystemNotices(),
+        features: features,
+      )..foreground = false;
+      await host.session!.inbox.refresh();
+      final boundary = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            builder: (context, child) =>
+                SwarmScope(notifier: host, child: child!),
+            home: SwarmLeaderboardPage(
+              swarmId: tab,
+              projectId: project,
+              now: () => now,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/phone-leaderboard-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // A person's week: their points and what the numbers are made of.
+      await tester.tap(
+        find.byKey(const ValueKey('swarm-leaderboard-person-diego')),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/phone-leaderboard-person-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // Scrolled to its end: what the machines they brought did.
+      await tester.drag(
+        find.byKey(const ValueKey('swarm-leaderboard-details')),
+        const Offset(0, -600),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File(
+          '$shots/phone-leaderboard-person-brought-${brightness.name}.png',
+        ).writeAsBytes(png!.buffer.asUint8List());
+      });
+      await tester.pumpWidget(const SizedBox());
+      host.dispose();
+    }
+    AppTheme.palette.value = HarnessPalette.graphite;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
+}
