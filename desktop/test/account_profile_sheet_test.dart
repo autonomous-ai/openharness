@@ -104,6 +104,10 @@ Future<SuperTabController> _swarm(ConversationServer server) async {
   return c;
 }
 
+/// The line said under a field, by its key.
+String? _said(WidgetTester tester, String key) =>
+    tester.widget<Text>(find.byKey(ValueKey(key))).data;
+
 String _text(WidgetTester tester, Finder field) =>
     tester.widget<TextField>(field).controller!.text;
 
@@ -137,7 +141,10 @@ void main() {
     expect(api.sent, ['Elvis']);
     expect(app.currentUser!.name, 'Elvis');
     expect(_types(server), ['member.username', 'member.name']);
-    expect(_command(server.posts.last), {'type': 'member.name', 'name': 'Elvis'});
+    expect(_command(server.posts.last), {
+      'type': 'member.name',
+      'name': 'Elvis',
+    });
     expect(c.snapshot!.people.single.username, 'elvis');
     expect(c.snapshot!.people.single.shownName, 'Elvis');
     // Saved: the sheet has closed.
@@ -165,21 +172,12 @@ void main() {
     final server = ConversationServer();
     final c = await _swarm(server);
     await _open(tester, app, swarm: c);
-    server.refuse = {
-      'code': 'USERNAME_TAKEN',
-      'message': 'elvis is taken.',
-    };
+    server.refuse = {'code': 'USERNAME_TAKEN', 'message': 'elvis is taken.'};
     await tester.enterText(_name, 'Elvis');
     await tester.enterText(_username, 'elvis');
     await tester.tap(_save);
     await tester.pumpAndSettle();
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('account-profile-username-error')),
-        matching: find.text('elvis is taken.'),
-      ),
-      findsOneWidget,
-    );
+    expect(_said(tester, 'account-profile-username-error'), 'elvis is taken.');
     expect(find.text('Profile'), findsOneWidget);
     expect(_text(tester, _username), 'elvis');
     expect(api.sent, ['Elvis']);
@@ -205,11 +203,8 @@ void main() {
     await tester.tap(_save);
     await tester.pumpAndSettle();
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('account-profile-name-error')),
-        matching: find.text('Use 1 to 60 characters, with no hidden ones.'),
-      ),
-      findsOneWidget,
+      _said(tester, 'account-profile-name-error'),
+      'Use 1 to 60 characters, with no hidden ones.',
     );
     expect(api.sent, isEmpty);
     expect(server.posts, isEmpty);
@@ -228,11 +223,8 @@ void main() {
     await tester.tap(_save);
     await tester.pumpAndSettle();
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('account-profile-name-error')),
-        matching: find.text('Use 1 to 60 characters, with no hidden ones.'),
-      ),
-      findsOneWidget,
+      _said(tester, 'account-profile-name-error'),
+      'Use 1 to 60 characters, with no hidden ones.',
     );
     expect(app.currentUser!.name, 'phorom12a');
     expect(server.posts, isEmpty);
@@ -308,7 +300,9 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: AccountSection(notifier: app))),
+      MaterialApp(
+        home: Scaffold(body: AccountSection(notifier: app)),
+      ),
     );
     expect(find.text('phorom12a'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('settings-account-edit')));

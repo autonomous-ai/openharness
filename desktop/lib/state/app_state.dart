@@ -7990,6 +7990,31 @@ class AppNotifier extends ChangeNotifier {
     await _profileCache.write(machineId, profile);
   }
 
+  /// Saves the signed-in person's own account name (Profile, task #2654) and
+  /// shows it at once; answers why it was refused, in one short line, or null
+  /// once saved.
+  Future<String?> setAccountName(String name) async {
+    final revision = _authRevision;
+    try {
+      final me = await api.updateMe(name: name);
+      if (me == null || !_authWorkCurrent(revision)) return null;
+      final profile = CurrentUserProfile.fromMe(me);
+      // Another account's answer is not this one's name: leave it for the
+      // next profile read to settle.
+      if (currentUser?.id != null && profile.id != currentUser?.id) return null;
+      currentUser = profile;
+      unawaited(_keepProfile(profile, revision));
+      notifyListeners();
+      return null;
+    } on ApiException catch (error) {
+      // A daemon (or, in a browser, a backend) from before the route.
+      if (error.status == 404) return 'Update Harness to change your name.';
+      return error.message;
+    } catch (_) {
+      return 'Your name was not saved. Try again.';
+    }
+  }
+
   Future<void> _readProfile(int revision) async {
     try {
       final me = await api.me();

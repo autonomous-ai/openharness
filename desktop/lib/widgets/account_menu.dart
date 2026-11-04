@@ -10,6 +10,7 @@ import 'workspace_account_button.dart';
 
 /// What the account menu was asked for.
 enum AccountMenuChoice {
+  profile,
   addPhone,
   devices,
   store,
@@ -19,7 +20,8 @@ enum AccountMenuChoice {
   signOut,
 }
 
-/// The menu under the avatar: who is signed in, then Add Phone, Devices, the
+/// The menu under the avatar: who is signed in, then Profile (their name and
+/// @username, task #2654), Add Phone, Devices, the
 /// Store (moved here from the bar: Quiet Swarm, screen 0), Appearance,
 /// Notifications, Settings and Sign out. Each opens something the app
 /// already has; the caller does that once this has closed, so the two never
@@ -97,6 +99,7 @@ class AccountMenu extends StatelessWidget {
   // same way, and a row that was there at the first opening and gone at the
   // next read as a fault (1.2.64 learned of the phone only when the menu opened).
   static const _rows = [
+    (AccountMenuChoice.profile, AppIcons.user, 'Profile'),
     (AccountMenuChoice.addPhone, AppIcons.smartphone, 'Add Phone'),
     (AccountMenuChoice.devices, AppIcons.circle, 'Devices'),
     (AccountMenuChoice.store, AppIcons.store, 'Store'),
