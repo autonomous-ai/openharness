@@ -1615,15 +1615,16 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start) context.contribution = await this.contribution(tx, original, actor, start.request, true).catch(() => undefined)
       }
-      if (command.type === 'message.send' && command.replyTo) {
-        const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
+      // An answer right below a message (commands.ts `answers`) reads that message as a reply does; it joins no thread.
+      if (command.type === 'message.send' && (command.replyTo || command.answers)) {
+        const reply = await tx.superTabMessage.findFirst({ where: { id: (command.replyTo ?? command.answers)!, tabId, conversationId: command.conversationId } })
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
         const root = reply?.thread && reply.thread !== reply.id
           ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
         // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
         // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
-        const sessionRow = reply?.thread && buddyChat && isBuddyChat(buddyChat)
+        const sessionRow = command.replyTo && reply?.thread && buddyChat && isBuddyChat(buddyChat)
           ? await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true },
             orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
           : null
@@ -1988,10 +1989,11 @@ export class SuperTabStore {
         if (taken.count !== proposed.length) fail('ATTACHMENT_USED', PROPOSED)
       }
       // On 2026-10-20 a Lead answered a message it had already read, then answered it again when the held
-      // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
-      if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
+      // delivery was finally typed. An agent's reply, or its answer right below the message, settles that agent's own
+      // deliveries of the message.
+      if (command.type === 'message.send' && (command.replyTo || command.answers) && actor.kind === 'agent') {
         // A notice gathered for the digest and answered before it (read in its chat): the digest does not name it again.
-        const replyTo = command.replyTo, agentId = actor.agentId
+        const replyTo = (command.replyTo ?? command.answers)!, agentId = actor.agentId
         await this.endDeliveries(tx, tabId, { where: { messageId: replyTo, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId: replyTo, agentId,
           status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
           data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))

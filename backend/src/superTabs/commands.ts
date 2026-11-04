@@ -315,6 +315,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
     mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional(),
+    // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
+    // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
+    answers: id.optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
     notice: z.literal('skills').optional(),
@@ -3156,6 +3159,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
+      // An answer below a message is read as its reply is (store.ts): context.reply is the message it answers.
+      if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
+        fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
+      }
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
       // An assigned worker's own post in its group reaches the Lead. Workers reported results as plain posts, which went to no
       // one: the Lead heard only at the next scheduled consolidation, and the owner saw no summary of finished work for up to
@@ -3257,7 +3264,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (thread) Object.assign(effects.messages.at(-1)!, { thread, ...(command.alsoSend ? { alsoInChat: true } : {}) })
       // Its project on the row itself, so the row hides once its person loses that project (buddySessions.ts lostProjectRow).
       if (session?.inSession) Object.assign(effects.messages.at(-1)!, { buddySession: true, ...(session.project ? { buddyProject: session.project } : {}) })
-      recordPost(state, group, actor, { replyTo: command.replyTo, text, reply: context.reply, openTags: context.openTags }, context.now)
+      recordPost(state, group, actor, { replyTo: command.replyTo ?? command.answers ?? null, text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
       if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)
