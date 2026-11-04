@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_activity_feed.dart';
 import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_notices.dart';
@@ -186,6 +187,139 @@ void main() {
     announcer.settle(const []);
 
     expect(notices.cancelled, isEmpty);
+  });
+
+  group('a reply in a thread the person is in', () {
+    SwarmActivityEntry reply(String id, {bool read = false}) =>
+        SwarmActivityEntry.fromJson({
+          'id': id,
+          'kind': 'reply',
+          'conversationId': 'g9',
+          'messageId': 'msg-$id',
+          'threadId': 'root-1',
+          'actor': {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
+          'text': "sounds good, I'll ship the copy today",
+          'createdAt': DateTime.utc(2026, 11, 4, 9).toIso8601String(),
+          'read': read,
+        });
+
+    test('says who replied and in which project, not the reply, and opens '
+        'at it', () {
+      final notices = _Recording();
+      SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+      ).announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'Mobile');
+
+      final notice = notices.shown.single;
+      expect(notice.title, 'Mia replied in a thread');
+      expect(notice.subtitle, 'Mobile');
+      expect(notice.body, 'Open Harness to read it.');
+      expect(notice.target, (
+        swarmId: 'tab-b',
+        conversationId: 'g9',
+        messageId: 'msg-a1',
+        decisionId: null,
+      ));
+      keepsItsContent(notice, ['sounds good', 'ship the copy']);
+    });
+
+    test('is posted once per row, by this session or the next', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      ).announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      expect(notices.shown, hasLength(1));
+
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a2'),
+        project: 'M',
+      );
+      expect(notices.shown, hasLength(2));
+      expect(notices.shown[0].key, isNot(notices.shown[1].key));
+    });
+
+    test('is not posted while the person looks at the Swarm', () {
+      final notices = _Recording();
+      final asked = <SwarmNeed?>[];
+      SwarmAnnouncer(
+        notices,
+        quiet: (need) {
+          asked.add(need);
+          return true;
+        },
+      ).announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      expect(notices.shown, isEmpty);
+      expect(asked, [null], reason: 'asked as for a chat, with no need');
+    });
+
+    test('is taken down once its row is read or gone, by its own Swarm '
+        'only', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a2'),
+        project: 'M',
+      );
+      final [first, second] = [for (final n in notices.shown) n.key];
+
+      announcer.repliesRead('tab-other', const []);
+      announcer.repliesRead('tab-b', [reply('a1'), reply('a2')]);
+      expect(notices.cancelled, isEmpty, reason: 'both still unread');
+
+      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', read: true)]);
+      expect(notices.cancelled, [second]);
+
+      announcer.repliesRead('tab-b', const []);
+      expect(notices.cancelled, [second, first]);
+    });
+
+    test('goes with a Swarm that can no longer be read, and at sign-out', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-c',
+        entry: reply('a2'),
+        project: 'M',
+      );
+      final [first, second] = [for (final n in notices.shown) n.key];
+
+      announcer.settle(const [], readable: {'tab-c'});
+      expect(notices.cancelled, [first]);
+
+      announcer.clear();
+      expect(notices.cancelled, [first, second]);
+    });
   });
 
   group("the app icon's count", () {
