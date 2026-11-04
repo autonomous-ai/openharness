@@ -16,7 +16,7 @@ import { request } from 'node:http'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
-import { readDaemonRecord } from './daemonRecord.js'
+import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders } from './localCredential.js'
 import { unixSocketPath } from './localSocket.js'
 import { NOT_RUNNING } from './unreachable.js'
@@ -139,7 +139,7 @@ export function daemonFetch(
 ): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
-    const saved = readDaemonRecord(dataDir, port, platform)?.port
+    const saved = readDaemonRecord(dataDir, configuredPortOf(dataDir, port, platform), platform)?.port
     const daemon = url.hostname === '127.0.0.1' && (Number(url.port) === port || Number(url.port) === saved)
     if (daemon && platform === 'win32') {
       const target = await pipe(dataDir, port)
@@ -170,7 +170,7 @@ function ownProcessRuns(pid: number): boolean {
  * (`pipeWebSocket`), so a squatter is refused before any frame is sent to it.
  */
 export function daemonPipeNow(dataDir: string, port: number): PipeTarget | null {
-  const record = readDaemonRecord(dataDir, port)
+  const record = readDaemonRecord(dataDir, configuredPortOf(dataDir, port))
   if (!record?.pipe || !record.pid || !ownProcessRuns(record.pid)) return null
   const token = readDaemonToken(dataDir)
   return token ? { pipe: record.pipe, token } : null

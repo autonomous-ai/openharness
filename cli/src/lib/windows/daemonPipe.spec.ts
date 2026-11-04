@@ -52,6 +52,13 @@ describe('the daemon over its Windows pipe', () => {
     expect(await daemonPipe(pipeDir(), port, alive)).toBeNull()
   })
 
+  // A Harness Team account holds the configured port, so the daemon is given another, which `daemonPort` hands every command.
+  it('is found by the port the daemon was given, as well as the one it was configured with', async () => {
+    const { dir, pipe } = await windowsDaemon((_req, res) => res.end('{}'))
+    expect((await daemonPipe(dir, 24567, alive))?.pipe).toBe(pipe)
+    expect(await daemonPipe(dir, 24567, { alive: () => false })).toBeNull()
+  })
+
   it('answers status over the pipe, and nothing for an answer without the proof', async () => {
     const { dir, port } = await windowsDaemon((_req, res) => res.end(JSON.stringify({ machineId: 'account-a' })))
     expect(await localDaemonStatus(dir, port, options)).toEqual({ machineId: 'account-a' })

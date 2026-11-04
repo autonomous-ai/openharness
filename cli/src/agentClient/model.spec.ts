@@ -50,6 +50,10 @@ describe('a harness as the agent verbs show it', () => {
       frame('ghost', { tmuxPane: '%5', status: 'stopped' })]
     expect(callerOf(frames, '%4', 'm')).toEqual({ machineId: 'm', agentId: 'lead', name: 'lead', engine: 'claude' })
     expect(callerOf(frames, '%5', 'm')).toBeNull()
+    // Windows: HARNESS_PANE names the host and the pane, and tmuxPane holds only the pane, whose number restarts in every host.
+    const windows = [frame('win', { tmuxPane: '%3', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p2', paneId: '%3' }] } })]
+    expect(callerOf(windows, 'p2:%3', 'm')).toMatchObject({ agentId: 'win' })
+    expect(callerOf(windows, 'p9:%3', 'm')).toBeNull()
     // Stopped or offline, an agent is still that agent, never the person.
     expect(callerOf(frames, '%6', 'm')?.agentId).toBe('old')
     expect(callerOf(frames, '%8', 'm')?.agentId).toBe('away')

@@ -166,8 +166,8 @@ A person's own agents, starts on a server without the app, and computers whose H
 is too old to understand the request keep using the computer's own git and gh
 configuration. The decision is recorded with the session, so a relaunch keeps it.
 In a team account (a Mac's Harness Team account, or a computer after `harness team on`),
-every Swarm agent qualifies, because the owner's login is not there. Windows is not
-wired yet.
+every Swarm agent qualifies, because the owner's login is not there. Windows works the
+same way, through Git for Windows.
 
 ## Preparing the folder before the agent starts
 
