@@ -3111,7 +3111,8 @@ class _SuperTabViewState extends State<SuperTabView>
               facts: _facts,
             ),
       author: _shownAuthor(c, message),
-      // A person is named by their username, as they are tagged.
+      // A person is found by their username, as they are tagged, and reads
+      // as the name they set.
       mentions: [
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
@@ -3119,6 +3120,11 @@ class _SuperTabViewState extends State<SuperTabView>
       mentionAddresses: {
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username: person.email,
+      },
+      mentionLabels: {
+        for (final id in message.mentions)
+          if (_people[id] case SuperTabPerson(:final username, :final name?))
+            username: name,
       },
       references: _references,
       onOpenGroup: (id) {
@@ -3155,6 +3161,9 @@ class _SuperTabViewState extends State<SuperTabView>
             },
       thread: thread,
       threadUnread: thread != null && c.threadUnread(thread),
+      threadTagged:
+          thread != null &&
+          SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null
@@ -3187,7 +3196,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reactorName: (kind, id) => kind == 'agent'
           ? c.snapshot?.agentName(id) ?? 'Agent'
           : switch (_people[id]) {
-              final person? => person.username,
+              final person? => person.shownName,
               null => 'Someone',
             },
       // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
@@ -3360,10 +3369,11 @@ class _SuperTabViewState extends State<SuperTabView>
     return data is SliverMultiBoxAdaptorParentData ? data.layoutOffset : null;
   }
 
-  /// The rows that join the one above them, without their name: runs of
-  /// one author's short updates, three to a group. Groups are counted from
-  /// the list's dividing row both ways, so a page read in above regroups
-  /// none of the rows already shown.
+  /// The rows that join the one above them, without their name: one
+  /// sender's messages within five minutes of each other, up to
+  /// [SuperTabMessageRow.groupLimit] to a group. Groups are counted from the
+  /// list's dividing row both ways, so a page read in above regroups none of
+  /// the rows already shown.
   static Set<String> _joined(
     List<SuperTabMessage> messages,
     SuperTabMessage? split,
@@ -3377,11 +3387,9 @@ class _SuperTabViewState extends State<SuperTabView>
     // oldest row.
     var group = [at - 1];
     for (var i = at - 2; i >= -1; i--) {
-      final newest = group.first;
       if (i >= 0 &&
-          newest - i < 3 &&
-          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i]) &&
-          SuperTabMessageRow.groupsWith(messages[newest], messages[i])) {
+          group.first - i < SuperTabMessageRow.groupLimit &&
+          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i])) {
         group.add(i);
         continue;
       }
@@ -3534,6 +3542,11 @@ class _SuperTabViewState extends State<SuperTabView>
           ? c.snapshot?.agent(message.authorId)
           : null;
       final previous = index > 0 ? entries[index - 1].message : null;
+      // Grouping is decided on the task's own rows; a step's row drawn between
+      // two of them still ends the group, or the next would read as its agent's.
+      final joined =
+          grouped.contains(message.id) &&
+          previous?.conversationId == message.conversationId;
       final time = message.createdAt;
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
@@ -3562,7 +3575,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       ? _outgoingRow(
                           pendingById[message.id]!,
                           byId,
-                          grouped: grouped.contains(message.id),
+                          grouped: joined,
                         )
                       : entry.interruptions > 0
                       ? SuperTabRecordingNotice(
@@ -3575,7 +3588,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         )
                       : _message(
                           message,
-                          grouped.contains(message.id),
+                          joined,
                           byId,
                           showReceipt: message.id == latestOwn?.id,
                         ),
@@ -4478,6 +4491,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                             widget.onOpenTerminal)
                                         .call(agent);
                                   },
+                                  onOpenConversation: _openConversation,
+                                  facts: _facts,
                                 )
                               : const SizedBox.shrink(),
                         ],

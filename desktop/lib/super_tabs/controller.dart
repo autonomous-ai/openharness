@@ -59,6 +59,10 @@ String superTabMessageId({
     .join()
     .substring(0, 24);
 
+/// The most pages of closed groups one read goes through (50 a page), so a
+/// Swarm whose old groups all changed lately cannot read without an end.
+const _closedSincePages = 40;
+
 /// Saved for a text still queued when the window closed. Older versions read
 /// and show it; this one knows it by [_unsentKey] and shows Not sent alone.
 const _unsentReason = 'Not sent before this window closed.';
@@ -2648,6 +2652,7 @@ class SuperTabController extends ChangeNotifier {
     }
     accessRevoked = true;
     devicesSelected = false;
+    _forgetClosedShipped();
     _forgetAttention();
     error = message;
     snapshot = null;
@@ -2960,6 +2965,14 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
+  /// When group [groupId] last changed, a message included (parts.dart
+  /// `groupChangedAt`); null for one this reader does not hold.
+  DateTime? groupChangedAt(String groupId) =>
+      switch (_parts?.groupChangedAt(groupId)) {
+        final int at => DateTime.fromMillisecondsSinceEpoch(at),
+        null => null,
+      };
+
   /// [projectId]'s conversations, open and closed, in the snapshot's order.
   List<SuperTabConversation> projectConversations(String projectId) =>
       _indexed()?.byProject[projectId] ?? const [];
@@ -3098,6 +3111,13 @@ class SuperTabController extends ChangeNotifier {
         }) !=
         null;
   }
+
+  /// Moves the reader's one Buddy onto [gridModel], a model shared in the
+  /// Swarm, or back to their own subscription when null (backend
+  /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
+  /// shows it under way. False when refused: [operationError] says why.
+  Future<bool> switchBuddyModel(String? gridModel) async =>
+      await command({'type': 'buddy.model', 'gridModel': gridModel}) != null;
 
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
@@ -3411,6 +3431,15 @@ class SuperTabController extends ChangeNotifier {
   bool unreadShown(SuperTabConversation group) =>
       notifyOf(group.id) != SuperTabNotify.muted && unread(group);
 
+  /// A person wrote in [group]'s main stream since the reader's mark, and it
+  /// is not muted: what makes a project's or a task's sidebar row bold, with
+  /// a tag of the reader or a wait on a person (Huy, 11-03, #2427). Agents'
+  /// progress messages and system rows leave it, so a busy Swarm's sidebar
+  /// does not read all bold.
+  bool unreadForPeople(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted &&
+      group.lastPersonSequence > readMark(group.id);
+
   /// Keeps [level] for [id] on every device of the reader. Shown at once;
   /// false, and the old setting back, when the server did not keep it. A
   /// later choice for the same chat wins over an earlier one still on its way.
@@ -3701,6 +3730,10 @@ class SuperTabController extends ChangeNotifier {
           for (final project in expandedProjects) {
             unawaited(loadDormant(project));
           }
+          if (_closedShippedSince case final since?) {
+            _forgetClosedShipped();
+            unawaited(readClosedShipped(since));
+          }
         }
       }
       // A first open draws its sidebar now, not once its chat answers.
@@ -3978,6 +4011,117 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
+  /// Closed tasks read for the Backlog that shipped since the read's window
+  /// began, by id. Kept here so an open of the tab reads nothing again: a task
+  /// that closes later is one this reader holds, and [snapshot] keeps it. They
+  /// join no snapshot, which is built again on every change, and no project's
+  /// "Closed" count.
+  final _closedShipped = <String, SuperTabConversation>{};
+  final _closedShippedProjects = <String>{};
+  final _closedShippedChanged = ValueNotifier<int>(0);
+  Future<void>? _closedShippedRead;
+  DateTime? _closedShippedSince;
+  int _closedShippedEpoch = 0;
+
+  /// Whether a project's closed tasks could not be read; [readClosedShipped]
+  /// tries it again.
+  bool closedShippedFailed = false;
+
+  Iterable<SuperTabConversation> get closedShipped => _closedShipped.values;
+
+  /// Tells of a change to [closedShipped] or [closedShippedFailed], and nobody
+  /// else who watches this controller: a page changes only the Backlog.
+  Listenable get closedShippedChanged => _closedShippedChanged;
+
+  /// Reads the closed tasks shipped since [since] of each project not read yet.
+  /// Joins a read under way.
+  Future<void> readClosedShipped(DateTime since) {
+    if (_disposed || accessRevoked || _parts == null) return Future.value();
+    if (_closedShippedRead case final reading?) return reading;
+    late final Future<void> reading;
+    reading = _readClosedShipped(since, _closedShippedEpoch).whenComplete(() {
+      if (identical(_closedShippedRead, reading)) _closedShippedRead = null;
+    });
+    return _closedShippedRead = reading;
+  }
+
+  Future<void> _readClosedShipped(DateTime since, int epoch) async {
+    _closedShippedSince = since;
+    if (closedShippedFailed) {
+      closedShippedFailed = false;
+      _closedShippedChanged.value++;
+    }
+    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    for (final project in projects) {
+      if (_closedShippedProjects.contains(project.id)) continue;
+      try {
+        await _readProjectClosedShipped(project.id, since, epoch);
+        if (epoch != _closedShippedEpoch) return;
+        _closedShippedProjects.add(project.id);
+      } catch (failure) {
+        if (_disposed || epoch != _closedShippedEpoch) return;
+        if (_isUpdateRequired(failure)) return _requireUpdate();
+        appLog.warn(
+          'swarm',
+          'closed tasks read failed: '
+              '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+        );
+        closedShippedFailed = true;
+        _closedShippedChanged.value++;
+      }
+    }
+  }
+
+  /// One project's closed groups, newest first, a page at a time: by project,
+  /// as only a project's list has an index that serves its order. A page whose
+  /// last group last changed before [since] is the last read, since those after
+  /// it were last active earlier still.
+  Future<void> _readProjectClosedShipped(
+    String projectId,
+    DateTime since,
+    int epoch,
+  ) async {
+    String? before;
+    for (var page = 0; page < _closedSincePages; page++) {
+      final answer = await request(
+        'GET',
+        '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
+            '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
+      );
+      if (_disposed || accessRevoked || epoch != _closedShippedEpoch) return;
+      final groups = answer['groups'] as List;
+      var added = false;
+      for (final raw in groups) {
+        final task = SuperTabConversation.fromJson(
+          superTabMap(superTabMap(raw)['data']),
+        );
+        if (task.shippedAt case final at? when !at.isBefore(since)) {
+          _closedShipped[task.id] = task;
+          added = true;
+        }
+      }
+      if (added) _closedShippedChanged.value++;
+      before = answer['next'] as String?;
+      final last = groups.lastOrNull;
+      if (before == null || last == null) return;
+      final changedAt = superTabMap(last)['changedAt'];
+      if (changedAt is num && changedAt < since.millisecondsSinceEpoch) return;
+    }
+    appLog.warn(
+      'swarm',
+      'closed tasks read stopped at $_closedSincePages pages',
+    );
+  }
+
+  void _forgetClosedShipped() {
+    _closedShippedEpoch++;
+    _closedShippedRead = null;
+    _closedShipped.clear();
+    _closedShippedProjects.clear();
+    closedShippedFailed = false;
+    if (!_disposed) _closedShippedChanged.value++;
+  }
+
   /// Builds the snapshot again from the parts held, after a read on demand.
   void _redraw() {
     final parts = _parts;
@@ -4174,6 +4318,7 @@ class SuperTabController extends ChangeNotifier {
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
       devicesSelected = false;
+      _forgetClosedShipped();
       _forgetAttention();
       snapshot = null;
       _showingSaved = false;
@@ -4992,7 +5137,7 @@ class SuperTabController extends ChangeNotifier {
       for (final file in files) {
         var id = _uploaded[file];
         if (id == null) {
-          final answer = await _uploadFile(conversationId, file);
+          final answer = await uploadFile(conversationId, file);
           if (run != _uploadRun) return null;
           id = superTabMap(answer['attachment'])['id'] as String;
           _uploaded[file] = id;
@@ -5022,7 +5167,7 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends [file] to the backend and returns its attachment. Gives up when no
   /// byte has moved for [uploadTimeout], or when the upload is cancelled.
-  Future<Map<String, dynamic>> _uploadFile(
+  Future<Map<String, dynamic>> uploadFile(
     String conversationId,
     HarnessAttachment file,
   ) async {
@@ -5107,6 +5252,7 @@ class SuperTabController extends ChangeNotifier {
     _markAll?._commit();
     _disposed = true;
     _machinesChanged.dispose();
+    _closedShippedChanged.dispose();
     _silenceWatch?.cancel();
     for (final then in _onDispose) {
       then();

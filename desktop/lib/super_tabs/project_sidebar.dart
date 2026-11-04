@@ -241,15 +241,18 @@ class ProjectSidebar extends StatelessWidget {
         ? needsHuman(group) > 0
         : reading.waiting.isNotEmpty;
     // Open, a project's row is its own chat's, as each workgroup under it
-    // has its own; collapsed, it is bold for anything it hides.
-    final unread =
-        reading == null || controller.expandedProjects.contains(project?.id)
+    // has its own; collapsed, it is bold for anything it hides. Both by what
+    // is for a person (#2427), never agents' progress alone.
+    final unread = reading == null
         ? controller.unreadShown(group)
+        : controller.expandedProjects.contains(project?.id)
+        ? reading.unread.contains(group.id)
         : reading.unread.isNotEmpty;
     // Only what opening this row shows, so opening it clears the number (Dee,
     // Slack's way). Tags in the task conversations it hides make it bold, and
     // are on their own rows and in Activity.
     final badge = attention?.mentionsIn(group.id) ?? 0;
+    final badgeTooltip = attention?.badgeTooltipIn(group.id);
     return _drawRow(
       group,
       project: project,
@@ -258,6 +261,7 @@ class ProjectSidebar extends StatelessWidget {
       waiting: waiting,
       unread: unread,
       badge: badge,
+      badgeTooltip: badgeTooltip,
       buddyChat: reading?.buddyChat,
       selectedProjectId: reading?.sidebar.selectedProjectId,
     );
@@ -293,6 +297,7 @@ class ProjectSidebar extends StatelessWidget {
         waiting: reading.waiting.contains(group.id),
         unread: reading.unread.contains(group.id),
         badge: attention?.mentionsIn(group.id) ?? 0,
+        badgeTooltip: attention?.badgeTooltipIn(group.id),
       );
 
   Widget _drawRow(
@@ -305,6 +310,7 @@ class ProjectSidebar extends StatelessWidget {
     required bool waiting,
     required bool unread,
     int badge = 0,
+    String? badgeTooltip,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
     Widget? trailing,
@@ -328,9 +334,10 @@ class ProjectSidebar extends StatelessWidget {
     // A muted chat stays listed, greyed, never bold (Slack); the open one
     // keeps its highlight.
     final muted = controller.notifyOf(group.id) == SuperTabNotify.muted;
+    // Regular weight when open too, as Slack's: the highlight carries it,
+    // and bold stays for unread alone (Huy, 11-03, #2427).
     final style = SwarmType.sidebar(
       compact: compact,
-      medium: highlighted,
       color: highlighted || (unread && !muted)
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
@@ -389,6 +396,13 @@ class ProjectSidebar extends StatelessWidget {
                             group,
                             task: project == null && label == null,
                             (status) => Tooltip(
+                              // Beside the row, level with it, never over
+                              // the rows below (Huy, 11-03, #2427).
+                              positionDelegate: _besideTheRow,
+                              // Compact: a long name wraps rather than
+                              // needing more room than the window has right
+                              // of the list.
+                              constraints: const BoxConstraints(maxWidth: 260),
                               message:
                                   label ??
                                   project?.name ??
@@ -398,16 +412,26 @@ class ProjectSidebar extends StatelessWidget {
                                       superTabTaskStatusText(status),
                                   ].join('\n'),
                               child: ConstrainedBox(
+                                // A project and its tasks a little taller
+                                // than other rows (Huy, 11-03, #2427).
                                 constraints: BoxConstraints(
-                                  minHeight: SwarmType.sidebarRowHeight(
-                                    compact: compact,
-                                  ),
+                                  minHeight: label == null
+                                      ? SwarmType.projectRowHeight(
+                                          compact: compact,
+                                        )
+                                      : SwarmType.sidebarRowHeight(
+                                          compact: compact,
+                                        ),
                                 ),
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(
-                                    vertical: SwarmType.sidebarRowPadding(
-                                      compact: compact,
-                                    ),
+                                    vertical: label == null
+                                        ? SwarmType.projectRowPadding(
+                                            compact: compact,
+                                          )
+                                        : SwarmType.sidebarRowPadding(
+                                            compact: compact,
+                                          ),
                                   ),
                                   child: Row(
                                     children: [
@@ -420,24 +444,22 @@ class ProjectSidebar extends StatelessWidget {
                                                 style: style,
                                               )
                                             : project == null
-                                            ? Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  SuperTabWorkgroupName(
-                                                    group,
-                                                    style: style,
-                                                  ),
-                                                  // Moving, waiting and on what, or stuck (#957).
-                                                  if (status != null)
-                                                    SuperTabTaskLineView(
-                                                      status,
-                                                      key: ValueKey(
-                                                        'super-task-line-${group.id}',
+                                            // One line, as Slack's (Huy,
+                                            // 11-03, #2427): the state is the
+                                            // mark at its right and the
+                                            // tooltip, and a screen reader
+                                            // still hears it (#957).
+                                            ? Semantics(
+                                                label: status == null
+                                                    ? null
+                                                    : superTabTaskStatusText(
+                                                        status,
                                                       ),
-                                                    ),
-                                                ],
+                                                child: SuperTabWorkgroupName(
+                                                  group,
+                                                  style: style,
+                                                  quietNumber: true,
+                                                ),
                                               )
                                             : Column(
                                                 crossAxisAlignment:
@@ -462,15 +484,18 @@ class ProjectSidebar extends StatelessWidget {
                                       if (badge > 0) ...[
                                         const SizedBox(width: 8),
                                         Semantics(
-                                          label: badge == 1
-                                              ? '1 mention'
-                                              : '$badge mentions',
+                                          label:
+                                              badgeTooltip ??
+                                              (badge == 1
+                                                  ? '1 mention'
+                                                  : '$badge mentions'),
                                           excludeSemantics: true,
                                           child: SuperTabCountBadge(
                                             badge,
                                             key: ValueKey(
                                               'super-mentions-${group.id}',
                                             ),
+                                            tooltip: badgeTooltip,
                                           ),
                                         ),
                                       ],
@@ -720,6 +745,7 @@ class ProjectSidebar extends StatelessWidget {
           chat != null && !_paneCovered && controller.selectedId == chat.id,
       unread: chat != null && controller.unreadShown(chat),
       badge: chat == null ? 0 : attention?.mentionsIn(chat.id) ?? 0,
+      badgeTooltip: chat == null ? null : attention?.badgeTooltipIn(chat.id),
       onTap: chat != null
           ? () => onSelect(chat.id)
           : controller.saving || controller.hasPendingAction
@@ -862,7 +888,9 @@ class ProjectSidebar extends StatelessWidget {
   /// first; a folded one shows only the open chat's row.
   List<Widget> _workgroups(_ProjectReading reading) {
     final project = reading.project;
-    final groups = _newestFirst(reading).where(_keptByFilter).toList();
+    final groups = _newestFirst(reading)
+        .where((g) => _keptByFilter(g, reading))
+        .toList();
     final grouped = superTabGroupTasks(
       groups,
       readerId: controller.accountId,
@@ -904,17 +932,22 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Whether the unread filter keeps [read]'s project: its chat or an open
   /// workgroup is unread or tags the reader, or the open chat is in it.
+  /// By the rule its rows are bold by (#2427): what is for a person.
   bool _hasUnread(_ProjectReading read) =>
       (!_paneCovered && read.sidebar.selectedProjectId == read.project.id) ||
       read.unread.isNotEmpty ||
       read.mentions > 0 ||
-      (read.lead != null && controller.unreadShown(read.lead!));
+      (read.lead != null && controller.unreadForPeople(read.lead!));
 
-  /// Whether the unread filter keeps [group]'s row.
-  bool _keptByFilter(SuperTabConversation group) =>
+  /// Whether the unread filter keeps [group]'s row: a project's chat or task
+  /// by what makes it bold ([reading]'s, review of #2790), a Buddy chat by
+  /// any new message, as its row is bold.
+  bool _keptByFilter(SuperTabConversation group, [_ProjectReading? reading]) =>
       !controller.unreadOnly ||
       (!_paneCovered && controller.selectedId == group.id) ||
-      controller.unreadShown(group) ||
+      (reading != null
+          ? reading.unread.contains(group.id)
+          : controller.unreadShown(group)) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
   /// Every project with its workgroups, by name from A to Z. The round dial
@@ -1115,6 +1148,25 @@ class _RowSurfaceState extends State<_RowSurface> {
   );
 }
 
+/// A sidebar row's tooltip, to the right of its row and level with it, so it
+/// never covers the rows below (Huy, 11-03, #2427); kept on screen.
+Offset _besideTheRow(TooltipPositionContext context) {
+  const gap = 8.0;
+  final left =
+      context.target.dx +
+      context.targetSize.width / 2 +
+      ProjectSidebar._iconColumn +
+      gap;
+  final top = context.target.dy - context.tooltipSize.height / 2;
+  final overlay = context.overlaySize;
+  double fit(double value, double room) =>
+      value.clamp(gap, room > gap ? room : gap).toDouble();
+  return Offset(
+    fit(left, overlay.width - context.tooltipSize.width - gap),
+    fit(top, overlay.height - context.tooltipSize.height - gap),
+  );
+}
+
 /// What one build of the sidebar reads, each piece once: per row, a Swarm's
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
@@ -1169,12 +1221,22 @@ class _ProjectReading {
                 attention.mentionsIn(g.id),
           ].fold(0, (a, b) => a + b),
   };
+
+  /// A row is bold when a person wrote there or the reader is tagged there
+  /// (#2427): what there is to read. Agents' progress alone leaves it, and a
+  /// wait is its ? mark, not bold (review of #2790). Each conversation's wait
+  /// is asked once per build.
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
+    final controller = sidebar.controller;
     for (final g in conversations) {
       if (g.closed || g.isBuddyChat || g.audience != null) continue;
-      if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
-      if (sidebar.controller.unreadShown(g)) unread.add(g.id);
+      final waits = sidebar.needsHuman(g) > 0;
+      if (waits) waiting.add(g.id);
+      if (controller.unreadForPeople(g) ||
+          (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0) {
+        unread.add(g.id);
+      }
     }
     return (waiting: waiting, unread: unread);
   }();

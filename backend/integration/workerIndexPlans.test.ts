@@ -151,3 +151,68 @@ describe('the pending-upload sweep', () => {
     }
   })
 })
+
+describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
+  // Mongo's TTL monitor deletes by the expiry index's key, about once a minute: receipts past their 30 days, never a scan.
+  it('finds the receipts past their 30 days by the operation_expiry index, reading only those', async () => {
+    const { OPERATION_EXPIRY_MS } = await import('../src/superTabs/operations.js')
+    const row = (ageMs: number) => ({ id: randomUUID(), tabId: 'tab', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {}, createdAt: new Date(Date.now() - ageMs) })
+    await db.superTabOperation.createMany({ data: [...Array.from({ length: 40 }, () => row(DAY)), ...Array.from({ length: 3 }, () => row(40 * DAY))] })
+    const cutoff = new Date(Date.now() - OPERATION_EXPIRY_MS).toISOString()
+    const answer = await db.$runCommandRaw({ explain: { find: 'SuperTabOperation', filter: { createdAt: { $lt: { $date: cutoff } } } }, verbosity: 'executionStats' }) as
+      { queryPlanner: { winningPlan: unknown }; executionStats: { nReturned: number; totalDocsExamined: number } }
+    const winning = JSON.stringify(answer.queryPlanner.winningPlan)
+    expect(winning).toMatch(/"stage":"IXSCAN"/)
+    expect(winning).toMatch(/"indexName":"operation_expiry"/)
+    expect(answer.executionStats.nReturned).toBe(3)
+    expect(answer.executionStats.totalDocsExamined).toBe(3)
+  })
+})
+
+describe('the usage-receipt sweep\'s stuck check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
+  // backend/AGENTS.md rule 3: its hourly read while the rule is refused takes one key of the expiry index, never a scan of millions.
+  it('reads the newest old receipt by one key of the product_usage_expiry index', async () => {
+    const { lastOldReceipt } = await import('../src/lib/productUsageReceiptSweep.js')
+    const now = new Date('2026-11-02T03:00:00Z')
+    // New receipts (4-day life) and old ones (36-day life): a read the index does not bound examines them all.
+    await db.productUsageReceipt.createMany({ data: [
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `new-${i}`, expiresAt: new Date(now.getTime() + (i % 4) * DAY), life: 4 })),
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `old-${i}`, expiresAt: new Date(now.getTime() + (6 + i) * DAY) })),
+    ] })
+    let newest: Date | null = null
+    const entries = await profiled(db, async () => { newest = await lastOldReceipt(db, now) })
+    expect(newest).toEqual(new Date(now.getTime() + 35 * DAY))
+    const rows = reads(entries, 'product_usage_receipts', ['expiresAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ expiresAt: 1/)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+  })
+})
+
+// Dee, #1891; ENGINEERING.md 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
+// mark's index, equality on its first two fields and the activity range last, newest first and capped.
+describe('the pull request watch', () => {
+  it('reads the open tasks active this week by the finished mark index, the newest first, capped', async () => {
+    const { watchPullRequests } = await import('../src/superTabs/pullRequestEvents.js')
+    let n = 0
+    const group = (activeAt: number, patch: { workFinished?: boolean; data?: Record<string, unknown> } = {}) => {
+      const key = `g${++n}`
+      return { id: `tab-w:${key}`, tabId: 'tab-w', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
+        workFinished: patch.workFinished ?? false, data: { pullRequestUrls: [`https://github.com/acme/app/pull/${n}`], ...patch.data } }
+    }
+    // Finished work and work quiet for a month, which a read the index does not bound examines too; a step, which it filters.
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, () => group(NOW - DAY, { workFinished: true })), ...Array.from({ length: 20 }, () => group(NOW - 30 * DAY)),
+      group(NOW - 3 * 3_600_000), group(NOW - 2 * 3_600_000), group(NOW - 3_600_000, { data: { reviewOf: 'g1' } }), group(NOW - 60_000),
+    ] })
+    const asked: string[] = []
+    const reader = { watch: async (url: string) => { asked.push(url); return null }, botLogin: async () => null, done: async () => {} }
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2))
+    expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+  })
+})

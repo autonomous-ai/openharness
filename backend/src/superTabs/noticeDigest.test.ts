@@ -20,6 +20,25 @@ describe('what is gathered', () => {
   it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'digest-request', 'agent-only', 'system', 'instructions', 'notice-digest', 'from-a-newer-server'])('not %s', kind => {
     expect(gatheredNotice({ kind })).toBe(false)
   })
+  it('never a Stuck or Needs a human, a step\'s or a task\'s: a person must act on each (review of #2797)', () => {
+    expect(gatheredNotice({ kind: 'system', status: 'blocked', conversationId: 'step' })).toBe(false)
+    expect(gatheredNotice({ kind: 'system', status: 'blocked' })).toBe(false)
+    expect(gatheredNotice({ kind: 'system', status: 'needs_human' })).toBe(false)
+    // The rule as it was on this branch: a step's Stuck, with its task's owner told too, waited for the digest.
+    expect((gatheredNotice as (...args: unknown[]) => boolean)({ kind: 'system', status: 'blocked' }, { reviewOf: 'task' }, true)).toBe(false)
+  })
+  it('the coordinator\'s own skills notice, and no other agent-only row', () => {
+    expect(gatheredNotice({ kind: 'agent-only', notice: 'skills' })).toBe(true)
+    expect(gatheredNotice({ kind: 'agent-only' })).toBe(false)
+    expect(gatheredNotice({ kind: 'agent-only', decisionId: 'd1' })).toBe(false)
+    expect(gatheredNotice({ kind: 'agent-only', notice: 'other' })).toBe(false)
+  })
+  it('a usage limit or a failing model, never an agent waiting at a prompt', () => {
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'limit' })).toBe(true)
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'model' })).toBe(true)
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'prompt' })).toBe(false)
+    expect(gatheredNotice({ kind: 'terminal-alert' })).toBe(false)
+  })
   it('not a row with no source: a post', () => {
     for (const source of [undefined, null]) expect(gatheredNotice(source)).toBe(false)
     expect(gatheredNotice({ status: 'done' })).toBe(false)

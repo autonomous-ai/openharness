@@ -18,7 +18,8 @@ import 'swarm_fixture.dart';
 /// (#2259) in the person's own Buddy chat too (Tony, 2026-10-30): above the
 /// first message from someone else the person had not read as the chat
 /// opened, placed once, the chat opening at it; and Jump to latest while
-/// they read more than a screen back. Work chats have neither.
+/// they read more than a screen back. A task's chat has both too
+/// (swarm_task_unread_line_test.dart).
 void main() {
   const chat = 'buddy-me';
   const messages = '/api/super-tabs/$tab/conversations/$chat/messages';
@@ -277,20 +278,26 @@ void main() {
       expect(find.text('Update 4.'), findsOneWidget);
     });
 
-    testWidgets('a work chat has none, nor Jump to latest', (tester) async {
+    testWidgets('a work chat has it too, from its own mark, and Jump to '
+        'latest', (tester) async {
       await pump(
         tester,
         backend([said(1)], mark: 1),
         home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
       );
-      expect(line, findsNothing);
-      await tester.drag(
-        find.byKey(const ValueKey('swarm-messages')),
-        const Offset(0, 1500),
+      // g1 is read through 3 of its 40.
+      expect(onScreen(tester, line), isTrue, reason: 'opened at the line');
+      expect(onScreen(tester, find.text('Update 4.')), isTrue);
+      expect(
+        tester.getTopLeft(find.text('Update 4.')).dy,
+        greaterThan(tester.getTopLeft(line).dy),
       );
-      await tester.pumpAndSettle();
-
       expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(jump, findsOneWidget);
+
+      await tester.tap(jump);
+      await tester.pumpAndSettle();
+      expect(onScreen(tester, find.text('Update 40.')), isTrue);
       expect(jump, findsNothing);
     });
   });
@@ -433,7 +440,9 @@ void main() {
       expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
     });
 
-    testWidgets('a work chat still has neither', (tester) async {
+    testWidgets('a work chat gets both too, with nothing read before', (
+      tester,
+    ) async {
       final fake = backend([said(1)], mark: 1);
       late SwarmHost host;
       final recover = swarmDownAt(tester, fake, () => host);
@@ -443,18 +452,17 @@ void main() {
         settle: false,
         home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
       );
+      expect(marksSent(fake, 'g1'), isEmpty);
 
       await recover();
-      await tester.drag(
-        find.byKey(const ValueKey('swarm-messages')),
-        const Offset(0, 1500),
-      );
-      await tester.pumpAndSettle();
 
-      expect(line, findsNothing);
-      expect(onScreen(tester, find.text('Update 40.')), isFalse);
-      expect(jump, findsNothing);
-      expect(marksSent(fake, 'g1'), isNotEmpty, reason: 'read, once known');
+      expect(onScreen(tester, line), isTrue, reason: 'opened at the line');
+      expect(jump, findsOneWidget);
+      expect(
+        marksSent(fake, 'g1').where((s) => (s! as int) > 3),
+        isEmpty,
+        reason: 'nothing past the line is read yet',
+      );
     });
 
     testWidgets('a chat left behind, still reading, does not mark the new '

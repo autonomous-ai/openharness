@@ -29,7 +29,9 @@ import 'swarm_uploads.dart';
 /// and is asked for by id, as a closed one is in no full read; one it never
 /// had is asked for while its messages are read. One the person cannot read
 /// keeps nothing here: messages, draft and a post not confirmed.
-class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
+class SwarmConversation extends ChangeNotifier
+    with SwarmMentioning
+    implements SwarmFilesBox {
   /// [shown] and [heldAt] as they are from the start, so what it kept is
   /// read only as far as it is seen.
   SwarmConversation(
@@ -124,6 +126,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     }
   }
 
+  @override
   final SwarmReader reader;
   final String id;
 
@@ -193,20 +196,39 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   SuperTabThread? thread(String root) => _threads[root];
 
   /// Each thread's draft while the chat is open (the desktop's
-  /// `threadDraft`): a thread closed and opened again finds it.
+  /// `threadDraft`), and those it mentions (`threadMentions`): a thread
+  /// closed and opened again finds them.
   final _threadDrafts = <String, String>{};
+  final _threadMentions = <String, Map<String, String>>{};
 
   String threadDraft(String root) =>
       _threadDrafts[root] ??
       reader.kept?.draft(reader.tabId, id, root)?.text ??
       '';
-  void setThreadDraft(String root, String text) {
+
+  /// Those [root]'s thread's draft mentions, by id with the token that names
+  /// them.
+  Map<String, String> threadMentions(String root) =>
+      _threadMentions[root] ??
+      reader.kept?.draft(reader.tabId, id, root)?.mentions ??
+      const {};
+
+  void setThreadDraft(
+    String root,
+    String text, [
+    Map<String, String> mentions = const {},
+  ]) {
     if (_refused) return;
-    reader.kept?.setDraft(reader.tabId, id, root, text);
+    reader.kept?.setDraft(reader.tabId, id, root, text, mentions);
     if (text.isEmpty) {
       _threadDrafts.remove(root);
     } else {
       _threadDrafts[root] = text;
+    }
+    if (text.isEmpty || mentions.isEmpty) {
+      _threadMentions.remove(root);
+    } else {
+      _threadMentions[root] = Map.of(mentions);
     }
   }
 
@@ -300,10 +322,6 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// answers nothing.
   int _epoch = 0;
   String _draft = '';
-
-  /// Agents and people mentioned in the draft, by id, with the token that
-  /// names them: an agent's is a recipient, a person's a tag.
-  final _mentions = <String, String>{};
 
   /// The person's posts on their way, each sent on its own and — while its
   /// answer never came — retried under its own operation id, so the backend
@@ -516,10 +534,12 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         false;
   }
 
+  @override
   String get draft => _draft;
+  @override
   set draft(String value) {
     _draft = value;
-    _mentions.removeWhere((_, token) => !containsMention(value, token));
+    keepMentionsOf(value);
     _composer.changed();
   }
 
@@ -527,48 +547,6 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   static bool containsMention(String text, String token) =>
       RegExp('(?:^|\\s)${RegExp.escape(token)}(?=\$|\\s|[.,!?;:])')
           .hasMatch(text);
-
-  /// The name typed after an @ that ends the draft — what the mention picker
-  /// narrows to; null while the draft does not end in one.
-  String? get mentionQuery =>
-      RegExp(r'(?:^|\s)@(\S*)$').firstMatch(_draft)?.group(1);
-
-  /// [id]'s name — an agent's or a person's — in place of the @ being typed
-  /// ([mentionQuery]), as [mention] adds it.
-  void completeMention(String id) {
-    if (mentionQuery case final query?) {
-      _draft = _draft.substring(0, _draft.length - query.length - 1);
-    }
-    mention(id);
-  }
-
-  /// The Tag chip: ends the draft in an @, which opens the picker, or takes
-  /// back an @ with no name typed after it. A name being typed is left alone.
-  void toggleMention() {
-    switch (mentionQuery) {
-      case null:
-        final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
-        draft = '$_draft${spaced ? '' : ' '}@';
-      case '':
-        draft = _draft.substring(0, _draft.length - 1);
-      case _:
-        break;
-    }
-  }
-
-  /// Adds [id]'s name to the draft: an agent's (the post goes to it) or a
-  /// person's username (the post tags them), while the name stays in the
-  /// text.
-  void mention(String id) {
-    final snapshot = reader.snapshot;
-    if (snapshot == null) return;
-    final person = snapshot.people.where((p) => p.id == id).firstOrNull;
-    final token = '@${person?.username ?? snapshot.agentName(id)}';
-    final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
-    _draft = '$_draft${spaced ? '' : ' '}$token ';
-    _mentions[id] = token;
-    _composer.changed();
-  }
 
   /// The agents a post can mention: those in this conversation.
   List<SuperTabAgent> get mentionable {
@@ -697,6 +675,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     _forget();
     _draft = _keptDraft = '';
     _threadDrafts.clear();
+    _threadMentions.clear();
     reader.kept?.dropChat(reader.tabId, id);
     // A thread's files go too; its own screen hears it and gives up theirs.
     for (final box in _threadFiles.values) {
@@ -915,7 +894,14 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       final again = _outbox.unconfirmed;
       return again != null && await retry(again);
     }
-    if (conversation == null) return false;
+    final group = conversation;
+    if (group == null) return false;
+    // As the desktop's, before any file goes up.
+    if (namesAgentGone(_draft, group.agentIds)) {
+      error = swarmMentionedAgentLeft;
+      _tell();
+      return false;
+    }
     final ids = await _uploadAll(outgoing);
     if (ids == null || _disposed) return false;
     final body = _compose(ids);
@@ -1448,14 +1434,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   Map<String, dynamic>? _compose([List<String> attachmentIds = const []]) {
     final text = _draft.trim();
     final group = conversation;
-    final people = {...?reader.snapshot?.people.map((p) => p.id)};
     if ((text.isEmpty && attachmentIds.isEmpty) || group == null) return null;
-    // A person still in the Swarm whose username the text still says is
-    // tagged, as Desktop sends it; the backend refuses one who cannot read.
-    final tagged = [
-      for (final MapEntry(key: id, value: token) in _mentions.entries)
-        if (containsMention(text, token) && people.contains(id)) id,
-    ];
+    final (:tagged, :addressed) = mentionsSaid(text, group.agentIds);
     return {
       'operationId': superTabOperationId(),
       'command': {
@@ -1463,12 +1443,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         'conversationId': id,
         'text': text,
         'replyTo': _replyingTo?.id,
-        'recipientIds': [
-          for (final MapEntry(key: agentId, value: token) in _mentions.entries)
-            if (containsMention(text, token) &&
-                group.agentIds.contains(agentId))
-              agentId,
-        ],
+        'recipientIds': addressed,
         if (tagged.isNotEmpty) 'mentions': tagged,
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         // As the desktop's: the server refuses it in an older Buddy chat.
@@ -1522,4 +1497,153 @@ enum SwarmChatState { loading, locating, loaded, lost }
 /// A notifier told from outside it: the conversation's [composer].
 class _Changes extends ChangeNotifier {
   void changed() => notifyListeners();
+}
+
+/// The desktop's words (`controller.dart` `send`, `sendThreadReply`) for a
+/// draft that still names an agent picked for it who has left the chat since.
+const swarmMentionedAgentLeft =
+    'A mentioned agent is no longer in this conversation. '
+    'Remove its mention or choose another agent.';
+
+/// The @ of a box — the chat's composer, a thread's reply box
+/// ([SwarmThread]): the name typed after an @, and the agents and people
+/// picked for the draft while its text still names them.
+mixin SwarmMentioning {
+  SwarmReader get reader;
+  String get draft;
+
+  /// Calls [keepMentionsOf] and tells the box.
+  set draft(String value);
+
+  /// Agents and people mentioned in the draft, by id, with the token that
+  /// names them: an agent's is a recipient, a person's a tag.
+  final _mentions = <String, String>{};
+
+  /// Those the draft mentions, by id with the token that names them.
+  Map<String, String> get mentions => Map.unmodifiable(_mentions);
+
+  /// [picked] mentioned again: a draft kept, or a post refused, put back.
+  @protected
+  void restoreMentions(Map<String, String> picked) => _mentions.addAll(picked);
+
+  /// Nobody is mentioned any more: the draft went, or the box with it.
+  @protected
+  void forgetMentions() => _mentions.clear();
+
+  /// Drops those [text] no longer names.
+  @protected
+  void keepMentionsOf(String text) => _mentions.removeWhere(
+    (_, token) => !SwarmConversation.containsMention(text, token),
+  );
+
+  /// The name typed after an @ that ends the draft — what the mention picker
+  /// narrows to; null while the draft does not end in one.
+  String? get mentionQuery =>
+      RegExp(r'(?:^|\s)@(\S*)$').firstMatch(draft)?.group(1);
+
+  /// [id]'s name — an agent's or a person's — in place of the @ being typed
+  /// ([mentionQuery]), as [mention] adds it.
+  void completeMention(String id) {
+    final text = draft;
+    final query = mentionQuery;
+    _name(
+      id,
+      query == null ? text : text.substring(0, text.length - query.length - 1),
+    );
+  }
+
+  /// The Tag chip: ends the draft in an @, which opens the picker, or takes
+  /// back an @ with no name typed after it. A name being typed is left alone.
+  void toggleMention() {
+    final text = draft;
+    switch (mentionQuery) {
+      case null:
+        final spaced = text.isEmpty || RegExp(r'\s$').hasMatch(text);
+        draft = '$text${spaced ? '' : ' '}@';
+      case '':
+        draft = text.substring(0, text.length - 1);
+      case _:
+        break;
+    }
+  }
+
+  /// Adds [id]'s name to the draft: an agent's (the post goes to it) or a
+  /// person's username (the post tags them), while the name stays in the
+  /// text.
+  void mention(String id) => _name(id, draft);
+
+  /// The token that names [id] in a draft: a person's username or an
+  /// agent's name, after an @. Null before the Swarm is read.
+  String? _tokenOf(String id) {
+    final snapshot = reader.snapshot;
+    if (snapshot == null) return null;
+    final person = snapshot.people.where((p) => p.id == id).firstOrNull;
+    return '@${person?.username ?? snapshot.agentName(id)}';
+  }
+
+  /// Those a sent [command] named, by id with their tokens as [text] still
+  /// says them: what a kept post puts back in the box when it is refused.
+  Map<String, String> mentionsSent(Map<String, dynamic> command, String text) {
+    final ids = {
+      ...?(command['recipientIds'] as List?)?.whereType<String>(),
+      ...?(command['mentions'] as List?)?.whereType<String>(),
+    };
+    return {
+      for (final id in ids)
+        if (_tokenOf(id) case final token?
+            when SwarmConversation.containsMention(text, token))
+          id: token,
+    };
+  }
+
+  /// [id]'s name after [before], as the draft.
+  void _name(String id, String before) {
+    final token = _tokenOf(id);
+    if (token == null) return;
+    final spaced = before.isEmpty || RegExp(r'\s$').hasMatch(before);
+    // Picked first: the draft keeps only those its text names.
+    _mentions[id] = token;
+    draft = '$before${spaced ? '' : ' '}$token ';
+  }
+
+  /// What the mentions [text] still names send, as Desktop sends them
+  /// (`_tagsSaid`): the people still in the Swarm, tagged, and the agents of
+  /// [agentIds], its recipients. The backend checks each again, and refuses
+  /// a person who cannot read the chat.
+  /// Whether [text] still names an agent picked for it that is not one of
+  /// [agentIds] any more: an agent of the Swarm that has left the chat
+  /// since, which the desktop refuses (`send`, `sendThreadReply`). A person
+  /// who left the Swarm is only no longer tagged, as before.
+  bool namesAgentGone(String text, List<String> agentIds) {
+    final snapshot = reader.snapshot;
+    if (snapshot == null) return false;
+    return _mentions.entries.any(
+      (entry) =>
+          SwarmConversation.containsMention(text, entry.value) &&
+          !agentIds.contains(entry.key) &&
+          snapshot.agent(entry.key) != null &&
+          !snapshot.people.any((p) => p.id == entry.key),
+    );
+  }
+
+  ({List<String> tagged, List<String> addressed}) mentionsSaid(
+    String text,
+    List<String> agentIds,
+  ) {
+    final people = {...?reader.snapshot?.people.map((p) => p.id)};
+    final said = [
+      for (final MapEntry(key: id, value: token) in _mentions.entries)
+        if (SwarmConversation.containsMention(text, token)) id,
+    ];
+    return (
+      tagged: [
+        for (final id in said)
+          if (people.contains(id)) id,
+      ],
+      addressed: [
+        for (final id in said)
+          if (agentIds.contains(id)) id,
+      ],
+    );
+  }
 }

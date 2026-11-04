@@ -137,6 +137,10 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', scope: 'agent' },
+  // What the route ranks by: the project's measured costs and its CI load (superTabs/costs/read.ts, github/ciLoad.ts). Missing
+  // here until 2026-11-03, so a Team PM routed without them and the CI hold never applied.
+  { method: 'GET', url: '/api/super-tabs/:tabId/costs', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/ci-load', scope: 'agent' },
   // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
   { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },
@@ -145,6 +149,9 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/attempts', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/terminal/:requestId', scope: 'agent' },
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments', scope: 'agent' },
+  // A file over the form's 10 MB: a signed link to the bucket, then its check (store.ts uploadLink, completeUpload).
+  { method: 'POST', url: '/api/super-tabs/:tabId/attachments/uploads', scope: 'agent' },
+  { method: 'POST', url: '/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', scope: 'agent' },
   // Its agent's one-hour GitHub token for the repository of its task (Task 4); the body's machine must be its own.
   { method: 'POST', url: '/api/super-tabs/:tabId/github-token', scope: 'agent', bodyMachine: true },
   // Commands as one of its agents, its agents' deliveries, stops and native terminals, its agents' role texts.

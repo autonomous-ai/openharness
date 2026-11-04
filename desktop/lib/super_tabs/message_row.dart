@@ -44,6 +44,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenGroup,
     this.mentions = const [],
     this.mentionAddresses = const {},
+    this.mentionLabels = const {},
     this.readerId = '',
     this.reactorName,
     this.onReact,
@@ -51,6 +52,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.dimmed = false,
     this.thread,
     this.threadUnread = false,
+    this.threadTagged = false,
     this.onOpenThread,
     this.threadTrailing,
     this.threadEnd,
@@ -69,6 +71,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
   final bool threadUnread;
+
+  /// Whether an unread reply in [thread] tags the reader.
+  final bool threadTagged;
 
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
@@ -90,6 +95,10 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Their addresses, by name: a tag by full address is theirs only when it
   /// is this one.
   final Map<String, String> mentionAddresses;
+
+  /// The name each tagged person shows as, by the name they are tagged by
+  /// ([SuperTabMessageText.labels]).
+  final Map<String, String> mentionLabels;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
   final String author;
@@ -140,15 +149,19 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Above and below a grouped line, and below a sender's last line.
   static const rowPad = 6.0;
 
-  /// Compact only a few short updates. Reports and long runs retain their own
-  /// speaker identity, so scrolling through agent output does not lose the who.
+  /// A header at least every this many rows of one run, so the chat can cut
+  /// its oldest rows at a header and a page read in above regroups none of
+  /// the rows shown (view.dart).
+  static const groupLimit = 20;
+
+  /// The messages that join the one above them under its header: like Slack,
+  /// one sender's messages within five minutes of each other, whatever their
+  /// length (Huy, 2026-11-03, #2419), up to [groupLimit] to a group.
   static Set<String> consecutiveUpdates(List<SuperTabMessage> messages) {
     final joined = <String>{};
     var first = 0;
     for (var i = 1; i < messages.length; i++) {
-      if (i - first < 3 &&
-          groupsWith(messages[i], messages[i - 1]) &&
-          groupsWith(messages[i], messages[first])) {
+      if (i - first < groupLimit && groupsWith(messages[i], messages[i - 1])) {
         joined.add(messages[i].id);
       } else {
         first = i;
@@ -157,21 +170,25 @@ class SuperTabMessageRow extends StatefulWidget {
     return joined;
   }
 
-  static bool groupsWith(SuperTabMessage current, SuperTabMessage? previous) {
+  /// Whether [current] joins [previous]'s header: the same sender, within five
+  /// minutes on the same day. In the chat, a thread reply shown there stands
+  /// on its own with its Replied in thread line; [inThread], replies group. A
+  /// line that draws its own row has no header to share, on either side.
+  static bool groupsWith(
+    SuperTabMessage current,
+    SuperTabMessage? previous, {
+    bool inThread = false,
+  }) {
     if (previous == null ||
+        current.drawsOwnRow ||
+        previous.drawsOwnRow ||
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
-        current.replyTo != null ||
-        previous.replyTo != null ||
-        current.text.length > 280 ||
-        previous.text.length > 280 ||
-        current.text.contains('\n') ||
-        previous.text.contains('\n') ||
-        current.text.contains('?') ||
-        previous.text.contains('?') ||
-        current.text.contains('？') ||
-        previous.text.contains('？') ||
+        // An older reply keeps its quote under its own header.
+        (current.replyTo != null && !current.threadReply) ||
+        (previous.replyTo != null && !previous.threadReply) ||
+        (!inThread && (current.threadReply || previous.threadReply)) ||
         current.authorId.isEmpty ||
         current.authorId != previous.authorId ||
         current.authorName != previous.authorName ||
@@ -265,6 +282,50 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     );
   }
 
+  /// A grouped message's time, shown at its left while it is hovered or
+  /// focused, as Slack does: its hour and minute on its first line,
+  /// right-aligned under the avatars above, so any time fits the gutter; the
+  /// full time and date are on its tooltip and in the row's label.
+  Widget? _groupedTime(BuildContext context, bool active) {
+    final time = widget.message.createdAt?.toLocal();
+    if (!active || time == null) return null;
+    final line = SwarmType.body(context);
+    final l10n = MaterialLocalizations.of(context);
+    final local = TimeOfDay.fromDateTime(time);
+    final hour = l10n.formatHour(
+      local,
+      alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+    );
+    return ExcludeSemantics(
+      child: SizedBox(
+        height: line.fontSize! * line.height!,
+        child: OverflowBox(
+          maxWidth:
+              SuperTabMessageRow.horizontalInset +
+              SuperTabMessageRow.avatarSize,
+          alignment: Alignment.centerRight,
+          child: Tooltip(
+            message: '${l10n.formatFullDate(time)}, ${local.format(context)}',
+            child: Text(
+              '$hour:${l10n.formatMinute(local)}',
+              key: ValueKey('super-row-time-${widget.message.id}'),
+              softWrap: false,
+              style: SwarmType.time(context),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// What assistive technology reads for a grouped message in place of its
+  /// header: its sender and time, as a header reads them.
+  String get _groupedLabel => switch (widget.message.createdAt) {
+    final time? =>
+      '${widget.author}, ${TimeOfDay.fromDateTime(time.toLocal()).format(context)}',
+    null => widget.author,
+  };
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -324,7 +385,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
           },
           child: Semantics(
             container: true,
-            label: widget.grouped ? widget.author : null,
+            label: widget.grouped ? _groupedLabel : null,
             child: DecoratedBox(
               key: taggedYou
                   ? ValueKey('super-tagged-you-${message.id}')
@@ -359,7 +420,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           width: SuperTabMessageRow.avatarSize,
                           padding: EdgeInsets.only(top: slack),
                           child: widget.grouped
-                              ? null
+                              ? _groupedTime(context, active)
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,
@@ -485,6 +546,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       onOpenGroup: widget.onOpenGroup,
                                       mentions: widget.mentions,
                                       addresses: widget.mentionAddresses,
+                                      labels: widget.mentionLabels,
                                       taggedYou: taggedYou,
                                     ),
                                   ),
@@ -528,6 +590,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                   thread: thread,
                                   unread: widget.threadUnread,
+                                  tagged: widget.threadTagged,
                                   onOpen: open,
                                   member: widget.member,
                                   trailing: widget.threadTrailing,
@@ -766,6 +829,7 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.thread,
     required this.unread,
     required this.onOpen,
+    this.tagged = false,
     this.member,
     this.trailing,
     this.end,
@@ -778,7 +842,7 @@ class SuperTabThreadLine extends StatelessWidget {
 
   /// Drawn last, outside the line's link: End session.
   final Widget? end;
-  final bool unread;
+  final bool unread, tagged;
   final VoidCallback onOpen;
 
   /// Dresses each reply author as their own messages are: a person's
@@ -831,7 +895,7 @@ class SuperTabThreadLine extends StatelessWidget {
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
-      label: unread ? '$count, unread' : count,
+      label: [count, if (unread) 'unread', if (tagged) '@ you'].join(', '),
       onTap: onOpen,
       builder: (active) => Row(
         children: [
@@ -857,6 +921,14 @@ class SuperTabThreadLine extends StatelessWidget {
                         ),
                   ),
                 ),
+                if (tagged) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Text(
+                    '@ you',
+                    key: ValueKey('super-thread-tagged-${thread.id}'),
+                    style: DesktopChrome.metadata(color: DesktopChrome.accent),
+                  ),
+                ],
                 const SizedBox(width: grid.AppDesktop.controlGap),
                 Flexible(
                   child: Text(

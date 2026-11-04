@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -539,6 +540,395 @@ void main() {
     ]) {
       expect(inside(sheet, find.text(line)), findsOneWidget, reason: line);
     }
+  });
+
+  group("a person's details, as the desktop's person card shows them", () {
+    const sheet = 'swarm-leaderboard-sheet';
+
+    /// This week's board, diego's and ken's numbers with what they are made
+    /// of: [shipped] stands for diego's pull requests when given.
+    /// [brought] is ken's machines, from a server that reads Brought.
+    FakeSwarm detailed({
+      List<Map<String, dynamic>>? shipped,
+      List<Object>? brought,
+    }) {
+      final fake = backend();
+      fake.routes[path] = (_) {
+        final data = board();
+        final people = (data['people'] as List).cast<Map<String, dynamic>>();
+        people[0]['details'] = {
+          'shipped':
+              shipped ??
+              [
+                {
+                  'title': 'Desktop: a machine shows its agents as one count',
+                  'prUrl':
+                      'https://github.com/autonomous-ai/openharness/pull/1824',
+                  'mergedAt': 2,
+                },
+                {
+                  'title': 'Swarm digest pauses with the Swarm',
+                  'prUrl': 'file:///etc/hosts',
+                  'mergedAt': 1,
+                },
+              ],
+          'unblocked': [
+            {
+              'title': 'Which sign-in page ships first?',
+              'conversationId': 'c1',
+              'kind': 'decision',
+              'waitedMinutes': 96,
+            },
+          ],
+          'lent': <Object>[],
+        };
+        people[1]['details'] = {
+          'shipped': <Object>[],
+          'unblocked': <Object>[],
+          'lent': [
+            {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 12.5},
+            {'machineName': 'build-box', 'busyHours': 7},
+          ],
+          'brought': ?brought,
+        };
+        return data;
+      };
+      return fake;
+    }
+
+    /// Records what the phone asks the system to open.
+    List<Object?> launches(WidgetTester tester) {
+      final opened = <Object?>[];
+      const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(launcher, (call) async {
+        if (call.method == 'launch') {
+          opened.add((call.arguments as Map)['url']);
+        }
+        return true;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+      return opened;
+    }
+
+    testWidgets('the points, then what shipped, was unblocked and was lent, '
+        'and saying so where nothing was', (tester) async {
+      await pump(tester, detailed());
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+
+      expect(inside(sheet, find.text('diego')), findsOneWidget);
+      final points = inside(
+        sheet,
+        find.text('28 points this week · 20 last week'),
+      );
+      expect(points, findsOneWidget);
+      expect(tester.widget<Text>(points).style!.fontSize, AppType.captionSize);
+      double top(String section) =>
+          tester.getTopLeft(key('swarm-leaderboard-details-$section')).dy;
+      expect(tester.getTopLeft(points).dy, lessThan(top('shipped')));
+      expect(top('shipped'), lessThan(top('unblocked')));
+      expect(top('unblocked'), lessThan(top('lent')));
+      Finder within(String section, String text) =>
+          inside('swarm-leaderboard-details-$section', find.text(text));
+      // Each list's count beside its heading.
+      expect(within('shipped', 'Shipped'), findsOneWidget);
+      expect(within('shipped', '2'), findsOneWidget);
+      expect(
+        within('shipped', 'Desktop: a machine shows its agents as one count'),
+        findsOneWidget,
+      );
+      expect(within('unblocked', 'Unblocked'), findsOneWidget);
+      expect(within('unblocked', '1'), findsOneWidget);
+      expect(
+        within('unblocked', 'Which sign-in page ships first?'),
+        findsOneWidget,
+      );
+      expect(within('unblocked', 'waited 1.6 h'), findsOneWidget);
+      expect(within('lent', 'No machines lent yet'), findsOneWidget);
+      // The numbers line by line are a server's without details.
+      expect(inside(sheet, find.text('Streak')), findsNothing);
+      expect(inside(sheet, find.text('3 days shipping')), findsNothing);
+      expect(
+        tester.getSemantics(
+          find.ancestor(
+            of: within('unblocked', 'waited 1.6 h'),
+            matching: find.byType(MergeSemantics),
+          ),
+        ),
+        isSemantics(label: 'Which sign-in page ships first?\nwaited 1.6 h'),
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(key('swarm-leaderboard-sheet-close'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+      expect(
+        inside(sheet, find.text('21 points this week · 25 last week')),
+        findsOneWidget,
+      );
+      expect(within('shipped', 'No pull requests merged yet'), findsOneWidget);
+      expect(within('unblocked', 'No questions answered yet'), findsOneWidget);
+      // The machine as it calls itself, without .local, busiest first.
+      expect(within('lent', 'MACs-Mac-Studio'), findsOneWidget);
+      expect(within('lent', '12.5 h busy'), findsOneWidget);
+      expect(within('lent', '7 h busy'), findsOneWidget);
+      expect(
+        tester.getTopLeft(within('lent', 'MACs-Mac-Studio')).dy,
+        lessThan(tester.getTopLeft(within('lent', 'build-box')).dy),
+      );
+    });
+
+    /// Ken's two machines: one with a subscription read, one not read yet.
+    List<Object> machines() => [
+      {
+        'machineId': 'studio',
+        'machineName': 'MACs-Mac-Studio.local',
+        'shipped': 5,
+        'busyHours': 31,
+        'subscriptions': [
+          {
+            'engine': 'claude',
+            'usedPercent': 38,
+            'resetsAt': DateTime.now()
+                .add(const Duration(days: 3, hours: 2))
+                .millisecondsSinceEpoch,
+          },
+          {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+        ],
+      },
+      {
+        'machineId': 'box',
+        'machineName': 'build-box',
+        'shipped': 0,
+        'busyHours': 0,
+        'subscriptions': <Object>[],
+      },
+    ];
+
+    testWidgets('from a server with Brought, the machines the person brought '
+        'stand in place of Lent, each subscription\'s week under its '
+        'machine', (tester) async {
+      await pump(tester, detailed(brought: machines()));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      Finder within(String text) =>
+          inside('swarm-leaderboard-details-brought', find.text(text));
+      expect(key('swarm-leaderboard-details-lent'), findsNothing);
+      expect(within('Brought'), findsOneWidget);
+      expect(within('2'), findsOneWidget, reason: 'its count');
+      // Named without .local, as the desktop does.
+      expect(within('MACs-Mac-Studio'), findsOneWidget);
+      expect(within('5 shipped · 31 h for others'), findsOneWidget);
+      expect(within('Claude'), findsOneWidget);
+      expect(within('38% used · resets in 3d'), findsOneWidget);
+      expect(within('Codex'), findsOneWidget);
+      expect(within('not read yet'), findsOneWidget);
+      expect(within('build-box'), findsOneWidget);
+      expect(within('0 shipped · 0 h for others'), findsOneWidget);
+      // Each subscription under its machine, set in and quieter.
+      final studio = tester.getTopLeft(within('MACs-Mac-Studio'));
+      final claude = tester.getTopLeft(within('Claude'));
+      final codex = tester.getTopLeft(within('Codex'));
+      final box = tester.getTopLeft(within('build-box'));
+      expect(studio.dy, lessThan(claude.dy));
+      expect(claude.dy, lessThan(codex.dy));
+      expect(codex.dy, lessThan(box.dy));
+      expect(claude.dx, greaterThan(studio.dx));
+      expect(
+        tester.widget<Text>(within('Claude')).style!.color,
+        AppPalette.textSecondary,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('from a server with Brought and nothing brought, it says so', (
+      tester,
+    ) async {
+      await pump(tester, detailed(brought: <Object>[]));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      expect(
+        inside(
+          'swarm-leaderboard-details-brought',
+          find.text('No machines brought yet'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-leaderboard-details-lent'), findsNothing);
+    });
+
+    testWidgets('a 320pt phone with large text fits a brought machine\'s '
+        'lines', (tester) async {
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(320 * 2, 568 * 2);
+      addTearDown(tester.view.reset);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await pump(tester, detailed(brought: machines()));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final sheet = tester.getRect(key('swarm-leaderboard-details'));
+      for (final text in [
+        '5 shipped · 31 h for others',
+        '38% used · resets in 3d',
+      ]) {
+        final line = tester.getRect(
+          inside('swarm-leaderboard-details-brought', find.text(text)),
+        );
+        expect(line.right, lessThanOrEqualTo(sheet.right), reason: text);
+      }
+      // The machine's name keeps its room beside its measure.
+      final name = tester.getRect(
+        inside(
+          'swarm-leaderboard-details-brought',
+          find.text('MACs-Mac-Studio'),
+        ),
+      );
+      expect(name.width, greaterThan(0));
+      expect(
+        name.right,
+        lessThan(
+          tester
+              .getRect(
+                inside(
+                  'swarm-leaderboard-details-brought',
+                  find.text('5 shipped · 31 h for others'),
+                ),
+              )
+              .left,
+        ),
+      );
+    });
+
+    testWidgets('a pull request opens in the in-app browser; one without a '
+        'web link is text', (tester) async {
+      final opened = launches(tester);
+      await pump(tester, detailed());
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+
+      const web = 'Desktop: a machine shows its agents as one count';
+      const file = 'Swarm digest pauses with the Swarm';
+      expect(
+        tester.widget<Text>(find.text(web)).style!.color,
+        AppPalette.swarmAccent,
+      );
+      expect(
+        tester.widget<Text>(find.text(file)).style!.color,
+        AppPalette.textPrimary,
+      );
+      expect(
+        tester
+            .getSize(
+              find.ancestor(of: find.text(web), matching: find.byType(InkWell)),
+            )
+            .height,
+        greaterThanOrEqualTo(minTouchTarget),
+        reason: 'a thumb',
+      );
+      expect(
+        tester.getSemantics(
+          find.ancestor(of: find.text(web), matching: find.byType(InkWell)),
+        ),
+        isSemantics(label: web, isLink: true, hasTapAction: true),
+      );
+
+      await tester.tap(find.text(web));
+      await tester.pumpAndSettle();
+      expect(opened, [
+        'https://github.com/autonomous-ai/openharness/pull/1824',
+      ]);
+      await tester.tap(find.text(file));
+      await tester.pumpAndSettle();
+      expect(opened, hasLength(1), reason: 'only a web page opens');
+      expect(
+        find.ancestor(of: find.text(file), matching: find.byType(InkWell)),
+        findsNothing,
+      );
+      // The sheet stays: nothing behind it was tapped.
+      expect(key(sheet), findsOneWidget);
+    });
+
+    testWidgets('a long list shows its newest five, Show all the rest, and '
+        'scrolls inside the sheet on a small phone', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(375, 667));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await pump(
+        tester,
+        detailed(
+          shipped: [
+            for (var i = 0; i < 20; i++)
+              {'title': 'Pull request $i', 'prUrl': 'https://x.dev/pull/$i'},
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        inside('swarm-leaderboard-details-shipped', find.text('20')),
+        findsOneWidget,
+      );
+      expect(find.text('Pull request 4'), findsOneWidget);
+      expect(find.text('Pull request 5'), findsNothing);
+      // Never over the status bar.
+      expect(tester.getSize(key(sheet)).height, lessThanOrEqualTo(667 * .82));
+
+      await tester.tap(find.text('Show all 20'));
+      await tester.pumpAndSettle();
+      expect(find.text('Show all 20'), findsNothing);
+      final scroll = find.descendant(
+        of: key('swarm-leaderboard-details'),
+        matching: find.byType(Scrollable),
+      );
+      await tester.scrollUntilVisible(
+        find.text('No machines lent yet'),
+        100,
+        scrollable: scroll.first,
+      );
+      expect(find.text('Pull request 19'), findsOneWidget);
+      expect(find.text('No machines lent yet'), findsOneWidget);
+      // The sheet's title stays above what scrolls.
+      expect(inside(sheet, find.text('diego')), findsOneWidget);
+      expect(
+        tester.getBottomLeft(inside(sheet, find.text('diego'))).dy,
+        lessThanOrEqualTo(
+          tester.getTopLeft(key('swarm-leaderboard-details')).dy,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('five or fewer have no Show all', (tester) async {
+      await pump(
+        tester,
+        detailed(
+          shipped: [
+            for (var i = 0; i < 5; i++)
+              {'title': 'Pull request $i', 'prUrl': 'https://x.dev/pull/$i'},
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+      expect(find.text('Pull request 4'), findsOneWidget);
+      expect(find.textContaining('Show all'), findsNothing);
+    });
   });
 
   group("a person's week closes when what opened it is lost", () {

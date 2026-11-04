@@ -21,7 +21,7 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
-import { stableId, type SuperTabState } from '../src/superTabs/model.js'
+import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
@@ -246,6 +246,17 @@ describe('durable group pull request links', () => {
     const group = (await store.read(owner, tab)).state.conversations.find(c => c.id === groupId)!
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
+
+  it('records a link under the project\'s repository and corrects the record it held before', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Links')).id
+    await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/project', repositoryUrl: null } })
+    // Without a repository to judge by, a link is kept as written.
+    await run(tab, message('Opened https://github.com/other/project/pull/50'))
+    expect(await links(tab, 'lead')).toEqual(['https://github.com/other/project/pull/50'])
+    await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://github.com/example/project' })
+    await run(tab, message(`Again ${pr(50)}, and elsewhere https://github.com/example/other/pull/51`))
+    expect(await links(tab, 'lead')).toEqual([pr(50)])
+  })
 
   it('keeps one link beyond the latest 100 messages', async () => {
     const { tab } = await fixture()
@@ -1346,6 +1357,20 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
   })
 
+  // Task #2427 (Huy, 11-03): the sidebar bolds a task only for a person's message, so each read conversation carries its newest
+  // main message from a person, and an agent's message leaves it.
+  it('reads each conversation\'s newest main message from a person, which an agent\'s message leaves', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('A person writes.'))
+    const chat = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const written = await chat()
+    expect(written.lastPersonSequence).toBe(written.lastMainSequence)
+    await run(tab, message('An agent answers.'), host, lead)
+    const answered = await chat()
+    expect(answered.lastMainSequence).toBeGreaterThan(written.lastMainSequence!)
+    expect(answered.lastPersonSequence).toBe(written.lastMainSequence)
+  })
+
   it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
@@ -2085,6 +2110,53 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const history = await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })
     // The first row after the one naming who added the Lead (#2207).
     expect(history.json().data.messages.find((m: { text: string; source?: unknown }) => !memberRow(m)).text).toBe('A shared conversation.')
+  })
+
+  // Tony, 2026-11-03 (#2458): New Harness from a project chat records the person's first message beside the row naming who
+  // added the harness. Both took the operation id, so the join answered 500 and the harness never joined.
+  it('joins a harness started from the project chat with a first message, through the HTTP API', async () => {
+    const { tab } = await fixture()
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    const operationId = randomUUID()
+    const join = () => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
+        name: 'Kai', configuration: config, lead: false, initialMessage: 'Hi New PM Personal' } } })
+    const joined = await join()
+    expect(joined.statusCode, joined.body).toBe(200)
+    const agentId = joined.json().data.result.agentId as string
+    expect((await storedState(tab)).agents.map(a => a.id)).toContain(agentId)
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
+      Array<{ id: string; text: string; source?: unknown }>
+    const first = rows.find(m => m.text === 'Hi New PM Personal'), added = rows.find(m => / added "Kai" to the project\./.test(m.text))
+    // The person's message is the one the receipt names; the row naming who added the harness has its own id.
+    expect(first?.id).toBe(joined.json().data.result.messageId)
+    expect(added?.id).toBeDefined()
+    expect(added?.id).not.toBe(first?.id)
+    // The same request again answers the same and writes nothing twice.
+    const again = await join()
+    expect(again.statusCode).toBe(200)
+    expect(again.json().data.result.agentId).toBe(agentId)
+    const after = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
+    expect(after.filter(m => m.text === 'Hi New PM Personal')).toHaveLength(1)
+  })
+
+  it('joins a Product Manager with a first message and a launch-refused note, through the HTTP API', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Personal')).id
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    const operationId = randomUUID()
+    const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm',
+        name: 'Lead', configuration: config, lead: true, initialMessage: 'Hi New PM Personal',
+        launchRefused: { model: 'opus', effort: 'xhigh' } } } })
+    expect(joined.statusCode, joined.body).toBe(200)
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
+      Array<{ id: string; text: string }>
+    const first = rows.find(m => m.text === 'Hi New PM Personal')
+    expect(first?.id).toBe(joined.json().data.result.messageId)
+    const refused = rows.find(m => m.text.includes('could not launch it with them'))
+    expect(refused?.id).toBeDefined()
+    expect(refused?.id).not.toBe(first?.id)
+    expect((await storedState(tab)).conversations.find(c => c.id === 'lead')?.leadId).toBe(joined.json().data.result.agentId)
   })
 
   it('rechecks the machine share at delivery even while the contributor remains in the tab', async () => {
@@ -3875,7 +3947,12 @@ describe('machine removal', () => {
     const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
     const shown = await preview(host)
     expect(shown.statusCode, shown.body).toBe(200)
-    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], soleSourceProjects: [] })
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }],
+      soleSourceProjects: [] })
+    const current = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(current.statusCode, current.body).toBe(200)
+    expect(current.json().data).toEqual({ previewVersion: 2, blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 0 })
     expect((await preview(owner)).statusCode).toBe(403)
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
 
@@ -3891,6 +3968,49 @@ describe('machine removal', () => {
     expect(ack.statusCode, ack.body).toBe(200)
     expect(await cleanups(tab)).toEqual([])
     expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('the removal route counts an unreadable project and still refuses to remove its PM', async () => {
+    const tab = await contributed()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret Project', visibility: 'private', brief: '' })).result.projectId)
+    const taskConversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Secret Task', brief: '', checks: [] })).result.conversationId)
+    const state = await storedState(tab)
+    const project = state.projects!.find(item => item.id === projectId)!
+    const leadChat = state.conversations.find(item => item.id === project.leadConversationId)!
+    const taskChat = state.conversations.find(item => item.id === taskConversationId)!
+    const hostGeneration = state.people.find(person => person.id === host.sub)!.generation
+    const pmId = randomUUID(), workerId = randomUUID()
+    const makeAgent = (id: string, name: string): Agent => ({ id, projectId, machineId: 'test-host', harnessId: randomUUID(),
+      machineOwnerId: host.sub, contributorId: host.sub, membershipGeneration: hostGeneration, hostGrant: null, name,
+      configuration: config, configurationVersion: randomUUID() })
+    const pm = makeAgent(pmId, 'Secret PM'), worker = makeAgent(workerId, 'Secret Builder')
+    leadChat.leadId = pmId
+    leadChat.agentIds.push(pmId)
+    taskChat.agentIds.push(workerId)
+    project.repository = { machineId: 'test-host', cwd: '/secret/repository', repositoryUrl: null }
+    state.agents.push(pm, worker)
+    await saveState(tab, state)
+    await run(tab, { type: 'work.assign', conversationId: taskConversationId, agentId: workerId })
+
+    const legacy = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(legacy.statusCode, legacy.body).toBe(426)
+    expect(legacy.json().error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to remove this machine.' })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(legacy.body).not.toContain(unreadable)
+    }
+
+    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(shown.statusCode, shown.body).toBe(200)
+    expect(shown.json().data).toEqual({
+      previewVersion: 2, blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." }, agents: [], hiddenAgentCount: 2,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 1,
+    })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(JSON.stringify(shown.json().data)).not.toContain(unreadable)
+    }
+    await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).rejects.toMatchObject({
+      code: 'LEAD_PROTECTED', message: "A Product Manager of a project you can't see prevents this action.",
+    })
   })
 
   it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
@@ -4056,10 +4176,18 @@ describe('Lead mentions', () => {
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 
+  it('lists a person’s tag under the name they set, when they set one', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'member.name', name: 'The Boss' })
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
+      mentions: [peer.sub] })).result.messageId as string
+    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
+  })
+
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
     const { tab, group } = await tagged()
     await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Elsewhere.', replyTo: null, recipientIds: [] }, peer)
+    // A post elsewhere to the Lead who tagged them answers it too (superTabTagsClear.test.ts): not one here.
     expect(await list(tab, peer, 'waiting')).toHaveLength(1)
     await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
     expect(await list(tab, peer, 'waiting')).toEqual([])
