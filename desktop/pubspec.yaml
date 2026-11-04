@@ -118,6 +118,9 @@ dependencies:
   # The composer's mic on macOS and the web, as the phone records (#2665):
   # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
   record: ^7.1.1
+  # The composer's mic dictates with the system's recognizer (#2888): SFSpeechRecognizer on
+  # macOS, the Web Speech API in a browser.
+  speech_to_text: ^7.5.0
 
 dev_dependencies:
   flutter_test:
