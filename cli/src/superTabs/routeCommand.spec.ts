@@ -836,6 +836,64 @@ describe('routeTask', () => {
   })
 })
 
+// Ken, 2026-11-04 (task #2901): PMs took the route's pick, nearly always Opus or Astra, against the project's Routing
+// instructions. The answer lists the candidates by machine with every fact, names none, and says how to start the chosen one.
+describe('route answers with no pick (task #2901)', () => {
+  const weekly = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: {
+    five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    seven_day: { utilization: 25, resets_at: new Date(Date.now() + 4 * 86_400_000 + 30 * 60_000).toISOString() } } }] }
+  const both = () => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: weekly }))
+  type Row = { id: string; kind: string; machineId: string; title: string; quota: string; cwd?: string }
+
+  it('lists every candidate by machine, records each with no pick, and sends the choice to the Routing instructions', async () => {
+    const s = scoped()
+    const answer = await routeTask(input, s, where as never, both(), () => 'op')
+    expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions', p: null })
+    expect(answer).not.toHaveProperty('pick')
+    expect(answer).not.toHaveProperty('alternatives')
+    expect(answer.why).toContain('Routing instructions')
+    const rows = answer.candidates as Row[]
+    // mac (m2) before remote-1 (m1), whatever is stronger or cheaper.
+    const machines = rows.map(r => r.title.split(' · ').at(-1)!)
+    expect(machines).toEqual([...machines].sort((x, y) => x.localeCompare(y)))
+    expect(new Set(machines)).toEqual(new Set(['mac', 'remote-1']))
+    expect(rows[0]!.machineId).toBe('m2')
+    const decision = recorded(s).command.decision
+    expect(decision).not.toHaveProperty('pick')
+    expect(decision).toMatchObject({ via: 'instructions', why: answer.why })
+    // Any candidate the coordinator chooses is a recorded one.
+    const ids = new Set((decision.candidates as Array<{ id: string }>).map(c => c.id))
+    for (const row of rows) expect(ids.has(row.id)).toBe(true)
+  })
+  it('carries each candidate\'s weekly quota left and its reset, and a new agent\'s folder on its machine', async () => {
+    const answer = await routeTask(input, scoped(), where as never, both(), () => 'op')
+    const rows = answer.candidates as Row[]
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.quota).toMatch(/^fits: weekly 75% left, resets in 4d(1h)?$/)
+    for (const row of rows.filter(r => r.kind === 'new')) expect(row.cwd).toBe('/absolute/repo/on/that/machine')
+  })
+  it('says how to start or assign the chosen candidate, with the decision and the rule that chose it', async () => {
+    const answer = await routeTask(input, scoped(), where as never, both(), () => 'op')
+    const next = String(answer.next)
+    expect(next).toContain('"type":"work.assign","conversationId":"g1","agentId":"AGENT","routeDecisionId":"d1","overrideReason":"RULE"')
+    const hint = JSON.parse(/start OPERATION_ID (\{.*?\}), then/.exec(next)![1]!)
+    expect(hint).toMatchObject({ conversationId: 'g1', machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', routeDecisionId: 'd1', overrideReason: 'RULE' })
+    expect(next).toContain('Routing instructions')
+    expect(next).not.toMatch(/\bpick\b/)
+  })
+  it('records with c0 as the pick for a backend from before this, which takes a record only with one', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    s.mockImplementation(async payload => payload.action === 'command' && !('pick' in payload.command.decision)
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.pick: Required', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, both(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions' })
+    const [current, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(current.command.decision).not.toHaveProperty('pick')
+    expect(picked.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
+    expect(picked.operationId).toBe(current.operationId)
+    expect(picked.command.decision.candidates).toEqual(current.command.decision.candidates)
+  })
+})
+
 describe('what the route log says about each candidate', () => {
   const git = (patch: Record<string, unknown> = {}) => ({ kind: 'git', name: 'api', cwd: '/w/api', root: '/w/api', remote: 'github.com/acme/api', branch: 'main', ...patch })
   /** The Lead's machine, as the folder reader sees it: the folder is there (unless said otherwise) and the SCM describes it. */
