@@ -115,6 +115,22 @@ List<SuperTabComposerChoice> superTabTagChoices(
   ].take(superTabCompletionLimit).toList();
 }
 
+/// [value] with `@` typed at its caret, in place of any selection, as @ Tag
+/// types it: after a space where the caret follows a word, so the tag list
+/// opens there ([superTabTagAtCaret]).
+TextEditingValue superTabTagPrompt(TextEditingValue value) {
+  final text = value.text;
+  final selection = value.selection.isValid
+      ? value.selection
+      : TextSelection.collapsed(offset: text.length);
+  final before = text.substring(0, selection.start);
+  final at = before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '@' : ' @';
+  return TextEditingValue(
+    text: before + at + text.substring(selection.end),
+    selection: TextSelection.collapsed(offset: before.length + at.length),
+  );
+}
+
 /// [value] with the tag typed at [at] replaced by [token] and a space, the
 /// caret after it.
 TextEditingValue superTabInsertTag(

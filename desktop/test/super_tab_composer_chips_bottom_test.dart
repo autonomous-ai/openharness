@@ -14,11 +14,11 @@ import 'support/super_tab_fixture.dart';
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_COMPOSER_CHIPS_SHOTS'];
 
-/// Scholes, 11-03: the chips beside the message (New session, attach, send)
-/// stay at the bottom-right of the box as the message grows, level with its
-/// last line, rather than drifting to the middle of a tall box; one line
-/// reads as before. The thread reply box keeps its chips on their own row
-/// under the text.
+/// Scholes, 11-03: the chips (New session, attach, send) stay at the
+/// bottom-right of the box as the message grows, rather than drifting to the
+/// middle of a tall box. Since the composer took the phone's layout (Huy and
+/// Scholes, 11-04), they sit on one row under the text, in the main chat as
+/// in a thread, with send at its right end.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -132,54 +132,33 @@ void main() {
       const ValueKey('super-message-composer-surface'),
     );
 
-    testWidgets('one line: the chips are centered on the line, as before', (
-      tester,
-    ) async {
-      await show(tester);
-      final box = field(thread: false);
-      await type(tester, box, 'Check the release notes.');
-      final line = lastLine(tester, box);
-      for (final chip in chips) {
+    for (final (lines, text) in [
+      ('one line', 'Check the release notes.'),
+      ('five lines', fiveLines),
+    ]) {
+      testWidgets('$lines: the chips stay on one row under the last line, '
+          'send at the bottom-right', (tester) async {
+        await show(tester);
+        final box = field(thread: false);
+        await type(tester, box, text);
+        final line = lastLine(tester, box);
+        final row = tester.getRect(chips.last);
+        for (final chip in chips) {
+          final rect = tester.getRect(chip);
+          expect(rect.top, greaterThanOrEqualTo(line.bottom), reason: '$chip');
+          expect((rect.center.dy - row.center.dy).abs(), lessThan(1));
+          expect(
+            rect.bottom,
+            lessThanOrEqualTo(tester.getRect(surface).bottom),
+          );
+        }
+        expect(row.right, greaterThan(tester.getRect(surface).right - 16));
         expect(
-          (tester.getCenter(chip).dy - line.center.dy).abs(),
-          lessThan(1),
-          reason: '$chip',
+          tester.getRect(surface).bottom - row.bottom,
+          lessThanOrEqualTo(16),
         );
-      }
-      // One control row inside its padding.
-      expect(
-        tester.getRect(surface).height,
-        closeTo(grid.AppControl.heightFieldScaled + 6, 1),
-      );
-    });
-
-    testWidgets('five lines: the chips stay at the bottom-right, level with '
-        'the last line', (tester) async {
-      await show(tester);
-      final box = field(thread: false);
-      await type(tester, box, fiveLines);
-      final line = lastLine(tester, box);
-      final first = tester.getRect(box).top;
-      expect(line.top - first, greaterThan(line.height * 3.5));
-      for (final chip in chips) {
-        final rect = tester.getRect(chip);
-        expect(
-          (rect.center.dy - line.center.dy).abs(),
-          lessThan(1),
-          reason: '$chip',
-        );
-        expect(rect.bottom, lessThanOrEqualTo(tester.getRect(surface).bottom));
-      }
-      // Send at the right end, and the text keeps its width.
-      expect(
-        tester.getRect(chips.last).right,
-        greaterThan(tester.getRect(surface).right - 16),
-      );
-      expect(
-        tester.getRect(box).right,
-        lessThanOrEqualTo(tester.getRect(chips.first).left),
-      );
-    });
+      });
+    }
   });
 
   testWidgets('the thread reply box: its chips stay on their own row under the '
