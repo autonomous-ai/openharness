@@ -11,16 +11,19 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
+import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 import 'swarm_new_project_fixture.dart';
 
 /// Review screenshots of + New project: Home's row, the sheet filled in, PM
-/// runs on, the brief written with the keyboard up, a long error (with the
+/// runs on, Agent, files attached under the brief (and +'s sheet), the
+/// brief written with the keyboard up, a long error (with the
 /// keyboard up too), a Product Manager that did not start, and no machine able to run
 /// one. On a 390-point and a 320-point phone in both phone themes, from
 /// made-up data only, to the folder `SWARM_NEW_PROJECT_SHOTS` names. The
@@ -190,6 +193,32 @@ void main() {
         await capture('machines');
         await tap('swarm-new-project-pick-machine-mac-studio');
         await capture('sheet');
+
+        // Agent: each engine with the model it gets.
+        await tap('swarm-new-project-agent');
+        await capture('agents');
+        await tap('swarm-new-project-back');
+
+        // Two files under the brief, then taken off again.
+        final picker = (files: pickSwarmFiles, copies: swarmPickerCopyFolders);
+        pickSwarmFiles = () async => [
+          for (final name in ['product-brief.pdf', 'build.log'])
+            XFile.fromData(
+              Uint8List.fromList(List.filled(48 * 1024, 1)),
+              name: name,
+              path: '/copies/$name',
+            ),
+        ];
+        swarmPickerCopyFolders = () async => const [];
+        await tap('swarm-new-project-attach');
+        await capture('attach');
+        await tap('swarm-attach-files');
+        await capture('files');
+        for (final name in ['product-brief.pdf', 'build.log']) {
+          await tap('swarm-outgoing-remove-$name');
+        }
+        pickSwarmFiles = picker.files;
+        swarmPickerCopyFolders = picker.copies;
 
         // The keyboard up while the brief is written: it and Create stay in
         // sight.
