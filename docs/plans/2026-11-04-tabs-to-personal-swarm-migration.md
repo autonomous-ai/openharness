@@ -52,7 +52,8 @@ Personal's projects get what they need to stand alone later:
    follows its renames, unless the person renamed the tab. (Points 1 and 7.)
 2. **When the desk is full.** The desk drops a 25th tab and a 10th pane in a tab without an error
    (`desk.ts:12-13`, `:113`, `:146`). So the Desktop checks first: a project tab with 9 panes gets a second tab
-   ("api 2"), and with 24 tabs on the desk the start is refused before any agent runs. The person reads: "Your tabs
+   ("api 2", its id the project's hash plus `-2`, then `-3`, so every computer links its panes to the same
+   project), and with 24 tabs on the desk the start is refused before any agent runs. The person reads: "Your tabs
    are full (24). Close a tab to start another agent." No pane is ever left with no tab.
 3. **A no-repo pane** started from a project joins that project through its tab (item 1). One started from an
    ordinary tab keeps today's tab project. Only a pane with neither goes to # scratch. (Point 1.)
@@ -77,19 +78,21 @@ What changes for people who turn it on, on that Desktop only:
 - The tab strip is hidden for tabs whose every pane is in a Personal project. A tab holding a pane Personal leaves out
   (point 3) stays visible as a tab. Utility tabs open from their menus as today.
 - Swarm tabs become entries in the Swarm dropdown, as the 10-30 design says: one Swarm tab stays, and every other
-  Swarm tab is hidden. The dropdown already lists every Swarm open in a tab or closed
-  (`desktop/lib/super_tabs/swarm_switcher.dart:321-346`), and picking one shows it in the same tab
+  Swarm tab is closed, not hidden: picking a Swarm that is open in another tab selects that tab
+  (`app_state.dart:2804-2805`), which would land on a hidden one. A closed Swarm stays in the dropdown
+  (`desktop/lib/super_tabs/swarm_switcher.dart:332-334`), and picking it shows it in the one visible tab
   (`app_state.dart:2800-2807`). Swarm tabs are not on the desk (`app_state.dart:21094-21095`), so this changes
   nothing on the phone or another computer.
 - The Swarm screen opens on Personal. Cmd-1..9 go to the first nine projects in the PROJECTS list instead of tabs
   (today they follow tab order: `app_state.dart:4155-4158`, `desktop/lib/shortcuts/app_shortcuts.dart:928-938`).
 - Nothing else changes: the panes, their sessions and the desk are the same.
 
-Roll back: turn the setting off. The tab strip and the hidden Swarm tabs come back as they were, because the desk was
-never changed and the Swarm tabs were only hidden. Nothing is restored, so nothing can be lost.
+Roll back: turn the setting off. The tab strip comes back as it was, because the desk was never changed, and the
+Swarm tabs closed by the switch reopen in their old order. Nothing else is restored, so nothing can be lost.
 
 Data kept: the whole desk, unchanged; this window's own tab layout (`terminal_pane_layout`,
-`desktop/lib/state/pane_layout_store.dart:20`) is still written.
+`desktop/lib/state/pane_layout_store.dart:20`) is still written; and, on this computer, the list of Swarm tabs the
+switch closed, in order, so turning it off reopens them.
 
 What tells us it works: how many people turn it on, how many turn it off again within a week, and the reasons in
 feedback.
