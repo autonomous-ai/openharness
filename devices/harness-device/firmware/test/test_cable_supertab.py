@@ -68,9 +68,10 @@ static void ui_supertab_recap(const char *tab,const char *lead,const char *chat_
     snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_thread,sizeof got_thread,"%s",thread);
     snprintf(got_text,sizeof got_text,"%s",text?text:"");got_at=at;got_none=none;
 }
-static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *text,uint32_t at) {
+static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *thread,const char *text,uint32_t at) {
     notice_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);got_chat=chat;
-    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_thread,sizeof got_thread,"%s",thread);
+    snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
 }
 static void ui_supertab_notice_read(const char *tab,const char *lead,const char *chat_id) {
     read_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
@@ -210,7 +211,16 @@ int main(void) {
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m9\",\"text\":\"Ready to ship.\",\"at\":1792560000}");
     beep_next=false;
     assert(notice_calls==1 && beeps==beeps_before+1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && got_chat==HT_CHAT_PM);
-    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u);
+    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u && !strcmp(got_thread,""));
+    // A reply inside a thread (#2463) names its root. One whose root cannot be held is still a thread's: no face shows it, so
+    // it beeps rather than reading as the main chat's; an empty one is the main stream.
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m12\",\"text\":\"Fixed.\",\"at\":7,\"thread\":\"m9\"}");
+    assert(notice_calls==2 && !strcmp(got_thread,"m9") && !strcmp(got_text,"Fixed."));
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m13\",\"text\":\"x\",\"at\":7,\"thread\":\"0123456789012345678901234567890123456789012345678901234567890123\"}");
+    assert(notice_calls==3 && got_thread[0]);
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m14\",\"text\":\"x\",\"at\":7,\"thread\":\"\"}");
+    assert(notice_calls==4 && !strcmp(got_thread,""));
+    notice_calls=1;
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"lead-web\",\"id\":\"m10\",\"text\":\"Done.\",\"at\":5}");
     assert(notice_calls==2 && got_chat==HT_CHAT_LEAD && beeps==beeps_before+1);
     // The Buddy's word: chat "buddy" reaches the UI as HT_CHAT_BUDDY; the UI says it is quiet.
