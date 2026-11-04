@@ -581,8 +581,12 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 
 /** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
  *  Swarm, so the refusal says nothing about whose it is or what runs there. */
-/** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
-export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
+/** A host that can tell a Buddy's window from another agent's on Windows (CLI callerPane.ts `windowsRunningPane`). An older one
+ *  cannot: a Buddy there refused every agent's Swarm command on that computer (security review of #2093). */
+export const WINDOWS_BUDDY_CAPABILITY = 'windowsBuddy'
+export const BUDDY_WINDOWS_REFUSAL = 'Update Harness on this Windows machine to run a Buddy on it, or pick another of your machines.'
+export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.observation?.resources.os === 'Windows'
+  && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
 /** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
  *  stops re-reading every machine; #2900 has what grows with the count. */
@@ -786,7 +790,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (!pool) return null
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
-  if (request.buddyOf && pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+  if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')

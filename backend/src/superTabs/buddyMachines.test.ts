@@ -179,11 +179,18 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect(rows.roster.filter(r => 'joinTeam' in r)).toEqual([])
   })
 
-  it('refuses its Buddy\'s launch once the machine reads as Windows', () => {
+  it('refuses its Buddy\'s launch once the machine reads as a Windows host from before its caller check', () => {
     const f = setup()
     const added = addOwn(f, f.app.projectId)
     buddyOnly(f)!.observation = reading(1000, 'Windows')
-    expect(() => f.run({ type: 'agent.startDispatch', startId: added.result.startId as string }, peer)).toThrow('A Buddy cannot run on a Windows machine yet')
+    expect(() => f.run({ type: 'agent.startDispatch', startId: added.result.startId as string }, peer)).toThrow('Update Harness on this Windows machine')
+  })
+
+  it('launches its Buddy on a Windows host that has the caller check', () => {
+    const f = setup()
+    const added = addOwn(f, f.app.projectId)
+    buddyOnly(f)!.observation = { ...reading(1000, 'Windows'), capabilities: ['swarmBuddy', 'windowsBuddy'] }
+    expect(() => f.run({ type: 'agent.startDispatch', startId: added.result.startId as string }, peer)).not.toThrow()
   })
 
   it('keeps its record through storage', () => {

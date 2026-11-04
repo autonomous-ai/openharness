@@ -221,13 +221,14 @@ export function writeSessionGitHub(dir: string, token: string | null, trailers?:
 
 /**
  * The launch of a Swarm session that uses the app ([key]: its session label, `SwarmSkill.key`): its environment, and the
- * variables to clear from what it inherits. Writes the shared tools and the session's folder first. Null where it does not
- * apply: on Windows, whose git does not run these shell scripts, or for a key unfit for a path.
+ * variables to clear from what it inherits. Writes the shared tools and the session's folder first. Null for a key unfit
+ * for a path. On Windows, Git for Windows runs these shell scripts through its own sh: tried on Git 2.55, with a space in
+ * the path, for the helper, the hooks and the commit identity.
  */
-export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = defaultTools(), platform: NodeJS.Platform = process.platform):
+export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = defaultTools()):
   { env: Record<string, string>; clearEnv: string[] } | null {
   const dir = swarmGitHubSessionDir(tools.dataDir, key)
-  if (platform === 'win32' || !dir) return null
+  if (!dir) return null
   const { helper, hooks } = writeSwarmGitHubTools(tools)
   if (!existsSync(join(dir, 'gh', 'hosts.yml'))) writeSessionGitHub(dir, null)
   // Marked as just used: a start held before its session is registered must not look like a folder left behind
