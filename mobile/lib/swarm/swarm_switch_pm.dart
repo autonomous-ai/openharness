@@ -13,7 +13,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_buddy.dart' show swarmCanWrite;
+import 'swarm_buddy.dart' show swarmBuddyMachineName, swarmCanWrite;
 import 'swarm_new_project_sheet.dart'
     show swarmLeadEngineLabel, swarmLeadEngines;
 import 'swarm_reader.dart';
@@ -24,7 +24,12 @@ import 'swarm_style.dart';
 // 2026-11-02-pm-switch-engine-account-design.md): move a project's Product
 // Manager to another engine or account on the machine it runs on. The
 // machine's host does the switch; the phone sends `lead.switch` and shows a
-// refusal, as Desktop does.
+// refusal, as Desktop does. Desktop's dialog also moves it to another
+// machine and picks its model; the phone does not yet.
+
+/// A machine reading this old is offline (Desktop's
+/// `kSuperTabMachineOfflineAfter`).
+const _offlineAfter = Duration(seconds: 35);
 
 /// "18:05" when [at] is today, else the date and time ("4 Nov 2026, 18:05"),
 /// in local time (Desktop's `switchPmTime`, in the phone's clock).
@@ -128,6 +133,41 @@ String? swarmLimitNoteSwitchPm(SwarmReader reader, SuperTabMessage message) {
   return swarmCanSwitchPm(reader, project.id) ? project.id : null;
 }
 
+/// Why [projectId]'s Product Manager cannot be switched now, as Desktop's
+/// dialog says it before Switch is pressed: no fresh reading from its
+/// machine, or a Harness there too old to switch one (backend
+/// `MACHINE_OFFLINE`, `HOST_OUTDATED`). Null when it can, and without a PM.
+String? swarmSwitchPmRefusal(
+  SwarmReader reader,
+  String projectId, {
+  DateTime? now,
+}) {
+  final lead = swarmLeadOf(reader.snapshot, projectId);
+  if (lead == null) return null;
+  final pool = reader.snapshot!.pool(lead.machineId);
+  final observation = pool?['observation'];
+  final at = observation is Map ? observation['receivedAt'] : null;
+  if (at is! num ||
+      (now ?? DateTime.now()).difference(
+            DateTime.fromMillisecondsSinceEpoch(at.toInt()),
+          ) >=
+          _offlineAfter) {
+    return 'Wait for a fresh reading from the PM’s machine.';
+  }
+  final capabilities = (observation as Map)['capabilities'];
+  if (capabilities is List && capabilities.contains('leadSwitch')) {
+    return null;
+  }
+  final name = switch (pool?['name']) {
+    final String named when named.isNotEmpty => swarmBuddyMachineName(
+      reader,
+      lead.machineId,
+    ),
+    _ => 'the PM’s machine',
+  };
+  return 'Update Harness on $name to switch this Product Manager.';
+}
+
 /// One account Switch PM lists, and whether the PM runs in it now.
 typedef SwarmSwitchPmChoice = ({SuperTabProfile profile, bool current});
 
@@ -214,8 +254,10 @@ const _notSent = 'Could not reach this Swarm. Try again.';
 
 /// Switch PM, as Desktop's dialog: the accounts of the PM's machine to pick
 /// one of, what a switch does, and Switch, which is the confirmation — it
-/// stops the PM's session and starts another in the account picked. A
-/// refusal stays under the list. It follows the machine's report while open,
+/// stops the PM's session and starts another in the account picked. While
+/// its machine cannot switch it ([swarmSwitchPmRefusal]), or no account can
+/// be picked, it says so under the list and Switch waits. A refusal stays
+/// under the list. It follows the machine's report while open,
 /// and goes once the PM can no longer be switched from here: access lost, a
 /// viewer now, another PM, or a switch asked for elsewhere.
 class SwarmSwitchPmDialog extends StatefulWidget {
@@ -409,6 +451,12 @@ class _SwarmSwitchPmDialogState extends State<SwarmSwitchPmDialog> {
         choices.any((c) => swarmSwitchPmPickable(c) && isPicked(c.profile))
         ? _picked
         : null;
+    final refusal = swarmSwitchPmRefusal(reader, widget.projectId);
+    final note =
+        refusal ??
+        (choices.any(swarmSwitchPmPickable)
+            ? null
+            : 'No engine or account can run a Product Manager right now.');
     return PopScope(
       // Its ask out, its answer decides whether it goes.
       canPop: !_busy,
@@ -426,6 +474,15 @@ class _SwarmSwitchPmDialogState extends State<SwarmSwitchPmDialog> {
               children: [
                 for (final choice in choices)
                   _row(choice, picked != null && isPicked(choice.profile)),
+                if (note != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpace.s),
+                    child: Text(
+                      note,
+                      key: const ValueKey('swarm-switch-pm-no-choice'),
+                      style: AppType.caption(color: AppPalette.textSecondary),
+                    ),
+                  ),
                 if (lead != null && lead.machineOwnerId != reader.accountId)
                   Padding(
                     padding: const EdgeInsets.only(top: AppSpace.s),
@@ -473,7 +530,7 @@ class _SwarmSwitchPmDialogState extends State<SwarmSwitchPmDialog> {
             style: SwarmButtonStyle.fill,
             busy: _busy,
             busyLabel: 'Switching…',
-            onPressed: _busy || picked == null
+            onPressed: _busy || picked == null || refusal != null
                 ? null
                 : () => unawaited(_switch(picked)),
           ),

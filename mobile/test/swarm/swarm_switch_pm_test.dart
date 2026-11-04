@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart' show SwarmButton;
@@ -19,8 +20,10 @@ import 'swarm_fixture.dart';
 
 /// Switch PM on the phone (Desktop's switch_pm.dart, spec
 /// 2026-11-02-pm-switch-engine-account-design.md section 8): who is offered
-/// it in the project's ⋮ and on the PM's limit note, what its dialog lists,
-/// what Switch sends, a refusal, and the PM reading Switching… after.
+/// it in the project's ⋮ › Project settings…, as Desktop's project menu has
+/// it, and on the PM's limit note, what its dialog lists, when its machine
+/// cannot switch it, what Switch sends, a refusal, and the PM reading
+/// Switching… after.
 void main() {
   // sha256('mac-1:claude:default') and sha256('mac-1:codex:default'), first
   // 16 hex: the ids the machine reports its default accounts by.
@@ -45,13 +48,21 @@ void main() {
     ...over,
   };
 
-  Map<String, dynamic> machineData({bool profiles = true}) => {
+  /// mac-1, read just now by a Harness that switches a PM, unless told
+  /// otherwise.
+  Map<String, dynamic> machineData({
+    bool profiles = true,
+    List<String> engines = const ['claude', 'codex'],
+    DateTime? readAt,
+    List<String> capabilities = const ['leadStart', 'leadSwitch'],
+  }) => {
     'machineId': 'mac-1',
-    'name': 'Team Mac',
+    'name': 'Team Mac.local',
     'contributorId': me,
-    'engines': ['claude', 'codex'],
+    'engines': engines,
     'observation': {
-      'receivedAt': DateTime.utc(2026, 11, 3, 8).millisecondsSinceEpoch,
+      'receivedAt': (readAt ?? DateTime.now()).millisecondsSinceEpoch,
+      'capabilities': capabilities,
       if (profiles)
         'profiles': [
           {
@@ -86,6 +97,12 @@ void main() {
     },
   };
 
+  /// [hour]:[minute] of today, in local time.
+  DateTime today(int hour, int minute) {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, hour, minute);
+  }
+
   /// The PM's usage-limit note in its project chat (backend terminal.ts).
   Map<String, dynamic> limitNote({String agentId = 'agent-lead'}) => {
     'id': 'n1',
@@ -99,7 +116,8 @@ void main() {
       'alert': 'limit',
       'agentId': agentId,
       'lead': agentId == 'agent-lead' ? true : null,
-      'limitedUntil': DateTime(2026, 11, 3, 18, 5).toIso8601String(),
+      // Today, so the note names the time alone.
+      'limitedUntil': today(18, 5).toIso8601String(),
     },
   };
 
@@ -188,17 +206,20 @@ void main() {
     return host;
   }
 
-  /// The Swarm read again, its PM now [pm] and the reader [role].
+  /// The Swarm read again, its PM now [pm], its machine [machine] and the
+  /// reader [role].
   Future<void> readAgain(
     WidgetTester tester,
     FakeSwarm fake,
     SwarmHost host, {
     Map<String, dynamic>? pm,
+    Map<String, dynamic>? machine,
     String? role,
   }) async {
     fake.routes[changesPath] = (_) => {
       ...changes(cursor: 'c3', lastChangedAt: 200),
       'agents': [if (pm != null) part('agent-lead', 2, pm)],
+      'machines': [if (machine != null) part('mac-1', 2, machine)],
       'members': [if (role != null) part(me, 2, person(me, role: role))],
     };
     await host.session!.inbox.reader(tab)!.refresh();
@@ -206,7 +227,8 @@ void main() {
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
-  final menuItem = key('swarm-project-menu-switch-pm');
+  // Project settings…'s row (the limit note's has its own key).
+  final menuItem = find.text('Switch PM…');
   final noteAction = key('swarm-limit-switch-pm');
   final dialog = find.byType(SwarmSwitchPmDialog);
   final confirm = key('swarm-switch-pm-confirm');
@@ -216,8 +238,15 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> openDialog(WidgetTester tester) async {
+  Future<void> openSettings(WidgetTester tester) async {
     await openMenu(tester);
+    await tester.tap(key('swarm-project-menu-settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Project settings'), findsOneWidget);
+  }
+
+  Future<void> openDialog(WidgetTester tester) async {
+    await openSettings(tester);
     await tester.tap(menuItem);
     await tester.pumpAndSettle();
     expect(dialog, findsOneWidget);
@@ -239,28 +268,28 @@ void main() {
         call.body!['operationId'] as String,
   ];
 
-  group('the project menu', () {
-    testWidgets('offers Switch PM… to the project owner, under Open terminal', (
-      tester,
-    ) async {
+  group('Project settings…', () {
+    testWidgets('offers Switch PM… to the project owner, after Project '
+        'details; the ⋮ itself keeps its rows', (tester) async {
       await pump(tester, backend());
       await openMenu(tester);
+      expect(key('swarm-project-menu-settings'), findsOneWidget);
+      expect(menuItem, findsNothing, reason: 'not a row of the ⋮');
+      await tester.tap(key('swarm-project-menu-settings'));
+      await tester.pumpAndSettle();
+
       expect(menuItem, findsOneWidget);
-      expect(find.text('Switch PM…'), findsOneWidget);
-      expect(
-        tester.getTopLeft(menuItem).dy,
-        greaterThan(tester.getTopLeft(key('swarm-project-menu-terminal')).dy),
-      );
-      expect(
-        tester.getTopLeft(menuItem).dy,
-        lessThan(tester.getTopLeft(key('swarm-project-menu-status')).dy),
-      );
+      double y(Finder finder) => tester.getTopLeft(finder).dy;
+      final details = find.text('Project details');
+      expect(y(find.text('Rename project')), lessThan(y(details)));
+      expect(y(details), lessThan(y(menuItem)));
     });
 
     testWidgets('offers it to the owner of the PM\'s machine who does not '
         'own the project', (tester) async {
       await pump(tester, backend(role: 'collaborator', projectOwner: ken));
-      await openMenu(tester);
+      await openSettings(tester);
+      expect(find.text('Rename project'), findsNothing);
       expect(menuItem, findsOneWidget);
     });
 
@@ -275,22 +304,22 @@ void main() {
           pm: pmData({'machineOwnerId': ken}),
         ),
       );
-      await openMenu(tester);
-      expect(find.text('Leaderboard'), findsOneWidget);
+      await openSettings(tester);
+      expect(find.text('Project details'), findsOneWidget);
       expect(menuItem, findsNothing);
     });
 
     testWidgets('not to a viewer, even the project\'s owner', (tester) async {
       await pump(tester, backend(role: 'viewer'));
-      await openMenu(tester);
-      expect(find.text('Leaderboard'), findsOneWidget);
+      await openSettings(tester);
+      expect(find.text('Project details'), findsOneWidget);
       expect(menuItem, findsNothing);
     });
 
     testWidgets('not while the PM is switching', (tester) async {
       await pump(tester, backend(pm: pmData({'switchRequest': switching()})));
-      await openMenu(tester);
-      expect(find.text('Leaderboard'), findsOneWidget);
+      await openSettings(tester);
+      expect(find.text('Project details'), findsOneWidget);
       expect(menuItem, findsNothing);
     });
 
@@ -302,8 +331,24 @@ void main() {
         return {...read, 'agents': <Object>[]};
       };
       await pump(tester, fake);
-      await openMenu(tester);
-      expect(find.text('Leaderboard'), findsOneWidget);
+      await openSettings(tester);
+      expect(find.text('Project details'), findsOneWidget);
+      expect(menuItem, findsNothing);
+    });
+
+    testWidgets('leaves the open sheet once a switch is asked for on another '
+        'device', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await openSettings(tester);
+      expect(menuItem, findsOneWidget);
+      await readAgain(
+        tester,
+        fake,
+        host,
+        pm: pmData({'switchRequest': switching()}),
+      );
+      expect(find.text('Project details'), findsOneWidget);
       expect(menuItem, findsNothing);
     });
   });
@@ -390,7 +435,7 @@ void main() {
         swarmTeamGlance(snapshot, projectId: project).agents.single.label,
         'Switching…',
       );
-      await openMenu(tester);
+      await openSettings(tester);
       expect(menuItem, findsNothing);
     });
 
@@ -508,6 +553,75 @@ void main() {
       await tester.pumpAndSettle();
       expect(switches(fake).single['profileId'], 'default');
       expect(switches(fake).single['engine'], 'codex');
+    });
+
+    testWidgets('waits for a fresh reading from the PM\'s machine: Switch '
+        'stays off until its machine reports again', (tester) async {
+      final fake = backend(
+        machine: machineData(
+          readAt: DateTime.now().subtract(const Duration(minutes: 1)),
+        ),
+      );
+      final host = await pump(tester, fake);
+      await openDialog(tester);
+      final note = key('swarm-switch-pm-no-choice');
+      expect(
+        tester.widget<Text>(note).data,
+        'Wait for a fresh reading from the PM’s machine.',
+      );
+      // Its accounts can still be picked, as on Desktop; Switch waits.
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      expect(confirmOn(tester), isFalse);
+
+      await readAgain(tester, fake, host, machine: machineData());
+      expect(dialog, findsOneWidget);
+      expect(note, findsNothing);
+      expect(confirmOn(tester), isTrue);
+      expect(switches(fake), isEmpty);
+    });
+
+    testWidgets('says to update Harness on a machine too old to switch it, '
+        'by its name without .local', (tester) async {
+      await pump(
+        tester,
+        backend(machine: machineData(capabilities: const ['leadStart'])),
+      );
+      await openDialog(tester);
+      expect(
+        tester.widget<Text>(key('swarm-switch-pm-no-choice')).data,
+        'Update Harness on Team Mac to switch this Product Manager.',
+      );
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      expect(confirmOn(tester), isFalse);
+    });
+
+    testWidgets('says so when no account can be picked', (tester) async {
+      // A machine that offers only the engine the PM runs, in its default
+      // account.
+      await pump(
+        tester,
+        backend(
+          machine: machineData(profiles: false, engines: const ['claude']),
+        ),
+      );
+      await openDialog(tester);
+      expect(find.text('Claude Code · Default'), findsOneWidget);
+      expect(find.text('Codex · Default'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-switch-pm-no-choice')).data,
+        'No engine or account can run a Product Manager right now.',
+      );
+      expect(confirmOn(tester), isFalse);
+    });
+
+    testWidgets('says nothing of the kind while it can switch', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      await openDialog(tester);
+      expect(key('swarm-switch-pm-no-choice'), findsNothing);
     });
 
     testWidgets('goes once a switch is asked for on another device', (
@@ -700,6 +814,60 @@ void main() {
           ),
         ),
         ['codex-bbbbbbbbbbbbbbbb'],
+      );
+    });
+
+    test('the PM\'s machine refuses a switch without a reading of the last '
+        '35 seconds, or without leadSwitch', () {
+      final now = DateTime(2026, 11, 4, 12);
+      SwarmReader reader(Map<String, dynamic>? machine) {
+        final reader = SwarmReader(
+          tabId: tab,
+          accountId: me,
+          request: FakeSwarm().request,
+        )..snapshot = snapshot(pmData(), machines: [?machine]);
+        addTearDown(reader.dispose);
+        return reader;
+      }
+      String? refusal(Map<String, dynamic>? machine) =>
+          swarmSwitchPmRefusal(reader(machine), project, now: now);
+
+      const stale = 'Wait for a fresh reading from the PM’s machine.';
+      expect(refusal(null), stale);
+      expect(
+        refusal(
+          machineData(readAt: now.subtract(const Duration(seconds: 35))),
+        ),
+        stale,
+      );
+      expect(
+        refusal(
+          machineData(readAt: now.subtract(const Duration(seconds: 34))),
+        ),
+        isNull,
+      );
+      expect(
+        refusal({
+          ...machineData(readAt: now, capabilities: const []),
+          'name': null,
+        }),
+        'Update Harness on the PM’s machine to switch this Product Manager.',
+      );
+      expect(
+        refusal({
+          ...machineData(readAt: now),
+          'observation': {'receivedAt': now.millisecondsSinceEpoch},
+        }),
+        'Update Harness on Team Mac to switch this Product Manager.',
+      );
+      // Without a PM there is nothing to refuse.
+      expect(
+        swarmSwitchPmRefusal(
+          reader(machineData(readAt: now))..snapshot = null,
+          project,
+          now: now,
+        ),
+        isNull,
       );
     });
 
