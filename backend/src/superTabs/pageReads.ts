@@ -335,7 +335,7 @@ const BACKFILL_CHECK_MS = 60_000
 const backfilled = new Map<string, { done: boolean; at: number }>()
 
 /** Whether the Swarm's thread summaries are backfilled (threadBackfill.ts), as this process read it in the last minute. */
-async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
+export async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
   const known = backfilled.get(tabId), now = Date.now()
   if (known && now - known.at < BACKFILL_CHECK_MS) return known.done
   const done = !!await tx.superTabThreadBackfill.findUnique({ where: { id: tabId }, select: { id: true } })
