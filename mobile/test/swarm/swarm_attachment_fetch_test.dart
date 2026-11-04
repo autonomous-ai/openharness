@@ -42,6 +42,22 @@ class _Hosts extends http.BaseClient {
   );
 }
 
+/// Harness's file storage answering every fetch with [headers], as the
+/// backend serves a chat file (superTabs/attachments.ts `served`).
+class _Serving extends http.BaseClient {
+  _Serving(this.headers);
+
+  final Map<String, String> headers;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      http.StreamedResponse(
+        Stream.value(pixelPng),
+        HttpStatus.ok,
+        headers: headers,
+      );
+}
+
 void main() {
   late Directory root;
   final link = Uri.parse('https://cdn.harness.autonomous.ai/a1/a.png');
@@ -80,4 +96,90 @@ void main() {
       expect(hosts.sent.single.followRedirects, isFalse);
     });
   }
+
+  group('the extension a file is kept under', () {
+    final voice = Uri.parse(
+      'https://storage.googleapis.com/harness-cdn/super-tabs/t/abc/'
+      'Voice_message.wav?X-Goog-Signature=sig',
+    );
+
+    Future<File> kept(Uri url, Map<String, String> headers) async {
+      final store = storeIn(root, SwarmFileFetch(client: _Serving(headers)));
+      await store.keepOnly('person-me');
+      return store.file(url);
+    }
+
+    test("a file served as bare bytes is kept under its name's, so an "
+        "iPhone's player opens a voice message", () async {
+      final file = await kept(voice, {
+        'content-type': 'application/octet-stream',
+        'content-disposition':
+            "attachment; filename*=UTF-8''Voice%20message.wav",
+      });
+      expect(file.path, endsWith('.wav'));
+      expect(await file.readAsBytes(), pixelPng);
+    });
+
+    test("with no name in the answer, under its link's", () async {
+      final file = await kept(voice, {
+        'content-type': 'application/octet-stream',
+      });
+      expect(file.path, endsWith('.wav'));
+    });
+
+    test("a picture is kept under its type's, whatever its name", () async {
+      final file = await kept(
+        Uri.parse('https://storage.googleapis.com/b/t/abc/photo.jpeg'),
+        {
+          'content-type': 'image/png',
+          'content-disposition': "inline; filename*=UTF-8''photo.jpeg",
+        },
+      );
+      expect(file.path, endsWith('.png'));
+    });
+
+    test('bare bytes with no extension in their name stay .bin', () async {
+      final file = await kept(
+        Uri.parse('https://storage.googleapis.com/b/t/abc/HANDOFF'),
+        {
+          'content-type': 'application/octet-stream',
+          'content-disposition': "attachment; filename*=UTF-8''HANDOFF",
+        },
+      );
+      expect(file.path, endsWith('.bin'));
+    });
+  });
+
+  test('reads the name however the answer gives it, and takes only a plain '
+      'extension', () {
+    final bare = Uri.parse('https://storage.googleapis.com/b/t/abc/file');
+    String named(String disposition) =>
+        swarmKeptExtension('.bin', disposition: disposition, url: bare);
+
+    expect(named("attachment; filename*=UTF-8''Voice%20message.WAV"), '.wav');
+    expect(named('attachment; filename="clip.m4a"'), '.m4a');
+    expect(named('attachment; FILENAME=notes.txt'), '.txt');
+    // Badly encoded: its plain name instead, or the link's.
+    expect(
+      named("attachment; filename*=UTF-8''%A.wav; filename=\"clip.ogg\""),
+      '.ogg',
+    );
+    expect(named("attachment; filename*=UTF-8''%E0.wav"), '.bin');
+    // Not a plain extension: neither a folder in it, nor a name that is one.
+    expect(named("attachment; filename*=UTF-8''a.w%2Fav"), '.bin');
+    expect(named("attachment; filename*=UTF-8''.wav"), '.bin');
+    expect(named("attachment; filename*=UTF-8''a.waveform-long"), '.bin');
+    expect(
+      swarmKeptExtension('', url: Uri.parse('https://h.test/a/clip.wav?x=1')),
+      '.wav',
+    );
+    expect(
+      swarmKeptExtension(
+        '.png',
+        disposition: "inline; filename*=UTF-8''a.wav",
+        url: bare,
+      ),
+      '.png',
+    );
+  });
 }
