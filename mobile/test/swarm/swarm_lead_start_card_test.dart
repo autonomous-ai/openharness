@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_lead_start.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -59,6 +60,12 @@ void main() {
     for (final family in ['.AppleSystemUIFont', 'Roboto']) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
     }
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    for (final family in ['.AppleSystemUIFontMonospaced', 'monospace']) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
+    }
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
     for (final entry in manifest.cast<Map<String, dynamic>>()) {
@@ -76,6 +83,7 @@ void main() {
     WidgetTester tester, {
     Map<String, dynamic>? load,
     Brightness brightness = Brightness.dark,
+    Widget? home,
   }) async {
     lead = FakeLeadComputers([
       computer('mac-1', 'Studio', folders: {repo: '/Users/me/games'}),
@@ -130,14 +138,17 @@ void main() {
       RepaintBoundary(
         key: boundary,
         child: MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: buildAppTheme(brightness: brightness),
           builder: (context, child) =>
               SwarmScope(notifier: host, child: child!),
-          home: const Scaffold(
-            body: SwarmConversationPage(
-              swarmId: tab,
-              conversationId: personalChat,
-            ),
+          home: Scaffold(
+            body:
+                home ??
+                const SwarmConversationPage(
+                  swarmId: tab,
+                  conversationId: personalChat,
+                ),
           ),
         ),
       ),
@@ -146,6 +157,15 @@ void main() {
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
+
+  /// The start's requests answered: a few frames, since Starting… spins
+  /// until the Lead joins and never settles.
+  Future<void> frames(WidgetTester tester) async {
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
   List<String> sent() => [for (final c in swarm.commands) c['type'] as String];
 
   Future<void> capture(WidgetTester tester, String name) async {
@@ -226,7 +246,7 @@ void main() {
     await tester.pump();
 
     lead.held!.complete();
-    await tester.pumpAndSettle();
+    await frames(tester);
     expect(sent(), ['lead.claim', 'agent.add']);
     expect(lead.starts, hasLength(1));
     expect(swarm.commands.last['lead'], isTrue);
@@ -250,7 +270,7 @@ void main() {
 
     lead.failure = null;
     await tester.tap(key('swarm-lead-start-button'));
-    await tester.pumpAndSettle();
+    await frames(tester);
     expect(lead.starts, hasLength(2));
     expect(sent(), ['lead.claim', 'lead.claim', 'agent.add']);
   });
@@ -288,7 +308,13 @@ void main() {
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     for (final brightness in Brightness.values) {
-      await pump(tester, brightness: brightness);
+      // As the person opens it: the project, its chat filling the screen.
+      await pump(
+        tester,
+        brightness: brightness,
+        home: SwarmProjectPage(swarmId: tab, projectId: personal),
+      );
+      expect(key('swarm-lead-start'), findsOneWidget);
       await capture(tester, 'ready-${brightness.name}');
       lead.held = Completer();
       await tester.tap(key('swarm-lead-start-button'));
