@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
@@ -156,6 +156,8 @@ const MAX_REMOVED_MACHINES = 64
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
+    // Its Agents setting (machines.ts agentLimit): an older client leaves it out.
+    agents: z.enum(['memory', 'atMost']).optional(),
     ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
     // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
     unlessRemoved: z.literal(true).optional() }).strict(),
@@ -1214,9 +1216,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
       // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
-      if (!pool.buddyOnly && machineSlots(state, pool) >= pool.maxAgents) {
-        fail('MACHINE_FULL', `${pool.name} is already running as many agents as it allows. End a session there, or try again when one finishes.`)
-      }
+      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes)
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
@@ -1314,7 +1314,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
       if (!(error instanceof SuperTabError && error.status < 500)) throw error
       return error.code === 'MACHINE_PAUSED' ? `${machine} is paused` : error.code === 'MACHINE_OFFLINE' ? `${machine} is offline`
-        : error.code === 'MACHINE_FULL' ? `${machine} already runs as many agents as it takes`
+        : error.code === 'MACHINE_FULL' ? (error.details?.reason === 'memory' ? `${machine} is out of free memory` : `${machine} already runs as many agents as it takes`)
         : error.code === 'MACHINE_REMOVED' ? `${machine} is being removed from the Swarm` : `${machine} cannot take me right now`
     }
     if (!admitted) return 'my machine is no longer in the Swarm'
@@ -1896,19 +1896,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // So is their choice of their own account for teammates' work (machine.ownAccountWork), Desktop's join re-save
       // included; not over a removal, so a Mac removed and added again starts Team-account-only.
       const ownAccountChoice = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.ownAccountChoice
+      // Its Agents setting: a client that does not send one (older than #2860) keeps the stored one while the count is the same.
+      const previous = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)
+      const agents = command.agents ?? (previous?.agents && previous.maxAgents === command.maxAgents ? previous.agents : undefined)
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
-        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
+        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(mac ? (mac.agents ? { agents: mac.agents } : {}) : agents ? { agents } : {}),
+        ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
         ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
         ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
-      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
+      for (const team of teamPoolsOf(state, added)) if (!team.removal) {
+        Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
+        if (added.agents) team.agents = added.agents
+        else delete team.agents
+      }
       break
     }
     case 'machine.pause': {
