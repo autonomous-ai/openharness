@@ -527,12 +527,16 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       builder: (_) => SwarmProjectDetailsSheet(
         reader: reader,
         projectId: project.id,
+        // The page's context, not the sheet's: a resume's question is asked
+        // once the sheet has gone.
         terminal: (shell, computers) => allowed()
             ? swarmTerminalAction(
+                context: context,
                 agent: () => swarmProjectPm(reader.snapshot, project.id),
                 allowed: allowed,
                 shell: shell,
                 computers: computers,
+                until: reader,
               )
             : null,
         onStatus: _openStatusSheet,
@@ -963,10 +967,12 @@ class _ProjectMenu extends StatelessWidget {
     // computers do ([SwarmScope.computersOf] depends on its host).
     final terminal = allowed()
         ? swarmTerminalAction(
+            context: context,
             agent: () => swarmProjectPm(reader.snapshot, projectId),
             allowed: allowed,
             shell: shell,
             computers: computers,
+            until: reader,
           )
         : null;
     return MenuTheme(
