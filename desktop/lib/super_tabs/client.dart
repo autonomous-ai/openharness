@@ -14,6 +14,7 @@ import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
 import 'reminders.dart';
+import 'reply_notices.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'saved_view.dart';
@@ -38,6 +39,7 @@ class SuperTabClient {
     this.onSelection,
     this.onMention,
     this.onChatMessage,
+    this.onReply,
     this.onReminder,
     this.onTagCounts,
     this.onNotices,
@@ -75,6 +77,10 @@ class SuperTabClient {
   /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
   final void Function(String tabId, SuperTabConversation group, int sequence)?
   onChatMessage;
+
+  /// A new reply in a thread the reader is in, in Swarm `tabId`
+  /// ([SuperTabReplyNotices]).
+  final void Function(String tabId, SuperTabReplyRow reply)? onReply;
 
   /// A reminder the reader set came due in Swarm `tabId` ([SuperTabReminders]).
   final void Function(String tabId, SuperTabReminder reminder)? onReminder;
@@ -822,6 +828,9 @@ class SuperTabClient {
     if (onChatMessage case final told?) {
       SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
           told(id, group, sequence);
+    }
+    if (onReply case final told?) {
+      SuperTabReplyNotices.of(controller).onReply = (reply) => told(id, reply);
     }
     if (onReminder case final told?) {
       SuperTabReminders.of(controller).onArrived = (reminder) =>

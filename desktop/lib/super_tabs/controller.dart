@@ -877,6 +877,10 @@ class SuperTabController extends ChangeNotifier {
   /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
 
+  /// Whether the open thread's pane is on screen, as its read mark counts it:
+  /// its replies are being read.
+  bool get threadPaneOnScreen => openedThread != null && !_threadUnshown;
+
   /// The pane of the open thread is on screen.
   void threadPaneShown() {
     if (!_threadUnshown) return;

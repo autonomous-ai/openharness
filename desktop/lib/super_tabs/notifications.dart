@@ -10,9 +10,11 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
+import 'message_link.dart';
 import 'model.dart';
 import 'private_project_lock.dart';
 import 'reminders.dart';
+import 'reply_notices.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -89,6 +91,28 @@ superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
         title: group.title,
         body: 'New messages',
         chat: (tabId: tabId, conversationId: group.id),
+      );
+
+/// What tells the person about a new reply in a thread they are in
+/// ([SuperTabReplyNotices]): the operating system, on Desktop only, as tags
+/// are. A click opens the reply as its message link does: in its thread, in
+/// its Swarm [tabId].
+void Function(String tabId, SuperTabReplyRow reply)? superTabReplyNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (tabId, reply) => system.postNotice(
+        id: 'harness-reply:$tabId:${reply.id}',
+        title: '${reply.actorName} replied in a thread',
+        body:
+            '${reply.projectName} · ${reply.conversationTitle}: '
+            '${reply.text}',
+        messageLink: SwarmMessageLink(
+          tabId: tabId,
+          conversationId: reply.conversationId,
+          messageId: reply.messageId,
+        ).url,
       );
 
 /// What tells the person a reminder they set is due: the operating system, on
