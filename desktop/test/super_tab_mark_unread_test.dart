@@ -98,6 +98,21 @@ void main() {
     expect(find.text('Mark unread'), findsNothing);
   });
 
+  testWidgets('the line goes above the message even when the reader '
+      'answered after it', (tester) async {
+    final server = _read(4);
+    server.append('My answer');
+    server.markReadElsewhere('lead', 5);
+    await show(tester, server);
+    await markUnread(tester, 'message-3');
+    expect(find.byKey(_line), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 3')).dy),
+    );
+    expect(leadUnread(), isTrue);
+  });
+
   testWidgets('the open chat stays unread until the reader leaves it', (
     tester,
   ) async {
