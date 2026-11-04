@@ -258,7 +258,10 @@ export interface HostAgentRow {
   roleName: string
   /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
    *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string
+    /** The coordinator's alone: the built-in PM schedule's hash (pmSchedule.ts), which its read carries beside the text. The host
+     *  reads again when it moves, as it does for `revision`. */
+    builtInHash?: string } | null
   lead: boolean
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null

@@ -54,6 +54,7 @@ import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BUILT_IN_HEADING } from './pmSchedule.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -1712,6 +1713,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!command.askedBy) fail('ASKED_BY_REQUIRED', 'Name the member who asked for this change (askedBy).', 400)
       }
       const askedBy = command.askedBy ? askedByOf(state, project, command.askedBy) : (actor as Extract<Actor, { kind: 'person' }>).userId
+      // The Swarm adds the built-in PM schedule to every coordinator's read (pmSchedule.ts); one copied into the document would
+      // be read twice, and go stale when the built-in one changes. Refused out loud, never stripped.
+      if (command.text.split('\n').some(line => line.trim() === BUILT_IN_HEADING)) {
+        fail('INSTRUCTIONS_BUILT_IN', 'Remove the "Built-in PM schedule" section: the Swarm adds it to every read, so it is never saved in the document.', 400)
+      }
       const current = project.instructionsRevision ?? 0
       if (command.baseRevision !== current) {
         // Refused with the text it missed, to merge and save again (design, Concurrency): never two writers' texts kept silently.
