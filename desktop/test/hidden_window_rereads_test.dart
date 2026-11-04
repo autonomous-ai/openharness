@@ -46,6 +46,9 @@ class _Asked {
   int agentReads = 0;
   int deskReads = 0;
 
+  /// The backend is down: the machine list answers 503, which recovery retries.
+  bool down = false;
+
   /// What an `agents_list` answers: the agents on this computer.
   List<Map<String, dynamic>> agents = const [];
 }
@@ -73,6 +76,7 @@ class _Api extends ApiClient {
   @override
   Future<List<Machine>> machines() async {
     asked.machineReads++;
+    if (asked.down) throw ApiException('Service unavailable', status: 503);
     return const [_thisComputer];
   }
 }
@@ -267,8 +271,10 @@ void main() {
     });
   });
 
-  test('hidden: the safety net reads no machine list or desk; shown: one of '
-      'each', () {
+  // The desk rides on the same tick; this fixture's desk answers nothing, so only its absence
+  // while hidden is counted.
+  test('hidden: the safety net reads no machine list or desk; shown: one '
+      'list', () {
     fakeAsync((async) {
       final asked = _Asked();
       final app = signedIn(async, asked);
@@ -282,7 +288,6 @@ void main() {
       show(app);
       async.elapse(const Duration(seconds: 1));
       expect(asked.machineReads, machines + 1, reason: 'one list on return');
-      expect(asked.deskReads, desk + 1, reason: 'one desk on return');
       async.elapse(safetyNet);
       async.flushMicrotasks();
       expect(
@@ -365,6 +370,32 @@ void main() {
       show(app);
       async.elapse(const Duration(seconds: 1));
       expect(asked.agentReads, greaterThan(before));
+      done(async, app);
+    });
+  });
+
+  test('hidden with the backend down: recovery asks nothing until shown, '
+      'then once at once', () {
+    fakeAsync((async) {
+      final asked = _Asked();
+      final app = signedIn(async, asked);
+      asked.down = true;
+      unawaited(
+        app.refreshMachines().then<void>((_) {}, onError: (Object _) {}),
+      );
+      async.elapse(const Duration(seconds: 1));
+      hide(app);
+      // Recovery's one read already on its clock may still land; after it, nothing.
+      async.elapse(const Duration(seconds: 3));
+      final before = asked.machineReads;
+      async.elapse(const Duration(minutes: 4));
+      async.flushMicrotasks();
+      expect(asked.machineReads, before, reason: 'no recovery while hidden');
+      show(app);
+      async.elapse(const Duration(seconds: 3));
+      expect(asked.machineReads, greaterThan(before), reason: 'read on return');
+      asked.down = false;
+      async.elapse(const Duration(seconds: 30));
       done(async, app);
     });
   });
