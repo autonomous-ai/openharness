@@ -67,7 +67,8 @@ void main() {
     expect(p.state, SwarmPostState.sending);
 
     r.answers[0].completeError(StateError('reset'));
-    await Future<void>.delayed(Duration.zero);
+    // A runner slower than the send timeout.
+    await Future<void>.delayed(const Duration(milliseconds: 30));
     expect(p.state, SwarmPostState.sending, reason: 'the retry speaks now');
 
     r.answers[1].complete({'result': <String, dynamic>{}});
