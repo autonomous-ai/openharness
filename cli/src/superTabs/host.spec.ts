@@ -5612,3 +5612,36 @@ describe('the account a Buddy\'s grant holds for', () => {
     expect(account()).toBeNull()
   })
 })
+
+// Task #2800's measure: what one idle agent and its machine ask the backend per minute over 10 minutes while the server
+// pushes, nothing waiting. Printed for the pull request; run against main's host.ts and terminal.ts for the before numbers.
+describe('requests per idle agent and machine per minute while the server pushes (task #2800)', () => {
+  async function measure(lead: boolean) {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+    t.row.lead = lead
+    const host = t.open()
+    t.idle()
+    t.push({ type: 'super_tab_deliveries' })
+    await host.tick()
+    vi.mocked(t.call).mockClear()
+    // The server's 4-minute repeat that it pushes (backend lib/swarmDeliveryPushes.ts), heard at 4 and 8 minutes.
+    for (let second = 1; second <= 600; second++) {
+      t.wait(1_000)
+      if (second % 240 === 0) t.push({ type: 'super_tab_deliveries' })
+      await host.tick()
+    }
+    const calls = vi.mocked(t.call).mock.calls
+    const perMinute = (match: (method: string, path: string) => boolean) => calls.filter(([method, path]) => match(method, path)).length / 10
+    return { lists: perMinute((method, path) => method === 'GET' && path.endsWith('/deliveries')),
+      pickups: perMinute((method, path) => method === 'POST' && path.endsWith('/terminal')) }
+  }
+
+  it('an idle worker: list reads only on the repeat, no terminal pickups; a Lead: a list read every 30 s', async () => {
+    const worker = await measure(false), lead = await measure(true)
+    console.log(`[#2800 measure] per minute: worker list GETs ${worker.lists}, Lead list GETs ${lead.lists}, machine terminal pickups ${worker.pickups}`)
+    expect(worker).toEqual({ lists: 0.2, pickups: 0 })
+    expect(lead.lists).toBe(2)
+  }, 60_000)
+})
