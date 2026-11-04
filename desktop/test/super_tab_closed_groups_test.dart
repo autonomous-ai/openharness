@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -55,32 +54,14 @@ void main() {
       await loadPreviewFonts();
     }
   });
-  final closedRow = find.byKey(const ValueKey('super-closed-lead'));
-
-  testWidgets('a project with no archived groups has no Closed row', (
-    tester,
-  ) async {
-    final server = ConversationServer();
-    final controller = server.controller();
-    await controller.refresh();
-    await tester.pumpWidget(_app(server, controller));
-    await tester.pumpAndSettle();
-    expect(closedRow, findsNothing);
-    expect(find.textContaining('Closed ('), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    await controller.flush();
-    controller.dispose();
-  });
 
   for (final brightness in Brightness.values) {
     testWidgets(
-      'Closed (N) starts collapsed, lists archived groups, opens one read-only and reopens it (${brightness.name})',
+      'a closed group opens read-only and reopens (${brightness.name})',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(1280, 800));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final server = ConversationServer();
-        await tester.binding.setSurfaceSize(const Size(1280, 800));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
         final oldBrightness = grid.AppTheme.brightness.value;
         final oldPalette = grid.AppTheme.palette.value;
         grid.AppTheme.brightness.value = brightness;
@@ -91,11 +72,6 @@ void main() {
         });
         final groups = server.state['conversations'] as List;
         groups[1]['archived'] = true;
-        groups.add({
-          ...conversationFixture('second', 'Second closed'),
-          'projectId': 'lead',
-          'archived': true,
-        });
         server.append(
           'Verified the offline result.',
           conversationId: 'offline',
@@ -104,30 +80,11 @@ void main() {
         await controller.refresh();
         await tester.pumpWidget(_app(server, controller, brightness));
         await tester.pumpAndSettle();
-        final sidebar = find.byType(ProjectSidebar);
-        Finder inside(Finder f) => find.descendant(of: sidebar, matching: f);
-        if (closedRow.evaluate().isEmpty) {
-          await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-          await tester.pumpAndSettle();
-        }
-
-        expect(inside(find.text('Closed (2)')), findsOneWidget);
-        expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-        expect(find.byKey(const ValueKey('super-group-second')), findsNothing);
-
-        await tester.tap(closedRow);
-        await tester.pumpAndSettle();
-        expect(
-          find.byKey(const ValueKey('super-group-offline')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const ValueKey('super-group-second')),
-          findsOneWidget,
-        );
-        await _shot(tester, 'closed-open-${brightness.name}');
-
-        await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+        // The sidebar lists no tasks, open or closed (task #2569): the
+        // closed one is read and opened as the Tasks view opens it.
+        expect(find.textContaining('Closed ('), findsNothing);
+        await controller.loadDormant('lead');
+        await controller.select('offline');
         await tester.pumpAndSettle();
         expect(controller.selectedId, 'offline');
         expect(find.text('Verified the offline result.'), findsOneWidget);
@@ -146,12 +103,7 @@ void main() {
           'conversationId': 'offline',
           'archived': false,
         });
-        expect(inside(find.text('Closed (1)')), findsOneWidget);
         expect(find.byKey(const ValueKey('super-group-reopen')), findsNothing);
-        expect(
-          find.byKey(const ValueKey('super-group-offline')),
-          findsOneWidget,
-        );
         expect(
           tester
               .widget<TextField>(
@@ -167,42 +119,4 @@ void main() {
       },
     );
   }
-
-  testWidgets(
-    'closed groups read a page at a time; Show earlier reads the next',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1280, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer()..parts.dormantPage = 1;
-      final groups = server.state['conversations'] as List;
-      groups[1]['archived'] = true;
-      groups.add({
-        ...conversationFixture('second', 'Second closed'),
-        'projectId': 'lead',
-        'archived': true,
-      });
-      final controller = server.controller();
-      await controller.refresh();
-      await tester.pumpWidget(_app(server, controller));
-      await tester.pumpAndSettle();
-      if (closedRow.evaluate().isEmpty) {
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-        await tester.pumpAndSettle();
-      }
-      expect(find.text('Closed (1)'), findsOneWidget);
-      await tester.tap(closedRow);
-      await tester.pumpAndSettle();
-      final earlier = find.byKey(const ValueKey('super-closed-earlier-lead'));
-      expect(earlier, findsOneWidget);
-      await tester.tap(earlier);
-      await tester.pumpAndSettle();
-      expect(find.text('Closed (2)'), findsOneWidget);
-      expect(earlier, findsNothing);
-      expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
-      expect(find.byKey(const ValueKey('super-group-second')), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    },
-  );
 }

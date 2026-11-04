@@ -40,15 +40,16 @@ Map<String, dynamic> _said(int sequence, String text) => {
 
 void main() {
   group('project rows', () {
-    testWidgets('a project waiting on a person shows no question mark; its '
-        'task still does', (tester) async {
+    testWidgets('a project waiting on a person shows no question mark, open '
+        'or not', (tester) async {
       final server = swarm();
       wait(server);
       await showView(tester, server);
       expect(find.text('?'), findsNothing);
       await tester.tap(find.text('web-project').first);
       await tester.pumpAndSettle();
-      expect(find.text('?'), findsOneWidget);
+      // Its task is in the Tasks view, not listed under it (task #2569).
+      expect(find.text('?'), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
     });
 
