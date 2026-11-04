@@ -472,9 +472,33 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   /// allowed to be wider than the box it drops out of; the reverse, a panel
   /// narrower than its control, is what reads as an unrelated box. Neither gets
   /// a fixed floor: a list of short names would keep an empty side.
-  double _rowWidth(double? panelWidth) {
-    final fit = AppMenuItem.fitWidth(context, [
-      for (final option in widget.options)
+  double _rowWidth(double? panelWidth) => math.max(
+    math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
+    math.min(_fitWidth ?? _unknownPanelWidth, _maxFitWidth),
+  );
+
+  int? _fitKey;
+  double? _fit;
+
+  /// The widest row, measured only when what it says changes: a field rebuilds
+  /// often, closed too, and a list of models can run to hundreds of names. Null
+  /// when a row has a trailing mark, whose width only its own layout decides.
+  double? get _fitWidth {
+    final options = widget.options;
+    if (options.any((option) => option.trailing != null)) return null;
+    final key = Object.hash(
+      Object.hashAll([
+        for (final option in options)
+          Object.hash(option.label, option.note, option.detail),
+      ]),
+      _hasMarks,
+      widget.textStyle,
+      MediaQuery.textScalerOf(context),
+    );
+    if (key == _fitKey) return _fit;
+    _fitKey = key;
+    return _fit = AppMenuItem.fitWidth(context, [
+      for (final option in options)
         AppMenuItem(
           label: option.label,
           note: option.note,
@@ -483,14 +507,9 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           leadingSlot: _hasMarks ? true : null,
           // Its tick: any row in a picker can become the chosen one.
           selected: true,
-          trailing: option.trailing?.call(),
           onPressed: null,
         ),
     ]);
-    return math.max(
-      math.max(panelWidth ?? 0, widget.menuWidth ?? 0),
-      math.min(fit ?? _unknownPanelWidth, _maxFitWidth),
-    );
   }
 
   bool get _hasMarks => widget.options.any((option) => option.leading != null);
@@ -533,6 +552,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
   }
 
   Widget _anchor(SelectOption<T>? current, double? panelWidth) {
+    final rowWidth = _rowWidth(panelWidth);
     return MenuAnchor(
       controller: _controller,
       childFocusNode: _fieldFocus,
@@ -546,9 +566,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // Below the control, by the app's one menu gap — and the panel takes its
       // fill, rim and radius from [AppMenu], the app's single panel recipe.
       alignmentOffset: Offset(
-        widget.menuAlignedToEnd
-            ? math.min(0, (panelWidth ?? 0) - _rowWidth(panelWidth))
-            : 0,
+        widget.menuAlignedToEnd ? math.min(0, (panelWidth ?? 0) - rowWidth) : 0,
         AppControl.menuGap,
       ),
       // ⚠️ The width is set on the ROWS, not with `MenuStyle.minimumSize`.
@@ -561,10 +579,10 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // at.
       style: AppMenu.style(maxHeight: _maxPanelHeight),
       menuChildren: [
-        if (_filtering) _filterField(_rowWidth(panelWidth)),
+        if (_filtering) _filterField(rowWidth),
         if (widget.options.isEmpty && widget.emptyLabel != null)
           SizedBox(
-            width: _rowWidth(panelWidth),
+            width: rowWidth,
             height: kMenuRowExtent,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -579,7 +597,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           ),
         if (_noMatches)
           SizedBox(
-            width: _rowWidth(panelWidth),
+            width: rowWidth,
             height: kMenuRowExtent,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -595,7 +613,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
         for (final option in _shownOptions)
           _typingRegion(
             SizedBox(
-              width: _rowWidth(panelWidth),
+              width: rowWidth,
               child: AppMenuItem(
                 textStyle: widget.textStyle,
                 // The leading column only when some option has a mark to put
