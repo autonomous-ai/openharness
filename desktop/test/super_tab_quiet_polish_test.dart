@@ -68,7 +68,7 @@ void main() {
       );
     });
 
-    testWidgets('a private project with mentions keeps its number and lock on '
+    testWidgets('a private project keeps its leading lock and mention number '
         'one line, and its row its height', (tester) async {
       final server = swarm()..followedThreads = null;
       (server.state['projects'] as List).first['visibility'] = 'private';
@@ -77,7 +77,7 @@ void main() {
       final number = tester.getCenter(_key('super-mentions-lead'));
       final lock = tester.getCenter(find.byIcon(AppIcons.lock).first);
       expect((number.dy - lock.dy).abs(), lessThan(2));
-      expect(lock.dx, greaterThan(number.dx));
+      expect(lock.dx, lessThan(number.dx));
       expect(tester.takeException(), isNull);
     });
 
