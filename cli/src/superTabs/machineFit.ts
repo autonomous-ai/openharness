@@ -2,8 +2,8 @@
  * its machine (`needs.heavy`), or starts heavy CI workflows itself (`needs.ci`: OS images, end-to-end, macOS jobs). The
  * route's plug-in (route.ts RoutePlugin) then
  * - leaves out a machine with less than half of what the work needs free, which cannot run it;
- * - ranks one with less than the need after every equally strong candidate that has it, never above a weaker model;
- * - says when a reading is unknown, and ranks a busy CPU later among equals;
+ * - notes one with less than the need, so an equally strong candidate that has it is preferred, never a weaker model;
+ * - says when a reading is unknown, and when a machine's CPU is busy;
  * - counts heavy work started there in the last minutes, which its reading may not show yet (pieces 3 to 6 all started on
  *   one Mac within ten minutes, and every route saw the same free memory, 2026-10-31);
  * - holds work that would start CI past the account's running-jobs limit, with a time to route it again.
@@ -21,10 +21,11 @@ export const HEAVY_NEEDS: Record<HeavyWork, { memoryBytes: number; diskBytes: nu
 }
 /** Below this share of the need the machine cannot run the work: it is left out. */
 export const FLOOR_SHARE = 0.5
-/** How far a short or unread machine ranks down, in catalog strength: less than one step, so a stronger model is never
- *  passed over for a machine, while an equally strong one that fits always ranks first. */
+/** Which way a short or unread machine's finding leans, in catalog strength: less than one step, since a stronger model is
+ *  never passed over for a machine, only an equally strong one that fits preferred. Since task #2901 it moves nothing: the
+ *  note says it (route.ts Adjustment). */
 export const SHORT_STRENGTH = -0.5, UNKNOWN_STRENGTH = -0.25
-/** A CPU this busy ranks a machine later among equals; one reading is only a moment, so it never leaves one out. */
+/** A CPU this busy is noted, for choosing between equals; one reading is only a moment, so it never leaves a machine out. */
 export const BUSY_CPU_PERCENT = 85, BUSY_CPU_COST = 1
 /** A heavy start this recent may not show in its machine's reading yet. */
 export const PLACED_RECENT_MS = 15 * 60_000
@@ -138,7 +139,7 @@ function fitOf(candidate: Pick<Probe, 'load'>, needs: Needs, held: Placed | unde
   const out = which(memory !== null && memory < floor.memoryBytes, disk !== null && disk < floor.diskBytes)
   if (out) return { refuse: true, reason: `Too little free ${out} for ${need.words}${counting}: ${wants}, and at least half to run at all.` }
   const short = which(memory !== null && memory < need.memoryBytes, disk !== null && disk < need.diskBytes)
-  if (short) return { strength: SHORT_STRENGTH, ...cpu, reason: `Short of free ${short} for ${need.words}${counting}: ${wants}, so equally strong candidates that have it rank first.${cpuWords}` }
+  if (short) return { strength: SHORT_STRENGTH, ...cpu, reason: `Short of free ${short} for ${need.words}${counting}: ${wants}, so prefer an equally strong candidate that has it.${cpuWords}` }
   const unknown = which(memory === null, disk === null)
   if (unknown) return { strength: UNKNOWN_STRENGTH, ...cpu, reason: `Free ${unknown} unknown here; ${need.words}: ${wants}.${cpuWords}` }
   return busy ? { cost: BUSY_CPU_COST, reason: `Its CPU is busy; it has what ${need.words} needs.` } : null

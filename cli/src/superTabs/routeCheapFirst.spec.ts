@@ -26,26 +26,33 @@ const ok = (r: ReturnType<typeof choose>) => { if ('error' in r) throw new Error
 const picks = (r: ReturnType<typeof choose>) => ok(r).shown.map(s => s.gridLabel ?? `${s.engine} ${s.model}`)
 const reasons = (r: ReturnType<typeof choose>) => r.excluded.map(e => e.reason)
 
-describe('cheap first: a small, low-risk build goes to a cheap grid model first', () => {
-  it('ranks Kimi K3 and DeepSeek above Opus and Codex, says why on the candidate, and records it', () => {
+describe('cheap first: a small, low-risk build notes a cheap grid model as the first choice', () => {
+  it('notes Kimi K3 and DeepSeek as the cheap first choice beside Opus and Codex, says why on the candidate, and records it', () => {
     const r = ok(route(first))
-    expect(picks(r)).toEqual(['DeepSeek v4.1', 'Kimi K3', 'codex default', 'claude opus', 'Qwen 3'])
-    expect(r.shown[0]!.notes).toEqual([`${CHEAP_FIRST}: ${GRID_FIRST}`])
-    expect(r.shown[0]!.label).toContain(GRID_FIRST)
-    // Opus and Codex are not moved, and a grid model the catalog does not rate (Qwen, 1) is not either.
+    // Since task #2901 a plug-in's finding is a note, never the order.
+    expect(picks(r)).toEqual(picks(choose([opus, codex, kimi, deepseek, qwen], catalog, a(), NOW)))
+    for (const label of ['DeepSeek v4.1', 'Kimi K3']) {
+      const s = r.shown.find(c => c.gridLabel === label)!
+      expect(s.notes).toEqual([`${CHEAP_FIRST}: ${GRID_FIRST}`])
+      expect(s.label).toContain(GRID_FIRST)
+    }
+    expect(r.adjusted).toBe(true)
+    // Opus and Codex are not noted, and a grid model the catalog does not rate (Qwen, 1) is not either.
     expect(r.shown.find(s => s.model === 'opus')!.notes).toEqual([])
+    expect(r.shown.find(s => s.engine === 'codex')!.notes).toEqual([])
     expect(r.shown.find(s => s.gridLabel === 'Qwen 3')!.notes).toEqual([])
     const verdict = decide(r)
-    const record = recordOf(r, verdict, a()) as { candidates: Array<{ gridModel?: string; quality: number; label: string }>; pick: string }
+    expect(verdict.via).toBe('instructions')
+    const record = recordOf(r, verdict, a()) as { candidates: Array<{ gridModel?: string; quality: number; label: string }> }
     // It is recorded as what it is: a grid model rated 2, with the reason people read.
-    expect(record.candidates.find(c => c.gridModel === 'deepseek/deepseek-v4.1')).toMatchObject({ quality: 2 })
-    expect(record.candidates[0]!.label).toContain(GRID_FIRST)
-    expect(record.pick).toBe(r.shown[0]!.id)
+    const recorded = record.candidates.find(c => c.gridModel === 'deepseek/deepseek-v4.1')!
+    expect(recorded).toMatchObject({ quality: 2 })
+    expect(recorded.label).toContain(GRID_FIRST)
+    expect(record).not.toHaveProperty('pick')
   })
 
-  it('keeps today\'s order unless the task is low risk, low difficulty and small in scope', () => {
+  it('says nothing unless the task is low risk, low difficulty and small in scope', () => {
     const today = picks(choose([opus, codex, kimi, deepseek, qwen], catalog, a(), NOW))
-    expect(today[0]).toBe('codex default')
     for (const [task, assessment] of [
       [first, { difficulty: 'medium' }], [first, { risk: 'medium' }], [{ ...first, owned: 0 }, {}], [{ ...first, owned: MAX_OWNED + 1 }, {}],
     ] as Array<[CheapTask, Partial<Assessment>]>) {
@@ -53,14 +60,14 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
       expect(picks(r)).toEqual(today)
       expect(r.adjusted).toBeUndefined()
     }
-    expect(picks(route({ ...first, owned: MAX_OWNED }))[0]).toBe('DeepSeek v4.1')
+    expect(ok(route({ ...first, owned: MAX_OWNED })).shown.find(s => s.gridLabel === 'DeepSeek v4.1')!.notes).toEqual([`${CHEAP_FIRST}: ${GRID_FIRST}`])
   })
 
   it('never puts a review on a grid model, even one a person names or a local one asked for, and says why', () => {
     for (const task of [{ ...first, review: true }, first]) {
       const kind = task.review ? {} : { kind: 'review' }
       const r = ok(route(task, kind))
-      expect(picks(r)).toEqual(['codex default', 'claude opus'])
+      expect(picks(r)).toEqual(['claude opus', 'codex default'])
       expect(reasons(r)).toEqual([`${GRID_LIMITS}: ${NEVER_REVIEWS}`, `${GRID_LIMITS}: ${NEVER_REVIEWS}`, `${GRID_LIMITS}: ${NEVER_REVIEWS}`])
       expect(route(task, { ...kind, model: 'kimi k3' })).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: expect.stringContaining('Kimi K3'), reason: `${GRID_LIMITS}: ${NEVER_REVIEWS}`, machine: 'remote-1' }] })
       expect(route(task, { ...kind, local: true })).toMatchObject({ error: 'NO_CANDIDATE' })
@@ -86,13 +93,13 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
     }
     expect(GRID_KINDS_ONLY).toBe('A model on the Swarm\'s grid takes only work whose kind is docs, tests, fixtures, copy or refactor; this task names no such kind.')
     // Every kind on the list may try the grid first.
-    for (const kind of GRID_KINDS) expect(picks(route(first, { kind }))[0]).toBe('DeepSeek v4.1')
+    for (const kind of GRID_KINDS) expect(ok(route(first, { kind })).shown.find(s => s.gridLabel === 'DeepSeek v4.1')!.notes).toEqual([`${CHEAP_FIRST}: ${GRID_FIRST}`])
   })
 
   it('steps up: a task with an earlier attempt routes without grid models, and says why', () => {
     const earlier = { ...first, earlier: 'Its first attempt ran on Kimi K3.' }
     const r = ok(route(earlier))
-    expect(picks(r)).toEqual(['codex default', 'claude opus'])
+    expect(picks(r)).toEqual(['claude opus', 'codex default'])
     expect(new Set(reasons(r))).toEqual(new Set([`${CHEAP_FIRST}: ${FIRST_ATTEMPT_ONLY} Its first attempt ran on Kimi K3.`]))
     // A person who names a grid model for the next attempt still gets it, told that the task stepped up.
     const named = ok(route(earlier, { model: 'kimi' }))
@@ -102,7 +109,7 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
     expect(route({ ...earlier, review: true }, { model: 'kimi' })).toMatchObject({ error: 'NO_CANDIDATE' })
   })
 
-  it('adds no candidate: it only ranks and leaves out the grid models the route itself found served and rated', () => {
+  it('adds no candidate: it only notes and leaves out the grid models the route itself found served and rated', () => {
     // Grid candidates come only from routeCommand.ts localProbes: models a fresh reading says are served, rated from the catalog.
     expect(cheapFirst(first).candidates).toBeUndefined()
     expect(gridLimits(true).candidates).toBeUndefined()
@@ -119,7 +126,7 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
   })
 })
 
-describe('what the route reads of a task before it is ranked', () => {
+describe('what the route reads of a task before it routes it', () => {
   const group = (patch: Record<string, unknown> = {}) => ({ id: 'g1', task: { goal: 'Fix it', owns: ['docs/a.md'] }, checks: [{ id: 'c1' }], assignment: null, ...patch })
   const state = (patch: Record<string, unknown> = {}) => ({ agents: [], starts: [], ...patch })
   const history = { decisions: [], attempts: [] }
@@ -169,7 +176,7 @@ describe('what the route reads of a task before it is ranked', () => {
 })
 
 describe('the maker', () => {
-  it('is in the route\'s makers list, the guard before the ranking', () => {
+  it('is in the route\'s makers list, the guard before cheap first', () => {
     const at = CHEAP_FIRST_MAKERS.map(m => ROUTE_PLUGIN_MAKERS.indexOf(m))
     expect(at.every(i => i >= 0)).toBe(true)
     expect(at[0]).toBeLessThan(at[1]!)
@@ -207,17 +214,18 @@ describe('the maker', () => {
     const empty = { ok: true, value: { decisions: [], attempts: [] } }
     for (const tab of [read([]), {}, { tab: { state: 'x' } }]) {
       const r = ok(choose([opus, kimi], catalog, a(), NOW, [], [], [], [(await make(Promise.resolve(empty), tab as never))!]))
-      // Nothing owned is no small task: today's order, the grid below the strong models.
+      // Nothing owned is no small task: the grid model is not noted as the cheap first choice.
       expect(r.shown.map(s => s.gridModel ?? s.model)).toEqual(['opus', 'moonshotai/kimi-k3'])
+      expect(r.shown.flatMap(s => s.notes)).toEqual([])
     }
-    // A review the tab lists is read as one: the ranking leaves it to the guard.
+    // A review the tab lists is read as one: cheap first leaves it to the guard.
     const listed = read([{ id: 'g1', reviewOf: 'g0' }])
     const guard = await GRID_LIMITS_MAKER.make({ conversationId: 'g1', assessment: a(), read: listed, catalog, history: Promise.resolve(empty), request: async () => ({}) })
     const review = ok(choose([opus, kimi], catalog, a(), NOW, [], [], [], [guard!, (await make(Promise.resolve(empty), listed))!]))
     expect(review.excluded.map(e => e.reason)).toEqual([`${GRID_LIMITS}: ${NEVER_REVIEWS}`])
   })
 
-  it('a review or security route has no grid choice when the history is unreadable, slow, or the ranking is dropped', async () => {
+  it('a review or security route has no grid choice when the history is unreadable, slow, or cheap first is dropped', async () => {
     const review = read([{ id: 'g1', reviewOf: 'g0', task: { owns: ['docs/a.md'] } }])
     const gridIn = (plugins: Parameters<typeof choose>[7], assessment: Partial<Assessment> = {}) =>
       ok(choose([opus, kimi], catalog, a(assessment), NOW, [], [], [], plugins)).shown.some(s => s.gridModel)
@@ -238,10 +246,10 @@ describe('the maker', () => {
         expect(warnings).toEqual([])
         expect(plugins.map(p => p.name)).toEqual([GRID_LIMITS, CHEAP_FIRST])
         expect(gridIn(plugins, assessment)).toBe(false)
-        // With the ranking dropped, as the hook drops a late maker, the guard alone still leaves the grid out.
+        // With cheap first dropped, as the hook drops a late maker, the guard alone still leaves the grid out.
         expect(gridIn([plugins[0]!], assessment)).toBe(false)
       }
-      // A ranking whose maker never answers is dropped after the hook's limit; the guard's plug-in is there all the same.
+      // A cheap first whose maker never answers is dropped after the hook's limit; the guard's plug-in is there all the same.
       const hung = { name: CHEAP_FIRST, make: () => new Promise<never>(() => {}) }
       const making = makePlugins([GRID_LIMITS_MAKER, hung], input(Promise.resolve(null)))
       await vi.advanceTimersByTimeAsync(MAKER_TIMEOUT_MS)
