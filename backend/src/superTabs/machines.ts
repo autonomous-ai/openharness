@@ -549,10 +549,14 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 /** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
 export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
-/** Every entry counts, a Mac's Harness Team account's too (Ken, 2026-11-04); the numbers at this limit are in #2900. */
-const MAX_MACHINES = 128
+/** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
+ *  stops re-reading every machine; #2900 has what grows with the count. */
+const MAX_MACHINES = 32
 export const MACHINES_FULL_MESSAGE = `This Swarm is at its limit of ${MAX_MACHINES} machines. One has to be removed before another can be added.`
-export const machinesFull = (state: SuperTabState): boolean => (state.machines?.length ?? 0) >= MAX_MACHINES
+/** Whether [state] can take another machine, or with [team] another Team account's entry: one for each machine at most. */
+export const machinesFull = (state: SuperTabState, team = false): boolean => team
+  ? (state.machines?.length ?? 0) >= 2 * MAX_MACHINES
+  : (state.machines ?? []).filter(m => !m.hostMachineId).length >= MAX_MACHINES
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)

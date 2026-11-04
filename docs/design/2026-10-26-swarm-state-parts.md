@@ -1128,7 +1128,7 @@ The items as raised:
     wanted.
 - The PM channel UI builds on (a)–(f).
 
-**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 128, projects
+**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 32 (Team accounts' entries apart), projects
 ≤ 100 and rules ≤ 50 are guarded by touching or writing `H`. So two `agent.start` calls in one Swarm conflict and
 one retries. **Recommendation:** accept. Starts are rare, and the limit stays exact.
 

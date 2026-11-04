@@ -1784,7 +1784,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
-      if (!state.machines.some(m => m.machineId === command.machineId) && machinesFull(state)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
+      if (!state.machines.some(m => m.machineId === command.machineId) && machinesFull(state, !!context.contribution?.hostMachineId)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
