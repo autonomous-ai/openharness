@@ -4,7 +4,7 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { authorForAgent, MAX_NAME_LENGTH, shownNameOf, writtenNameOf } from './personNames.js'
+import { authorForAgent, MAX_NAME_LENGTH, namesPerson, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
@@ -200,5 +200,19 @@ describe('a person author as an agent reads it', () => {
     expect(JSON.stringify(gone)).not.toContain('@')
     const agent = { kind: 'agent' as const, id: 'a1', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
     expect(authorForAgent(f.state, agent, names)).toBe(agent)
+  })
+
+  it('names the person who typed into an agent\'s terminal by name too, in a row an agent reads', () => {
+    const f = fixture()
+    const names = swarmUsernames(f.state)
+    const agent = { kind: 'agent' as const, id: 'a1', name: 'Builder', displayName: 'Robin', membershipGeneration: 'g' }
+    const native = { id: 'm1', author: agent, text: 'npm test', source: { kind: 'native', phase: 'input', operator: stored('peer', peer.email) } }
+    expect(namesPerson(native)).toBe(true)
+    const read = rowForAgent(f.state, names, native)
+    expect(read).toEqual({ ...native, source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' } } })
+    expect(JSON.stringify(read)).not.toContain('@')
+    const plain = { id: 'm2', author: agent, text: 'Done.', source: null }
+    expect(namesPerson(plain)).toBe(false)
+    expect(rowForAgent(f.state, names, plain)).toEqual(plain)
   })
 })
