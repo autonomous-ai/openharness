@@ -394,6 +394,8 @@ void main() {
       expect(find.text('dee'), findsOneWidget);
       expect(find.text('Check number 2'), findsOneWidget);
       expect(find.text('+2 more from dee'), findsOneWidget);
+      // Each unread tag counts once, folded or not.
+      expect(_tab(tester, 'super-activity-tab-mentions'), 'Mentions 3');
     });
   });
 
@@ -527,6 +529,8 @@ void main() {
         expect(find.text(text), findsNothing, reason: text);
       }
       expect(_tab(tester, 'super-activity-tab-mentions'), 'Mentions 4');
+      // Needs you's own number is only what needs the reader.
+      expect(_tab(tester, 'super-activity-tab-needs'), 'Needs you');
     });
   });
 

@@ -732,16 +732,54 @@ void main() {
       return SuperTabActivity.of(c);
     }
 
-    test('tags do not count', () async {
+    test('an unread tag counts once in Activity and in Mentions; Mark read '
+        'clears both', () async {
       final server = withAgent();
-      for (var i = 1; i <= 4; i++) {
-        server.tag('message-$i', messageSequence: i);
+      server.tag('message-1', messageSequence: 1);
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.count, 1);
+      expect(activity.mentionsUnread, 1);
+      expect(activity.needsCount, 0);
+      expect(activity.unread, isTrue);
+      activity.markMentionsRead(activity.mentions.waiting);
+      await settle();
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+    });
+
+    test('a tag answered but not read past still counts; read past, it does '
+        'not', () async {
+      final server = withAgent();
+      conversation(server, 'lead')['lastMessageSequence'] = 20;
+      server.tag('message-1', messageSequence: 5);
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+        ..['resolvedBy'] = 'answer';
+      server.state['mentionsWaiting'] = 0;
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.count, 1);
+      expect(activity.mentionsUnread, 1);
+      activity.markMentionsRead(activity.mentions.earlier);
+      expect(activity.controller.readMark('lead'), 5);
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+    });
+
+    test('each folded tag counts once', () async {
+      final server = withAgent();
+      for (var i = 1; i <= 3; i++) {
+        server.tag('message-$i', messageSequence: i, leadId: 'dee');
       }
       final activity = await activityOf(server);
       await activity.mentions.load();
       await activity.decisions.load();
-      expect(activity.count, 0);
-      expect(activity.unread, isTrue);
+      expect(activity.mentionRows, hasLength(1));
+      expect(activity.count, 3);
+      expect(activity.mentionsUnread, 3);
     });
 
     test('a stuck task nobody was asked about does not count', () async {
@@ -769,14 +807,16 @@ void main() {
       expect(activity.count, 1);
     });
 
-    testWidgets('the sidebar fallback counts decisions only', (tester) async {
+    testWidgets('before the tags and decisions are read, the sidebar counts '
+        'the server\'s waiting ones', (tester) async {
       final server = withAgent();
       server.state['mentionsWaiting'] = 4;
       server.state['decisionsWaiting'] = 2;
       server.failDecisions = true;
+      server.failMentions = true;
       final c = await openHere(server);
       await pumpSidebar(tester, c);
-      expect(inRow('super-activity', find.text('2')), findsOneWidget);
+      expect(inRow('super-activity', find.text('6')), findsOneWidget);
       await close(tester, c);
     });
 
