@@ -5,6 +5,7 @@
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
 import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
+import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -387,7 +388,9 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
     const asker = state.agents.find(a => a.id === row.askerAgentId)
     return { id: row.id, batchId: row.batchId, projectId: row.projectId, projectName: projectOf(state, row.projectId).name,
       conversationId: row.conversationId, conversationTitle: group.title, assignmentId: row.assignmentId ?? null,
-      personId: row.personId, personEmail: state.people.find(p => p.id === row.personId)?.email ?? null,
+      // An agent reads whom it asked by name, never email (review of #2954); the person's own app keeps the email.
+      personId: row.personId, personEmail: actor.kind === 'agent' ? null : state.people.find(p => p.id === row.personId)?.email ?? null,
+      personName: agentWrittenNameOf(state, row.personId) ?? null,
       askerAgentId: row.askerAgentId, askerName: asker?.displayName ?? asker?.name ?? 'Agent',
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,

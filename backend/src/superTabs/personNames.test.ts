@@ -200,7 +200,7 @@ describe('a person author as an agent reads it', () => {
       .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'wkpnjjhbnm', membershipGeneration: 'g' })
     // Or holds it among other words (review of #2954).
     f.setName(`Minh ${relay.email}`)
-    expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state)).displayName).toBe('wkpnjjhbnm')
+    expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state))).toMatchObject({ displayName: 'wkpnjjhbnm' })
   })
 
   it('reads every username as swarmUsernames gives it, working them out only for one not stored', () => {

@@ -79,8 +79,8 @@ export function authorForAgent<T extends Pick<Author, 'kind' | 'id'>>(state: Sup
   return { ...author, name, displayName: agentReadName(state.people.find(p => p.id === author.id)?.name) ?? name }
 }
 
-/** A name a person set, unless it is an email address, which setName allows for one's own: an agent never reads one. */
-const agentReadName = (name: string | undefined): string | undefined => name && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name) ? name : undefined
+/** A name a person set, unless it holds an email address, which setName allows for one's own: an agent never reads one. */
+const agentReadName = (name: string | undefined): string | undefined => name && !/[^\s@]+@[^\s@]+\.[^\s@]+/.test(name) ? name : undefined
 
 /** Person [id] as server-written text an agent reads names them (writtenNameOf), never by an email they took as their name. */
 export const agentWrittenNameOf = (state: SuperTabState, id: string): string | undefined =>

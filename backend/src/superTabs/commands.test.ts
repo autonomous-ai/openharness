@@ -1438,10 +1438,10 @@ describe('a route that names no pick', () => {
     const command = { type: 'route.override', decisionId: 'd1', candidateId: 'c0', reason: 'Opus for the schema.' } as const
     const effects = f.run(command, undefined, { routeDecision: open() })
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c0' }) }])
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c0. Reason: Opus for the schema.')
+    expect(effects.messages[0]!.text).toBe('owner chose Title c0. Reason: Opus for the schema.')
     const started = open({ final: { kind: 'new', startId: 's', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' } })
     expect(() => f.run({ ...command, candidateId: 'c1' }, undefined, { routeDecision: started })).toThrow(expect.objectContaining({ code: 'ALREADY_CHOSEN' }))
-    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner@example.com chose Title c0 instead of Title c1. Reason: Opus for the schema.')
+    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner chose Title c0 instead of Title c1. Reason: Opus for the schema.')
   })
 
   it('links a start to the candidate a person chose, as before, keeping that candidate in the final', () => {
