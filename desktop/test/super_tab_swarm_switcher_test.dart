@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -56,6 +57,10 @@ class _Backend {
   /// While set, the account's Swarm list fails so.
   Object? listFailure;
 
+  /// How many times the account's Swarm list was asked for, failed reads
+  /// included.
+  int listReads = 0;
+
   /// While true, this computer's Harness is restarting (a CLI update): every
   /// request to it fails as its dropped socket does.
   bool daemonRestarting = false;
@@ -98,6 +103,7 @@ class _Backend {
   }) async {
     final uri = Uri.parse(path);
     if (uri.path == '/api/super-tabs/list') {
+      listReads++;
       if (listFailure case final failure?) throw failure;
       return {
         'tabs': [
@@ -1036,6 +1042,145 @@ void main() {
       expect(alpha.accessRevoked, isTrue);
       await fallBackToPersonal(app, alpha);
       expect(_shown(app, tab), personal);
+    });
+
+    group('re-reads the list at most once a minute (task #2767)', () {
+      late DateTime now;
+      late AppNotifier app;
+      late _Backend backend;
+      late SuperTabController alpha;
+
+      /// One poll of Alpha, its refusal's list check and all, then [later].
+      Future<void> poll({Duration later = const Duration(seconds: 10)}) async {
+        await alpha.refresh();
+        await _settle();
+        now = now.add(later);
+      }
+
+      Future<void> under(Future<void> Function() body) {
+        now = DateTime.utc(2026, 11, 4, 5);
+        return withClock(Clock(() => now), () async {
+          (app, backend, _, alpha) = await shown();
+          await body();
+        });
+      }
+
+      test('refusals within a minute read the list once, the first of them '
+          'failing; a refusal after the minute reads it again', () {
+        return under(() async {
+          backend.listFailure = dropped;
+          backend.stateReadFailure = refusals.last;
+          final before = backend.listReads;
+          await poll();
+          expect(backend.listReads - before, 1);
+          backend.listFailure = null;
+          for (final refusal in [...refusals, ...refusals]) {
+            backend.stateReadFailure = refusal;
+            await poll();
+          }
+          expect(
+            backend.listReads - before,
+            1,
+            reason: 'five refusals in 50 seconds read the list once',
+          );
+          expect(alpha.accessRevoked, isFalse);
+          now = now.add(const Duration(seconds: 10));
+          await poll();
+          expect(backend.listReads - before, 2);
+          expect(alpha.accessRevoked, isFalse);
+          expect(alpha.snapshot?.name, 'Alpha');
+        });
+      });
+
+      test('a list read within the minute that leaves the Swarm out takes it '
+          'away at the next refusal, reading the list no more', () {
+        return under(() async {
+          backend.stateReadFailure = refusals.first;
+          await poll();
+          expect(alpha.accessRevoked, isFalse);
+          final reads = backend.listReads;
+          backend.tabs.removeWhere((t) => t['id'] == 'alpha');
+          // This computer's own discovery reads the list meanwhile.
+          await app.superTabs.refreshTabs();
+          await _settle();
+          await poll();
+          expect(alpha.accessRevoked, isTrue);
+          expect(backend.listReads, reads + 1, reason: 'the discovery read');
+        });
+      });
+
+      test('a list that answered before the refusal asked never takes the '
+          'Swarm away', () {
+        return under(() async {
+          // The last list that answered, already without Alpha, is older
+          // than the ask, whose own read fails; another read within the
+          // minute is not made.
+          backend.tabs.removeWhere((t) => t['id'] == 'alpha');
+          await app.superTabs.refreshTabs();
+          await _settle();
+          now = now.add(const Duration(seconds: 1));
+          backend.listFailure = dropped;
+          backend.stateReadFailure = refusals.last;
+          await poll();
+          await poll();
+          expect(alpha.accessRevoked, isFalse);
+          expect(alpha.snapshot?.name, 'Alpha');
+        });
+      });
+
+      test('each Swarm has its own minute', () {
+        return under(() async {
+          final beta = await app.superTabs.open('beta');
+          await beta.refresh();
+          await _settle();
+          backend.stateReadFailure = refusals.last;
+          final before = backend.listReads;
+          await poll(later: Duration.zero);
+          await beta.refresh();
+          await _settle();
+          expect(backend.listReads - before, 2);
+          await poll(later: Duration.zero);
+          await beta.refresh();
+          await _settle();
+          expect(backend.listReads - before, 2);
+        });
+      });
+
+      test('another account signed in within the minute reads the list '
+          "afresh: the last account's ask never answers it", () {
+        now = DateTime.utc(2026, 11, 4, 5);
+        return withClock(Clock(() => now), () async {
+          final backend = _Backend()
+            ..add('alpha', 'Alpha', members: ['owner', 'mate']);
+          final app = _computer(backend, MemoryStore());
+          await app.superTabs.refreshTabs();
+          final owners = await app.superTabs.open('alpha');
+          await owners.refresh();
+          await _settle();
+          // The owner's refusal asks, and the list answers with Alpha.
+          backend.stateReadFailure = refusals.last;
+          await owners.refresh();
+          await _settle();
+          expect(owners.accessRevoked, isFalse);
+
+          now = now.add(const Duration(seconds: 10));
+          app.currentUser = const CurrentUserProfile(
+            id: 'mate',
+            email: 'mate@example.com',
+          );
+          backend.account = 'mate';
+          backend.listFailure = dropped;
+          await _settle();
+          // Mate's list has not answered yet: a refusal is no reason to
+          // take Alpha away.
+          final reads = backend.listReads;
+          final mates = await app.superTabs.open('alpha');
+          await mates.refresh();
+          await _settle();
+          expect(mates.accessRevoked, isFalse);
+          expect(backend.listReads, greaterThan(reads));
+        });
+      });
     });
   });
 
