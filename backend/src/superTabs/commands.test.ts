@@ -5411,13 +5411,15 @@ describe('the Next-up queue (work.queue)', () => {
 // 11-04 13:57 VN on the Mac Studio: the CLI's idle cleanup closed Tern, its machine's next reading listed the session
 // stopped, and six seconds after the close the PM assigned Tern a task, which was lost at once (task #2744).
 describe('assigning an agent whose session was closed', () => {
-  /** A worker on machine 'host', whose reading at [receivedAt] lists [running] and [stopped]. */
-  function closed(running: string[], stopped: string[], receivedAt = 1000) {
+  /** A worker on machine 'host', whose reading at [receivedAt] lists [running] and [stopped], and of those [cleaned] as closed
+   *  by its idle cleanup. */
+  function closed(running: string[], stopped: string[], receivedAt = 1000, cleaned: string[] = stopped) {
     const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
     f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId: 'owner', membershipGeneration: f.state.people.find(p => p.id === 'owner')!.generation,
       generation: 'g1', cwd: '/repo', engines: ['codex'], maxAgents: 4, paused: false, observation: { generation: 'g1', receivedAt,
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
-          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: running, stoppedHarnessIds: stopped } }]
+          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(cleaned.length ? { closedHarnessIds: cleaned } : {}) } }]
     return { f, group, worker }
   }
 
@@ -5429,8 +5431,10 @@ describe('assigning an agent whose session was closed', () => {
     expect(JSON.stringify(f.state)).toBe(before)
   })
 
-  it('goes ahead when the reading lists it running, is stale, or cannot prove a resumed session stopped', () => {
-    for (const { f, group, worker } of [closed(['worker'], []), closed(['worker'], ['worker']), closed([], ['worker'], -100_000)]) {
+  // The review of #2953: Change agent stops the old terminal before the rebind moves the member to its new one, and a host
+  // mid-restart lists its sessions stopped for a moment. Either is stopped, never closed by the cleanup, and keeps its task.
+  it('goes ahead when the reading lists it running, is stale, lists it stopped but not closed, or cannot prove a resumed session stopped', () => {
+    for (const { f, group, worker } of [closed(['worker'], []), closed(['worker'], ['worker']), closed([], ['worker'], -100_000), closed([], ['worker'], 1000, [])]) {
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: worker, status: 'working' })
     }
