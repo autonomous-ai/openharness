@@ -20,6 +20,7 @@ import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
+import 'voice_recorder.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -33,6 +34,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.sessionActivity,
     this.machineName,
     this.onScroll,
+    this.voiceRecorder,
   });
 
   final SuperTabController controller;
@@ -54,6 +56,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// Given the thread's list while the panel lives (null once it is gone),
   /// so a device scrolling this Swarm scrolls the thread, not the chat.
   final ValueChanged<ScrollController?>? onScroll;
+
+  /// What the reply box's mic records with; without it, no mic shows.
+  final SuperTabVoiceRecorder? voiceRecorder;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();

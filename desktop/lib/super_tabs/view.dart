@@ -72,6 +72,7 @@ import 'ship_row.dart';
 import 'switch_pm.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
+import 'voice_recorder.dart';
 import 'swarm_type.dart';
 import 'visible_tick.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -99,6 +100,7 @@ class SuperTabView extends StatefulWidget {
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
+    this.voiceRecorder,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -123,6 +125,9 @@ class SuperTabView extends StatefulWidget {
   /// How a message link reaches the account's other Swarms. Without it, and
   /// without an [app], a link into another Swarm is not followed.
   final SwarmLinkSwarms? linkSwarms;
+
+  /// What the composer's mic records with; without it, no mic shows.
+  final SuperTabVoiceRecorder? voiceRecorder;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -3288,6 +3293,7 @@ class _SuperTabViewState extends State<SuperTabView>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
       onScroll: (list) => _threadScroll = list,
+      voiceRecorder: widget.voiceRecorder,
     );
   }
 
