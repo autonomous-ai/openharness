@@ -65,7 +65,7 @@ void main() {
 
   int asked([String of = path]) => fake.paths.where((p) => p == of).length;
 
-  test('a message is read once, then kept', () async {
+  test('a message is read once, then kept within the minute', () async {
     fake.routes[path] = (_) => {
       'messages': [row('m1')],
     };
@@ -76,12 +76,70 @@ void main() {
       final read = reads.read(reader, link);
       expect(read.state, SwarmReadState.found);
       expect(read.message!.text, 'The plan');
-      now = now.add(const Duration(hours: 1));
+      now = now.add(const Duration(seconds: 59));
       expect(reads.read(reader, link).state, SwarmReadState.found);
       await answered();
     });
     expect(asked(), 1, reason: 'asked once while it was read, kept after');
     expect(told, 1);
+  });
+
+  group('a message found', () {
+    Future<void> found() async {
+      fake.routes[path] = (_) => {
+        'messages': [row('m1')],
+      };
+      reads.read(reader, link);
+      await answered();
+    }
+
+    test('is asked again a minute later, and shows until answered', () async {
+      await at(() async {
+        await found();
+        now = now.add(const Duration(seconds: 59));
+        reads.read(reader, link);
+        await answered();
+        expect(asked(), 1, reason: 'not within the minute');
+
+        now = now.add(const Duration(seconds: 1));
+        fake.routes[path] = (_) => {
+          'messages': [row('m1', text: 'Edited')],
+        };
+        expect(reads.read(reader, link).message?.text, 'The plan');
+        await answered();
+        expect(asked(), 2);
+        expect(reads.read(reader, link).message?.text, 'Edited');
+      });
+    });
+
+    test('goes once a later read is refused or finds nothing', () async {
+      final answers = <Map<String, dynamic> Function(dynamic)>[
+        (_) => throw const SuperTabFailure('FORBIDDEN', 'No'),
+        (_) => {'messages': <Object>[]},
+      ];
+      await at(() async {
+        for (final answer in answers) {
+          await found();
+          now = now.add(const Duration(minutes: 1));
+          fake.routes[path] = answer;
+          reads.read(reader, link);
+          await answered();
+          expect(reads.read(reader, link).state, SwarmReadState.gone);
+          now = now.add(const Duration(minutes: 1));
+        }
+      });
+    });
+
+    test('stays when a later read is not answered', () async {
+      await at(() async {
+        await found();
+        now = now.add(const Duration(minutes: 1));
+        fake.routes[path] = (_) => throw const SuperTabFailure('OFFLINE', 'No');
+        reads.read(reader, link);
+        await answered();
+        expect(reads.read(reader, link).message?.text, 'The plan');
+      });
+    });
   });
 
   test('none read, or refused, is gone: asked again only a minute later, '
