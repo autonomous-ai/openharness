@@ -6,12 +6,15 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 const team = vi.hoisted(() => ({ value: false }))
 vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => team.value }))
+/** The owner the start recorded for a Buddy's folder (superTabs/start.ts); every Buddy here is started so, unless a test says. */
+const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
+vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { buddyLaunchOf, buddyReadsOf, grantBuddyWide } from './buddyGuard.js'
+import { buddyAccountFile, buddyLaunchOf, buddyReadsOf, grantBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
@@ -931,6 +934,25 @@ describe('a Buddy\'s folder', () => {
       expect(existsSync(join(workspace, '.claude'))).toBe(false)
       expect(() => prepareSwarmSkill(workspace, { role: 'dev', key: 'session' })).not.toThrow()
     } finally { team.value = false }
+  })
+
+  // Security review 2 of #2832: a relaunch never passes the start's own-machine check. A Buddy launches only in a folder whose
+  // start passed it here, for the owner signed in now; one saved before then waits for its owner to start it again.
+  it('launches a Buddy only in a folder a start recorded for its owner, with no other account signed in here', () => {
+    const workspace = fixture(), account = buddyAccountFile()
+    try {
+      started.owner = null
+      expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).toThrow('Start your Buddy again')
+      expect(existsSync(join(workspace, '.claude'))).toBe(false)
+      started.owner = 'peer'
+      writeBuddyAccount('someone-else')
+      expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).toThrow('A Buddy runs only on its owner\'s own machine')
+      writeBuddyAccount('peer')
+      expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
+      // Before the host has read who is signed in (a restart restores its sessions first), the start's record decides.
+      writeBuddyAccount(null)
+      expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
+    } finally { started.owner = 'peer'; rmSync(account, { force: true }) }
   })
 
   it('leaves every other role\'s folder as it is', () => {

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { dirname, join } from 'node:path'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
+import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
 import { BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
@@ -508,10 +511,15 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
   it.each(['claude', 'codex'])('launches a %s Buddy dispatched by its owner\'s own host, signed in as its owner', async engine => {
     const f = fixture()
     ownStart(f, engine)
+    const mark = buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start'))
+    rmSync(mark, { force: true })
     const result = await startAgent({ action: 'start', tabId: 'tab', operationId: `own-${engine}`, request: f.start.request, hostDispatch: true, signedIn: 'peer' } as never,
       f.scoped, where, f.open)
     expect(result.error).toBeUndefined()
     expect(launches(f)).toBe(true)
+    // Its folder is recorded as its owner's before it launches, so its relaunches find the check passed (security review 2).
+    expect(buddyOwnerOf(join('/somewhere', worktreeFolderName('super-tab/start')), env.ADAPTER_DATA_DIR)).toBe('peer')
+    rmSync(mark, { force: true })
   })
 
   const refusals: [string, (f: ReturnType<typeof fixture>) => Record<string, unknown>][] = [
@@ -532,6 +540,7 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
         const result = await startAgent({ action: 'start', tabId: 'tab', operationId: `refused-${engine}`, request: f.start.request, ...input } as never, f.scoped, where, f.open)
         expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
         expect(launches(f)).toBe(false)
+        expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
         expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
         expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
       } finally { teamDaemon.value = false }
