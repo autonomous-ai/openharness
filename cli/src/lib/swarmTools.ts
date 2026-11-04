@@ -121,7 +121,7 @@ Many people talk at once; answers in the main chat bury each other. Answer a mes
 
 ## GitHub
 - An agent on another person's machine, and every agent in a Team account, gets git and gh through the Swarm's GitHub App for its task: clone, fetch, push branches, open, update and comment on pull requests, read checks. Nobody signs in for it.
-- The App cannot comment on or label issues. Work that needs more runs on the project owner's own machine, in their account, with their sign-in.
+- Issues and changes to .github/workflows: the token writes issues (comment, label) and pushes workflow changes only where the repository's installation of the App granted it; elsewhere GitHub refuses them. Work that needs more runs on the project owner's own machine, in their account, with their sign-in.
 - Never ask for a token in the chat or in a file. When a person must give access, they sign in on their own machine.
 - Ask a person only for what no agent can do: allowing a prompt in their own session, a physical device, adding a machine to the Swarm, approving a repository for the GitHub App, a decision. One step at a time, with the exact words to click or type.
 

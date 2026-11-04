@@ -21,7 +21,7 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(at).toBeGreaterThan(0)
     const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Shared machines and secrets'))
     for (const part of ['Team account', 'nobody types in it', 'none of the owner\'s tools', 'in their own session', 'handoff',
-      '## GitHub', 'GitHub App', 'pull requests', 'cannot comment on or label issues', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
+      '## GitHub', 'GitHub App', 'pull requests', 'where the repository\'s installation of the App granted it', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
   })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)
