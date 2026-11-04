@@ -499,6 +499,9 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     '# for the administrator prompt\'s own process, or for a LaunchDaemon, and refuses them (eDSPermissionError); it',
     '# asks it for a terminal app. When it refuses, the team daemon runs again and nothing else has changed.',
     'set -eu',
+    // As setup's: sudo in the owner's terminal keeps their PATH (macOS sudoers has no secure_path), and a tool ahead of the
+    // system's would run as root, or a GNU stat would hand pkill a wrong user id (security review 2 of #2765).
+    'PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'cd /',
     `die() { printf 'harness: %s\\n' "$1" >&2; exit "\${2:-1}"; }`,
     `say() { printf 'harness: %s\\n' "$1"; }`,
