@@ -5,7 +5,7 @@ import { applyCommand, type Command } from '../src/superTabs/commands.js'
 import { createSuperTab, type Actor, type SuperTabState } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { databaseProposalReads, openProposals } from '../src/superTabs/proposals.js'
-import { planDatabase } from './plans.test-support.js'
+import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // The Tasks view's Proposals (#2569) read the project chat's proposal roots and their threads as the chat page does. A busy
 // project chat holds thousands of rows, nearly all task lines and talk: the roots' read must not walk them.
@@ -65,5 +65,15 @@ describe('the open-proposal read', () => {
       { messageId: 'old', title: 'Old proposal', personId: 'peer', at: T0 + 9000 },
       { messageId: 'newest', title: 'Newest', personId: 'peer', at: expect.any(Number) },
     ])
+  })
+
+  it('reads the roots by their own index, examining only the proposals', async () => {
+    const chat = state.conversations.find(c => c.id === CHAT)!
+    const entries = await profiled(db, () => openProposals(state, chat, databaseProposalReads(db, TAB, CHAT)))
+    const rows = reads(entries, 'SuperTabMessage', ['source.kind'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, conversationId: 1, source\.kind: 1, sequence: 1 \}/)
+    // Five proposal roots among 3,000 rows.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(5)
   })
 })
