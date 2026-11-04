@@ -653,11 +653,13 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   // ---- Threads ----
 
-  /// Every thread listed is unread (Activity lists today's new replies), so
-  /// there is no Unreads only here.
+  /// Every thread the reader follows (Darren, task #2835): those with new
+  /// replies first, bold, as before; then the ones they have read, plain,
+  /// newest reply first, 50 at a time as they scroll. Only the new ones have
+  /// Mark read.
   List<Widget> _threads() {
     final a = _activity;
-    final rows = a.threadRows;
+    final rows = a.threadRows, read = a.readThreadRows;
     return [
       _bar([
         _markAll(
@@ -669,49 +671,80 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
                 },
         ),
       ]),
-      if (rows.isEmpty)
-        _empty('No threads with new replies')
-      else
-        ..._byDay<SuperTabFollowedThread>(rows, (t) => t.lastReplyAt, (t) {
-          // The data holds the root and the newest reply's author, not the
-          // reply's text: the preview is the root, said by the root's author.
-          final author = t.rootAuthor['name'] as String? ?? '';
-          final replier = t.lastReplier?['name'] as String? ?? '';
-          final project = _snapshot?.projectFor(t.conversationId);
-          final subject = threadSubject(t.rootText);
-          final root = _oneLine(t.rootText);
-          return _ActivityRow(
-            key: ValueKey('super-activity-row-thread:${t.key}'),
-            unread: a.attention.isNew(t),
-            avatarName: author.isEmpty ? subject : author,
-            who: subject.isEmpty ? 'Thread' : subject,
-            where: project?.name,
-            privateWhere: project?.isPrivate == true,
-            forThread: true,
-            repliedBy: replier.isEmpty ? null : replier,
-            trailing: '${a.attention.newCount(t)} new',
-            preview: author.isEmpty ? root : '$author: $root',
-            previewLead: author.isEmpty ? null : author.length + 1,
-            actions: [
-              (
-                label: 'Mark read',
-                run: () {
-                  _settle();
-                  a.attention.markRead(t);
-                },
-              ),
-              (
-                label: 'Unfollow',
-                run: () {
-                  _settle();
-                  unawaited(a.attention.setFollow(t, false));
-                },
-              ),
-            ],
-            onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
-          );
-        }),
+      if (rows.isEmpty && read.isEmpty)
+        _empty('No threads yet')
+      else ...[
+        ..._byDay<SuperTabFollowedThread>(
+          rows,
+          (t) => t.lastReplyAt,
+          (t) => _threadRow(t, unread: true),
+        ),
+        if (read.isNotEmpty) ...[
+          KeyedSubtree(
+            key: const ValueKey('super-activity-threads-read'),
+            child: _heading('Read'),
+          ),
+          ..._byDay<SuperTabFollowedThread>(
+            read,
+            (t) => t.lastReplyAt,
+            (t) => _threadRow(t, unread: false),
+          ),
+          if (a.attention.canReadMore)
+            _ReadMore(
+              key: const ValueKey('super-activity-threads-more'),
+              onShown: a.attention.readMore,
+            ),
+        ],
+      ],
     ];
+  }
+
+  /// One followed thread's row: bold with its new count when [unread], plain
+  /// with its last reply's time when read.
+  Widget _threadRow(SuperTabFollowedThread t, {required bool unread}) {
+    final a = _activity;
+    // The data holds the root and the newest reply's author, not the
+    // reply's text: the preview is the root, said by the root's author.
+    final author = t.rootAuthor['name'] as String? ?? '';
+    final replier = t.lastReplier?['name'] as String? ?? '';
+    final project = _snapshot?.projectFor(t.conversationId);
+    final subject = threadSubject(t.rootText);
+    final root = _oneLine(t.rootText);
+    return _ActivityRow(
+      key: ValueKey('super-activity-row-thread:${t.key}'),
+      unread: unread && a.attention.isNew(t),
+      avatarName: author.isEmpty ? subject : author,
+      who: subject.isEmpty ? 'Thread' : subject,
+      where: project?.name,
+      privateWhere: project?.isPrivate == true,
+      forThread: true,
+      repliedBy: replier.isEmpty ? null : replier,
+      trailing: unread
+          ? '${a.attention.newCount(t)} new'
+          : t.lastReplyAt == null
+          ? ''
+          : _when(t.lastReplyAt!),
+      preview: author.isEmpty ? root : '$author: $root',
+      previewLead: author.isEmpty ? null : author.length + 1,
+      actions: [
+        if (unread)
+          (
+            label: 'Mark read',
+            run: () {
+              _settle();
+              a.attention.markRead(t);
+            },
+          ),
+        (
+          label: 'Unfollow',
+          run: () {
+            _settle();
+            unawaited(a.attention.setFollow(t, false));
+          },
+        ),
+      ],
+      onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
+    );
   }
 
   @override
@@ -1122,4 +1155,36 @@ class _ActivityRowState extends State<_ActivityRow> {
       ),
     );
   }
+}
+
+/// The end of the read threads while there are more: built only once the list
+/// scrolls to it, it asks for the next page.
+class _ReadMore extends StatefulWidget {
+  const _ReadMore({super.key, required this.onShown});
+
+  final Future<void> Function() onShown;
+
+  @override
+  State<_ReadMore> createState() => _ReadMoreState();
+}
+
+class _ReadMoreState extends State<_ReadMore> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(widget.onShown());
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.all(grid.AppDesktop.groupGap),
+    child: Center(
+      child: SizedBox.square(
+        dimension: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    ),
+  );
 }
