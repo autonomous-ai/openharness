@@ -123,6 +123,65 @@ void main() {
     },
   );
 
+  // #2906: the machine and agent summary is sent again only when it changed.
+  test(
+    'an unchanged poll echoes the summary etag and keeps the summary it holds',
+    () async {
+      server.state['mentionsWaiting'] = 2;
+      final c = open();
+      await c.refresh();
+      await c.refresh();
+      final echoed = Uri.parse(reads.last);
+      expect(echoed.path, '/api/super-tabs/tab/changes');
+      expect(echoed.queryParameters['derivedEtag'], isNotEmpty);
+      expect(server.parts.unchangedSummaries, 1);
+      expect(c.snapshot!.mentionsWaiting, 2);
+
+      // The summary moves: the next read sends it whole, and it replaces the one held.
+      server.state['mentionsWaiting'] = 3;
+      await c.refresh();
+      expect(server.parts.unchangedSummaries, 1);
+      expect(c.snapshot!.mentionsWaiting, 3);
+      await c.refresh();
+      expect(server.parts.unchangedSummaries, 2);
+      expect(c.snapshot!.mentionsWaiting, 3);
+      expect(c.error, isNull);
+    },
+  );
+
+  test(
+    'a refused etag (a backend rolled back) reads in full once, then polls without it',
+    () async {
+      final c = open();
+      await c.refresh();
+      await c.refresh();
+      expect(Uri.parse(reads.last).queryParameters['derivedEtag'], isNotNull);
+      server.parts.stampsDerived = false;
+      await c.refresh();
+      await c.refresh();
+      expect(reads.skip(2).map((p) => Uri.parse(p).path), [
+        '/api/super-tabs/tab/changes',
+        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/changes',
+      ]);
+      expect(Uri.parse(reads.last).queryParameters, isNot(contains('derivedEtag')));
+      expect(c.error, isNull);
+      expect(c.accessRevoked, isFalse);
+    },
+  );
+
+  test('a backend without the etag is polled as before', () async {
+    server.parts.stampsDerived = false;
+    final c = open();
+    await c.refresh();
+    await c.refresh();
+    await c.refresh();
+    for (final path in reads.skip(1)) {
+      expect(Uri.parse(path).queryParameters.keys, ['cursor']);
+    }
+    expect(c.error, isNull);
+  });
+
   test(
     'a removed group leaves the snapshot and its local state goes',
     () async {

@@ -59,6 +59,26 @@ class SwarmPartsBackend {
   /// The visibility epoch: a test moves it to have the next change read answer a reload.
   int epoch = 1;
 
+  /// A backend with the summary etag (backend read/derivedEtag.ts, #2906). Off, it is one from before it, or one rolled
+  /// back: no etag is sent, and a change read naming one is refused by its strict query.
+  bool stampsDerived = true;
+
+  /// Change reads answered without the summary, its etag still matching.
+  int unchangedSummaries = 0;
+
+  static const _markFields = {
+    'readMarks',
+    'unreadMarks',
+    'threadMarks',
+    'chatSettings',
+  };
+
+  /// The summary without the reader's marks, as one string: equal summaries, equal etag.
+  static String _etag(Map<String, dynamic> derived) => jsonEncode({
+    for (final entry in derived.entries)
+      if (!_markFields.contains(entry.key)) entry.key: entry.value,
+  }).hashCode.toRadixString(36);
+
   /// The ticks a change read sends again, as the 30 s overlap does.
   int overlap = 3;
 
@@ -274,6 +294,9 @@ class SwarmPartsBackend {
         for (final kind in _kinds) kind: <dynamic>[],
         'derived': _derived(state, reader),
       };
+      if (stampsDerived) {
+        answer['derivedEtag'] = _etag(answer['derived'] as Map<String, dynamic>);
+      }
       for (final entry in _ordered()) {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head' || entry.value.deleted) continue;
@@ -285,6 +308,14 @@ class SwarmPartsBackend {
     }
     if (segments.length == 4 && route == 'changes') {
       reads.add(path);
+      final held = uri.queryParameters['derivedEtag'];
+      if (held != null && !stampsDerived) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Unrecognized key(s) in object: \'derivedEtag\'',
+          statusCode: 400,
+        );
+      }
       final cursor = RegExp(r'^c(\d+)e(\d+)$')
           .firstMatch(uri.queryParameters['cursor'] ?? '');
       if (cursor == null || int.parse(cursor.group(2)!) != epoch) {
@@ -304,6 +335,18 @@ class SwarmPartsBackend {
         for (final kind in _kinds) kind: <dynamic>[],
         'derived': _derived(state, reader),
       };
+      if (stampsDerived) {
+        final derived = answer['derived'] as Map<String, dynamic>;
+        final etag = answer['derivedEtag'] = _etag(derived);
+        if (held == etag) {
+          unchangedSummaries++;
+          answer['derivedUnchanged'] = true;
+          answer['derived'] = {
+            for (final entry in derived.entries)
+              if (_markFields.contains(entry.key)) entry.key: entry.value,
+          };
+        }
+      }
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
         if (_hides(entry.key, entry.value, reader, state)) continue;

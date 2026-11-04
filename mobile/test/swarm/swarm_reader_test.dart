@@ -67,6 +67,69 @@ void main() {
     expect(swarm.paths.last, '/api/super-tabs/$tab/changes?cursor=c2');
   });
 
+  // #2906: the machine and agent summary is sent again only when it changed.
+  test(
+    'an unchanged poll echoes the summary etag and keeps the summary it holds',
+    () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(cursor: 'c1', derived: {'mentionsWaiting': 2}),
+        'derivedEtag': 'e1',
+      };
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c2'),
+        'derivedEtag': 'e1',
+        'derivedUnchanged': true,
+      };
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+
+      await r.refresh();
+      await r.refresh();
+
+      expect(swarm.paths.last, '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1');
+      expect(r.snapshot!.mentionsWaiting, 2);
+      expect(r.error, isNull);
+    },
+  );
+
+  test(
+    'a refused etag (a backend rolled back) reads in full once, then polls without it',
+    () async {
+      var loads = 0;
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(cursor: 'c${++loads}'),
+        if (loads == 1) 'derivedEtag': 'e1',
+      };
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) {
+        if (swarm.paths.last.contains('derivedEtag')) {
+          throw SuperTabFailure(
+            'VALIDATION_ERROR',
+            "Unrecognized key(s) in object: 'derivedEtag'",
+            statusCode: 400,
+          );
+        }
+        return changes(cursor: 'c9');
+      };
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+
+      await r.refresh();
+      await r.refresh();
+      await r.refresh();
+
+      expect(swarm.paths, [
+        '/api/super-tabs/$tab/parts',
+        '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1',
+        '/api/super-tabs/$tab/parts',
+        '/api/super-tabs/$tab/changes?cursor=c2',
+      ]);
+      expect(r.error, isNull);
+      expect(r.accessRevoked, isFalse);
+    },
+  );
+
   test('a reload answer starts again from a first load', () async {
     var loads = 0;
     final swarm = FakeSwarm();
