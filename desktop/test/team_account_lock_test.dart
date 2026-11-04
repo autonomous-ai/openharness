@@ -511,6 +511,43 @@ void main() {
     },
   );
 
+  // Scholes, 2026-11-04: the new member's setup did finish, after about 7
+  // minutes on a screen that showed no progress. It says the step and the
+  // time so far, and which step can take minutes.
+  testWidgets('while it waits, it says the step setup is on and how long it has run', (
+    tester,
+  ) async {
+    daemon.statuses
+      ..clear()
+      ..addAll([
+        {'ok': true, 'state': 'running', 'step': 'password', 'elapsedMs': 1500},
+        {'ok': true, 'state': 'running', 'step': 'engines', 'elapsedMs': 125000},
+      ]);
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(
+      outcome(tester),
+      'macOS is asking for your password in a window titled “osascript”. '
+      'Setup then takes a minute or two, and Harness opens when it is done.',
+    );
+    expect(find.text('1 s so far.'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(
+      outcome(tester),
+      'Installing Claude Code and Codex for Harness Team. '
+      'On a new Mac this can take several minutes.',
+    );
+    expect(
+      find.text('Step 5 of 8 · 2 min 5 s so far. Harness opens when it is done.'),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+  });
+
   testWidgets('Try again while it waits opens the app once the account is made', (
     tester,
   ) async {
@@ -710,6 +747,23 @@ void main() {
         await tester.tap(find.byKey(const Key('team-account-lock-continue')));
         await tester.pump();
         // Far enough into the spinner's turn that its arc shows.
+        await tester.pump(const Duration(milliseconds: 600));
+      },
+    ),
+    (
+      '2b-installing-engines',
+      (tester) async {
+        daemon.statuses
+          ..clear()
+          ..add({
+            'ok': true,
+            'state': 'running',
+            'step': 'engines',
+            'elapsedMs': 125000,
+          });
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 2));
         await tester.pump(const Duration(milliseconds: 600));
       },
     ),
