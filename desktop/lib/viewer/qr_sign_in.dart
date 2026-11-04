@@ -28,8 +28,7 @@ Future<IssuedTokens> viewerQrSignIn({
   final link = phoneSignInLink(started.code);
   var expiresAt = clock().add(Duration(seconds: started.expiresIn));
   onQr(link, started.expiresIn);
-  Never gone(String code, String message) =>
-      throw PhoneSignInException(code, message);
+  Never gone(String code, String message) => throw PhoneSignInException(code, message);
   for (;;) {
     await wait(pollEvery);
     if (!stillCurrent()) {

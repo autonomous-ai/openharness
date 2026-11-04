@@ -95,8 +95,7 @@ class DaemonRules {
       overflowXp = (raw['overflowXp'] as num? ?? 0).toInt(),
       firstEggNeed = ((raw['firstEgg'] as Map)['need'] as num).toInt(),
       firstEggRequire = [
-        for (final k
-            in (raw['firstEgg'] as Map)['require'] as List? ?? const [])
+        for (final k in (raw['firstEgg'] as Map)['require'] as List? ?? const [])
           k as String,
       ],
       setupEggNeed = ((raw['setupEgg'] as Map?)?['need'] as num?)?.toInt(),
@@ -125,11 +124,10 @@ class DaemonRules {
           slot as String,
       ],
       lineExample = {
-        for (final e
-            in (raw['lineExample'] is Map
-                    ? raw['lineExample'] as Map
-                    : const {})
-                .entries)
+        for (final e in (raw['lineExample'] is Map
+                ? raw['lineExample'] as Map
+                : const {})
+            .entries)
           if (e.value is String || e.value is num)
             e.key as String: '${e.value}',
       },
@@ -377,14 +375,10 @@ class DaemonDef {
         for (final e in (raw['examples'] as Map? ?? const {}).entries)
           if (e.value is String) e.key as String: e.value as String,
       },
-      shinyHex =
-          _hex((raw['shiny'] as Map?)?['hex']) ??
+      shinyHex = _hex((raw['shiny'] as Map?)?['hex']) ??
           _hex((raw['color'] as Map)['shiny']),
-      lightHex =
-          _hex((raw['color'] as Map)['light']) ??
-          _hex(
-            raw['light'] is Map ? (raw['light'] as Map)['hex'] : raw['light'],
-          ),
+      lightHex = _hex((raw['color'] as Map)['light']) ??
+          _hex(raw['light'] is Map ? (raw['light'] as Map)['hex'] : raw['light']),
       suggest = Map<String, String>.from(raw['suggest'] as Map? ?? const {}),
       eyes = raw['eyes'] == null
           ? null

@@ -81,35 +81,37 @@ TerminalTheme terminalThemeFor(
 /// The ANSI ramp follows the palette's brightness: the dark ramp's pale yellow
 /// and white are unreadable on a light ground, and the light ramp's deep ones
 /// vanish on a dark one.
-TerminalTheme _matchApp(HarnessPalette palette) =>
-    _palettes.putIfAbsent(palette, () {
-      final ramp = palette.isDark ? darkTerminalTheme : lightTerminalTheme;
-      return TerminalTheme(
-        cursor: palette.accent,
-        selection: palette.accent.withValues(alpha: 0.3),
-        foreground: palette.foreground,
-        background: palette.background,
-        black: ramp.black,
-        red: ramp.red,
-        green: ramp.green,
-        yellow: ramp.yellow,
-        blue: ramp.blue,
-        magenta: ramp.magenta,
-        cyan: ramp.cyan,
-        white: ramp.white,
-        brightBlack: ramp.brightBlack,
-        brightRed: ramp.brightRed,
-        brightGreen: ramp.brightGreen,
-        brightYellow: ramp.brightYellow,
-        brightBlue: ramp.brightBlue,
-        brightMagenta: ramp.brightMagenta,
-        brightCyan: ramp.brightCyan,
-        brightWhite: ramp.brightWhite,
-        searchHitBackground: ramp.searchHitBackground,
-        searchHitBackgroundCurrent: ramp.searchHitBackgroundCurrent,
-        searchHitForeground: ramp.searchHitForeground,
-      );
-    });
+TerminalTheme _matchApp(HarnessPalette palette) => _palettes.putIfAbsent(
+  palette,
+  () {
+    final ramp = palette.isDark ? darkTerminalTheme : lightTerminalTheme;
+    return TerminalTheme(
+      cursor: palette.accent,
+      selection: palette.accent.withValues(alpha: 0.3),
+      foreground: palette.foreground,
+      background: palette.background,
+      black: ramp.black,
+      red: ramp.red,
+      green: ramp.green,
+      yellow: ramp.yellow,
+      blue: ramp.blue,
+      magenta: ramp.magenta,
+      cyan: ramp.cyan,
+      white: ramp.white,
+      brightBlack: ramp.brightBlack,
+      brightRed: ramp.brightRed,
+      brightGreen: ramp.brightGreen,
+      brightYellow: ramp.brightYellow,
+      brightBlue: ramp.brightBlue,
+      brightMagenta: ramp.brightMagenta,
+      brightCyan: ramp.brightCyan,
+      brightWhite: ramp.brightWhite,
+      searchHitBackground: ramp.searchHitBackground,
+      searchHitBackgroundCurrent: ramp.searchHitBackgroundCurrent,
+      searchHitForeground: ramp.searchHitForeground,
+    );
+  },
+);
 
 final _palettes = <HarnessPalette, TerminalTheme>{};
 

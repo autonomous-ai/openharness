@@ -56,77 +56,38 @@ class DevLogEntry {
   final String sig;
 
   DevLogEntry withSig(String sig) => DevLogEntry(
-    v: v,
-    acct: acct,
-    seq: seq,
-    prev: prev,
-    op: op,
-    pub: pub,
-    kind: kind,
-    machineId: machineId,
-    label: label,
-    at: at,
-    signer: signer,
-    sig: sig,
+    v: v, acct: acct, seq: seq, prev: prev, op: op, pub: pub, kind: kind,
+    machineId: machineId, label: label, at: at, signer: signer, sig: sig,
   );
 
   Map<String, Object?> toJson() => {
-    'v': v,
-    'acct': acct,
-    'seq': seq,
-    'prev': prev,
-    'op': op,
-    'pub': pub,
-    'kind': kind,
-    'machineId': machineId,
-    'label': label,
-    'at': at,
-    'signer': signer,
-    'sig': sig,
+    'v': v, 'acct': acct, 'seq': seq, 'prev': prev, 'op': op, 'pub': pub, 'kind': kind,
+    'machineId': machineId, 'label': label, 'at': at, 'signer': signer, 'sig': sig,
   };
 
   /// deviceLog.ts `parseDevLogEntry`: every field present, of its type and within bounds.
   static DevLogEntry? parse(Object? raw) {
     if (raw is! Map) return null;
-    final v = raw['v'],
-        acct = raw['acct'],
-        seq = raw['seq'],
-        prev = raw['prev'];
+    final v = raw['v'], acct = raw['acct'], seq = raw['seq'], prev = raw['prev'];
     final op = raw['op'], pub = raw['pub'], kind = raw['kind'];
     final machineId = raw['machineId'], label = raw['label'], at = raw['at'];
     final signer = raw['signer'], sig = raw['sig'];
     if (v != devLogVersion) return null;
     if (acct is! String || acct.isEmpty || acct.length > 128) return null;
     if (seq is! int || seq < 1 || seq > _maxSafe) return null;
-    if (!_bytesOf(prev, 32) ||
-        !_bytesOf(pub, 32) ||
-        !_bytesOf(signer, 32) ||
-        !_bytesOf(sig, 64)) {
+    if (!_bytesOf(prev, 32) || !_bytesOf(pub, 32) || !_bytesOf(signer, 32) || !_bytesOf(sig, 64)) {
       return null;
     }
     if (op != 'add' && op != 'remove') return null;
     if (kind != 'machine' && kind != 'viewer') return null;
     if (machineId is! String) return null;
-    if (kind == 'machine' ? !_machineIdRe.hasMatch(machineId) : machineId != '')
-      return null;
-    if (label is! String ||
-        label.length > devLogLabelMax ||
-        _controlRe.hasMatch(label))
-      return null;
+    if (kind == 'machine' ? !_machineIdRe.hasMatch(machineId) : machineId != '') return null;
+    if (label is! String || label.length > devLogLabelMax || _controlRe.hasMatch(label)) return null;
     if (at is! int || at <= 0 || at > _maxSafe) return null;
     return DevLogEntry(
-      v: v as int,
-      acct: acct,
-      seq: seq,
-      prev: prev as String,
-      op: op as String,
-      pub: pub as String,
-      kind: kind as String,
-      machineId: machineId,
-      label: label,
-      at: at,
-      signer: signer as String,
-      sig: sig as String,
+      v: v as int, acct: acct, seq: seq, prev: prev as String, op: op as String, pub: pub as String,
+      kind: kind as String, machineId: machineId, label: label, at: at,
+      signer: signer as String, sig: sig as String,
     );
   }
 }
@@ -159,41 +120,20 @@ class DevLogMember {
   final int seq;
 
   DevLogMember withLabel(String label) => DevLogMember(
-    pub: pub,
-    kind: kind,
-    machineId: machineId,
-    label: label,
-    addedAt: addedAt,
-    seq: seq,
+    pub: pub, kind: kind, machineId: machineId, label: label, addedAt: addedAt, seq: seq,
   );
 
   Map<String, Object?> toJson() => {
-    'pub': pub,
-    'kind': kind,
-    'machineId': machineId,
-    'label': label,
-    'addedAt': addedAt,
-    'seq': seq,
+    'pub': pub, 'kind': kind, 'machineId': machineId, 'label': label, 'addedAt': addedAt, 'seq': seq,
   };
 
   static DevLogMember? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final pub = raw['pub'], kind = raw['kind'], machineId = raw['machineId'];
     final label = raw['label'], addedAt = raw['addedAt'], seq = raw['seq'];
-    if (pub is! String ||
-        kind is! String ||
-        machineId is! String ||
-        label is! String)
-      return null;
+    if (pub is! String || kind is! String || machineId is! String || label is! String) return null;
     if (addedAt is! int || seq is! int) return null;
-    return DevLogMember(
-      pub: pub,
-      kind: kind,
-      machineId: machineId,
-      label: label,
-      addedAt: addedAt,
-      seq: seq,
-    );
+    return DevLogMember(pub: pub, kind: kind, machineId: machineId, label: label, addedAt: addedAt, seq: seq);
   }
 }
 
@@ -213,8 +153,7 @@ class DevLogHead {
   }
 
   @override
-  bool operator ==(Object other) =>
-      other is DevLogHead && other.seq == seq && other.hash == hash;
+  bool operator ==(Object other) => other is DevLogHead && other.seq == seq && other.hash == hash;
 
   @override
   int get hashCode => Object.hash(seq, hash);
@@ -230,11 +169,7 @@ class DevLogState {
   });
 
   factory DevLogState.empty(String acct) => DevLogState(
-    acct: acct,
-    head: DevLogHead(0, devLogZeroHash),
-    hashes: [],
-    active: {},
-    removed: [],
+    acct: acct, head: DevLogHead(0, devLogZeroHash), hashes: [], active: {}, removed: [],
   );
 
   final String acct;
@@ -250,11 +185,7 @@ class DevLogState {
   final List<String> removed;
 
   DevLogState copy() => DevLogState(
-    acct: acct,
-    head: head,
-    hashes: [...hashes],
-    active: {...active},
-    removed: [...removed],
+    acct: acct, head: head, hashes: [...hashes], active: {...active}, removed: [...removed],
   );
 
   Map<String, Object?> toJson() => {
@@ -268,15 +199,8 @@ class DevLogState {
   static DevLogState? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final acct = raw['acct'], head = DevLogHead.fromJson(raw['head']);
-    final hashes = raw['hashes'],
-        active = raw['active'],
-        removed = raw['removed'];
-    if (acct is! String ||
-        head == null ||
-        hashes is! List ||
-        active is! Map ||
-        removed is! List)
-      return null;
+    final hashes = raw['hashes'], active = raw['active'], removed = raw['removed'];
+    if (acct is! String || head == null || hashes is! List || active is! Map || removed is! List) return null;
     final members = <String, DevLogMember>{};
     for (final e in active.entries) {
       final m = DevLogMember.fromJson(e.value);
@@ -313,28 +237,15 @@ class DevLogApplied {
 
 /// The bytes a signature covers.
 Uint8List devLogMessage(DevLogEntry e) => lvCat([
-  'harness-devlog-v1',
-  '${e.v}',
-  e.acct,
-  '${e.seq}',
-  b64d(e.prev),
-  e.op,
-  b64d(e.pub),
-  e.kind,
-  e.machineId,
-  e.label,
-  '${e.at}',
-  b64d(e.signer),
+  'harness-devlog-v1', '${e.v}', e.acct, '${e.seq}', b64d(e.prev), e.op, b64d(e.pub),
+  e.kind, e.machineId, e.label, '${e.at}', b64d(e.signer),
 ]);
 
 /// The entry's hash: what the next entry's `prev` names.
-String devLogHash(DevLogEntry e) =>
-    b64e(sha256(lvCat([devLogMessage(e), b64d(e.sig)])));
+String devLogHash(DevLogEntry e) => b64e(sha256(lvCat([devLogMessage(e), b64d(e.sig)])));
 
-Future<DevLogEntry> signDevLogEntry(
-  DevLogEntry unsigned,
-  E2eeIdentity identity,
-) async => unsigned.withSig(b64e(await identity.sign(devLogMessage(unsigned))));
+Future<DevLogEntry> signDevLogEntry(DevLogEntry unsigned, E2eeIdentity identity) async =>
+    unsigned.withSig(b64e(await identity.sign(devLogMessage(unsigned))));
 
 /// The next entry to append on top of [state], unsigned.
 DevLogEntry nextDevLogEntry(
@@ -347,25 +258,13 @@ DevLogEntry nextDevLogEntry(
   required String signer,
   required int at,
 }) => DevLogEntry(
-  v: devLogVersion,
-  acct: state.acct,
-  seq: state.head.seq + 1,
-  prev: state.head.hash,
-  op: op,
-  pub: pub,
-  kind: kind,
-  machineId: machineId,
-  label: label,
-  at: at,
-  signer: signer,
+  v: devLogVersion, acct: state.acct, seq: state.head.seq + 1, prev: state.head.hash, op: op,
+  pub: pub, kind: kind, machineId: machineId, label: label, at: at, signer: signer,
 );
 
 /// Apply [entries], in order, on top of [state]. All or nothing: the first entry that breaks a rule
 /// throws a [DevLogError] and [state] is left as it was.
-Future<DevLogApplied> applyDevLogEntries(
-  DevLogState state,
-  List<Object?> entries,
-) async {
+Future<DevLogApplied> applyDevLogEntries(DevLogState state, List<Object?> entries) async {
   final s = state.copy();
   final out = DevLogApplied(s);
   for (final raw in entries) {
@@ -392,27 +291,18 @@ Future<DevLogApplied> applyDevLogEntries(
         out.relabeled.add(relabeled);
       } else {
         if (e.kind == 'machine' &&
-            s.active.values.any(
-              (m) => m.kind == 'machine' && m.machineId == e.machineId,
-            )) {
+            s.active.values.any((m) => m.kind == 'machine' && m.machineId == e.machineId)) {
           throw DevLogError('MACHINE_TAKEN', e.seq);
         }
-        if (s.active.length >= devLogMaxActive)
-          throw DevLogError('TOO_MANY', e.seq);
+        if (s.active.length >= devLogMaxActive) throw DevLogError('TOO_MANY', e.seq);
         final member = DevLogMember(
-          pub: e.pub,
-          kind: e.kind,
-          machineId: e.machineId,
-          label: e.label,
-          addedAt: e.at,
-          seq: e.seq,
+          pub: e.pub, kind: e.kind, machineId: e.machineId, label: e.label, addedAt: e.at, seq: e.seq,
         );
         s.active[e.pub] = member;
         out.added.add(member);
       }
     } else {
-      if (s.active[e.signer] == null)
-        throw DevLogError('SIGNER_NOT_ACTIVE', e.seq);
+      if (s.active[e.signer] == null) throw DevLogError('SIGNER_NOT_ACTIVE', e.seq);
       final gone = s.active.remove(e.pub);
       if (gone == null) throw DevLogError('NOT_ACTIVE', e.seq);
       s.removed.add(e.pub);

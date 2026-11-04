@@ -43,18 +43,14 @@ class StoreRating {
     final histogram = raw['histogram'];
     if (id is! String || id.isEmpty || count is! num) return null;
     final bars = histogram is List
-        ? histogram
-              .map((v) => v is num ? v.toInt().clamp(0, 1 << 30) : 0)
-              .toList()
+        ? histogram.map((v) => v is num ? v.toInt().clamp(0, 1 << 30) : 0).toList()
         : <int>[];
     while (bars.length < 5) {
       bars.add(0);
     }
     return StoreRating(
       harnessId: id,
-      average: (average is num ? average.toDouble() : 0.0)
-          .clamp(0.0, 5.0)
-          .toDouble(),
+      average: (average is num ? average.toDouble() : 0.0).clamp(0.0, 5.0).toDouble(),
       count: count.toInt().clamp(0, 1 << 30),
       histogram: bars.take(5).toList(growable: false),
     );

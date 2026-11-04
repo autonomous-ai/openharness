@@ -8,12 +8,7 @@ import 'package:qr/qr.dart';
 /// white margin (the "quiet zone") is part of the code, not decoration: it is
 /// how a scanner finds the edges. So the white square stays, on every palette.
 class QrCodeView extends StatelessWidget {
-  const QrCodeView({
-    super.key,
-    required this.data,
-    required this.side,
-    required this.semanticLabel,
-  });
+  const QrCodeView({super.key, required this.data, required this.side, required this.semanticLabel});
 
   /// What the code says — the whole link, secret included.
   final String data;

@@ -13,9 +13,7 @@ import 'build_identity.dart';
 /// runtime, thrown from `main` before the first frame. The guard therefore has
 /// to live here rather than being left to each call site to remember.
 bool get hasManagedWindow =>
-    RuntimePlatform.isMacOS ||
-    RuntimePlatform.isWindows ||
-    RuntimePlatform.isLinux;
+    RuntimePlatform.isMacOS || RuntimePlatform.isWindows || RuntimePlatform.isLinux;
 
 /// Configures the native window before the first Flutter frame.
 ///
@@ -47,8 +45,9 @@ Future<void> configureDesktopWindow({
   // return before native setup finishes and detach any error from this future.
   await windowManager.waitUntilReadyToShow(options);
   if (RuntimePlatform.isMacOS) {
-    await const MethodChannel('harness/swarm_tabs')
-        .invokeMethod('configure', {'palette': palette.nativeColors});
+    await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
+      'palette': palette.nativeColors,
+    });
   }
   // Always open filling the screen (owner, 2026-09-15): the tabs, a viewer
   // beside its terminal and the rail all want the width. The options above

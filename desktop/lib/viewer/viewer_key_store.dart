@@ -188,9 +188,7 @@ class ViewerKeyStore {
     if (raw == null) return null;
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is Map &&
-          decoded['epoch'] == epoch &&
-          decoded['acct'] is String) {
+      if (decoded is Map && decoded['epoch'] == epoch && decoded['acct'] is String) {
         return decoded['acct'] as String;
       }
     } on FormatException {
@@ -199,10 +197,8 @@ class ViewerKeyStore {
     return null;
   }
 
-  Future<void> writeSignInAcct(String epoch, String acct) => _storage.write(
-    _signInAcctKey,
-    jsonEncode({'epoch': epoch, 'acct': acct}),
-  );
+  Future<void> writeSignInAcct(String epoch, String acct) =>
+      _storage.write(_signInAcctKey, jsonEncode({'epoch': epoch, 'acct': acct}));
 
   /// What this device trusts — its pins and its trust group — as stored: kept with an account's
   /// device key log when this device signs in to another one ([writeTrust] puts it back).
@@ -213,10 +209,7 @@ class ViewerKeyStore {
 
   /// Trust exactly what [snapshot] ([trustSnapshot]) holds; an empty one trusts nothing.
   Future<void> writeTrust(Map<Object?, Object?> snapshot) async {
-    await _storage.synchronized(
-      'viewer_peers',
-      () => _put(_peersKey, snapshot['peers']),
-    );
+    await _storage.synchronized('viewer_peers', () => _put(_peersKey, snapshot['peers']));
     await _put(_groupKey, snapshot['group']);
   }
 

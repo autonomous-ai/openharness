@@ -136,7 +136,9 @@ class _LoopbackCallback {
       ..statusCode = signedIn ? HttpStatus.ok : HttpStatus.badRequest
       ..headers.contentType = ContentType.html
       ..write(
-        _page(signedIn ? 'Signed in to Harness' : 'Harness sign-in failed'),
+        _page(
+          signedIn ? 'Signed in to Harness' : 'Harness sign-in failed',
+        ),
       );
     await response.close();
     if (_completer.isCompleted) return;

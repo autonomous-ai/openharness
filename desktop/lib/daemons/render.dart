@@ -124,13 +124,7 @@ String statusCell(DaemonRoster roster, String sprite, [int? baseWidth]) {
 /// The base width [statusCell] centres on: the version's sprite in its idle
 /// mood.
 int baseWidth(DaemonRoster roster, DaemonDef d, int versionIndex) =>
-    renderSprite(
-      roster,
-      d,
-      versionIndex,
-      DaemonMood.idle,
-      motion: false,
-    ).length;
+    renderSprite(roster, d, versionIndex, DaemonMood.idle, motion: false).length;
 
 /// The hatchling before it has colour: every drawn cell becomes `#`.
 String silhouette(String sprite) => sprite.replaceAll(RegExp(r'[^ ]'), '#');
@@ -315,14 +309,11 @@ List<String> cardLines(
   final portrait = plate ?? cardPortrait(roster, d, v);
   final width = portrait.fold(0, (w, l) => max(w, l.length));
   final pad = max(0, ((_cardInner - width) / 2).floor());
-  final hasHatched =
-      (hatched != null && hatched.isNotEmpty) ||
+  final hasHatched = (hatched != null && hatched.isNotEmpty) ||
       (egg != null && egg.isNotEmpty);
   return [
     '.${'-' * (cardWidth - 2)}.',
-    row(
-      '$head${' ' * max(1, _cardInner - head.length - rarity.length)}$rarity',
-    ),
+    row('$head${' ' * max(1, _cardInner - head.length - rarity.length)}$rarity'),
     row(''),
     for (final l in portrait) row('${' ' * pad}$l'),
     row(''),

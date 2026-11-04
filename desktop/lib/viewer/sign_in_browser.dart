@@ -23,6 +23,5 @@ Future<bool> openSignInPage(Uri url) => launchUrl(
 );
 
 Future<void> closeSignInPage() async {
-  if (RuntimePlatform.isIOS || RuntimePlatform.isAndroid)
-    await closeInAppWebView();
+  if (RuntimePlatform.isIOS || RuntimePlatform.isAndroid) await closeInAppWebView();
 }
