@@ -290,6 +290,16 @@ describe('the change feed by stamp scope (#2783)', () => {
     expect(kinds).toEqual([['machine']])
   })
 
+  it('a poller a minute behind the one that loaded the feed reads the held feed, not the collections (#2783)', async () => {
+    const { view, now } = setup()
+    const { db, read } = partsDb(now() - 5_000)
+    await readChanged(db, await view(), 't', now() - 3_000)
+    read.length = 0
+    const parts = await readChanged(db, await view(), 't', now() - 60_000)
+    expect(read).toEqual([])
+    expect(parts.map(p => p.kind).sort()).toEqual([...PART_KINDS].sort())
+  })
+
   it('answers every kind, as loadChanged does', async () => {
     const { view, now } = setup()
     const { db } = partsDb(now() - 5_000)
