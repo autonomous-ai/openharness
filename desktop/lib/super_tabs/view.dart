@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import 'package:clock/clock.dart';
+
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -73,6 +76,9 @@ import 'pane_layout.dart';
 import 'view_room.dart';
 import 'swarm_type.dart';
 import 'visible_tick.dart';
+import 'buddy_rows.dart';
+import 'task_groups.dart';
+import 'tasks_view.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -150,6 +156,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+
+  /// The project's Tasks view holds the main pane (task #2569), as Pull
+  /// requests does for a task.
+  bool _showTasks = false;
 
   bool _showNotifications = false;
 
@@ -487,6 +497,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
+        _showTasks ||
         _showNotifications ||
         _showManage) {
       return false;
@@ -729,7 +740,7 @@ class _SuperTabViewState extends State<SuperTabView>
       widget.onCloseTerminal?.call();
       setState(() {
         _showNotifications = _showManage = false;
-        _showPullRequests = false;
+        _showPullRequests = _showTasks = false;
       });
       unawaited(c.select(group.id));
       return true;
@@ -1623,7 +1634,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNotifications: _openActivity,
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = _showManage = false);
+      setState(() => _showNotifications = _showManage = _showTasks = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1637,7 +1648,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
@@ -1654,7 +1665,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _showNotifications = true;
       _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     if (request.kind != 'mention') return;
     final mention = SuperTabMentions.of(c).waiting
@@ -1672,7 +1683,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _showNotifications = true;
       _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
   }
@@ -1700,7 +1711,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showManage = true;
-      _showNotifications = _showPullRequests = false;
+      _showNotifications = _showPullRequests = _showTasks = false;
       if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
         _manageTab = SuperTabManageTab.machines;
       }
@@ -1735,7 +1746,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     c.select(conversationId);
     return true;
@@ -1813,7 +1824,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
       _back = null;
       _target = shownBy;
       _openedAtMessage = id;
@@ -2181,7 +2192,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   void _openAgent(SuperTabAgent agent) {
     setState(() {
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
       _rosterOpen = false;
     });
     widget.onOpenTerminal(agent);
@@ -2440,14 +2451,99 @@ class _SuperTabViewState extends State<SuperTabView>
   VoidCallback? _openTerminals(SuperTabConversation group) =>
       _terminalCount(group) > 0 && c.canWrite
       ? () {
-          setState(() => _showPullRequests = false);
+          setState(() => _showPullRequests = _showTasks = false);
           widget.onOpenGroupTerminals?.call();
         }
       : null;
 
   void _openPullRequests() {
     widget.onCloseTerminal?.call();
-    setState(() => _showPullRequests = true);
+    setState(() {
+      _showPullRequests = true;
+      _showTasks = false;
+    });
+  }
+
+  /// Opens [group]'s project's Tasks view; from a task's chat, its project's
+  /// chat is selected under it.
+  void _openTasks(SuperTabConversation group) {
+    final project = c.snapshot?.projectById(group.projectId);
+    if (project == null) return;
+    widget.onCloseTerminal?.call();
+    if (c.selectedId != project.leadConversationId) {
+      unawaited(c.select(project.leadConversationId));
+    }
+    setState(() {
+      _showTasks = true;
+      _showPullRequests = false;
+    });
+  }
+
+  /// A task's chat, opened from its card: read first when it is one of the
+  /// shipped tasks only the Tasks view holds.
+  Future<void> _openTask(String id) async {
+    if (!await c.loadGroup(id) || !mounted) return;
+    _openConversation(id);
+  }
+
+  /// How many of [project]'s tasks need the reader: the Tasks icon's count.
+  int _tasksNeedingYou(SuperTabProject project) => superTabTasksNeedingYouIn(
+    superTabProjectBoard(
+      c,
+      project,
+      now: clock.now(),
+      needsHuman: (g) => _needsHuman(g).length,
+    ),
+  );
+
+  /// The open project's Tasks view, while it holds the pane.
+  Widget _tasksPage() {
+    final project = _showTasks
+        ? c.snapshot?.projectById(c.selected?.projectId ?? '')
+        : null;
+    if (project == null) return const SizedBox.shrink();
+    return SuperTabTasksView(
+      key: ValueKey('super-tasks-${project.id}'),
+      controller: c,
+      project: project,
+      storage: widget.app?.localStore,
+      needsHuman: (g) => _needsHuman(g).length,
+      onOpenTask: (id) => unawaited(_openTask(id)),
+      onOpenProposal: (id) =>
+          _openThreadFromList(project.leadConversationId, id),
+    );
+  }
+
+  /// The Tasks icon of a project's header and of its tasks' (Dee, task
+  /// #2569): selected while the board shows, and in a task opened from it;
+  /// its red count is the tasks that need the reader, none at 0.
+  Widget _tasksButton(SuperTabConversation group, {required bool task}) {
+    final project = c.snapshot!.projectById(group.projectId)!;
+    final selected = task || (_showTasks && !_terminalsVisible);
+    final count = _tasksNeedingYou(project);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        fingerTarget(
+          enabled: _phone,
+          AppIconButton(
+            key: const ValueKey('super-tasks'),
+            icon: AppIcons.squareKanban,
+            size: AppIcons.inlineSize,
+            tooltip: 'Tasks',
+            selected: selected,
+            color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
+            onPressed: () => _openTasks(group),
+          ),
+        ),
+        if (count > 0)
+          SuperTabCountBadge(
+            count,
+            key: const ValueKey('super-tasks-badge'),
+            tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+          ),
+      ],
+    );
   }
 
   /// Members takes the right side from an open thread, as in Slack.
@@ -2508,6 +2604,13 @@ class _SuperTabViewState extends State<SuperTabView>
     // The one Buddy has one chat, as a project does; it has no pull requests.
     final oneBuddy = group?.isSwarmBuddyChat == true;
     final restsOnChat = isProject || oneBuddy;
+    // A project's task: its header leads back to the board it came from.
+    final isTask =
+        group != null &&
+        !isProject &&
+        !oneBuddy &&
+        !group.isBuddyChat &&
+        c.snapshot?.projectById(group.projectId) != null;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -2573,7 +2676,10 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
-            if (!restsOnChat || _terminalsVisible || _showPullRequests)
+            if (!restsOnChat ||
+                _terminalsVisible ||
+                _showPullRequests ||
+                _showTasks)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -2581,12 +2687,13 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: AppIcons.messageSquare,
                   size: AppIcons.inlineSize,
                   tooltip: 'Chat',
-                  selected: !_terminalsVisible && !_showPullRequests,
-                  color: !_terminalsVisible && !_showPullRequests
+                  selected:
+                      !_terminalsVisible && !_showPullRequests && !_showTasks,
+                  color: !_terminalsVisible && !_showPullRequests && !_showTasks
                       ? DesktopChrome.foreground
                       : DesktopChrome.muted,
                   onPressed: () {
-                    setState(() => _showPullRequests = false);
+                    setState(() => _showPullRequests = _showTasks = false);
                     widget.onCloseTerminal?.call();
                     _readVisibleTailAfterFrame();
                     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2611,6 +2718,10 @@ class _SuperTabViewState extends State<SuperTabView>
                   onPressed: _openTerminals(group),
                 ),
               ),
+            ],
+            if (isProject || isTask) ...[
+              const SizedBox(width: 4),
+              _tasksButton(group, task: isTask),
             ],
             if (!isProject) ...[
               if (!_menuNamesViews && !oneBuddy) ...[
@@ -3125,7 +3236,7 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       references: _references,
       onOpenGroup: (id) {
-        setState(() => _showPullRequests = false);
+        setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
         c.selectTerminal(id, null);
       },
@@ -4399,7 +4510,7 @@ class _SuperTabViewState extends State<SuperTabView>
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
           setState(() {
-            _showPullRequests = false;
+            _showPullRequests = _showTasks = false;
             _rosterOpen = false;
             _showManage = _showNotifications = false;
           });
@@ -4411,7 +4522,7 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onAnswer: (id) {
           setState(() {
-            _showPullRequests = false;
+            _showPullRequests = _showTasks = false;
             _rosterOpen = false;
           });
           unawaited(c.select(id));
@@ -4463,6 +4574,8 @@ class _SuperTabViewState extends State<SuperTabView>
                             ? 1
                             : _showPullRequests
                             ? 2
+                            : _showTasks
+                            ? 5
                             : 0,
                         children: [
                           _conversation(narrow),
@@ -4500,6 +4613,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                   facts: _facts,
                                 )
                               : const SizedBox.shrink(),
+                          _tasksPage(),
                         ],
                       ),
                     ),

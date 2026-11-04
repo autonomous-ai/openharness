@@ -58,15 +58,8 @@ void main() {
   ) async {
     await _showView(tester, tasksServer());
     expect(
-      find.descendant(
-        of: _key('super-tasks-badge'),
-        matching: find.byType(SuperTabCountBadge),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: _key('super-tasks-badge'), matching: find.text('1')),
-      findsOneWidget,
+      tester.widget<SuperTabCountBadge>(_key('super-tasks-badge')).count,
+      1,
     );
     await tester.pumpWidget(const SizedBox());
     await _showView(tester, tasksServer(empty: true));
