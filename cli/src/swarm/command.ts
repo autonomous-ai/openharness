@@ -139,8 +139,10 @@ function startResult(start: Json, now: number): string {
 }
 
 export async function swarmCommand(argv: readonly string[], deps: SwarmDeps, json = false): Promise<number> {
-  const words = argv.filter((arg) => !arg.startsWith('-'))
-  const flags = argv.filter((arg) => arg.startsWith('-'))
+  // `--tab <id>` takes the word after it, which is no verb and was lost with the flags: every read answered for the first Swarm.
+  const tabAt = argv.indexOf('--tab')
+  const words = argv.filter((arg, at) => !arg.startsWith('-') && !(tabAt >= 0 && at === tabAt + 1))
+  const flags = argv.flatMap((arg, at) => tabAt >= 0 && at === tabAt + 1 ? [`--tab=${arg}`] : arg.startsWith('-') && arg !== '--tab' ? [arg] : [])
   if (!words.length || words[0] === 'help' || flags.includes('-h') || flags.includes('--help')) {
     deps.out(SWARM_USAGE)
     return 0

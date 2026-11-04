@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -42,9 +41,6 @@ enum Out {
     Binary(Vec<u8>),
 }
 
-trait SocketIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
-impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> SocketIo for T {}
-
 type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value)>)>>>;
 
 /// The daemon's owner-only socket, shared with Desktop. Never fall back to TCP: loopback is shared
@@ -55,7 +51,124 @@ pub fn socket_path(port: u16) -> PathBuf {
     dir.join(format!("daemon-{port}.sock"))
 }
 
+/// What a request on the daemon's socket proves, and what it asks the answer to prove: nothing on a socket only its owner
+/// can reach; on Windows the pipe's token (`pipe`), in a header and never in the clear.
+struct Door {
+    #[cfg(windows)] target: Option<(pipe::Target, String)>,
+}
+
+impl Door {
+    fn none() -> Door { Door { #[cfg(windows)] target: None } }
+    fn header(&self) -> Option<(&'static str, String)> {
+        #[cfg(windows)] { self.target.as_ref().map(|(target, nonce)| (pipe::AUTH_HEADER, target.auth(nonce))) }
+        #[cfg(unix)] { None }
+    }
+    fn proven(&self, _proof: Option<&str>) -> bool {
+        #[cfg(windows)] { self.target.as_ref().is_none_or(|(target, nonce)| target.proven(nonce, _proof)) }
+        #[cfg(unix)] { true }
+    }
+    #[cfg(windows)]
+    const PROOF: &'static str = pipe::PROOF_HEADER;
+    #[cfg(unix)]
+    const PROOF: &'static str = "";
+}
+
+/// The daemon's socket, for one request. Never TCP (`socket_path`).
+async fn open_door(path: &Path) -> std::io::Result<(crate::sock::Stream, Door)> {
+    #[cfg(unix)] { Ok((Box::new(connect_owned(path).await?), Door::none())) }
+    #[cfg(windows)] {
+        let target = pipe::target(path)?;
+        let client = target.dial().await?;
+        let nonce = target.nonce();
+        Ok((Box::new(client), Door { target: Some((target, nonce)) }))
+    }
+}
+
+/// The daemon's pipe on Windows, by the record it writes beside the Unix socket's path, and the proof each request carries
+/// (cli/src/lib/windows/pipeAuth.ts: reaching the pipe proves nothing there, and the token never travels).
+#[cfg(windows)]
+mod pipe {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use std::path::Path;
+    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+
+    pub const AUTH_HEADER: &str = "x-harness-auth";
+    pub const PROOF_HEADER: &str = "x-harness-proof";
+    const PIPE_PREFIX: &str = r"\\.\pipe\harness-";
+
+    pub struct Target { pipe: String, token: Vec<u8> }
+
+    fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+    fn unhex(text: &str) -> Option<Vec<u8>> {
+        if text.len() != 64 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) { return None }
+        (0..64).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).ok()).collect()
+    }
+    fn mac(token: &[u8], separator: u8, nonce: &str) -> Hmac<Sha256> {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(token).expect("HMAC takes a key of any length");
+        mac.update(&[separator]);
+        mac.update(nonce.as_bytes());
+        mac
+    }
+
+    /// [socket] is daemon-<port>.sock in the data folder: its record is daemon-<port>.json, its token daemon-token.
+    pub fn target(socket: &Path) -> std::io::Result<Target> {
+        let refused = |what: &str| std::io::Error::new(std::io::ErrorKind::NotFound, format!("Harness's daemon is not running ({what})."));
+        let record: serde_json::Value = serde_json::from_slice(&std::fs::read(socket.with_extension("json")).map_err(|_| refused("no record"))?).map_err(|_| refused("no record"))?;
+        let pipe = record["pipe"].as_str().ok_or_else(|| refused("no pipe"))?.to_string();
+        let id = pipe.strip_prefix(PIPE_PREFIX).ok_or_else(|| refused("no pipe"))?;
+        // A pipe on this computer of the daemon's own naming: never `\\host\pipe\`, an SMB connection.
+        if id.len() != 32 || !id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) { return Err(refused("no pipe")) }
+        // Once its process is gone, any account can create a pipe of that name.
+        if !record["pid"].as_u64().is_some_and(crate::sys::running) { return Err(refused("not running")) }
+        let dir = socket.parent().ok_or_else(|| refused("no folder"))?;
+        let text = std::fs::read_to_string(dir.join("daemon-token")).map_err(|_| refused("no token"))?;
+        let token = unhex(text.trim_end_matches('\n')).ok_or_else(|| refused("no token"))?;
+        Ok(Target { pipe, token })
+    }
+
+    impl Target {
+        /// A nonce for one request: the pipe's id, then 128 random bits.
+        pub fn nonce(&self) -> String { format!("{}{}", &self.pipe[PIPE_PREFIX.len()..], uuid::Uuid::new_v4().simple()) }
+        pub fn auth(&self, nonce: &str) -> String { format!("{nonce}.{}", hex(&mac(&self.token, 0x01, nonce).finalize().into_bytes())) }
+        /// Whether the answer proves the daemon's token.
+        pub fn proven(&self, nonce: &str, proof: Option<&str>) -> bool {
+            let Some(proof) = proof.and_then(unhex) else { return false };
+            mac(&self.token, 0x00, nonce).verify_slice(&proof).is_ok()
+        }
+        pub async fn dial(&self) -> std::io::Result<NamedPipeClient> {
+            for _ in 0..50 {
+                match ClientOptions::new().open(&self.pipe) {
+                    Err(error) if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                    other => return other,
+                }
+            }
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the daemon's pipe stayed busy"))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // What cli/src/lib/windows/pipeAuth.ts gives for the same token and nonce (node, 2026-11-04).
+        #[test]
+        fn proves_as_the_daemon_does() {
+            let target = Target { pipe: format!(r"\\.\pipe\harness-{}", "a".repeat(32)), token: vec![7u8; 32] };
+            let nonce = format!("{}{}", "a".repeat(32), "b".repeat(32));
+            assert_eq!(target.auth(&nonce), format!("{nonce}.1fb3712c9ce529ac4078673a472239a348642c33ddebf4ef7b560dbc40f69103"));
+            assert!(target.proven(&nonce, Some("7efd293f44984e224674766ad89bc95ce305fbc6cd1f09ed3ce4bab2ef4f6928")));
+            assert!(!target.proven(&nonce, Some(&"0".repeat(64))));
+            assert!(!target.proven(&nonce, None));
+            assert!(target.nonce().starts_with(&"a".repeat(32)));
+            assert_eq!(target.nonce().len(), 64);
+        }
+    }
+}
+
+#[cfg(unix)]
 async fn connect_owned(path: &Path) -> std::io::Result<tokio::net::UnixStream> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Harness requires a private daemon socket owned by this OS user"));
@@ -104,12 +217,22 @@ impl Link {
             // Local shells use the same protocol on a private Unix socket. The rest of the
             // request, heartbeat, ordering and reconnect machinery remains shared.
             let connect = tokio::time::timeout(Duration::from_secs(20), async {
-                let io: Box<dyn SocketIo> = if crate::local::is_local(&id) {
-                    Box::new(crate::local::connect(port).await.map_err(tokio_tungstenite::tungstenite::Error::Io)?)
+                use tokio_tungstenite::tungstenite::{Error as WsError, client::IntoClientRequest};
+                let (io, door) = if crate::local::is_local(&id) {
+                    (crate::local::connect(port).await.map_err(WsError::Io)?, Door::none())
                 } else {
-                    Box::new(connect_owned(&socket_path).await.map_err(tokio_tungstenite::tungstenite::Error::Io)?)
+                    open_door(&socket_path).await.map_err(WsError::Io)?
                 };
-                tokio_tungstenite::client_async(&url, io).await
+                let mut request = url.as_str().into_client_request()?;
+                if let Some((name, value)) = door.header() {
+                    request.headers_mut().insert(name, value.parse().map_err(|_| WsError::Io(std::io::Error::other("bad header")))?);
+                }
+                let (ws, response) = tokio_tungstenite::client_async(request, io).await?;
+                // A squatter on a dead daemon's pipe can accept the upgrade: nothing is sent it.
+                if !door.proven(response.headers().get(Door::PROOF).and_then(|v| v.to_str().ok())) {
+                    return Err(WsError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "that was not Harness's daemon")));
+                }
+                Ok((ws, response))
             }).await;
             let (ws, _) = match connect {
                 Ok(Ok(ok)) => ok,
@@ -280,10 +403,11 @@ pub async fn http_json_for(port: u16, method: &str, path: &str, body: Option<&Va
 async fn http_json_at(port: u16, socket: &Path, method: &str, path: &str, body: Option<&Value>, wait: Duration) -> Result<Value, RpcError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let work = async {
-        let mut stream = connect_owned(socket).await.map_err(|e| RpcError::new("DAEMON_UNREACHABLE", e.to_string()))?;
+        let (mut stream, door) = open_door(socket).await.map_err(|e| RpcError::new("DAEMON_UNREACHABLE", e.to_string()))?;
         let body = body.map(|b| b.to_string()).unwrap_or_default();
+        let auth = door.header().map(|(name, value)| format!("{name}: {value}\r\n")).unwrap_or_default();
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\nx-adapter-local: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\nx-adapter-local: 1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(request.as_bytes()).await.map_err(|e| RpcError::new("DISCONNECTED", e.to_string()))?;
@@ -291,6 +415,8 @@ async fn http_json_at(port: u16, socket: &Path, method: &str, path: &str, body: 
         stream.read_to_end(&mut raw).await.map_err(|e| RpcError::new("DISCONNECTED", e.to_string()))?;
         let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| RpcError::new("BAD_RESPONSE", "no header end"))?;
         let head = String::from_utf8_lossy(&raw[..split]).to_string();
+        let proof = head.lines().find_map(|line| line.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case(Door::PROOF)).map(|(_, value)| value.trim()));
+        if !door.proven(proof) { return Err(RpcError::new("DAEMON_UNREACHABLE", "that was not Harness's daemon")) }
         let mut content = raw[split + 4..].to_vec();
         if head.to_ascii_lowercase().contains("transfer-encoding: chunked") { content = dechunk(&content) }
         let status: u16 = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -318,7 +444,7 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod recovery_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

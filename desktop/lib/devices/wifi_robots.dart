@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -16,6 +17,8 @@ import '../shared/widgets/labeled_field.dart';
 import '../shared/widgets/setting_row.dart';
 import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
+
+bool get _onWindows => defaultTargetPlatform == TargetPlatform.windows;
 
 /// The Autonomous robots paired with this computer over the network, through the CLI
 /// (`harness autonomous-device`): what is paired, what the network shows, and the two acts on them —
@@ -457,7 +460,7 @@ class _WifiPairDialogState extends State<WifiPairDialog> {
       () => unawaited(
         launchUrl(
           Uri.parse(
-            'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork',
+            _onWindows ? 'windowsdefender://network/' : 'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork',
           ),
         ),
       ))();
@@ -540,20 +543,28 @@ class _WifiPairDialogState extends State<WifiPairDialog> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'macOS is blocking Harness from your local network, so it can’t find Autonomous robots. '
-                              'Turn on Harness in Privacy & Security › Local Network, then refresh.',
+                              _onWindows
+                                  ? 'Windows Firewall is blocking Harness, so it can’t find Autonomous robots. '
+                                        'Allow Harness through the firewall, then refresh.'
+                                  : 'macOS is blocking Harness from your local network, so it can’t find Autonomous robots. '
+                                        'Turn on Harness in Privacy & Security › Local Network, then refresh.',
                               style: DesktopChrome.text(
                                 color: DesktopChrome.muted,
                               ),
                             ),
                             if (Platform.isMacOS ||
+                                _onWindows ||
                                 widget.openLocalNetworkSettings != null) ...[
                               const SizedBox(height: 8),
                               OutlinedButton(
                                 onPressed: disabled
                                     ? null
                                     : _openLocalNetworkSettings,
-                                child: const Text('Open Settings'),
+                                child: Text(
+                                  _onWindows
+                                      ? 'Open firewall settings'
+                                      : 'Open Settings',
+                                ),
                               ),
                             ],
                           ],
@@ -610,7 +621,11 @@ class _WifiPairDialogState extends State<WifiPairDialog> {
                         robots.networkBlocked
                             ? 'Allow local network access above to find your robot.'
                             : robots.discovered.isEmpty
-                            ? 'No Autonomous robots found. Keep your device on the same network, then refresh.'
+                            // Windows Firewall drops the answers without an error, so a
+                            // blocked network looks like an empty one there.
+                            ? _onWindows
+                                  ? 'No Autonomous robots found. Keep your device on the same network, then refresh. If it still isn’t found, Windows Firewall may be blocking Harness.'
+                                  : 'No Autonomous robots found. Keep your device on the same network, then refresh.'
                             : 'Select your device and enter its six-character code. Separators are allowed, for example ABC-123.',
                         style: DesktopChrome.metadata(),
                       ),

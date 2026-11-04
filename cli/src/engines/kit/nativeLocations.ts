@@ -49,7 +49,8 @@ export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
     OPENCODE_PLUGIN_DIR: vars.OPENCODE_PLUGIN_DIR || join(vars.OPENCODE_CONFIG_DIR || join(config, 'opencode'), 'plugin'),
     KILO_PLUGIN_DIR: vars.KILO_PLUGIN_DIR || join(config, 'kilo', 'plugin'),
     PI_AGENT_DIR: vars.PI_CODING_AGENT_DIR || join(vars.PI_HOME || join(home, '.pi'), 'agent'),
-    HERMES_HOME: vars.HERMES_HOME || join(home, '.hermes'),
+    // Windows: under %LOCALAPPDATA% (Hermes 0.22.7, hermes_constants.py).
+    HERMES_HOME: vars.HERMES_HOME || (process.platform === 'win32' ? join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'hermes') : join(home, '.hermes')),
     COMMANDCODE_HOME: vars.COMMANDCODE_HOME || join(home, '.commandcode'),
     DEVIN_HOME: vars.DEVIN_HOME || join(data, 'devin', 'cli'),
     DEVIN_CONFIG_PATH: vars.DEVIN_CONFIG_PATH || join(config, 'devin', 'config.json'),

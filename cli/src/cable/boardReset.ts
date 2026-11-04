@@ -9,7 +9,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-type Run = (file: string, args: string[], options: { timeout: number }) => Promise<unknown>
+import type { CommandFor } from './windowsSerial.js'
+
+type Run = (file: string, args: string[], options: { timeout: number; windowsHide?: boolean }) => Promise<unknown>
 
 /** TIOCMSET: _IOW('t', 109, int) on macOS, 0x5418 on Linux. */
 const TIOCMSET: Partial<Record<NodeJS.Platform, string>> = { darwin: '0x8004746d', linux: '0x5418' }
@@ -21,8 +23,20 @@ const SCRIPT = 'use Fcntl;sysopen(my $f,shift,O_RDWR|O_NONBLOCK|O_NOCTTY) or exi
   + 'for(@ARGV){my($b,$ms)=split /:/;ioctl($f,$r,pack("i",$b)) or exit 3;select(undef,undef,undef,$ms/1000)}'
 
 /** True when the pulse was sent. Never throws: a board that cannot be reset is an ordinary answer. */
-export async function resetBoard(path: string, deps: { platform?: NodeJS.Platform; run?: Run } = {}): Promise<boolean> {
-  const request = TIOCMSET[deps.platform ?? process.platform]
+export async function resetBoard(path: string, deps: { platform?: NodeJS.Platform; run?: Run; serial?: CommandFor } = {}): Promise<boolean> {
+  const platform = deps.platform ?? process.platform
+  if (platform === 'win32') {
+    // A COM port's lines are set through Windows' own calls, by the program that holds its ports.
+    const command = (deps.serial ?? (await import('./windowsSerial.js')).windowsSerialCommand)(['reset', path])
+    if (!command) return false
+    try {
+      await (deps.run ?? promisify(execFile))(command.file, command.args, { timeout: 5000, windowsHide: true })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const request = TIOCMSET[platform]
   if (!request) return false
   try {
     await (deps.run ?? promisify(execFile))('perl', ['-e', SCRIPT, path, request, ...PULSE], { timeout: 5000 })

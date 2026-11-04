@@ -67,7 +67,8 @@ class AgentPrefetch {
        _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
-       // These downloads use POSIX shell recipes; Windows installs agents from their panes.
+       // These downloads use POSIX shell recipes; Windows installs an agent when one is
+       // first started (cli engines/kit/windowsInstall.ts).
        _skip =
            skip ??
            (() =>

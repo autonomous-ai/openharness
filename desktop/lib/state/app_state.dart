@@ -61,6 +61,7 @@ import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
+import '../bootstrap/windows_git_setup.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../bootstrap/setup_progress.dart';
 import '../bootstrap/windows_self_install.dart';
@@ -7152,6 +7153,10 @@ class AppNotifier extends ChangeNotifier {
       // Terminal and setup keeps its own screen: a fresh Ubuntu VM (2026-10-09) ended setup on an empty
       // box and installed OpenCode in its first pane, about 90 s to a first result against 55 s on a Mac.
       // They wait for what setup brings until it is ready ([_continueAfterEnvironmentReady]).
+      // Everyone on Windows, not only a first run: once, and it never holds anything up.
+      unawaited(
+        WindowsGitSetup(log: (line) => appLog.info('setup', line)).start(),
+      );
       if (firstHarness) {
         _firstHarnessLaunch = true;
         agentPrefetch?.setupRunning = true;

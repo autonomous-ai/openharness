@@ -1050,6 +1050,18 @@ describe('contributed machine executor', () => {
         expect(closeMember).toHaveBeenCalledTimes(1)
       })
 
+      // The start is still listed for one pass after the Swarm fails it, and that pass reads the failure with no agent named. The
+      // agent was forgotten there and kept running as nobody's: three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04.
+      it('still stops it when a pass reads the failure before the start leaves the list', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.start.mockResolvedValueOnce({ error: 'START_FAILED', startId: 'start', detail: 'Mac Auto did not start it within 3 minutes' } as never)
+        f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).not.toHaveBeenCalled()
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+      })
+
       // A daemon restarted between the launch and the Swarm failing the start no longer forgets the agent it launched.
       it('still stops it after the daemon restarted, from the launches it kept on disk', async () => {
         const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))

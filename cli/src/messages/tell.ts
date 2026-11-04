@@ -101,11 +101,11 @@ export interface RelayCheck {
 
 /** Said when the owner is not proven here: the grant lapses an hour after their last message, and a relaunch drops it. */
 export const OWNER_AWAY_TEXT = 'You pass words to your owner\'s harnesses only while they are with you: once they write to you in your chat, on ' +
-  'this Mac signed in as them, for an hour. Nothing was sent. Tell your owner in one line.'
+  'this computer signed in as them, for an hour. Nothing was sent. Tell your owner in one line.'
 
 /** The one refusal for every harness a Buddy may not reach, or that does not run: which kind it is, or that it exists, is
  *  no read a Buddy is given (security review 2 of #2626). The CLI says the same for a name it does not find. */
-export const NOT_ONE_TEXT = 'That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.'
+export const NOT_ONE_TEXT = 'That is not one of your owner\'s harnesses on this computer, or it no longer runs. Nothing was sent.'
 
 /** Why a Buddy may not pass words to [check.target] here, or null. */
 export function relayRefusal(check: RelayCheck): { code: 'TELL_OFF' | 'OWNER_AWAY' | 'NOT_YOURS'; message: string } | null {

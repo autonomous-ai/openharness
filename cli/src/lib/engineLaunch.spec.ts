@@ -795,7 +795,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       expect(onWindows(() => buildEngineLaunchArgv('terminal', { cwd: '/work', terminalHint: { machineName: 'box' } }, '/bin/zsh')))
         .toEqual(defaultWindowsShell())
       expect(() => onWindows(() => buildEngineInstallationArgv('codex', engineInstallRecipe('codex')!, { HOME: '/h' })))
-        .toThrow('Harness cannot install codex on Windows yet')
+        .toThrow('The POSIX installer of codex does not run on Windows')
     })
   })
 

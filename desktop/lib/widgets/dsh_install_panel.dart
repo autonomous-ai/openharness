@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -259,6 +260,8 @@ final _transientGit = RegExp(
 
 final _gaveUp = RegExp(r'gave up after (\d+) attempts');
 
+bool get _onWindows => defaultTargetPlatform == TargetPlatform.windows;
+
 InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
   final miss =
       run.checks.where((c) => c.startsWith('miss')).firstOrNull ??
@@ -319,11 +322,13 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
     );
   }
   if (lower.startsWith('uv')) {
-    return const InstallFailure(
+    return InstallFailure(
       kind: InstallFailureKind.runtime,
       title: 'uv is not installed on this machine.',
       body: 'The toolchain is a Python environment that uv builds. Install it, then retry.',
-      command: 'curl -LsSf https://astral.sh/uv/install.sh | sh',
+      command: _onWindows
+          ? 'irm https://astral.sh/uv/install.ps1 | iex'
+          : 'curl -LsSf https://astral.sh/uv/install.sh | sh',
     );
   }
   if (lower.startsWith('node')) {
@@ -331,7 +336,9 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
       kind: InstallFailureKind.runtime,
       title: 'Node.js is missing or too old.',
       body: text,
-      command: 'brew install node@22',
+      command: _onWindows
+          ? 'winget install --id OpenJS.NodeJS.LTS -e'
+          : 'brew install node@22',
     );
   }
   if (lower.contains('doctor still running')) {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/model_search_catalog.dart' show thisComputerName;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -111,7 +112,7 @@ class _SwarmAccountsDialogState extends State<SwarmAccountsDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Other people’s PMs on this Mac can run on an offered account and spend its usage.',
+                'Other people’s PMs on ${thisComputerName()} can run on an offered account and spend its usage.',
                 style: DesktopChrome.text(),
               ),
               const SizedBox(height: 12),

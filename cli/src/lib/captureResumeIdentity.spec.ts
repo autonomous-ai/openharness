@@ -35,6 +35,16 @@ it('leaves a shell and a complete binding unchanged', async () => {
   expect(await captureResumeIdentity(row)).toBe(row); expect(processRows).not.toHaveBeenCalled()
 })
 
+it('on Windows stops a session no hook has named yet, with nothing to read its process by', async () => {
+  expect(row.sessionId).toBeFalsy()
+  expect(await captureResumeIdentity(row, 'win32')).toBe(row)
+  expect(processSessionEvidence).not.toHaveBeenCalled()
+  expect(findLiveSession).not.toHaveBeenCalled()
+  // One a hook named keeps its conversation there as anywhere.
+  Object.assign(row, { sessionId: 'named', transcriptPath: '/history' })
+  expect(await captureResumeIdentity(row, 'win32')).toBe(row)
+})
+
 it('uses a completely proven parent transcript without changing the saved conversation', async () => {
   Object.assign(row, { sessionId: 'parent', transcriptPath: '/child' })
   vi.mocked(savedTranscriptEvidence).mockReturnValue({ path: '/parent', fileKey: 'parent-file', verify: vi.fn() })

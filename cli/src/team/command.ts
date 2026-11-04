@@ -21,6 +21,7 @@ import { psQuote, type AdminVia, type RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
 import { teamModelSet } from './model.js'
+import type { TeamModelHandoff } from './modelHandoff.js'
 import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
@@ -191,6 +192,8 @@ export interface TeamCommandDeps {
   handOver?(code: string): void
   /** Windows: asks Task Scheduler to start the team daemon's task; false when it would not. */
   startTeamTask?(): Promise<boolean>
+  /** Windows: leaves a model API for the Team daemon (./modelHandoff.ts); a spec names its own. */
+  handModel?(handoff: TeamModelHandoff): void
 }
 
 export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promise<number> {
