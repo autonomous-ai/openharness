@@ -2,6 +2,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../identity.dart';
@@ -96,6 +97,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     required this.onTap,
     this.columns,
     this.own = false,
+    this.noMachine = false,
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
@@ -106,6 +108,10 @@ class LeaderboardPersonRow extends StatelessWidget {
 
   /// Whether this is the viewer's own row.
   final bool own;
+
+  /// Whether they have no machine in this Swarm: a quiet mark after the name
+  /// (Scholes, task #2699). One only offline still counts.
+  final bool noMachine;
 
   @override
   Widget build(BuildContext context) {
@@ -148,33 +154,69 @@ class LeaderboardPersonRow extends StatelessWidget {
   /// system).
   Widget _name() => SuperTabUntil(
     until: person.status?.until,
-    builder: (context) => Tooltip(
-      message: [
-        leaderboardName(person, score),
-        if (person.name != null) '@${person.username}',
-        person.email,
-        ?person.statusAt(clock.now())?.text,
-      ].join('\n'),
-      child: Text.rich(
-        TextSpan(
-          text: leaderboardName(person, score),
-          children: [
-            if (leaderboardCrowned(score))
-              WidgetSpan(
-                alignment: PlaceholderAlignment.middle,
-                child: LeaderboardCrown(
-                  id: person.id,
-                  weekName: score!.spanName,
-                ),
+    builder: (context) => Row(
+      children: [
+        Flexible(
+          child: Tooltip(
+            message: [
+              leaderboardName(person, score),
+              if (person.name != null) '@${person.username}',
+              person.email,
+              ?person.statusAt(clock.now())?.text,
+            ].join('\n'),
+            child: Text.rich(
+              TextSpan(
+                text: leaderboardName(person, score),
+                children: [
+                  if (leaderboardCrowned(score))
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: LeaderboardCrown(
+                        id: person.id,
+                        weekName: score!.spanName,
+                      ),
+                    ),
+                ],
               ),
-          ],
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(),
+            ),
+          ),
         ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: DesktopChrome.control(),
-      ),
+        // After the name, which gives way first (task #2699).
+        if (noMachine) _NoMachineMark(id: person.id),
+      ],
     ),
   );
+}
+
+/// After the name of someone with no machine in this Swarm: the crossed-out
+/// monitor, muted and at the metadata size so the row keeps its height, with
+/// why on hover (Scholes, task #2699).
+class _NoMachineMark extends StatelessWidget {
+  const _NoMachineMark({required this.id});
+  final String id;
+
+  static const _why = 'No machine shared yet';
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.metadata();
+    return Padding(
+      padding: const EdgeInsets.only(left: _halfGap),
+      child: Tooltip(
+        message: _why,
+        child: Icon(
+          AppIcons.monitorOff,
+          key: ValueKey('super-person-no-machine-$id'),
+          size: style.fontSize,
+          color: style.color,
+          semanticLabel: _why,
+        ),
+      ),
+    );
+  }
 }
 
 /// Number one's crown beside their name: content artwork, said in words, at

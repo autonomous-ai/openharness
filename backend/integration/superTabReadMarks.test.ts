@@ -21,7 +21,7 @@ import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { READ_MARK_EXPIRY_MS, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
+import { READ_MARK_EXPIRY_MS, sweepReadMarks, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { listNamedIndexes, NAMED_INDEX } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -594,5 +594,33 @@ describe('thread marks (one per person and thread)', () => {
     expect(rows.length).toBeGreaterThanOrEqual(2)
     expect(new Set(hints)).toEqual(new Set([JSON.stringify(NAMED_INDEX.SuperTabThreadMark.person)]))
     expect(rows.every(row => row.planSummary?.startsWith('IXSCAN') && !row.fromMultiPlanner), JSON.stringify(rows.map(r => r.planSummary))).toBe(true)
+  })
+})
+
+describe('read marks past 180 days, where the database refuses their expiry (Ken\'s prod scan 11-04)', () => {
+  const DAY = 86_400_000
+  // Long before every other test's marks, so the cutoff below passes only the marks seeded here.
+  const base = NOW - 400 * DAY
+  const now = new Date(base + READ_MARK_EXPIRY_MS)
+  /** One mark of a conversation per [name, last moved] in a new Swarm; answers the Swarm. */
+  const seed = async (marks: Array<[string, number]>) => {
+    const tabId = `tab-${randomUUID()}`
+    await db.superTabReadMark.createMany({ data: marks.map(([conversationId, at]) =>
+      ({ id: stableId(tabId, conversationId, owner.sub), tabId, personId: owner.sub, conversationId, sequence: 1, updatedAt: new Date(at) })) })
+    return tabId
+  }
+  const left = async (tabId: string) =>
+    (await db.superTabReadMark.findMany({ where: { tabId }, select: { conversationId: true } })).map(mark => mark.conversationId).sort()
+
+  it('removes only the marks untouched for more than 180 days', async () => {
+    const tabId = await seed([['older', base - DAY], ['just-older', base - 1], ['exactly', base], ['younger', base + DAY]])
+    expect(await sweepReadMarks(db, now)).toBe(2)
+    expect(await left(tabId)).toEqual(['exactly', 'younger'])
+  })
+
+  it('removes one bounded chunk a pass, oldest first', async () => {
+    const tabId = await seed(['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6'].map((name, i) => [name, base - (7 - i) * DAY]))
+    expect(await sweepReadMarks(db, now, 3)).toBe(3)
+    expect(await left(tabId)).toEqual(['m3', 'm4', 'm5', 'm6'])
   })
 })
