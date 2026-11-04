@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command } from './commands.js'
 import { createSuperTab, type Actor, type Author, type SuperTabState } from './model.js'
 import type { ThreadReply } from './pageReads.js'
-import { MAX_PROPOSALS, openProposals, proposalChat, type ProposalReads, type ProposalRoot } from './proposals.js'
+import { MAX_PROPOSALS, openProposals, proposalChat, SEED_SETTLE_MS, type ProposalReads, type ProposalRoot } from './proposals.js'
 
 // The Tasks view's Proposals (#2569): a project's Buddy proposals its PM has not answered, by #2867's rule (threads.ts askOf).
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -36,17 +36,30 @@ const rows = (of: ProposalRoot, ...replies: Array<{ author: Author; ask?: Thread
     createdAt: new Date(of.createdAt.getTime() + i + 1), agentOnly: false, routing: false, ...reply.ask ? { kind: 'system', ask: reply.ask } : {} })),
 ]
 
-/** The chat as the database reads it: roots newest first before a sequence, and the threads of the roots named. */
-function chatReads(roots: ProposalRoot[], threads: ThreadReply[]) {
+const NOW = 10_000_000
+/** The chat as the database reads it: roots newest first before a sequence, and the threads of the roots named; and its open set
+ *  (SuperTabOpenProposal): the roots in it, and its seed mark's time. `calls` are the chat scan's; `counts`, every read's. */
+function chatReads(roots: ProposalRoot[], threads: ThreadReply[], options: { seededAt?: number; open?: ProposalRoot[] } = {}) {
   const calls: Array<{ before: number | undefined; take: number }> = []
+  const counts = { scan: 0, seededAt: 0, listed: 0, rootsById: 0, threads: 0, seed: 0, forget: 0 }
+  const set = new Map((options.open ?? []).map(r => [r.id, r.sequence]))
+  const forgotten: string[] = []
+  let mark = options.seededAt ?? null
   const reads: ProposalReads = {
+    seededAt: async () => { counts.seededAt++; return mark },
+    seed: async open => { counts.seed++; for (const r of open) set.set(r.id, r.sequence); mark ??= NOW },
+    listed: async (before, take) => { counts.listed++; return [...set].map(([id, sequence]) => ({ id, sequence }))
+      .filter(r => before === undefined || r.sequence < before).sort((a, b) => b.sequence - a.sequence).slice(0, take) },
+    rootsById: async ids => { counts.rootsById++; return roots.filter(r => ids.includes(r.id)) },
     roots: async (before, take) => {
+      counts.scan++
       calls.push({ before, take })
       return roots.filter(r => before === undefined || r.sequence < before).sort((a, b) => b.sequence - a.sequence).slice(0, take)
     },
-    threads: async ids => threads.filter(row => ids.includes(row.thread)),
+    threads: async ids => { counts.threads++; return threads.filter(row => ids.includes(row.thread)) },
+    forget: async ids => { counts.forget++; for (const id of ids) { set.delete(id); forgotten.push(id) } },
   }
-  return { reads, calls }
+  return { reads, calls, counts, set, forgotten }
 }
 
 describe('a project\'s open proposals', () => {
@@ -64,7 +77,7 @@ describe('a project\'s open proposals', () => {
       ...rows(personal, details, { author: person('owner') }),
       // A proposal from before #2867 with no reply at all has no thread summary: nobody answered it.
     ])
-    expect(await openProposals(s.state, s.chat(), reads)).toEqual([
+    expect(await openProposals(s.state, s.chat(), reads, NOW)).toEqual([
       { messageId: 'old', title: 'Old proposal', personId: 'peer', at: 5 },
       { messageId: 'open', title: 'Sync edits', personId: 'peer', at: 10 },
       { messageId: 'personal', title: 'Offline drafts', personId: 'peer', at: 50 },
@@ -75,14 +88,68 @@ describe('a project\'s open proposals', () => {
     const s = swarm()
     const roots = Array.from({ length: 250 }, (_, i) => root(`p${i}`, i + 1))
     const { reads, calls } = chatReads(roots, roots.flatMap(r => rows(r, { author: agent('buddy') })))
-    const listed = await openProposals(s.state, s.chat(), reads)
+    const listed = await openProposals(s.state, s.chat(), reads, NOW)
     expect(listed).toHaveLength(MAX_PROPOSALS)
     expect(listed.map(p => p.messageId)).toEqual(roots.slice(-MAX_PROPOSALS).map(r => r.id))
     expect(calls).toEqual([{ before: undefined, take: MAX_PROPOSALS }])
     // Answered ones are read past, a batch at a time.
     const answered = chatReads(roots, roots.flatMap(r => rows(r, { author: agent(r.sequence > 200 ? s.pm : 'buddy') })))
-    expect((await openProposals(s.state, s.chat(), answered.reads)).map(p => p.messageId)).toEqual(roots.slice(100, 200).map(r => r.id))
+    expect((await openProposals(s.state, s.chat(), answered.reads, NOW)).map(p => p.messageId)).toEqual(roots.slice(100, 200).map(r => r.id))
     expect(answered.calls.map(c => c.before)).toEqual([undefined, 151])
+  })
+
+  // Task #2777 (Ken's prod scan 11-04): Desktop reads this every minute, and the scan above walks the whole project chat.
+  it('scans the chat once, keeping its open proposals, then answers the same from them alone, however long the chat', async () => {
+    const s = swarm()
+    const [open, answered, personal] = [root('open', 10, 'Sync edits'), root('answered', 20), root('personal', 50, 'Offline drafts')]
+    const threads = [...rows(open, { author: agent('buddy') }), ...rows(answered, { author: agent(s.pm) }), ...rows(personal, { author: person('owner') })]
+    const chat = chatReads([open, answered, personal], threads)
+    const first = await openProposals(s.state, s.chat(), chat.reads, NOW)
+    expect(first.map(p => p.messageId)).toEqual(['open', 'personal'])
+    expect([...chat.set.keys()].sort()).toEqual(['open', 'personal'])
+    expect(chat.counts.scan).toBe(1)
+    const later = NOW + SEED_SETTLE_MS + 1
+    expect(await openProposals(s.state, s.chat(), chat.reads, later)).toEqual(first)
+    expect(chat.counts.scan).toBe(1)
+    // The same reads for a chat of a thousand answered proposals besides.
+    const many = Array.from({ length: 1_000 }, (_, i) => root(`old${i}`, 100 + i))
+    const short = chatReads([open, personal], threads, { seededAt: NOW, open: [open, personal] })
+    const long = chatReads([open, personal, ...many], [...threads, ...many.flatMap(r => rows(r, { author: agent(s.pm) }))], { seededAt: NOW, open: [open, personal] })
+    expect(await openProposals(s.state, s.chat(), short.reads, later)).toEqual(first)
+    expect(await openProposals(s.state, s.chat(), long.reads, later)).toEqual(first)
+    expect(long.counts).toEqual(short.counts)
+    expect(long.counts).toMatchObject({ scan: 0, seededAt: 1, listed: 1, rootsById: 1, threads: 1, seed: 0 })
+  })
+
+  it('lists a proposal sent since, and forgets one the PM answered, one a task marks, and one whose root is gone', async () => {
+    const s = swarm()
+    const [fresh, answered, onIt, gone] = [root('fresh', 60, 'New idea'), root('answered', 20), root('on-it', 30), root('gone', 40)]
+    const chat = chatReads([fresh, answered, onIt], [...rows(fresh, { author: agent('buddy') }), ...rows(answered, { author: agent('buddy') }, { author: agent(s.pm) }),
+      ...rows(onIt, { author: agent('buddy') }, { author: person('owner'), ask: 'on-it' })], { seededAt: NOW - SEED_SETTLE_MS - 1, open: [fresh, answered, onIt, gone] })
+    expect(await openProposals(s.state, s.chat(), chat.reads, NOW)).toEqual([{ messageId: 'fresh', title: 'New idea', personId: 'peer', at: 60 }])
+    expect(chat.forgotten.sort()).toEqual(['answered', 'gone', 'on-it'])
+    expect([...chat.set.keys()]).toEqual(['fresh'])
+    expect(chat.counts.scan).toBe(0)
+    // Nothing more to forget: no write.
+    await openProposals(s.state, s.chat(), chat.reads, NOW)
+    expect(chat.counts.forget).toBe(1)
+  })
+
+  it('scans the chat again for half an hour after its seed: a server still on the older release writes no row', async () => {
+    const s = swarm()
+    const late = root('late', 70, 'Sent during the release')
+    const chat = chatReads([late], rows(late, { author: agent('buddy') }), { seededAt: NOW - 60_000 })
+    expect((await openProposals(s.state, s.chat(), chat.reads, NOW)).map(p => p.messageId)).toEqual(['late'])
+    expect(chat.counts.scan).toBe(1)
+    expect([...chat.set.keys()]).toEqual(['late'])
+  })
+
+  it('keeps the newest 100 from the open set, read a batch at a time', async () => {
+    const s = swarm()
+    const roots = Array.from({ length: 250 }, (_, i) => root(`p${i}`, i + 1))
+    const chat = chatReads(roots, roots.flatMap(r => rows(r, { author: agent('buddy') })), { seededAt: 0, open: roots })
+    expect((await openProposals(s.state, s.chat(), chat.reads, NOW)).map(p => p.messageId)).toEqual(roots.slice(-MAX_PROPOSALS).map(r => r.id))
+    expect(chat.counts).toMatchObject({ scan: 0, listed: 1, rootsById: 1, threads: 1 })
   })
 
   it('is read only by those who read the project chat', () => {
