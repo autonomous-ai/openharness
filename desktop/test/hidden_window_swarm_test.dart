@@ -9,6 +9,8 @@
 /// that without pushes the 15 s away poll still runs, so no tag is missed.
 library;
 
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/client.dart';
@@ -82,17 +84,20 @@ void main() {
     fakeAsync((async) {
       final backend = _Backend();
       final client = desktop(async, backend);
+      // The server's word that it pushes: on connect, then every 4 minutes
+      // (backend lib/swarmClientPushes.ts PUSHES_REPEAT_MS), as a live socket hears it.
       client.swarmChanged(const {});
+      final repeat = Timer.periodic(
+        const Duration(minutes: 4),
+        (_) => client.swarmChanged(const {}),
+      );
       async.elapse(const Duration(seconds: 20));
       client.pageVisible = false;
       async.elapse(const Duration(seconds: 1));
       backend.paths.clear();
-      // Ten minutes, with the server's word that it pushes every 4 (backend
-      // lib/swarmClientPushes.ts PUSHES_REPEAT_MS), as a live socket hears it.
-      for (var minute = 1; minute <= 10; minute++) {
-        async.elapse(const Duration(minutes: 1));
-        if (minute % 4 == 0) client.swarmChanged(const {});
-      }
+      async.elapse(const Duration(minutes: 10));
+      expect(backend.paths, isEmpty, reason: 'nothing read on a clock');
+      repeat.cancel();
       async.elapse(const Duration(seconds: 2));
       expect(backend.paths, isEmpty, reason: 'nothing read on a clock');
 
@@ -127,6 +132,35 @@ void main() {
       });
     },
   );
+
+  // Review of #3035: the word comes on every connect too, with the same payload. A word off the
+  // 4-minute beat is a socket that reconnected, and a push may have been lost meanwhile: a hidden
+  // window reads its open Swarms and the list once, so a tag's notice still comes.
+  test('hidden while the server pushes: a word off the 4-minute beat (a '
+      'reconnect) reads the open Swarm and the list once', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final client = desktop(async, backend);
+      client.swarmChanged(const {});
+      async.elapse(const Duration(seconds: 20));
+      client.pageVisible = false;
+      async.elapse(const Duration(seconds: 70));
+      backend.paths.clear();
+      // A tag lands while the socket is away, then the socket is back.
+      backend.servers['tab']!.append('A tag for you');
+      client.swarmChanged(const {});
+      async.elapse(const Duration(seconds: 20));
+      expect(backend.states('tab'), 1, reason: 'the open Swarm, once');
+      expect(backend.discoveries, 1, reason: 'the list, once');
+      backend.paths.clear();
+      // Its own beat 4 minutes on is a repeat: nothing.
+      async.elapse(const Duration(minutes: 4) - const Duration(seconds: 20));
+      client.swarmChanged(const {});
+      async.elapse(const Duration(seconds: 20));
+      expect(backend.paths, isEmpty, reason: 'a repeat reads nothing');
+      client.dispose();
+    });
+  });
 
   test('hidden with no push heard: the 15 s away poll still reads, so tags '
       'and notices still arrive', () {
