@@ -336,6 +336,19 @@ describe('a Buddy-only machine after its reviews', () => {
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === lead)).toMatchObject({ joinSwarm: true })
   })
 
+  it('follows the Swarm\'s limit on machines, past the old 32', () => {
+    const fill = (f: Swarm, entries: number) => {
+      f.state.machines!.push(...Array.from({ length: entries - f.state.machines!.length }, (_, i) => ({ ...f.state.machines![0]!, machineId: `other-${i}` })))
+    }
+    const room = setup()
+    fill(room, 127)
+    addOwn(room, room.app.projectId)
+    expect(buddyOnly(room)).toBeDefined()
+    const full = setup()
+    fill(full, 128)
+    expect(() => addOwn(full, full.app.projectId)).toThrow('This Swarm is at its limit of 128 machines. One has to be removed before another can be added.')
+  })
+
   it('never lets a Mac\'s Team account join through it (review 2)', () => {
     const f = setup()
     addOwn(f, f.app.projectId)
