@@ -811,6 +811,7 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
     expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: "I\'ll post this as you: …", and wait for their ok.')
     expect(text).toContain('"text":"the line they okayed, or their own words"')
+    expect(text).toContain('Only what follows "I\'ll post this as you:" in your message counts as shown')
     expect(text).toContain('in full, never cut, as their own message, with no reply from you in the chat')
     expect(text).not.toContain('Short name (at most 80 characters)')
     expect(text).not.toContain('with your full proposal as the first reply in its thread')
