@@ -37,6 +37,8 @@ interface Dependencies {
   now?: () => number
   /** Each live agent's measured memory, by harness id. */
   agentMemory?: () => Promise<Map<string, number>>
+  /** Where a give-back is told: this machine's log (issue #2989: a held start was found only by reading the ledger). */
+  log?: (line: string) => void
 }
 const MAX_ACTIVE = 256
 const MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -62,6 +64,14 @@ export const START_DEADLINE_MS = 15 * 60_000
  *  that was held for good: trunghieu's Team account refused every start for four such 2 GiB starts the Swarm had failed,
  *  across a restart (issue #2989, 2026-11-04). The start window on top covers the reservation made just before dispatch. */
 export const LAUNCH_DEADLINE_MS = START_DEADLINE_MS + START_WINDOW_MS
+/** The starts a memory refusal counts, oldest first, so a held one can be found (issue #2989 named only the total). Members
+ *  read only the refusal's numbers (backend startFailure.ts); this rest reaches the start's Lead and the machine owner. */
+const setAside = (rows: Reservation[], now: number) => {
+  const oldest = [...rows].sort((a, b) => a.created_at - b.created_at), minutes = Math.floor((now - oldest[0]!.created_at) / 60_000)
+  const age = minutes < 1 ? 'under a minute' : minutes === 1 ? '1 minute' : `${minutes} minutes`
+  const named = oldest.slice(0, 3).map(row => row.creation_id).join(', ') + (oldest.length > 3 ? ` and ${oldest.length - 3} more` : '')
+  return `${oldest.length === 1 ? '1 agent' : `${oldest.length} agents`} still starting, the oldest reserved ${age} ago (start receipts ${named})`
+}
 const memoryOf = (core: CoreApi) => {
   const read = createHarnessResourcesReader(() => core.agents.live())
   return async () => new Map((await read()).agents.flatMap(row => row.memoryBytes === null ? [] : [[row.agentId, row.memoryBytes] as const]))
@@ -69,7 +79,7 @@ const memoryOf = (core: CoreApi) => {
 
 /** All Super Tabs on this host share one ledger. SQLite serializes admission
  * across service restarts/overlap; no asynchronous work runs inside its write
- * transaction. Unknown native outcomes keep their budget, without a timeout. */
+ * transaction. Unknown native outcomes keep their budget until the Swarm's own start deadline has passed (LAUNCH_DEADLINE_MS). */
 export class CapacityReservations implements ReservationBook {
   private readonly db: Database
   private readonly file: string
@@ -77,6 +87,7 @@ export class CapacityReservations implements ReservationBook {
   private stopped = false
   private readonly now: () => number
   private readonly agentMemory: () => Promise<Map<string, number>>
+  private readonly log: (line: string) => void
 
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: Dependencies = { resources: readMachineResources, disk: readCapacityDisk,
@@ -101,6 +112,7 @@ export class CapacityReservations implements ReservationBook {
     }
     this.now = deps.now ?? Date.now
     this.agentMemory = deps.agentMemory ?? memoryOf(core)
+    this.log = deps.log ?? (line => console.log(`[super-tabs] ${line}`))
     this.identity = lstatSync(this.file)
     this.db = new Database(this.file)
     try {
@@ -159,7 +171,7 @@ export class CapacityReservations implements ReservationBook {
   }
 
   private async reconcile(rows: Reservation[], closed?: AbortSignal): Promise<void> {
-    const deadline = this.now() - START_DEADLINE_MS
+    const now = this.now(), deadline = now - START_DEADLINE_MS, launchDeadline = now - LAUNCH_DEADLINE_MS
     for (let index = 0; index < rows.length; index += 8) {
       const observations = await Promise.all(rows.slice(index, index + 8).map(async row => {
         const observation = await this.native(row.creation_id)
@@ -169,15 +181,21 @@ export class CapacityReservations implements ReservationBook {
         const released = observation?.state === 'failed' || observation?.state === 'cancelled'
           || (!!harnessId && await this.core.agents.stopped?.(harnessId).catch(() => false) === true)
           || (observation?.state === 'created' && await this.core.agents.gone?.(harnessId!).catch(() => false) === true)
-        // Only a confirmed missing creation: a pending, unconfirmed or unreadable one may still launch.
-        const expired = observation?.state === 'missing' && !harnessId
-        return { row, harnessId, released, expired }
+        // A missing creation is given back at the start deadline, which a run that confirms it restarts: its start may
+        // still be waiting in the backend. One that is pending, unconfirmed or unreadable was dispatched, and the Swarm
+        // failed it by the launch deadline if no agent joined (issue #2989). A launched or ended creation keeps its row.
+        const expired = !harnessId && !released
+          ? observation?.state === 'missing' ? deadline : observation?.state === 'created' ? null : launchDeadline
+          : null
+        return { row, harnessId, released, expired, state: observation?.state ?? 'unreadable' }
       }))
       this.transaction(() => {
-        for (const { row, harnessId, released, expired } of observations) {
+        for (const { row, harnessId, released, expired, state } of observations) {
           // The deadline is checked on the row as it is now: a run may have confirmed it again since it was read.
-          if (expired) this.db.prepare(`DELETE FROM reservations WHERE creation_id = ? AND fingerprint = ? AND released = 0
-            AND harness_id IS NULL AND created_at <= ?`).run(row.creation_id, row.fingerprint, deadline)
+          const gone = expired === null ? null : this.db.prepare(`DELETE FROM reservations WHERE creation_id = ? AND fingerprint = ?
+            AND released = 0 AND harness_id IS NULL AND created_at <= ?`).run(row.creation_id, row.fingerprint, expired) as { changes?: number }
+          if (gone?.changes === 1) this.log(`Gave back the ${gibibytes(row.memory_bytes)} of memory reserved for start receipt ${row.creation_id}: `
+            + `no agent ${Math.floor((now - row.created_at) / 60_000)} minutes after it reserved (its creation is ${state} here).`)
           // A later reconciliation may already have learned the native ID.
           // Missing/unavailable observations never erase that durable identity.
           this.db.prepare(`UPDATE reservations SET harness_id = COALESCE(harness_id, ?), released = ?
@@ -284,7 +302,7 @@ export class CapacityReservations implements ReservationBook {
       const diskHeld = active.filter(row => row.volume === destination.volume && this.starting(row, now)).reduce((sum, row) => sum + row.disk_bytes, 0)
       if (memory > 0 && !finite(freeMemory)) return unavailable('The free memory on this machine could not be read.')
       if (memory > 0 && memory > freeMemory! - memoryHeld) return unavailable(memoryShort(freeMemory! - memoryHeld, memory)
-        + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for agents still starting.` : ''))
+        + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for ${setAside(active.filter(row => this.held(row, measured, now) > 0), now)}.` : ''))
       if (disk > destination.freeBytes - diskHeld) return unavailable('Destination disk space is already in use or reserved for other agents. Choose another machine or free space before retrying.')
       this.db.prepare(`INSERT INTO reservations (creation_id, fingerprint, memory_bytes, disk_bytes, volume, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(creationId, fingerprint, memory, disk, destination.volume, now)
