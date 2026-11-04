@@ -1010,6 +1010,48 @@ class ConversationServer {
     return true;
   }
 
+  /// An edit as the backend keeps it (messageEdits.ts): the new text, when it
+  /// changed, and the group's `reactionSeq` moved. False for the same text.
+  bool editMessage(String messageId, String text) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    if (message['text'] == text) return false;
+    message
+      ..['text'] = text
+      ..['editedAt'] = '2026-10-18T00:05:00Z';
+    _messageChanged(message['conversationId'] as String);
+    return true;
+  }
+
+  /// A delete as the backend keeps it (messageEdits.ts): a message with
+  /// replies stays as its tombstone, any other goes from every page. Whether
+  /// it was kept.
+  bool deleteMessage(String messageId) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    final kept = messages.any(
+      (m) => m['thread'] == messageId && m['id'] != messageId,
+    );
+    if (kept) {
+      message
+        ..['text'] = 'This message was deleted.'
+        ..['deletedAt'] = '2026-10-18T00:06:00Z'
+        ..['attachments'] = <dynamic>[]
+        ..['mentions'] = <dynamic>[]
+        ..['reactions'] = <dynamic>[];
+    } else {
+      messages.remove(message);
+    }
+    _messageChanged(message['conversationId'] as String);
+    return kept;
+  }
+
+  void _messageChanged(String conversationId) {
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == conversationId);
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    revision++;
+  }
+
   /// What the backend does with a file sent to its upload route.
   Future<Map<String, dynamic>> upload({
     required String tabId,
@@ -1284,6 +1326,14 @@ class ConversationServer {
         _profile(command, reader ?? 'owner');
       } else if (command['type'] == 'message.react') {
         output['changed'] = _react(command, reader ?? 'owner');
+      } else if (command['type'] == 'message.edit') {
+        output['changed'] = editMessage(
+          command['messageId'] as String,
+          command['text'] as String,
+        );
+      } else if (command['type'] == 'message.delete') {
+        output['changed'] = true;
+        output['kept'] = deleteMessage(command['messageId'] as String);
       } else if (command['type'] == 'decision.answer') {
         final id = command['decisionId'] as String;
         if (command['delegate'] == true) {
