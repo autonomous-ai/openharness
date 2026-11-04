@@ -14,7 +14,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
-import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
+import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
@@ -429,6 +429,9 @@ export interface CommandContext {
   /** A Workspace removal taking the person out of this Swarm (workspaceStore.ts): it reaches a deleted Swarm too, so a restore
    *  never brings them back (security review 2 of #2457). Set by the store alone. */
   workspaceLeave?: true
+  /** For `decision.answer`: the hourly sweep leaves a decision unanswered for 24 hours to the PM (overdueDecisions.ts). Set by the
+   *  store alone; a client cannot send it. */
+  overdue?: boolean
   /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
   workspaceLost?: string[]
   /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
@@ -1100,7 +1103,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** The candidate a start or assignment should match, and whether it does. Following another needs no reason (project
    *  instructions, phase 4: the route is advice); it is still recorded as an override, with the reason when one is given. */
-  const linkDecision = (conversationId: string, matches: (c: RouteCandidate, d: RouteDecision) => boolean,
+  const linkDecision = (conversationId: string, matches: (c: KeptCandidate, d: RouteDecision) => boolean,
     finalOf: (d: RouteDecision) => RouteFinal, reasonText: string | undefined, assignmentId?: string) => {
     const decision = openDecision()
     if (decision.conversationId !== conversationId) fail('ROUTE_MISMATCH', 'This routing decision belongs to another group.')
@@ -1119,7 +1122,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Why a route candidate cannot take a teammate's work in [conversationId], or null (machines.ts teamWorkCheck). A
    *  member runs under its own contributor's grant; a new agent under the contribution's, or off the Machines list under
    *  the grant of whoever will start it ([starter]). */
-  const candidateRefusal = (candidate: RouteCandidate, conversationId: string, starter: string) => {
+  const candidateRefusal = (candidate: KeptCandidate, conversationId: string, starter: string) => {
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
@@ -2088,7 +2091,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'decision.answer': {
       const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
-        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true })
+        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
       if (recipients.length) message(noticeIn, notice, recipients, null, source)

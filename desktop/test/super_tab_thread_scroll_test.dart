@@ -291,8 +291,8 @@ void main() {
     c.openThread('message-1');
     await c.loadThread();
     // Just tall enough for all of it, Also send's line under the box included
-    // (#2662).
-    await tester.binding.setSurfaceSize(const Size(500, 592));
+    // (#2662) and the box's inner padding (#2779).
+    await tester.binding.setSurfaceSize(const Size(500, 596));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
