@@ -1,7 +1,8 @@
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseThreadStat, readThreads, startCpuStats, threadBucket, type ThreadCpu } from './cpuStats.js'
+import Fastify from 'fastify'
+import { parseThreadStat, readThreads, registerReplyJsonTiming, startCpuStats, threadBucket, type ThreadCpu } from './cpuStats.js'
 
 let stop = () => {}
 afterEach(() => { stop(); stop = () => {} })
@@ -106,5 +107,31 @@ describe('cpu by thread', () => {
       expect(context).toMatchObject({ threads: 'unavailable', reason: 'ENOENT /proc/self/task' })
       expect(typeof context.processCpuMs).toBe('number')
     }
+  })
+})
+
+describe('reply JSON timing', () => {
+  it('replies the same bytes as Fastify\'s own JSON, and counts each reply\'s time and size', async () => {
+    const replies: Array<[number, number]> = []
+    const app = Fastify()
+    registerReplyJsonTiming(app, { replyJson: (ms, bytes) => replies.push([ms, bytes]) })
+    const payload = { items: [{ id: 'a', text: 'é ✓' }], at: new Date(0), none: null }
+    app.register(async child => { child.get('/nested', async () => payload) })
+    app.get('/text', async (_request, reply) => reply.type('text/plain').send('plain'))
+    const response = await app.inject({ method: 'GET', url: '/nested' })
+    expect(response.body).toBe(JSON.stringify(payload))
+    expect(response.headers['content-type']).toMatch(/^application\/json/)
+    await app.inject({ method: 'GET', url: '/text' })
+    expect(replies).toHaveLength(1)
+    expect(replies[0]![0]).toBeGreaterThanOrEqual(0)
+    expect(replies[0]![1]).toBe(Buffer.byteLength(JSON.stringify(payload)))
+    await app.close()
+  })
+
+  it('refuses at startup a route whose response schema the timed serializer would bypass', async () => {
+    const app = Fastify()
+    registerReplyJsonTiming(app, { replyJson: () => {} })
+    app.get('/schema', { schema: { response: { 200: { type: 'object', properties: { ok: { type: 'boolean' } } } } } }, async () => ({ ok: true }))
+    await expect(app.ready()).rejects.toThrow(/response schema/)
   })
 })
