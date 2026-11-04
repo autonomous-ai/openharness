@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -471,6 +472,35 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(body.data.more).toBe(true)
   })
 
+  // Darren (11-04, task #2835): Activity's Threads lists every thread, 50 at a time; the read answers as many as asked.
+  it('answers as many read threads as asked, the newest replies first, and says when there are more', async () => {
+    const s = await scene()
+    const many = await insert(s.tabId, s.web, Array.from({ length: 60 }, (_, i) => ({ text: `Paged root ${i}`, author: personAuthor(peer) })))
+    await markRead(s.tabId, s.web, await sequenceOf(many.at(-1)!), peer)
+    await insert(s.tabId, s.web, many.map(thread => ({ text: 'Reply', author: agentAuthor(s.worker), thread })))
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    const top = await newestIn(s.tabId, s.web)
+    for (const root of many) await writeThreadMark(db, { tabId: s.tabId, personId: peer.sub, conversationId: s.web, threadId: root, sequence: top, now: Date.now() })
+    const page = async (query: string) => {
+      resetThreadsReads()
+      return call('GET', `/api/super-tabs/${s.tabId}/threads${query}`, peer)
+    }
+    const first = (await page('?read=50')).body.data
+    expect(first.unread).toEqual([])
+    expect(first.read).toHaveLength(50)
+    expect(first.more).toBe(true)
+    const all = (await page('?read=100')).body.data
+    expect(all.read).toHaveLength(60)
+    expect(all.more).toBe(false)
+    // The next page goes on where the first stopped: the same 50 first, newest reply first throughout.
+    expect(all.read.slice(0, 50).map((t: { rootId: string }) => t.rootId)).toEqual(first.read.map((t: { rootId: string }) => t.rootId))
+    const times = all.read.map((t: { lastReplyAt: string }) => Date.parse(t.lastReplyAt))
+    expect(times).toEqual(times.toSorted((a: number, b: number) => b - a))
+    // A client that asks for no number gets what it always did.
+    expect((await page('')).body.data.read).toHaveLength(MAX_READ_THREADS)
+    for (const bad of ['0', '251', '2.5', 'many']) expect((await page(`?read=${bad}`)).status, bad).toBe(400)
+  })
+
   it('refuses a Team session and an agent', async () => {
     const s = await followScene()
     const team = await threads(s.tabId, 'team')
@@ -514,7 +544,8 @@ describe('a person\'s followed threads (GET /threads)', () => {
     return { ...s, long }
   }
   /** One threads read under the profiler, after a warm read: its reply, and the operations each collection served. */
-  async function profiledThreads(tabId: string) {
+  async function profiledThreads(tabId: string, query = '') {
+    const threads = (id: string, as: AuthUser) => call('GET', `/api/super-tabs/${id}/threads${query}`, as)
     await threads(tabId, peer)
     await db.$runCommandRaw({ profile: 0 })
     await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
@@ -559,6 +590,28 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(summaries.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(60)
     expect(reply.body.data.read).toHaveLength(MAX_READ_THREADS)
     expect(reply.body.data.more).toBe(true)
+  }, 120_000)
+
+  // Task #2835: a page of N read threads reads 2N candidates' roots by id and summaries by root id, nothing more.
+  it('reads each page of read threads by index, its cost bounded by the threads asked for', async () => {
+    const s = await longScene()
+    await backfillThreads(db, Date.now())
+    for (const [n, candidates] of [[50, 70], [100, 70]] as const) {
+      resetThreadsReads()
+      const { reply, rows } = await profiledThreads(s.tabId, `?read=${n}`)
+      const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+      expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+      expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
+      expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+      expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+      // At most 2N candidates, and here all 70 of the person's marks.
+      expect(summaries.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(Math.min(2 * n, candidates))
+      expect(messages.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(candidates)
+      expect(reply.body.data.read).toHaveLength(Math.min(n, candidates))
+      // What each page read, for the pull request: THREADS_COST_OUT=<file> writes it there.
+      if (process.env.THREADS_COST_OUT) appendFileSync(process.env.THREADS_COST_OUT, `read=${n} ${JSON.stringify(rows.map(r => ({
+        collection: r.ns.split('.').at(-1), op: r.op, plan: r.planSummary, docs: r.docsExamined, keys: r.keysExamined, returned: r.nreturned })))}\n`)
+    }
   }, 120_000)
 
   // Ken's scan of 11-04 (task #2768): the unread threads' member check read each thread's newest 100 rows before the mark in
