@@ -38,6 +38,18 @@ describe('a delta reads whole rows only for versions it has not read (#2783)', (
     expect(second.hostDigests!.get('g2')).toBe('d3')
   })
 
+  it('the first delta of a kind, with nothing held, reads its rows whole in one read, as before (CI shard 2 of #2976)', async () => {
+    const stored = { SwarmGroup: [group('g1', 1, 2_000)] }
+    const { db, reads } = fakeDb(stored)
+    const memo: DeltaRows = new Map()
+    const delta = await loadDelta(db, 't', 1_000, ['group'], memo)
+    expect(reads.map(r => [r.collection, r.ids, r.whole])).toEqual([['SwarmGroup', false, 1]])
+    expect(delta).toEqual(await loadDelta(fakeDb(stored).db, 't', 1_000, ['group']))
+    reads.length = 0
+    await loadDelta(db, 't', 1_000, ['group'], memo)
+    expect(reads.map(r => [r.collection, r.ids, r.whole])).toEqual([['SwarmGroup', false, 0]])
+  })
+
   it('reads whole only the part whose version moved', async () => {
     const stored = { SwarmGroup: [group('g1', 1, 2_000), group('g2', 3, 3_000)] }
     const { db, reads } = fakeDb(stored)
