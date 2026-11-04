@@ -153,6 +153,7 @@ Future<SuperTabController> _show(
   MemoryKeyValueStore? storage,
   List<String>? opened,
   List<String>? openedProposals,
+  Set<String> asking = const {},
 }) async {
   await tester.binding.setSurfaceSize(const Size(1400, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -166,7 +167,7 @@ Future<SuperTabController> _show(
           controller: c,
           project: c.snapshot!.projects.single,
           storage: storage ?? MemoryKeyValueStore(),
-          needsHuman: (_) => 0,
+          needsHuman: (task) => asking.contains(task.id) ? 1 : 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (id) => openedProposals?.add(id),
           now: () => _now,
@@ -496,6 +497,28 @@ void main() {
       // Read again, as another person or a restart reads it.
       c = await _show(tester, server);
       expect(_cardsIn(tester, 'nextUp'), ['third', 'shipped-means', 'preview']);
+      await _close(tester, c);
+    });
+
+    testWidgets('a drop under a Needs-you card lands where it was dropped, '
+        'in the shared order too', (tester) async {
+      final server = queued();
+      // `preview` needs the reader, so it shows first though it is second in
+      // the queue.
+      var c = await _show(tester, server, asking: {'preview'});
+      expect(_cardsIn(tester, 'nextUp'), ['preview', 'shipped-means', 'third']);
+      await dragTo(
+        tester,
+        'third',
+        tester.getTopLeft(_card('shipped-means')) + const Offset(20, 2),
+      );
+      // Before `shipped-means`, the card under the drop: the queue's top.
+      expect(moves(server), [
+        {'type': 'work.queue', 'conversationId': 'third', 'after': null},
+      ]);
+      await _close(tester, c);
+      c = await _show(tester, server, asking: {'preview'});
+      expect(_cardsIn(tester, 'nextUp'), ['preview', 'third', 'shipped-means']);
       await _close(tester, c);
     });
 
