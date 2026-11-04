@@ -9,6 +9,7 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
+import 'swarm_chat_agents.dart';
 import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
@@ -122,8 +123,9 @@ Future<void> showSwarmNotifySheet(
   }
 }
 
-/// At the end of a chat's header: ⋮, whose sheet holds Rename and Archive
-/// where the person may ([swarmChatManage]) and the chat's Notifications
+/// At the end of a chat's header: ⋮, whose sheet holds Add agent
+/// ([swarmCanAddAgent]), Rename and Archive where the person may
+/// ([swarmChatManage]) and the chat's Notifications
 /// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
 /// person reads, a viewer's too. Nothing while the chat is not
 /// known. The sheet goes once the chat can no longer be read — access lost,
@@ -193,7 +195,7 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.chatId,
     onShown: (route) => _sheet = route,
     // Work details, Rename and Archive where the desktop's chat menu has
-    // them.
+    // them; Add agent where its Members does.
     actions: () => [
       if (swarmHasWorkDetails(widget.reader, widget.chatId))
         PhoneSheetAction(
@@ -205,6 +207,7 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
             chatId: widget.chatId,
           ),
         ),
+      ...swarmAddAgentActions(context, widget.reader, widget.chatId),
       ...swarmChatManageActions(context, widget.reader, widget.chatId),
     ],
   ).whenComplete(() => _sheet = null);

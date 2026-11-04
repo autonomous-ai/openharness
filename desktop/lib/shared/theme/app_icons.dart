@@ -185,6 +185,7 @@ abstract final class AppIcons {
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
+  static const squareKanban = LucideIcons.squareKanban400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;

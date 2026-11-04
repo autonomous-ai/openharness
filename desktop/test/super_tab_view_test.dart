@@ -15,6 +15,19 @@ import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_members.dart';
 
+/// Adds a project named [name] whose chat is `other-chat`.
+void _secondProject(ConversationServer server, String name) {
+  server.state['projects'] = [
+    ...(server.state['projects'] as List?) ??
+        [projectFixture('lead', server.state['name'] as String, 'lead')],
+    projectFixture('other', name, 'other-chat'),
+  ];
+  (server.state['conversations'] as List).add({
+    ...conversationFixture('other-chat', 'Lead'),
+    'projectId': 'other',
+  });
+}
+
 void main() {
   testWidgets('rapid pending rows have independent identity and dimmed text', (
     tester,
@@ -256,6 +269,9 @@ void main() {
     final server = ConversationServer();
     (server.state['conversations'] as List)[1]['title'] =
         'Offline editing across mobile and desktop';
+    // A second project with a long name: the sidebar lists projects, not
+    // tasks (task #2569).
+    _secondProject(server, 'Offline editing across mobile and desktop');
     final controller = server.controller();
     await controller.refresh();
     await tester.pumpWidget(
@@ -283,12 +299,10 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-other-chat')));
     await tester.pumpAndSettle();
-    // A workgroup with no work is in The rest, which starts folded (#2309).
-    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    expect(controller.selectedId, 'other-chat');
+    await controller.select('offline');
     await tester.pumpAndSettle();
     expect(controller.selectedId, 'offline');
     expect(find.text('New group'), findsNothing);
@@ -340,6 +354,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(600, 520));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final server = ConversationServer();
+      _secondProject(server, 'second-project');
       final controller = server.controller();
       await controller.refresh();
       await tester.pumpWidget(
@@ -375,16 +390,9 @@ void main() {
       expect(server.posts, isEmpty);
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-other-chat')));
       await tester.pumpAndSettle();
-      // A workgroup with no work is in The rest, which starts folded (#2309).
-      await tester.tap(
-        find.byKey(const ValueKey('super-task-group-lead-rest')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-group-offline')));
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'other-chat');
       expect(field.focusNode!.hasFocus, isTrue);
       expect(controller.draft('lead'), 'Keep this draft');
       expect(tester.takeException(), isNull);
