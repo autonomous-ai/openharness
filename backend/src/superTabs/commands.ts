@@ -1629,7 +1629,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       for (const start of state.starts ?? []) {
         if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
       }
-      deleteProject(state, actor, command.projectId, orphaned)
+      deleteProject(state, actor, command.projectId, orphaned, context.now)
       // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
       for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
       break
