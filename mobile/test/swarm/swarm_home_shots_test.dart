@@ -17,9 +17,10 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of Swarm Home, direction C, as Tony's prototype C1
-/// draws it (2026-10-30) — over two Swarms, back after an hour away:
-/// While you were away, Pinned, Projects by latest activity with the quiet
-/// ones folded, an unread project and a tagged one — then its switcher, in
+/// draws it (2026-10-30), simplified for anh Dee (2026-11-04) — over two
+/// Swarms, back after an hour away: the need-you line, each Swarm's projects
+/// under its heading, pins first, by latest activity with the quiet ones
+/// folded, an unread project and a tagged one — then its switcher, in
 /// both phone themes, from made-up Swarm data only, to the folder
 /// `SWARM_HOME_SHOTS` names.
 final shots = Platform.environment['SWARM_HOME_SHOTS'];
@@ -331,7 +332,16 @@ void main() {
         image.dispose();
       });
       await capture('home');
-      await tester.tap(find.byKey(const ValueKey('swarm-other-projects')));
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => switch (w.key) {
+            ValueKey<String>(:final value) => value.startsWith(
+              'swarm-other-projects',
+            ),
+            _ => false,
+          },
+        ),
+      );
       await tester.pumpAndSettle();
       await capture('home-quiet-open');
       await tester.tap(find.byKey(const ValueKey('swarm-title-button')));

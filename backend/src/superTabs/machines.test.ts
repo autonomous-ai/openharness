@@ -15,6 +15,12 @@ it('accepts optional tool probe failures while preserving older observations', (
   expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
 })
 
+it('takes the sessions its idle cleanup closed, bounded as the stopped ones are', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse({ ...sent, stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, closedHarnessIds: Array(1001).fill('a') }).success).toBe(false)
+})
+
 it('takes a model that is starting, and never counts it as served for a Builder', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const model = { grid: 'swarm-0123456789ab', model: 'qwen3', kind: 'local' as const }
@@ -270,6 +276,9 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(same({})).toBe(true)
     expect(same({ resources: { ...sent.resources, cpuPercent: 90 }, tools: { git: true }, harnessTokens: { a: tokens } })).toBe(true)
     expect(same({ harnessProgress: { a: 9 } })).toBe(true)
+    // Which stopped sessions its idle cleanup closed decides who may be assigned (closedAgents.ts sessionClosed, task #2744).
+    expect(same({ stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] })).toBe(false)
+    expect(readingOnly(stored({ stoppedHarnessIds: ['a'] }), stored({ stoppedHarnessIds: ['a'], closedHarnessIds: ['a'] }))).toBe(false)
     expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['b', 'a'] }))).toBe(true)
     // A decision may differ.
     expect(same({ runningHarnessIds: ['a', 'b'] })).toBe(false)

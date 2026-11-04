@@ -472,12 +472,9 @@ void main() {
     }
     await tester.pumpAndSettle();
 
-    final away = find.byKey(const ValueKey('swarm-away'));
+    final away = find.byKey(const ValueKey('swarm-need-line'));
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('swarm-away-needs')),
-        matching: find.text('1'),
-      ),
+      find.descendant(of: away, matching: find.textContaining('1 need you')),
       findsOneWidget,
     );
     await tester.tap(away);

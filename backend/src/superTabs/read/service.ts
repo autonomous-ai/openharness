@@ -40,6 +40,7 @@ import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 import { moveChatMark } from './threadMarkSeeds.js'
+import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
@@ -95,8 +96,11 @@ export class SwarmReads {
     this.db = store.db
     this.now = options.now ?? store.now
     this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
+    this.servedTops = new ServedTops(store.db)
   }
   private readonly avatarLinks: AvatarLinks | null
+  /** Each project chat's newest main row people read, as readers are served it (servedTops.ts, #2742). */
+  private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
 
@@ -186,8 +190,11 @@ export class SwarmReads {
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
+      // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
+      if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined),
+        epoch: read.parts.visibilityEpoch, ...sent,
         derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
     })
   }
@@ -491,10 +498,12 @@ export class SwarmReads {
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
-    return { parts: loaded, actor, lastChangedAt: newest,
-      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
-        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-          decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state) }
+    const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
+      ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
+        decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
+    // People count a chat unread by its newest main row; agents keep no read marks.
+    if (actor.kind === 'person') view.parts.groups = await this.servedTops.served(tabId, state, view.parts.groups)
+    return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

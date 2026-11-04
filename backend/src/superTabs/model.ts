@@ -616,7 +616,10 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
@@ -965,6 +968,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens

@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'agent_group_picker.dart';
 import 'agent_line.dart';
 import 'agent_mark.dart';
 import 'controller.dart';
@@ -298,6 +299,7 @@ Future<void> showSuperTabAgentDetails(
         final dresses =
             controller.canWrite &&
             current.contributorId == controller.accountId;
+        final blocked = superTabOpenTerminalBlocked(controller, current.id);
         return AlertDialog(
           title: Row(
             children: [
@@ -350,6 +352,8 @@ Future<void> showSuperTabAgentDetails(
                       _fact('Started', fullDateTime(value)),
                     if (info.questionOwner case final value?)
                       _fact('Who can answer', value),
+                    // Beside the actions, as the card says it (#2738).
+                    if (blocked != null) _terminalBlocked(blocked),
                   ],
                 ),
               ),
@@ -368,10 +372,12 @@ Future<void> showSuperTabAgentDetails(
               child: const Text('Close'),
             ),
             FilledButton(
-              onPressed: () {
-                Navigator.pop(context);
-                onOpenAgent(current);
-              },
+              onPressed: blocked != null
+                  ? null
+                  : () {
+                      Navigator.pop(context);
+                      onOpenAgent(current);
+                    },
               child: const Text('Open terminal'),
             ),
           ],
@@ -417,6 +423,7 @@ Future<void> showSuperTabAgentCard(
       final role = controller.snapshot?.roleOf(current.id);
       final group = info.taskGroup;
       final runs = [?glance.modelEffort, ?glance.machine].join(' · ');
+      final blocked = superTabOpenTerminalBlocked(controller, current.id);
       return SuperTabDetailDialog(
         key: const ValueKey('super-agent-card'),
         title: name,
@@ -461,12 +468,15 @@ Future<void> showSuperTabAgentCard(
               ),
           ],
         ),
+        footer: blocked == null ? null : _terminalBlocked(blocked),
         leadingActions: [
           TextButton(
-            onPressed: () {
-              Navigator.pop(dialog);
-              onOpenAgent(current);
-            },
+            onPressed: blocked != null
+                ? null
+                : () {
+                    Navigator.pop(dialog);
+                    onOpenAgent(current);
+                  },
             child: const Text('Open terminal'),
           ),
         ],
@@ -491,6 +501,13 @@ Future<void> showSuperTabAgentCard(
       );
     },
   ),
+);
+
+/// Why Open terminal is off, one muted line (#2738).
+Widget _terminalBlocked(String reason) => Text(
+  reason,
+  key: const ValueKey('super-card-terminal-blocked'),
+  style: DesktopChrome.metadata(),
 );
 
 Widget _fact(String label, String value) => Padding(
