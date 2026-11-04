@@ -132,8 +132,7 @@ export class TeamEngineReporter {
 
 export function teamEngineReporter(): TeamEngineReporter {
   return new TeamEngineReporter({
-    // Only a Mac and a Linux computer have a Harness Team account: elsewhere nothing is read.
-    config: () => process.platform === 'darwin' || process.platform === 'linux' ? readTeamConfig() : null,
+    config: () => readTeamConfig(),
     user: () => userInfo().username,
     check: (config) => checkTeamEngines(realEngineCheckDeps(config.home)),
     read: (path) => readTeamStatus(path),

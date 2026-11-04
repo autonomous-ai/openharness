@@ -7422,7 +7422,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _revealForDevice() async {
-    if (!RuntimePlatform.isMacOS ||
+    if (RuntimePlatform.isLinux ||
         !mounted ||
         app.inForeground ||
         nativePickerOpen ||

@@ -3014,7 +3014,7 @@ switch (cmd) {
     break
   case 'remote':
     remoteCommand({
-      tmuxPane: process.env.TMUX_PANE,
+      tmuxPane: sendPane(process.env),
       localMachineId: wantedDaemonIdentity(),
       port: daemonPort(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),

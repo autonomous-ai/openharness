@@ -9,6 +9,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { release } from 'node:os'
 import { binaryOnPath } from './binaryOnPath.js'
+import { runPowershellAsync } from './windows/powershell.js'
 
 export type OsClipboardImageResult =
   | { state: 'written' }
@@ -108,9 +109,22 @@ async function writeLinuxClipboard(pngBytes: Uint8Array): Promise<OsClipboardIma
   return { state: 'unavailable', reason: 'no X11 or Wayland display on this machine' }
 }
 
+/** Windows PowerShell's own .NET clipboard. Ten tries 100 ms apart, as another program may hold the clipboard for a moment. */
+const WINDOWS_CLIPBOARD_SCRIPT = [
+  'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
+  '$image = [System.Drawing.Image]::FromFile($env:HARNESS_PASTE_IMAGE)',
+  'try { [System.Windows.Forms.Clipboard]::SetDataObject($image, $true, 10, 100) } finally { $image.Dispose() }',
+].join('\n')
+
+export async function writeWindowsClipboard(pngPath: string, run: typeof runPowershellAsync = runPowershellAsync): Promise<OsClipboardImageResult> {
+  const result = await run(WINDOWS_CLIPBOARD_SCRIPT, { HARNESS_PASTE_IMAGE: pngPath })
+  return result.status === 0 ? { state: 'written' } : { state: 'failed', reason: result.stderr.trim() || 'PowerShell could not write the clipboard' }
+}
+
 /** Writes `pngBytes` (already saved at `pngPath`) into this machine's native OS clipboard. */
 export async function writeImageToOsClipboard(pngPath: string, pngBytes: Uint8Array): Promise<OsClipboardImageResult> {
   if (process.platform === 'darwin') return writeMacClipboard(pngPath)
   if (process.platform === 'linux') return writeLinuxClipboard(pngBytes)
+  if (process.platform === 'win32') return writeWindowsClipboard(pngPath)
   return { state: 'unavailable', reason: `no clipboard writer for ${process.platform}` }
 }
