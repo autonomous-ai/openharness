@@ -29,6 +29,7 @@ import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
 import 'personal_projects.dart';
+import 'private_project_lock.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
@@ -2225,6 +2226,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [SuperTabWorkgroupName].
   Widget _title(SuperTabConversation? group) {
     final style = DesktopChrome.text(medium: true);
+    final project = group == null ? null : c.snapshot?.projectFor(group.id);
     final name = _manageOpen
         ? 'Manage'
         : _notificationsVisible
@@ -2234,7 +2236,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ? c.snapshot!.name
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
-        ? '# ${c.snapshot!.projectFor(group.id)!.name}'
+        ? '${project!.isPrivate ? '' : '# '}${project.name}'
         // An older Buddy chat in a project says which, as the menu that opens
         // it does; the one Buddy chat is the sidebar's # buddy.
         : c.isEarlierBuddyChat(group)
@@ -2253,6 +2255,26 @@ class _SuperTabViewState extends State<SuperTabView>
         !_listViewHoldsThePane) {
       return _projectMenu(group, name, style);
     }
+    if (group != null &&
+        c.snapshot!.isProjectLead(group.id) &&
+        project!.isPrivate) {
+      return Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: PrivateProjectLock(
+                size: AppIcons.inlineSize,
+                color: DesktopChrome.muted,
+              ),
+            ),
+            TextSpan(text: ' $name', style: style),
+          ],
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
+    }
     return Text(
       name,
       maxLines: 1,
@@ -2266,7 +2288,8 @@ class _SuperTabViewState extends State<SuperTabView>
   String _messageHint(SuperTabConversation group) {
     final snapshot = c.snapshot!;
     if (snapshot.isProjectLead(group.id)) {
-      return 'Message #${snapshot.projectFor(group.id)!.name}';
+      final project = snapshot.projectFor(group.id)!;
+      return 'Message ${project.isPrivate ? project.name : '#${project.name}'}';
     }
     if (_buddyName(group) case final buddy?) {
       // A Buddy's name is its person's and long: a phone's one line says Buddy.
@@ -2773,9 +2796,15 @@ class _SuperTabViewState extends State<SuperTabView>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (project.isPrivate)
+                PrivateProjectLock(
+                  size: AppIcons.inlineSize,
+                  color: DesktopChrome.muted,
+                ),
+              if (project.isPrivate) const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  name,
+                  project.isPrivate ? project.name : name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: style,
