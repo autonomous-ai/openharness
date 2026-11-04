@@ -54,6 +54,19 @@ class SetupHotspot {
     }
   }
 
+  /// Whether the phone's Wi-Fi is on (iOS: whether it is on a Wi-Fi network). Asked before a join:
+  /// with it off, iOS never answers the join. True when it cannot be told: no setup waits on a guess.
+  Future<bool> wifiOn() async {
+    if (!joinsByItself) return true;
+    try {
+      return await _channel.invokeMethod<bool>('wifiOn') ?? true;
+    } on PlatformException {
+      return true;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
   /// Back to the phone's own Wi-Fi and the Internet.
   Future<void> leave() async {
     if (!joinsByItself) return;
