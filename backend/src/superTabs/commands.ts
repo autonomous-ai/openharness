@@ -1928,7 +1928,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (pool.hostMachineId) fail('TEAM_ACCOUNT_ENTRY', 'A Harness Team account always runs teammates\' work. Choose on its Mac.', 400)
       if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
-      pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString() }
+      // A Lead's relay keeps the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
+      pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString(),
+        ...(actor.kind === 'agent' && command.askedIn ? { askedIn: { conversationId: command.askedIn.conversationId, messageId: command.askedIn.messageId } } : {}) }
       break
     }
     case 'machine.remove': {

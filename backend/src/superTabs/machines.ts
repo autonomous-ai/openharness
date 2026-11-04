@@ -41,9 +41,10 @@ export interface ContributedMachine {
   teamAccountOnly?: true
   /** Its owner's choice whether teammates' work may also run in their own account here (commands.ts machine.ownAccountWork,
    *  Scholes 11-04): who chose (the owner, whose word it is) and when. `allowed` lets a teammate's start run on this entry,
-   *  as its owner, instead of moving to its Harness Team account (ownAccountWork). Kept when the contribution is saved again;
+   *  as its owner, instead of moving to its Harness Team account (ownAccountWork); only the owner's own session turns it on.
+   *  `askedIn`: the owner's message a Lead passed on to turn it off. Kept when the contribution is saved again;
    *  gone with the machine, so a Mac removed and added again starts Team-account-only. Never on a Team account's own entry. */
-  ownAccountChoice?: { allowed: boolean; by: string; at: string }
+  ownAccountChoice?: { allowed: boolean; by: string; at: string; askedIn?: { conversationId: string; messageId: string } }
   /** One of its person's own machines that is not in the Swarm, recorded only so its host starts and watches their Buddies
    *  there (Dee, 10-29: "I don't want to add my machine to the swarm"). It takes no other start, is no route or Product
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
