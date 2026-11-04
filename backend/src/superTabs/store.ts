@@ -91,6 +91,7 @@ import { APPROVE, approvedLine, localDate, MAX_PROPOSALS, proposalQuestion, prop
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
+import { OVERDUE_PER_PASS, overdueDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
@@ -1325,6 +1326,41 @@ export class SuperTabStore {
     })
   }
 
+  /**
+   * Leaves to the PM every decision asked at least 24 hours ago that its person still has not answered (spec: Diego,
+   * 2026-11-04, a decision left a day goes to the PM). Runs as the person through the same pipeline as their own delegate, with
+   * the store-only `overdue` context, so a person answering in the same second wins (DECISION_ANSWERED) and a repeat replays.
+   * Every pass reads the waiting decisions asked 24 hours to 8 days ago, 500 at most, oldest first. No cursor: a row that failed or
+   * missed the cap is read again next pass until it is 8 days old, and a person answering takes it out of the index range.
+   */
+  async leaveOverdueDecisions(now: number, limit = OVERDUE_PER_PASS): Promise<{ answered: number; skipped: number; failed: number }> {
+    const rows = await overdueDecisions(this.db, now, limit)
+    const result = { answered: 0, skipped: 0, failed: 0 }
+    const tabs = new Map<string, AuthUser['autonomousEnv'] | null>()
+    const codes = new Set<string>()
+    for (const row of rows) {
+      try {
+        if (!tabs.has(row.tabId)) tabs.set(row.tabId, (await this.db.superTab.findUnique({ where: { id: row.tabId }, select: { autonomousEnv: true } }))?.autonomousEnv as AuthUser['autonomousEnv'] | undefined ?? null)
+        const autonomousEnv = tabs.get(row.tabId)
+        const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
+        if (!autonomousEnv || !person) { result.skipped++; continue }
+        const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
+        await this.executeOnce(user, row.tabId, { operationId: `overdue-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
+          undefined, undefined, false, true)
+        result.answered++
+      } catch (error) {
+        const code = error instanceof SuperTabError ? error.code : 'unknown'
+        // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') { result.skipped++; continue }
+        result.failed++
+        codes.add(code)
+      }
+    }
+    // One loud line a pass (backend/AGENTS.md rule 4): codes only, never ids or emails.
+    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered or 8 days old', { failed: result.failed, codes: [...codes] })
+    return result
+  }
+
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
     try {
@@ -1413,7 +1449,7 @@ export class SuperTabStore {
   }
 
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false) {
+    workspaceLeave = false, overdue = false) {
     const { operationId, command } = operationSchema.parse(input)
     const pushOrigin = await this.pushOriginFor(user, tabId, command)
     let ended: WorkHold[] = [], started: WorkHold[] = []
@@ -1500,7 +1536,8 @@ export class SuperTabStore {
         return replyOf(prior)
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
-      const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}) }
+      const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}),
+        ...(overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
       if (command.type === 'swarm.restore' && original.deletion && original.workspaceId) {
         const lost: string[] = []
         for (const person of original.people) if (!await hasWorkspaceAccess(tx, original, person.id)) lost.push(person.id)

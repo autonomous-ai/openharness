@@ -212,8 +212,8 @@ void main() {
         await close(tester, c);
       });
 
-      testWidgets('a tag in an unread New replies thread also counts on the '
-          'project row and in Needs you', (tester) async {
+      testWidgets('a tag in an unread New replies thread counts on the '
+          'project row, not in Needs you', (tester) async {
         final server = projectServer();
         server.followedThreads = {
           'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
@@ -228,16 +228,15 @@ void main() {
         expect(attention.mentionsIn('lead'), 1);
         expect(attention.mentionsIn('offline'), 0);
         expect(activity.newReplies, hasLength(1));
-        expect(
-          activity.needsYou.where((need) => need.conversationId == 'lead'),
-          hasLength(1),
-        );
+        // A tag asks for nothing: Activity's number and Needs you leave it out.
+        expect(activity.needsYou, isEmpty);
+        expect(activity.count, 0);
         expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
         await close(tester, c);
       });
 
-      testWidgets('the project badge explains its count and clears with '
-          'Needs you', (tester) async {
+      testWidgets('the project badge explains its count and clears as the tag '
+          'is read and the decision answered', (tester) async {
         final server = projectServer();
         server.followedThreads = {
           'unread': [],
@@ -255,7 +254,11 @@ void main() {
           find.descendant(of: projectBadge, matching: find.text('2')),
           findsOneWidget,
         );
-        expect(attention.mentionsIn('lead'), activity.needsYou.length);
+        // The project row counts the tag and the decision; Activity's number
+        // only the decision.
+        expect(attention.mentionsIn('lead'), 2);
+        expect(activity.needsYou, hasLength(1));
+        expect(activity.count, 1);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: tester.getCenter(projectBadge));
         await mouse.moveTo(tester.getCenter(projectBadge));
@@ -286,7 +289,7 @@ void main() {
         await pumpSidebar(tester, c, attention);
         expect(attention.threadMentions, 1);
         expect(attention.mentionsIn('lead'), 1);
-        expect(activity.needsYou, hasLength(1));
+        expect(activity.needsYou, isEmpty);
         expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
         c.markThreadRead('lead', 'message-1', 2);
         await tester.pumpAndSettle();
