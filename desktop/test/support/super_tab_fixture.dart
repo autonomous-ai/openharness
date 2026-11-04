@@ -654,6 +654,14 @@ class ConversationServer {
     if (!agent) group['lastPersonSequence'] = revision;
   }
 
+  /// Each project's unanswered Buddy proposals, as the backend's proposals
+  /// read answers them (task #2569), by project id; [proposalReads] records
+  /// each read's path. With [proposalsUnsupported], it answers 404 as a
+  /// backend from before the read does.
+  final proposals = <String, List<Map<String, dynamic>>>{};
+  final proposalReads = <String>[];
+  bool proposalsUnsupported = false;
+
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
 
@@ -864,6 +872,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.timeZone')
+              'timeZone': command['timeZone']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
             else if (command['type'] == 'member.name')
@@ -1125,6 +1135,7 @@ class ConversationServer {
           output['startId'] = operationId;
         }
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.timeZone' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||
@@ -1373,6 +1384,20 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.claim') {
+        // One start of a project's Lead (backend commands.ts lead.claim):
+        // another machine's claim is the one; the same machine claims again.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        final held = project?['leadClaim'];
+        if (held is Map && held['machineId'] != command['machineId']) {
+          output['leadStart'] = 'waiting';
+        } else {
+          project?['leadClaim'] = {'machineId': command['machineId']};
+          output['leadStart'] = 'start';
+        }
       } else if (command['type'] == 'lead.start') {
         if (leadRefusal case final refusal?) {
           leadRefusal = null;
@@ -1419,6 +1444,38 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'work.queue') {
+        // As backend taskQueue.ts places it: right after `after` among the
+        // project's open tasks, by rank or else number; null for the top.
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final task = groups.firstWhere(
+          (g) => g['id'] == command['conversationId'],
+        );
+        num key(Map<String, dynamic> g) =>
+            (g['queueRank'] ?? g['number'] ?? 0) as num;
+        final siblings =
+            groups
+                .where(
+                  (g) =>
+                      g['projectId'] == task['projectId'] &&
+                      g['archived'] != true &&
+                      g['number'] != null &&
+                      g['id'] != task['id'],
+                )
+                .toList()
+              ..sort((a, b) => key(a).compareTo(key(b)));
+        final after = command['after'];
+        if (after == null) {
+          task['queueRank'] = siblings.isEmpty ? 1 : key(siblings.first) - 1;
+        } else {
+          final i = siblings.indexWhere((g) => g['id'] == after);
+          final next = i + 1 < siblings.length ? siblings[i + 1] : null;
+          task['queueRank'] = next == null
+              ? key(siblings[i]) + 1
+              : (key(siblings[i]) + key(next)) / 2;
+        }
+        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()
@@ -1527,6 +1584,15 @@ class ConversationServer {
         );
       }
       return {'attachment': await answer(uri.pathSegments.last)};
+    }
+    if (uri.pathSegments.last == 'proposals') {
+      proposalReads.add(path);
+      if (proposalsUnsupported) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return {
+        'proposals': [...?proposals[uri.queryParameters['projectId']]],
+      };
     }
     if (uri.pathSegments.last == 'threads' ||
         uri.pathSegments.last == 'inbox') {

@@ -85,9 +85,6 @@ Future<SuperTabController> showView(
     ),
   );
   await tester.pumpAndSettle();
-  // The project's rows show once it is expanded.
-  if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
-  await tester.pumpAndSettle();
   return c;
 }
 

@@ -12,6 +12,10 @@ import '../widgets/desktop_chrome.dart';
 /// [SuperTabDayMark] with its time; rows without one are not counted. With
 /// nothing hidden above the list's top (the start of what is read) it shows
 /// nothing, and the inline day line says the day.
+///
+/// A day line's label in [child] is a [SuperTabDayLabel]. Once a label
+/// reaches the pill, the pill takes its place, as Slack's: the pill says the
+/// label's day and the label is not painted, so one label shows (Huy 11-04).
 class SuperTabStickyDay extends StatefulWidget {
   const SuperTabStickyDay({
     super.key,
@@ -34,6 +38,7 @@ class SuperTabStickyDay extends StatefulWidget {
 
 class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
   final _marks = <_SuperTabDayMarkState>{};
+  final _labels = <_SuperTabDayLabelState>{};
   DateTime? _day;
   bool _measuring = false;
 
@@ -56,17 +61,26 @@ class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _measuring = false;
       if (!mounted) return;
-      final day = _dayAtTop();
+      final (:day, :under) = _measure();
+      // The pill and the labels it covers change in the same frame.
       if (day != _day) setState(() => _day = day);
+      for (final label in _labels.toList()) {
+        label._cover(under.contains(label));
+      }
     });
   }
 
-  /// The local day of the row at the top edge: the one the edge cuts
-  /// through, else the highest one below it; null when nothing is hidden
-  /// above the list's top.
-  DateTime? _dayAtTop() {
+  /// The pill's day and the day line labels it covers, null and none when
+  /// nothing is hidden above the list's top.
+  ///
+  /// The day is that of the lowest label whose top has reached the pill's
+  /// bottom edge, which the pill covers with every label above it; with none,
+  /// the day of the row at the top edge: the one the edge cuts through, else
+  /// the highest one below it.
+  ({DateTime? day, Set<_SuperTabDayLabelState> under}) _measure() {
+    const none = (day: null, under: <_SuperTabDayLabelState>{});
     final list = context.findRenderObject();
-    if (list is! RenderBox || !list.hasSize) return null;
+    if (list is! RenderBox || !list.hasSize) return none;
     ({double top, DateTime time})? at;
     ScrollPosition? position;
     for (final mark in _marks) {
@@ -84,10 +98,28 @@ class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
           (top <= 0 ? at.top > 0 || top > at.top : at.top > 0 && top < at.top);
       if (better) at = (top: top, time: time);
     }
-    if (at == null || position == null || !position.hasPixels) return null;
-    if (position.extentBefore <= 0) return null;
-    final local = at.time.toLocal();
-    return DateTime(local.year, local.month, local.day);
+    if (at == null || position == null || !position.hasPixels) return none;
+    if (position.extentBefore <= 0) return none;
+    final under = <_SuperTabDayLabelState>{};
+    ({double top, DateTime day})? passed;
+    for (final label in _labels) {
+      final box = label.context.findRenderObject();
+      if (box is! RenderBox || !box.attached || !box.hasSize) continue;
+      final top = box.localToGlobal(Offset.zero, ancestor: list).dy;
+      // The pill's text is set as the label's, inside the pill's padding.
+      if (top >= SuperTabDayPill.top + SuperTabDayPill.heightFor(box.size)) {
+        continue;
+      }
+      under.add(label);
+      if (passed == null || top > passed.top) {
+        passed = (top: top, day: label.widget.day);
+      }
+    }
+    final local = (passed?.day ?? at.time).toLocal();
+    return (
+      day: DateTime(local.year, local.month, local.day),
+      under: widget.hidden ? const {} : under,
+    );
   }
 
   bool _onScroll(Notification event) {
@@ -118,7 +150,7 @@ class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
           ),
           if (day != null && !widget.hidden)
             Positioned(
-              top: grid.AppDesktop.controlGap,
+              top: SuperTabDayPill.top,
               left: 0,
               right: 0,
               child: IgnorePointer(
@@ -132,6 +164,75 @@ class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// A day line's label, which the [SuperTabStickyDay] above it covers once
+/// the pill reaches it. A covered label keeps its place, so no row moves, and
+/// a screen reader still reads it.
+class SuperTabDayLabel extends StatefulWidget {
+  const SuperTabDayLabel({super.key, required this.day, required this.child});
+
+  /// The day the label says.
+  final DateTime day;
+  final Widget child;
+
+  @override
+  State<SuperTabDayLabel> createState() => _SuperTabDayLabelState();
+}
+
+class _SuperTabDayLabelState extends State<SuperTabDayLabel> {
+  _SuperTabStickyDayState? _list;
+  bool _covered = false;
+
+  void _cover(bool covered) {
+    if (covered != _covered && mounted) setState(() => _covered = covered);
+  }
+
+  void _join() {
+    final list = context
+        .getInheritedWidgetOfExactType<_SuperTabDayScope>()
+        ?.state;
+    if (list == _list) return;
+    _list?._labels.remove(this);
+    _list = list?.._labels.add(this);
+  }
+
+  void _leave() {
+    _list?._labels.remove(this);
+    _list = null;
+    _covered = false;
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _join();
+  }
+
+  @override
+  void deactivate() {
+    _leave();
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
+    _leave();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _join();
+    return Visibility(
+      visible: !_covered,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      maintainSemantics: true,
+      child: widget.child,
     );
   }
 }
@@ -206,21 +307,35 @@ class SuperTabDayPill extends StatelessWidget {
 
   final DateTime day;
 
+  /// The pill's distance from the list's top.
+  static const top = grid.AppDesktop.controlGap;
+
+  static const _padding = EdgeInsets.symmetric(
+    horizontal: grid.AppDesktop.controlGap + grid.AppDesktop.menuInset,
+    vertical: grid.AppDesktop.listRowGap,
+  );
+  static const _rim = 1.0;
+
+  /// The pill's height around a label of [label]'s size, set in the same
+  /// style as the pill's text.
+  static double heightFor(Size label) =>
+      label.height + _padding.vertical + 2 * _rim;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return DecoratedBox(
       decoration: ShapeDecoration(
-        color: DesktopChrome.surface,
-        shape: StadiumBorder(side: BorderSide(color: DesktopChrome.rim)),
+        // Opaque, so the rows it floats over never read through it.
+        color: DesktopChrome.surface.withValues(alpha: 1),
+        shape: StadiumBorder(
+          side: BorderSide(color: DesktopChrome.rim, width: _rim),
+        ),
         // Lifted off the rows it floats over, as Slack's.
         shadows: grid.AppGlass.cardShadow,
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: grid.AppDesktop.controlGap + grid.AppDesktop.menuInset,
-          vertical: grid.AppDesktop.listRowGap,
-        ),
+        padding: _padding,
         child: Text(
           MaterialLocalizations.of(context).formatMediumDate(day),
           maxLines: 1,

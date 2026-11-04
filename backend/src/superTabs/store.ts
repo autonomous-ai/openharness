@@ -21,6 +21,7 @@ import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCE
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
+import { databaseProposalReads, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
@@ -2623,8 +2624,8 @@ export class SuperTabStore {
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
       // A session hears its thread's rows; the one Buddy's session in an older project chat (commands.ts startOldChatBuddy)
-      // hears that chat's main rows, never a thread session's.
-      const heard = target.buddySession ? !!row?.buddySession : !!target.buddyNarrow && !row?.buddySession
+      // hears that chat's main rows, never a thread session's; so does a project's Lead that joined a chat with none (leadArrived).
+      const heard = target.buddySession ? !!row?.buddySession : (!!target.buddyNarrow || !!l.lead) && !row?.buddySession
       if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !heard || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
@@ -2787,6 +2788,19 @@ export class SuperTabStore {
       deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
+  }
+
+  /** One project's Buddy proposals its PM has not answered, oldest first (proposals.ts), for a person who reads its chat:
+   *  anyone else is answered as for a project that is not there. */
+  async proposals(user: AuthUser, tabId: string, projectId: string): Promise<{ proposals: OpenProposal[] }> {
+    this.personOnly(user)
+    let { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state)
+    // The project chat is never archived, but a quiet one is not in the first load.
+    const chatId = readProject(state, actor, projectId).leadConversationId
+    if (!state.conversations.some(c => c.id === chatId)) ({ state } = await this.readLoad(user, tabId, { groupIds: [chatId] }))
+    const chat = proposalChat(state, actor, projectId)
+    return { proposals: await openProposals(state, chat, databaseProposalReads(this.db, tabId, chat.id)) }
   }
 
   /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session

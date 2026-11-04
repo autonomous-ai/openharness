@@ -18,6 +18,9 @@ interface AccountHttpDeps {
   /** Every machine list the backend answered (its body), and null on a sign-out: the trust group reads which of the
    *  account's machines are team machines from it (lib/e2ee/machineKinds.ts). */
   listed?(body: Record<string, unknown> | null): void
+  /** The machines the backend's list shows offline, and null when the list is not the backend's: the relay answers
+   *  their selects without a dial (lib/remoteRelay.ts). */
+  offline?(machineIds: string[] | null): void
   log?(line: string): void
 }
 
@@ -95,6 +98,7 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     const { machines, source } = cache.list()
     deps.reachable?.(source !== 'backend' ? null : machines.filter(m => m.state !== 'offline').map(m => m.machineId))
     deps.listed?.(source === 'backend' ? body : null)
+    deps.offline?.(source !== 'backend' ? null : machines.filter(m => m.state === 'offline').map(m => m.machineId))
     deps.changed?.({ owner: deps.account().machineId, body, fetchedAt: cache.lastResponse()?.fetchedAt ?? Date.now() })
   })
   const restored = cache.lastResponse()
@@ -125,5 +129,12 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     return (res.body.data as { gridName?: string } | undefined)?.gridName ?? null
   }
 
-  return { backend, machines, mintGridName }
+  /** Read the list again unless it was read within `maxAgeMs`; a read in flight is shared. The relay asks this for
+   *  the selects it holds on the list's word (lib/remoteRelay.ts). */
+  async function recheck(maxAgeMs: number): Promise<void> {
+    if (!deps.account().machineId) return
+    await cache.refresh({ maxAgeMs })
+  }
+
+  return { backend, machines, mintGridName, recheck }
 }
