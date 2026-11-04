@@ -217,7 +217,8 @@ export type QueryStatsOptions = {
 }
 
 export type QueryStats = {
-  record(model: string | undefined, action: string, args: unknown, ms: number, result: unknown, failed?: boolean): void
+  /** [label] names the client a query ran on (`secondary`), ahead of its operation. */
+  record(model: string | undefined, action: string, args: unknown, ms: number, result: unknown, failed?: boolean, label?: string): void
   /** Logs the window so far and starts a new one. */
   flush(): void
 }
@@ -229,8 +230,8 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
   let entries = new Map<string, Entry>()
   let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, bytesCapped = 0, started = performance.now()
 
-  const record: QueryStats['record'] = (model, action, args, ms, result, failed = false) => {
-    const op = opName(model, action, args), shape = filterShape(action, args), route = workKind()
+  const record: QueryStats['record'] = (model, action, args, ms, result, failed = false, label) => {
+    const op = `${label ? `${label}:` : ''}${opName(model, action, args)}`, shape = filterShape(action, args), route = workKind()
     let key = `${op}\0${shape}\0${route}`
     let entry = entries.get(key)
     if (!entry) {
@@ -312,14 +313,14 @@ export function startQueryStats(options: QueryStatsOptions & { reportMs?: number
 }
 
 /** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape`.
- *  Query extensions keep the client's types, so it is still a PrismaClient to its callers. A failure of the stats never
+ *  [label] names this client's queries (`secondary:User.findMany`). Query extensions keep the client's types, so it is still a PrismaClient to its callers. A failure of the stats never
  *  reaches the query: it is warned about once per client, and the query's own result or error goes back unchanged. */
 export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active,
-  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c)): PrismaClient {
+  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c), label?: string): PrismaClient {
   let warned = false
   const note = (model: string | undefined, operation: string, args: unknown, ms: number, result: unknown, failed: boolean) => {
     try {
-      stats()?.record(model, operation, args, ms, result, failed)
+      stats()?.record(model, operation, args, ms, result, failed, label)
     } catch (error) {
       if (warned) return
       warned = true

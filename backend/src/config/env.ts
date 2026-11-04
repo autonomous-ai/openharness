@@ -17,6 +17,10 @@ const envSchema = z.object({
   // Same MongoDB (and database) as the agent-manager — backend owns `users` +
   // `machines`; reads `managers`/`machine_nodes` via raw queries when needed.
   DATABASE_URL: z.string().default('mongodb://localhost:27017/harness?replicaSet=rs0'),
+  // The reads that tolerate a few seconds of lag (older history pages, costs, search, usage totals) go to the secondaries
+  // through a second client on DATABASE_URL (lib/prisma.ts prismaSecondary, task #2970). 'off' sends them back to the
+  // primary at the next start, with no code change.
+  DATABASE_SECONDARY_READS: z.enum(['on', 'off']).default('on'),
 
   // Redis for the cross-instance data bus. Behind a load balancer an agent's web socket and its
   // manager socket may land on different backend instances; Redis pub/sub bridges them

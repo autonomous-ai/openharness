@@ -21,7 +21,7 @@ import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
-import { prisma } from './lib/prisma.js'
+import { prisma, prismaSecondary } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { configureSwarmStamps, swarmReadCache } from './superTabs/cache.js'
 import { startCacheStats } from './superTabs/cacheStats.js'
@@ -268,7 +268,7 @@ async function start(): Promise<void> {
       stopRelayStats()
       stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
-      await Promise.allSettled([prisma.$disconnect(), closeBus()])
+      await Promise.allSettled([prisma.$disconnect(), ...prismaSecondary === prisma ? [] : [prismaSecondary.$disconnect()], closeBus()])
       process.exit(exitCode)
     } catch (err) {
       logger.error('Error during shutdown', err)
