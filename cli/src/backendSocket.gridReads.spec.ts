@@ -40,6 +40,8 @@ let overview: { status: number; body: unknown }
 let modelsDelayMs: number
 let root: string, gridHome: string, previousData: string, grid: FakeGrid, service: GridModelsService, clock: number
 let socket: BackendSocket, frames: Array<{ type: string; payload: Record<string, unknown> }>
+/** Every read the daemon has sent the fake relay and not yet seen end, so the cleanup can wait them out. */
+const relayReads = new Set<Promise<unknown>>()
 
 const TOKEN = fakeGridAnswers().token
 
@@ -69,8 +71,17 @@ async function ask(type: string, payload: Record<string, unknown> = {}): Promise
  * the agent_retarget prewarm runs on purpose after the move answers, and the fake grid it may start
  * appends to its call log (#2917's CI, 11-04: ENOTEMPTY).
  */
-async function removeSettling(remove: () => void): Promise<void> {
-  remove()
+async function removeSettling(remove: () => void, attempts = 10): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove()
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= attempts || (code !== 'ENOTEMPTY' && code !== 'EBUSY')) throw error
+      await new Promise((resolve) => setTimeout(resolve, 20 * attempt))
+    }
+  }
 }
 
 function expectNoCredential(): void {
@@ -110,7 +121,10 @@ beforeEach(async () => {
     if (new URL(url).origin !== relayOrigin) return externalFetch(input, init)
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
     headers.set('x-harness-test-client', clientId)
-    return externalFetch(input, { ...init, headers })
+    const read = externalFetch(input, { ...init, headers })
+    const tracked = read.catch(() => {}).finally(() => relayReads.delete(tracked))
+    relayReads.add(tracked)
+    return read
   })
   root = mkdtempSync(join(tmpdir(), 'grid-reads-rpc-'))
   gridHome = join(root, 'grid-home')
@@ -145,17 +159,21 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // A read still held (agent_retarget's prewarm, which the move does not wait on) ends here, and the
+  // service has nothing left to save, before anything is removed.
+  server.closeAllConnections()
+  await Promise.allSettled([...relayReads])
   await service.settled()
   await socket.unregisterLocalClient('local:grid-reads')
   await socket.stop()
-  grid.dispose()
+  // The fake grid a background read started may still be appending to its call log.
+  await removeSettling(() => grid.dispose())
   clearGridMcpUrlCache()
   env.ADAPTER_DATA_DIR = previousData
   vi.unstubAllEnvs()
-  server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
   vi.unstubAllGlobals()
-  rmSync(root, { recursive: true, force: true })
+  await removeSettling(() => rmSync(root, { recursive: true, force: true }))
 })
 
 describe('grid_models_list', () => {
