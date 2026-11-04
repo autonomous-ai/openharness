@@ -162,14 +162,14 @@ describe('planSetup', () => {
     expect((s.instance.tasks as Json[]).map(t => [t.id, t.floor])).toEqual([['b1', 3], ['r1', 2]])
     for (const task of s.instance.tasks as Json[]) {
       expect(task).toMatchObject({ independent_of: [], machines: ['m1', 'm2'],
-        models: ['claude-opus-high', 'codex-default-default', 'claude-sonnet-medium', 'grid:deepseek/flash'] })
+        models: ['claude-opus-high', 'codex-gpt-6.1-sol-high', 'claude-sonnet-medium', 'grid:deepseek/flash'] })
     }
     // A review still waits for the work it reviews.
     expect(taskOf(s, 'r1').deps).toEqual(['b1'])
     expect((s.instance.machines as Json[]).find(m => m.id === 'm1')).toMatchObject({ engines: ['claude', 'codex'] })
     expect((s.instance.accounts as Json[]).map(a => a.reserve)).toEqual([0, 0, 0])
     // A row starts at its own effort: no minimum lifts it.
-    expect(s.rows['codex-default-default']).toMatchObject({ effort: 'default' })
+    expect(s.rows['codex-gpt-6.1-sol-high']).toMatchObject({ effort: 'high' })
   })
 
   // Final review: every task had floor 1 and the solver minimizes finish time then cost, so the plan picked the cheapest

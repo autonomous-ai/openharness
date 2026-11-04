@@ -18,6 +18,7 @@ const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
   { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 3, cost: 2, enabled: true },
   { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: false },
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: false },
 ] }
 /** The table with Sonnet at its real rating, 2, for the specs of strength and floors. */
 const floorPolicy = { ...policy, models: policy.models.map(m => m.model === 'sonnet' ? { ...m, quality: 2 } : m) }

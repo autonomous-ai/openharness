@@ -457,8 +457,8 @@
      "machineId": "b",
      "machineName": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -495,8 +495,8 @@
       "account": "B"
      },
      "id": "c1",
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)"
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)"
     },
     {
      "kind": "new",
@@ -590,12 +590,12 @@
      "kind": "new",
      "machineId": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)",
      "fit": {
       "status": "short",
       "coverage": 0.1,
@@ -742,8 +742,8 @@
      "machineId": "c",
      "machineName": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -775,8 +775,8 @@
       "account": "C"
      },
      "id": "c2",
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)"
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)"
     }
    ],
    "excluded": [],
@@ -848,12 +848,12 @@
      "kind": "new",
      "machineId": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)",
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)",
      "fit": {
       "status": "fits",
       "coverage": 30,
@@ -1055,8 +1055,8 @@
      "machineId": "a",
      "machineName": "a",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1081,16 +1081,16 @@
       "account": "a:codex"
      },
      "id": "c0",
-     "title": "New agent · Codex default default · a",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered"
+     "title": "New agent · Codex gpt-6.1-sol high · a",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered"
     },
     {
      "kind": "new",
      "machineId": "b",
      "machineName": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1115,16 +1115,16 @@
       "account": "b:codex"
      },
      "id": "c1",
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)"
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)"
     },
     {
      "kind": "new",
      "machineId": "c",
      "machineName": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1148,16 +1148,16 @@
       "account": "c:codex"
      },
      "id": "c2",
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h"
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h"
     },
     {
      "kind": "new",
      "machineId": "d",
      "machineName": "d",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1182,8 +1182,8 @@
       "account": "d:codex"
      },
      "id": "c3",
-     "title": "New agent · Codex default default · d",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left"
+     "title": "New agent · Codex gpt-6.1-sol high · d",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left"
     }
    ],
    "excluded": [],
@@ -1208,12 +1208,12 @@
      "kind": "new",
      "machineId": "a",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · a",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered",
+     "title": "New agent · Codex gpt-6.1-sol high · a",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered",
      "fit": {
       "status": "fits",
       "coverage": null,
@@ -1231,12 +1231,12 @@
      "kind": "new",
      "machineId": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -1254,12 +1254,12 @@
      "kind": "new",
      "machineId": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h",
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -1277,12 +1277,12 @@
      "kind": "new",
      "machineId": "d",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · d",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left",
+     "title": "New agent · Codex gpt-6.1-sol high · d",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -2938,7 +2938,7 @@
      "machine": "a"
     },
     {
-     "title": "New agent · Codex default default · b",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
      "reason": "Codex is signed out.",
      "machine": "b"
     }
