@@ -234,4 +234,12 @@ describe('a check with several checkers', () => {
     const group = withCheck({ evidence: 'Crashes', passedBy: null, verdicts: [verdict('agent:gone', false, 'Crashes', 1)] })
     expect(unknownAgents(group, swarm([group]), [])).toContain('gone')
   })
+
+  // Diego, 2026-11-04 (#2656): a departed checker's failure is read by its last known name, not a bare id.
+  it('names a stopped checker\'s failure by its last known name', () => {
+    const group = withCheck({ evidence: 'Crashes', passedBy: null,
+      verdicts: [verdict('agent:gone', false, 'Crashes', 1), verdict('agent:rev1', true, 'Diff reads right', 2)] })
+    expect(taskText(group, swarm([group]), [], changed({}), NOW, new Map([['gone', 'Plover']])))
+      .toContain('✗ Signs in offline — failed by Plover: Crashes; passed by Rev1')
+  })
 })
