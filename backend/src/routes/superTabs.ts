@@ -1,3 +1,4 @@
+import { declaredHttpClient } from '../superTabs/refusalLog.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
@@ -323,7 +324,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof operationSchema> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId',
     { preHandler: [validateParams(hostStartParams), validateBody(operationSchema)] }, (req, reply) => respond(reply, async () => {
       if (!('startId' in req.body.command) || req.body.command.startId !== req.params.startId) throw new SuperTabError('FORBIDDEN', 'The host request must name this start.', 403)
-      return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId)
+      return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId, declaredHttpClient(req.headers))
     }))
   // Whether teammates' agents can push to a project's repository: the Harness GitHub App installed there
   // (github/projectAccess.ts). `refresh=1`: a person installed it just now and checks again.
@@ -558,7 +559,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,
-      { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId)))
+      { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId, undefined, declaredHttpClient(req.headers))))
   // A chat file comes straight from the client (the desktop's and the browser's account token, or the daemon's for
   // `post --attach`), never through a machine or the relay. Multipart is parsed in this scope alone, so no other
   // Super Tab route's body handling changes.
