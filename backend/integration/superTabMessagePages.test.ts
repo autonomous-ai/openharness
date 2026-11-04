@@ -8,7 +8,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import { agentOnly } from '../src/superTabs/model.js'
 import { receiptFields } from '../src/superTabs/pageReads.js'
 import { startMessageReadStats, type MessageReadKey } from '../src/superTabs/messageReadStats.js'
-import { planDatabase } from './plans.test-support.js'
+import { plan, planDatabase, profiled, reads } from './plans.test-support.js'
 
 // Spec 5 phase A (docs/superpowers/specs/2026-10-30-swarm-messages-delta-and-retention-design.md): who reads messages how, a
 // page that decodes about the rows it shows, and receipts read the same whether their deliveries are live or compacted.
@@ -220,5 +220,75 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
       await store.messages(owner, f.tab, 'lead', { messageId: f.deliveries[0]!.messageId }), await store.catchUp(owner, f.tab, 'lead', 0),
       await store.mentions(owner, f.tab, 'waiting')]
     for (const reply of replies) expect(JSON.stringify(reply)).not.toMatch(/"receipts"|"deliveryIds"|"deliveryId"|"machineOwnerId"|"claimId"/)
+  })
+})
+
+describe('a jump reads the window around a time in one request (task #2911)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const START = Date.UTC(2026, 9, 20)
+
+  /** `count` messages in the Lead chat over `days` days from START, evenly; `hidden(i)` ones are agent-only notes to another agent. */
+  async function timed(tab: string, count: number, days: number, hidden: (i: number) => boolean = () => false) {
+    const step = Math.floor(days * DAY / count)
+    const rows: Prisma.SuperTabMessageCreateManyInput[] = Array.from({ length: count }, (_, i) => {
+      const id = `${tab}-t${String(i).padStart(5, '0')}`
+      return { id, tabId: tab, conversationId: 'lead', sequence: 1000 + i, author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' },
+        text: `row ${i}`, replyTo: null, recipientIds: hidden(i) ? ['someone-else'] : [], mentions: [], thread: id, createdAt: new Date(START + i * step),
+        ...(hidden(i) ? { source: { kind: 'agent-only' } } : {}) }
+    })
+    await db.superTabMessage.createMany({ data: rows })
+    return step
+  }
+  const cursorOf = (m: { sequence: number; id: string }) => ({ sequence: m.sequence, id: m.id })
+
+  it('a week back in two weeks of 5,000 messages is one read: the 100 rows before that time and the 100 from it', async () => {
+    const { tab } = await fixture()
+    await timed(tab, 5000, 14)
+    const at = START + 7 * DAY
+    const { value, rows } = await counted(() => store.messages(owner, tab, 'lead', { at }))
+    expect(value.messages).toHaveLength(200)
+    const first = value.messages.findIndex(m => m.createdAt.getTime() >= at)
+    expect(first).toBe(100)
+    expect(value.messages[99]!.createdAt.getTime()).toBeLessThan(at)
+    expect(value.messages.map(m => m.sequence)).toEqual([...value.messages.map(m => m.sequence)].sort((a, b) => a - b))
+    expect(value.next).toEqual(cursorOf(value.messages[0]!))
+    expect(value.newer).toEqual(cursorOf(value.messages[199]!))
+    expect(rows).toEqual([expect.objectContaining({ reader: 'person', cursor: 'at', n: 1, shown: 200 })])
+  })
+
+  it('the very beginning (0) reads the first 100, and a time after everything the newest 100, each with no cursor past its end', async () => {
+    const { tab } = await fixture()
+    await timed(tab, 300, 3)
+    const beginning = await store.messages(owner, tab, 'lead', { at: 0 })
+    expect(beginning.messages.map(m => m.text)).toEqual(Array.from({ length: 100 }, (_, i) => `row ${i}`))
+    expect(beginning.next).toBeNull()
+    expect(beginning.newer).toEqual(cursorOf(beginning.messages[99]!))
+    const after = await store.messages(owner, tab, 'lead', { at: START + 30 * DAY })
+    expect(after.messages.map(m => m.text)).toEqual(Array.from({ length: 100 }, (_, i) => `row ${200 + i}`))
+    expect(after.newer).toBeNull()
+    expect(after.next).toEqual(cursorOf(after.messages[0]!))
+  })
+
+  it('rows the reader may not see never shorten either half, nor show', async () => {
+    const { tab } = await fixture()
+    await timed(tab, 900, 9, i => i % 3 === 0)
+    const at = START + 4.5 * DAY
+    const page = await store.messages(owner, tab, 'lead', { at })
+    expect(page.messages).toHaveLength(200)
+    expect(page.messages.some(m => m.recipientIds.includes('someone-else'))).toBe(false)
+    expect(page.messages.findIndex(m => m.createdAt.getTime() >= at)).toBe(100)
+  })
+
+  it('every read it sends is bounded by the sequence index, and the search is about log2 of the sequence', async () => {
+    const { tab } = await fixture()
+    await timed(tab, 2000, 14)
+    const entries = await profiled(db, () => store.messages(owner, tab, 'lead', { at: START + 7 * DAY }))
+    const rows = reads(entries, 'SuperTabMessage', ['conversationId', 'sequence'])
+    expect(rows.length, JSON.stringify(plan(rows))).toBeLessThanOrEqual(20)
+    for (const row of rows) {
+      expect(row.planSummary, JSON.stringify(plan(rows))).toContain('IXSCAN')
+      expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned!)
+      expect(row.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned! + 1)
+    }
   })
 })
