@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyLaunchFile, buddyReadsOf, revokeBuddyWide } from './buddyGuard.js'
+import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
 import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -775,6 +775,12 @@ function prepareBuddyFolder(root: string, key: string): void {
   // buddyOnOwnMachine), and a Buddy saved in an older mode relaunches in full mode: in a Harness Team account, which is never
   // its owner's own, it is held before anything is written or launched (security review 1 of #2832).
   if (isTeamAccount()) throw new Error(BUDDY_NOT_HERE)
+  // Nor anywhere its start did not check (security review 2 of #2832): the start recorded its owner for this folder after
+  // checking the machine, and an account signed in here since that is not theirs holds it too. Before the host has read who
+  // is signed in (a restart restores its sessions first) the record alone decides, as the host's own sign-out clears it.
+  const owner = buddyOwnerOf(root), account = signedInAccount()
+  if (!owner) throw new Error(BUDDY_START_AGAIN)
+  if (account && account !== owner) throw new Error(BUDDY_NOT_HERE)
   const claude = join(root, '.claude'), guard = join(claude, 'buddy-guard.mjs'), settings = join(claude, 'settings.local.json')
   const locked = isPlainFile(guard)
   if (locked) {
@@ -800,7 +806,9 @@ function prepareBuddyFolder(root: string, key: string): void {
   ignoreBuddyFiles(root)
 }
 /** Why a Buddy is not prepared in a Harness Team account: the server's own words (backend buddyContract.ts). */
-const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine. It is not started in a Harness Team account.'
+const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
+/** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
+const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
 const isPlainFile = (path: string) => { try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false } }
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,

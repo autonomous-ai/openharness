@@ -250,3 +250,38 @@ export class SentListsError extends Error {
   }
 }
 
+/**
+ * Whose a Buddy's folder is, as the start that made it found (security review 2 of #2832). A Buddy runs with its owner's full
+ * rights, and a relaunch (a restart, a model switch, a move) never passes the start's own-machine check (superTabs/start.ts
+ * buddyOnOwnMachine). So that start records here, by the folder's name (its worktree named for the start, or its folder of
+ * project copies), the owner it checked, before anything launches; every launch of a Buddy then requires that record
+ * (lib/swarmSkills.ts). A Buddy saved before this record existed has none, and waits for its owner to start it again.
+ * In Harness's data folder, never the Buddy's own folder, which it can write. One small file per Buddy start, removed with
+ * the data folder; a start's folder name is never reused.
+ */
+export const buddyOwnerFile = (dataDir: string, leaf: string): string =>
+  join(dataDir, 'buddy-owners', createHash('sha256').update(leaf).digest('hex').slice(0, 32))
+export function markBuddyOwner(leaf: string, personId: string, dataDir: string = env.ADAPTER_DATA_DIR): void {
+  const file = buddyOwnerFile(dataDir, leaf)
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, `${JSON.stringify({ personId })}\n`, { mode: 0o600 })
+}
+/** The owner recorded for the Buddy folder [root]: by its name, or its name before a -2, -3 a taken one got
+ *  (lib/gitProject.ts). Null when none was recorded or it cannot be read. */
+export function buddyOwnerOf(root: string, dataDir: string = env.ADAPTER_DATA_DIR): string | null {
+  const name = basename(root)
+  for (const leaf of new Set([name, name.replace(/-\d+$/, '')])) {
+    try {
+      const personId = (JSON.parse(readFileSync(buddyOwnerFile(dataDir, leaf), 'utf8')) as { personId?: unknown }).personId
+      if (typeof personId === 'string' && personId) return personId
+    } catch { /* none for this name */ }
+  }
+  return null
+}
+/** The account the host last read as signed in here (lib/buddyAccount.ts), or null before it has read one. */
+export function signedInAccount(file: string = buddyAccountFile()): string | null {
+  try {
+    const accountId = (JSON.parse(readFileSync(file, 'utf8')) as { accountId?: unknown }).accountId
+    return typeof accountId === 'string' && accountId ? accountId : null
+  } catch { return null }
+}

@@ -17,7 +17,8 @@ vi.mock('./buddyHome.js', async original => {
 })
 vi.mock('../lib/buddyGuard.js', async original => {
   const actual = await original<typeof import('../lib/buddyGuard.js')>()
-  return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads) }
+  // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+  return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'

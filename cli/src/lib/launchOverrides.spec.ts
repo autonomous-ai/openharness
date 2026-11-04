@@ -27,6 +27,8 @@ const GRID: GridLaunchOverride = {
 }
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }

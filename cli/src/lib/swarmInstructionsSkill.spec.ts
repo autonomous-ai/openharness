@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
+
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { instructionsSkillText, recordProjectSkillsNotice, refreshProjectSkills, type ProjectDoc } from './swarmInstructionsSkill.js'

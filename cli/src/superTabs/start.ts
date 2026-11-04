@@ -14,6 +14,7 @@ import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trus
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
+import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
@@ -403,6 +404,10 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // Buddy's Claude Code traces covers it (host.ts buddyWorktree and ownScrub; security reviews of #2345 and #2375). The
       // backend's folder for it only admits the start.
       const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
+      // Its folder recorded as its owner's, checked above, before it launches: every launch and relaunch of a Buddy requires it
+      // (lib/swarmSkills.ts; security review 2 of #2832). Only a folder named for this start: one the request names could share
+      // its name with another folder, so a Buddy there has no record and does not launch.
+      if (buddy && (homeFolder || request.worktree)) markBuddyOwner(worktreeFolderName(`super-tab/${startId}`), String(object(request.buddyOf).personId))
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
