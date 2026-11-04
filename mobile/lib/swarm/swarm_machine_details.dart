@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icon_size.dart';
 import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
@@ -308,7 +309,7 @@ class SwarmMachineDetails extends StatelessWidget {
       padding: const EdgeInsets.only(top: AppSpace.s, bottom: AppSpace.xs),
       child: Row(
         children: [
-          EngineMark(engine: allowance.engine, size: 16),
+          EngineMark(engine: allowance.engine, size: AppIconSize.besideText),
           const SizedBox(width: AppSpace.s),
           Expanded(
             child: Text(
