@@ -2058,7 +2058,7 @@ class SuperTabController extends ChangeNotifier {
   );
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request';
+      m.source['kind'] != 'update-request' && !m.terminalPrompt;
 
   /// [id]'s messages with its steps' rows merged in by time (task steps
   /// design): each step keeps its own conversation, shown inside its task.
@@ -2332,18 +2332,24 @@ class SuperTabController extends ChangeNotifier {
   /// thread's reply line instead ([threadUnread]). The server's newest
   /// main-stream message covers a chat not held here; an older server's
   /// newest message, and the newest held, stand in for it.
-  bool unread(SuperTabConversation group) =>
-      max(
-        group.lastMainSequence ?? group.lastMessageSequence,
-        _messages[group.id]?.reversed
-                .where(
-                  (m) => m.source['kind'] != 'update-request' && m.inMainStream,
-                )
-                .firstOrNull
-                ?.sequence ??
-            0,
-      ) >
-      readMark(group.id);
+  /// Held through the server's newest message, the rows held say it, so a
+  /// row the chat does not list (a terminal's prompt) is nothing new.
+  bool unread(SuperTabConversation group) {
+    final held = _messages[group.id];
+    final heldAll =
+        held != null &&
+        held.isNotEmpty &&
+        held.last.sequence >= group.lastMessageSequence;
+    return max(
+          heldAll ? 0 : group.lastMainSequence ?? group.lastMessageSequence,
+          held?.reversed
+                  .where((m) => _listed(m) && m.inMainStream)
+                  .firstOrNull
+                  ?.sequence ??
+              0,
+        ) >
+        readMark(group.id);
+  }
 
   void start() {
     if (_disposed) return;
@@ -3604,7 +3610,14 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     final loaded = _loadedMessageSequence(id);
-    final last = min(through ?? loaded, loaded);
+    var last = min(through ?? loaded, loaded);
+    // Rows the chat does not list (a terminal's prompt) just after what was
+    // read are read with it, so another device does not show them unread.
+    for (final m in _messages[id] ?? const <SuperTabMessage>[]) {
+      if (m.sequence <= last || !m.inMainStream) continue;
+      if (_listed(m) || m.sequence > loaded) break;
+      last = m.sequence;
+    }
     _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
