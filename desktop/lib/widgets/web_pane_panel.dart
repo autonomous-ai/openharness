@@ -517,9 +517,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
     final controller = _controller;
     final url = widget.pane.url;
     if (controller == null) {
-      // No embedded webview on this platform (it ships for macOS only — see
-      // [webviewAvailable]), so the page it would have shown opens in the
-      // browser instead of sitting here as text (openharness#108).
+      // No embedded webview here ([webviewAvailable]), so the page it would
+      // have shown opens in the browser instead of sitting here as text
+      // (openharness#108). Windows 11 ships WebView2, so on Windows this is a
+      // computer that has lost it, and it can be had again.
       final page = url == null ? null : Uri.tryParse(url);
       return _Notice(
         key: const ValueKey('web-pane-placeholder'),
@@ -527,6 +528,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
         title: 'Viewer',
         detail: page == null
             ? 'No viewer yet.'
+            : defaultTargetPlatform == TargetPlatform.windows
+            ? 'This viewer opens in your browser. Install Microsoft Edge WebView2 to see it here.\n$url'
             : 'This viewer opens in your browser on this platform.\n$url',
         action: page == null
             ? null

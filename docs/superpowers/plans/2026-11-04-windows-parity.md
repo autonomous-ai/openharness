@@ -41,7 +41,7 @@ The person is using Harness, not Windows administration. So:
 | No Git for Windows | Buddy and setup scripts refuse with a URL | Harness installs it in the background, asking nothing. If that can't work, whatever needs Git says so with the link |
 | Plays a voice message | Opens another program | Plays in the chat with the waveform, as on a Mac |
 | Opens a web pane | Shows only a URL | The page, beside its terminal. Menus and dialogs show over it normally |
-| Web pane without WebView2 | Shows only a URL | The URL, **Open in browser**, and "Install Microsoft Edge WebView2 to see pages here." with **Install** |
+| Web pane without WebView2 | Shows only a URL | The URL, **Open in browser**, and "Install Microsoft Edge WebView2 to see it here." |
 | Pastes an image into an agent | The file's path | The image, as on a Mac |
 | Types `harness remote` in a tile | "runs inside a Harness terminal tile" | It works |
 | Robots not found | "macOS is blocking Harness from your local network" with a Mac button | "Windows Firewall may be blocking Harness." with **Open firewall settings** |
@@ -149,12 +149,9 @@ Each vendor's own Windows installer, checked 2026-11-04:
 - [ ] Test: a probe or start failing with Windows' application-control error (`ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION`, 4551, or exit `0xC0E90002`) refuses with "Windows blocked <engine>: Smart App Control does not trust it. Choose another engine."
 - [ ] Implement in the one place launches start a program. Run; commit.
 
-### Task 9: A web view that can be installed
+### Task 9: A computer without WebView2 (done)
 
-**Files:** `desktop/lib/widgets/web_pane_panel.dart` (placeholder), `desktop/lib/core/native_webview_runtime.dart`, test.
-
-- [ ] Test: on Windows with no WebView2, the placeholder keeps the URL and **Open in browser**, and adds the sentence and **Install**, which runs `winget install --id Microsoft.EdgeWebView2Runtime -e --silent` through the CLI, then re-checks and mounts the page without a restart.
-- [ ] Implement; run; commit.
+Windows 11 ships WebView2, and Windows Update brings it to Windows 10, so this is rare: the pane keeps **Open in browser** and says what would show it here.
 
 ### Task 10: `harness team model`, without running elevated in the Team's folder
 
