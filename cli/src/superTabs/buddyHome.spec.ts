@@ -28,21 +28,27 @@ function root(): string {
 }
 
 describe('a person\'s one Buddy\'s folder', () => {
-  it('answers Claude Code\'s folder question for it, and leaves any other engine to ask', async () => {
-    const claude = root(), home = join(root(), 'home'), config = join(claude, '.claude.json')
+  // Task #2832: a Codex Buddy runs too, and would sit at Codex's own folder question in a terminal no Swarm view shows.
+  it('answers Claude Code\'s and Codex\'s folder question for it, and leaves any other engine to ask', async () => {
+    const claude = root(), codex = root(), home = join(root(), 'home'), config = join(claude, '.claude.json'), toml = join(codex, 'config.toml')
     mkdirSync(home)
     writeFileSync(config, '{}')
-    const moved = process.env.CLAUDE_CONFIG_DIR
+    writeFileSync(toml, '')
+    const moved = { claude: process.env.CLAUDE_CONFIG_DIR, codex: process.env.CODEX_HOME }
     process.env.CLAUDE_CONFIG_DIR = claude
+    process.env.CODEX_HOME = codex
     try {
-      await trustBuddyHome(home, 'codex')
-      expect(readFileSync(config, 'utf8')).toBe('{}')
+      await trustBuddyHome(home, 'opencode')
+      expect([readFileSync(config, 'utf8'), readFileSync(toml, 'utf8')]).toEqual(['{}', ''])
       await trustBuddyHome(home, 'claude')
       const saved = Object.values(JSON.parse(readFileSync(config, 'utf8')).projects as Record<string, { hasTrustDialogAccepted: boolean }>)
       expect(saved.map(p => p.hasTrustDialogAccepted)).toEqual([true])
+      await trustBuddyHome(home, 'codex')
+      expect(readFileSync(toml, 'utf8')).toMatch(/trust_level = "trusted"/)
+      expect(readFileSync(toml, 'utf8')).toContain(home.split('/').pop()!)
     } finally {
-      if (moved === undefined) delete process.env.CLAUDE_CONFIG_DIR
-      else process.env.CLAUDE_CONFIG_DIR = moved
+      if (moved.claude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved.claude
+      if (moved.codex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = moved.codex
     }
   })
 
