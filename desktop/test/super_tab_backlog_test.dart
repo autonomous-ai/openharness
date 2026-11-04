@@ -153,6 +153,107 @@ void main() {
     }
   });
 
+  group('Shipped means merged, as the server tells it (task #2558)', () {
+    final at = DateTime.fromMillisecondsSinceEpoch(now);
+    const day = 86400000;
+    const own = 'https://github.com/acme/app/pull/7';
+    const batch = 'https://github.com/acme/app/pull/8';
+
+    /// A task as the read path answers it (backend superTabRead.test.ts): the
+    /// first Done sets shippedAt; only a recorded merge sets a card's mergedAt.
+    SuperTabBacklogGroup? placed(
+      String status, {
+      int? shippedAt = now,
+      List<String> urls = const [own],
+      List<Map<String, dynamic>>? cards,
+      bool archived = false,
+      bool dormant = false,
+    }) => superTabBacklogGroupOf(
+      SuperTabConversation.fromJson({
+        ...conversationFixture('work', 'A task'),
+        'assignment': working(status),
+        'shippedAt': ?shippedAt,
+        'pullRequestUrls': urls,
+        'cards': {
+          'pullRequests':
+              cards ??
+              [
+                for (final url in urls) {'url': url, 'messageId': 'm-$url'},
+              ],
+        },
+        if (archived) 'archived': true,
+        if (dormant) 'dormant': true,
+      }),
+      at,
+    );
+    Map<String, dynamic> merged(String url, {int at = now}) => {
+      'url': url,
+      'messageId': 'm-$url',
+      'mergedAt': at,
+    };
+
+    test('a Done task with an open pull request is Ready to merge', () {
+      expect(placed('done'), SuperTabBacklogGroup.readyToMerge);
+    });
+
+    test('a Done task whose link has no card yet is Ready to merge', () {
+      expect(
+        placed('done', cards: const []),
+        SuperTabBacklogGroup.readyToMerge,
+      );
+    });
+
+    test('a task whose pull request merged is Shipped', () {
+      expect(
+        placed('done', cards: [merged(own)]),
+        SuperTabBacklogGroup.shipped,
+      );
+    });
+
+    test('a merge recorded on a batch pull request counts, its own closed', () {
+      expect(
+        placed(
+          'done',
+          urls: const [own, batch],
+          cards: [
+            {'url': own, 'messageId': 'm1'},
+            merged(batch),
+          ],
+        ),
+        SuperTabBacklogGroup.shipped,
+      );
+    });
+
+    test('a Done task with no pull request has nothing to merge: Shipped', () {
+      expect(placed('done', urls: const []), SuperTabBacklogGroup.shipped);
+    });
+
+    test('Ready to merge stays after a day quiet, while its window lasts', () {
+      expect(placed('done', dormant: true), SuperTabBacklogGroup.readyToMerge);
+      expect(placed('done', dormant: true, shippedAt: now - 8 * day), isNull);
+    });
+
+    test('an archived task whose pull request never merged is not listed', () {
+      expect(placed('done', archived: true), isNull);
+    });
+
+    test('work back on after its first Done goes by its state', () {
+      expect(placed('working'), SuperTabBacklogGroup.working);
+      expect(placed('working', urls: const []), SuperTabBacklogGroup.working);
+    });
+
+    test('merged long ago and back at work is listed as Working', () {
+      expect(
+        placed(
+          'working',
+          shippedAt: now - 8 * day,
+          cards: [merged(own, at: now - 8 * day)],
+        ),
+        SuperTabBacklogGroup.working,
+      );
+    });
+  });
+
   group('Shipped looks back 7 days, and a closed task only counts shipped', () {
     final at = DateTime.fromMillisecondsSinceEpoch(now);
     const day = 86400000;
@@ -326,6 +427,12 @@ void main() {
         'liveness': ?liveness,
         'shippedAt': ?shippedAt,
         if (pr != null) 'pullRequestUrls': [pr],
+        if (pr != null && shippedAt != null)
+          'cards': {
+            'pullRequests': [
+              {'url': pr, 'messageId': 'card-$id', 'mergedAt': shippedAt},
+            ],
+          },
       };
       conversations.addAll(<Map<String, dynamic>>[
         {...conversationFixture('api-chat', 'api'), 'projectId': 'api'},
@@ -696,6 +803,40 @@ void main() {
         expect(find.text('Shipped · 3'), findsOneWidget);
         // The snapshot is built again on every change: these never join it.
         expect(c.snapshot!.conversation('recent'), isNull);
+      });
+
+      testWidgets('a quiet Done task with an open pull request is Ready to '
+          'merge, read as the closed list answers it', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          {
+            ...archived('waiting', 90),
+            'archived': false,
+            'dormant': true,
+            'pullRequestUrls': ['https://github.com/acme/app/pull/90'],
+            'cards': {
+              'pullRequests': [
+                {
+                  'url': 'https://github.com/acme/app/pull/90',
+                  'messageId': 'card-90',
+                },
+              ],
+            },
+          },
+        ]);
+        await show(tester, server, today: at);
+        expect(row('waiting'), findsOneWidget);
+        expect(
+          tester.getTopLeft(row('waiting')).dy,
+          lessThan(tester.getTopLeft(header(SuperTabBacklogGroup.shipped)).dy),
+        );
+        expect(
+          tester.getTopLeft(row('waiting')).dy,
+          greaterThan(
+            tester.getTopLeft(header(SuperTabBacklogGroup.readyToMerge)).dy,
+          ),
+        );
       });
 
       testWidgets('it reads on through every page of the last 7 days', (

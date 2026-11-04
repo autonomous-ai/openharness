@@ -580,6 +580,9 @@ model ProductUsageActivity {
   dayUtc    DateTime
   surfaces  String[]
   worked    Boolean  @default(false)
+  /// A Swarm agent's turn ran on this person's Mac that day. Not `worked`, which is only their own sessions' turns. Set only when true;
+  /// absent on rows from before 2026-11-04.
+  hosting   Boolean?
   signupDay DateTime
   staff     Boolean
   expiresAt DateTime

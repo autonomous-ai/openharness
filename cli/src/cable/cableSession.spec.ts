@@ -3944,7 +3944,7 @@ describe('swarm cards', () => {
     swarms: rows.map((r) => ({ name: r.id, agents: 0, agentIds: [] as string[], panes: 0, ...r })) })
 
   /** A host whose cards, desk tab and window project the test moves. */
-  function cardHost(state: { cards: SwarmCard[] | null; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
+  function cardHost(state: { cards: SwarmCard[] | null; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
     return makeHost({
       swarmCards: () => state.cards,
       listSwarms: () => state.desk ?? desk(),
@@ -5375,6 +5375,56 @@ describe('swarm cards', () => {
       const threaded = () => withBuddy({ local: 'h1', sideChat: inThread, chat: { ...pmChat, thread: { root: 'm9', title: 'build it' } } })
       const threadKeys = (l: Record<string, unknown>) => Object.fromEntries(Object.entries(l).filter(([k]) => k.startsWith('thread')))
 
+      // A PM reply inside a task thread (Diego, 2026-10-29): opening its chat is not reading it.
+      const pmFrame = { t: 'supertab.notice', tab: 'st1', lead: 'lead1', chat: 'pm', chatId: 'pm1', id: 'n1', text: 'From the PM n1', at: 1792560000 }
+      it('a thread notice is sent while its chat is open, and read only when the window opens that thread', async () => {
+        const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false } }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(ROUND_THREAD)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          state.cards = [card('st1', [lead(1, { chat: pmChat, notice: { ...pmNotice('n1'), thread: 'r1' } })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([{ ...pmFrame, thread: 'r1' }]))
+          // Another thread of that chat open: still unread.
+          state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', threadRoot: 'r2', fromDevice: false }
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice.read')).toEqual([])
+          state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', threadRoot: 'r1', fromDevice: false }
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice.read')).toEqual([{ t: 'supertab.notice.read', tab: 'st1', lead: 'lead1', chatId: 'pm1' }]))
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice.read')).toHaveLength(1)
+        } finally { await session.stop() }
+      })
+
+      it('a thread notice that arrives while the window has that thread open is read there, and not sent', async () => {
+        const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', threadRoot: 'r1', fromDevice: false } }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(ROUND_THREAD)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          state.cards = [card('st1', [lead(1, { chat: pmChat, notice: { ...pmNotice('n1'), thread: 'r1' } })])]
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice')).toEqual([])
+        } finally { await session.stop() }
+      })
+
+      it('a dial without swarmThread gets today\'s frame for a thread notice', async () => {
+        const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false } }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(ROUND)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          state.cards = [card('st1', [lead(1, { chat: pmChat, notice: { ...pmNotice('n1'), thread: 'r1' } })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([pmFrame]))
+        } finally { await session.stop() }
+      })
+
       it('a swarmThread dial is sent the face\'s thread and its recap\'s thread', async () => {
         for (const [hello, expected] of [[THREAD, { thread: 'm9', threadTitle: 'build it', threadReplies: 2 }], [ROUND_THREAD, { thread: 'm9', threadTitle: 'build it' }]] as const) {
           const host = cardHost({ cards: [card('st1', [threaded()])] }, {
@@ -5555,6 +5605,20 @@ describe('swarm cards', () => {
           .toEqual({ errors: ['Chat with PM is read-only.'], turns: [] })
         expect(swarmSay).toHaveBeenCalledOnce()
       }
+    })
+
+    it('logs why a voice turn ended in an error: the failed post and the words the dial was shown', async () => {
+      const lines: string[] = []
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay: offline, log: (l: string) => lines.push(l) })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY); await settle()
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error')).toBe(true))
+      } finally { await session.stop() }
+      expect(lines).toContain('cable: voice → Swarm chat of h1 failed (offline)')
+      expect(lines).toContain('cable: voice → error "Could not reach your Buddy. Try again."')
     })
 
     it('on the Buddy face an unreachable post shows voice.error and types nothing', async () => {

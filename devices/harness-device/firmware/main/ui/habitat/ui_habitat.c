@@ -1456,8 +1456,8 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
 /*
  * THE THREAD FACE (spec 2026-11-03-dial-thread-face, mockup round-thread): a Lead whose face chat is a thread. The teal
  * ring at the glass edge, "Thread" (Buddy: "Thread · Buddy"), the thread's title on two lines, no pet, and the card of the
- * thread's last message with a teal spine, its meta line (who, how many replies) and up to three lines; "Waiting for ..."
- * until one comes. "‹ chat" at the left edge says which way out. Inter has no hooked arrow, so the label leads with ›.
+ * thread's last message with its meta line (who, how many replies) and up to three lines; "Waiting for ..." until one
+ * comes. A sideways swipe leaves it. Inter has no hooked arrow, so the label leads with one drawn in boxes.
  */
 // The next line of `*cursor` in `w` px, copied to `out`.
 static void thread_line(const char **cursor, const ht_font_t *font, int w, char out[HT_TEXT_BYTES])
@@ -1518,20 +1518,12 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     }
     if (rows == 0) rows = 1;
     int h = 26 + rows * 38 + (meta[0] ? 28 : 0);
-    // x 63..403, symmetric, so "‹ chat" has room at the edge. Three lines under a two-line title end at y 369: its corners
-    // are 180 px from the centre at most, inside the ring's 226 px inner edge, so all three lines stay.
+    // x 63..403, symmetric. Three lines under a two-line title end at y 369: its corners are 180 px from the centre at most,
+    // inside the ring's 226 px inner edge, so all three lines stay. No spine and no "chat" label (Diego, 2026-11-04).
     ht_box(f, 63, top, 340, h, 28, card, color(mix_black(TEAL, 70)));
-    ht_box(f, 63, top + 18, 7, h - 36, 3, teal, teal);
     if (meta[0]) focus_put(f, 75, top + 13, 316, small, teal, card, meta, true);
     if (!recap) focus_put(f, 75, top + 17, 316, body, DIM, card, buddy ? "Waiting for your Buddy…" : "Waiting for the PM…", true);
     else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, wait ? ACCENT : FG, card, text[i], true);
-    // The way out: a chevron at the left edge, small "chat" under it.
-    uint16_t out = color(mix_black(TEAL, 85));
-    // At the screen's vertical centre, where the glass is widest: "‹" just above y 233, "chat" just below, 15 px in from the
-    // edge, so every corner of both runs is 6 px or more inside the ring's inner edge (r 226.5), and 8 px clear of the card.
-    int cw = ht_measure(&ht_mono_16, "chat"), vw = ht_measure(body, "\u2039");
-    ht_text(f, 15 + (cw - vw) / 2, 233 - body->height, vw, body, out, bg, "\u2039");
-    ht_text(f, 15, 234, cw, &ht_mono_16, out, bg, "chat");
 }
 /*
  * A SWARM PANE'S FACE (spec §4): the agent face, built from the Lead. The project on the upper arc; working: the pet
@@ -5468,7 +5460,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
  * A LEAD'S NEW MESSAGE (design 2026-10-28-round-dial-swarm-chat §3), in its Lead conversation or Chat with PM: the one
  * alert a swarmChat daemon raises. It is that Lead's single entry, news rather than a question, the message as its text
  * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
- * once only when that Lead's face shows that very chat. True when the caller should beep (the coalescing is the audio's).
+ * once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its root) that very
+ * thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere (#2463). True
+ * when the caller should beep (the coalescing is the audio's).
  */
 _Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
 static int swarm_said_of(const char *lead)
@@ -5476,10 +5470,10 @@ static int swarm_said_of(const char *lead)
     for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
     return -1;
 }
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at)
 {
     (void)at;
-    if (!tab || !lead || !chat_id || !text) return false;
+    if (!tab || !lead || !chat_id || !thread || !text) return false;
     display_lock();
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
@@ -5507,7 +5501,7 @@ bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, 
     if (slot < 0) slot = 0;
     COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
     s.notice_sequence++;
-    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id);
+    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id) && (!thread[0] || !strcmp(l->thread_root, thread));
     if (face) notice_read_now(l->id);
     else display_wake();
     change();

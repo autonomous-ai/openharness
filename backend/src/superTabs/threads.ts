@@ -1,6 +1,7 @@
 import type { Author, Conversation, SuperTabState } from './model.js'
 import type { ThreadReply } from './pageReads.js'
 import { canReadGroup } from './projects.js'
+import type { TaskAsk } from './taskLine.js'
 
 /** What a page says about one thread: the line under its root, and who it marks unread for. */
 export interface ThreadSummary {
@@ -12,6 +13,16 @@ export interface ThreadSummary {
   authors: Author[]
   /** People who wrote in the thread or were tagged in it, in order of first appearance. */
   people: string[]
+  /** Where the ask at its root stands: the row's tag in the chat (Dee, 2026-11-04). */
+  ask?: Exclude<TaskAsk, 'closed'> | 'proposal'
+}
+
+/** A task's newest mark decides (taskLine.ts). With none, a Buddy's proposal is an ask until the PM has answered it. */
+function askOf(group: Conversation, root: string, thread: ThreadReply[]): ThreadSummary['ask'] {
+  const mark = thread.findLast(row => row.ask)?.ask
+  if (mark) return mark === 'closed' ? undefined : mark
+  const asked = thread.some(row => row.id === root && row.kind === 'buddy-proposal')
+  return asked && !thread.some(row => row.id !== root && row.author.kind === 'agent' && row.author.id === group.leadId) ? 'proposal' : undefined
 }
 
 /** Summaries of the threads in `rows` (pageThreads, oldest first), roots with no reply left out; a row counts as `count`
@@ -36,6 +47,8 @@ export function threadSummaries(state: SuperTabState, group: Conversation, rows:
       .filter(person => readable({ kind: 'person', id: person }))
     const authors = [...new Map(replies.toReversed().map(row => [`${row.author.kind}:${row.author.id}`, row.author])).values()]
       .filter(readable).slice(0, 3)
-    return [{ id, replies: replies.reduce((sum, row) => sum + (row.count ?? 1), 0), lastSequence: last.sequence, lastAt: last.createdAt, authors, people }]
+    const ask = askOf(group, id, thread)
+    return [{ id, replies: replies.reduce((sum, row) => sum + (row.count ?? 1), 0), lastSequence: last.sequence, lastAt: last.createdAt, authors, people,
+      ...(ask ? { ask } : {}) }]
   })
 }

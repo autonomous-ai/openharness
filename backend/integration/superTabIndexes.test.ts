@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from '../src/superTabs/pageReads.js'
+import { inConversationOrder, noteBackfilled, pageDeliveries, pageReactions, pageThreads, refreshThreads } from '../src/superTabs/pageReads.js'
 import { costRows } from '../src/superTabs/costs/read.js'
 import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
@@ -167,6 +167,30 @@ describe('message page reads', () => {
     // A few rows per author and kind of row, however long the thread: the database counts, not the server.
     expect(threads.length).toBeLessThan(30)
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 505, returned: 1 })
+  })
+
+  it('says where an ask stands from the real rows, summed up in the database and from a stored summary alike', async () => {
+    const s = richSwarm()
+    const chat = { ...s.state.conversations.find(c => c.id === s.web)!, leadId: 'pm' }
+    const person = { kind: 'person' as const, id: owner.userId, name: owner.userId, membershipGeneration: 'gen' }
+    const agent = (id: string) => ({ kind: 'agent' as const, id, name: id, membershipGeneration: 'gen' })
+    const row = (id: string, thread: string, sequence: number, author: object, source?: object) => ({ id, tabId: 'ASK', conversationId: 'chat', thread, sequence,
+      author, text: 'x', recipientIds: [], mentions: [], createdAt: new Date(T0 + sequence * 1000), ...source ? { source } : {} })
+    await db.superTabMessage.createMany({ data: [
+      row('asked', 'asked', 1, person, { kind: 'buddy-proposal' }), row('asked-1', 'asked', 2, agent('buddy')),
+      row('declined', 'declined', 3, person, { kind: 'buddy-proposal' }), row('declined-1', 'declined', 4, agent('buddy')), row('declined-2', 'declined', 5, agent('pm')),
+      row('own', 'own', 6, person), row('own-1', 'own', 7, agent('pm'), { kind: 'system', ask: 'on-it' }),
+      row('merged', 'merged', 8, person), row('merged-1', 'merged', 9, agent('pm'), { kind: 'system', ask: 'on-it' }),
+      row('merged-2', 'merged', 10, agent('pm'), { kind: 'system', ask: 'shipped' }), row('merged-3', 'merged', 11, person),
+      row('plain', 'plain', 12, person), row('plain-1', 'plain', 13, agent('pm')),
+    ] })
+    const roots = ['asked', 'declined', 'own', 'merged', 'plain']
+    const asks = async () => Object.fromEntries(threadSummaries(s.state, chat, await pageThreads(db, 'ASK', 'chat', roots)).map(t => [t.id, t.ask]))
+    const expected = { asked: 'proposal', declined: undefined, own: 'on-it', merged: 'shipped', plain: undefined }
+    expect(await asks()).toEqual(expected)
+    await refreshThreads(db, 'ASK', 'chat', roots)
+    noteBackfilled('ASK')
+    expect(await asks()).toEqual(expected)
   })
 
   it('reads a page of reactions through the tabId+messageId index, examining only the reactions it returns', async () => {
