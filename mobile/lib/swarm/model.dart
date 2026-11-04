@@ -1163,7 +1163,8 @@ class SuperTabAttachment {
       unlinked = row['unlinked'] == true,
       expiresAt = row['expiresAt'] is num
           ? (row['expiresAt'] as num).toInt()
-          : null;
+          : null,
+      voice = SuperTabVoice.read(row['voice']);
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -1183,6 +1184,10 @@ class SuperTabAttachment {
   /// When [link] stops opening, in epoch milliseconds.
   final int? expiresAt;
 
+  /// What makes this file a voice message, drawn as one
+  /// (swarm_voice_bubble.dart); null for any other file.
+  final SuperTabVoice? voice;
+
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.
   bool get isImage => const {
@@ -1191,6 +1196,48 @@ class SuperTabAttachment {
     'image/gif',
     'image/webp',
   }.contains(mime);
+}
+
+/// A voice message's clip, as the backend read it before it was sent
+/// (backend superTabs/voiceMessages.ts): its words are the message's text.
+class SuperTabVoice {
+  const SuperTabVoice({
+    required this.length,
+    required this.waveform,
+    required this.transcribed,
+    this.overLimit = false,
+  });
+
+  /// The tallest bar of [waveform].
+  static const barMax = 31;
+
+  /// A voice that does not read as one is none: the file still shows, as a
+  /// file.
+  static SuperTabVoice? read(Object? row) {
+    if (row is! Map) return null;
+    final ms = row['durationMs'], bars = row['waveform'];
+    final transcribed = row['transcribed'];
+    if (ms is! num || bars is! List || transcribed is! bool) return null;
+    return SuperTabVoice(
+      length: Duration(milliseconds: ms.toInt()),
+      waveform: List.unmodifiable([
+        for (final bar in bars) bar is num ? bar.toInt().clamp(0, barMax) : 0,
+      ]),
+      transcribed: transcribed,
+      overLimit: row['failure'] == 'limit',
+    );
+  }
+
+  final Duration length;
+
+  /// How loud each slice of the clip is, 0 to [barMax].
+  final List<int> waveform;
+
+  /// Whether its words were heard; without them the message's text is empty.
+  final bool transcribed;
+
+  /// It has no words because its sender's daily voice limit was used.
+  final bool overLimit;
 }
 
 /// A message's files. A row that does not read is left out, so one bad row

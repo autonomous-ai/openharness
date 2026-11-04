@@ -89,6 +89,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -4454,7 +4455,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 Expanded(
                   child: SuperTabReplyPreview(
                     author: 'Replying to ${_authorName(reply)}',
-                    text: reply.text,
+                    text: superTabQuoteText(reply),
                   ),
                 ),
                 fingerTarget(

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/phone/resume_agent.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_pager_fixture.dart';
@@ -216,5 +217,118 @@ void main() {
 
     final c = app.stateOf('m')!.agents.where((a) => a.id == 'c').single;
     expect(c.isStopped, isTrue);
+  });
+
+  // What the Swarm's Open terminal reads and asks for (`PhoneShellScope`'s
+  // agentStopped and onResumeAgent), on the person's own machines alone.
+  group("the Swarm's resume", () {
+    test('reads stopped work, and whether a resume can bring it back', () {
+      final app = stoppedApp(_ResumeConn());
+      addTearDown(app.dispose);
+
+      expect(phoneAgentStopped(app, 'm', 'b'), isTrue);
+      expect(phoneAgentStopped(app, 'm', 'a'), isNull, reason: 'running');
+      expect(phoneAgentStopped(app, 'm', 'gone'), isNull);
+      expect(phoneAgentStopped(app, 'other', 'b'), isNull);
+
+      final machine = app.stateOf('m')!;
+      machine.agents = [
+        for (final agent in machine.agents)
+          agent.id == 'b'
+              ? Agent.fromJson(
+                  {...agentJson(stopped: true)}..remove('sessionId'),
+                )
+              : agent,
+      ];
+      expect(
+        phoneAgentStopped(app, 'm', 'b'),
+        isFalse,
+        reason: 'no saved conversation to bring back',
+      );
+    });
+
+    test('never on a machine another account shares', () async {
+      final conn = _ResumeConn()..answer = (_, payload) => created(payload);
+      final app = stoppedApp(conn);
+      addTearDown(app.dispose);
+      const shared = Machine(
+        machineId: 's',
+        authMode: MachineAuthMode.remote,
+        name: 'Ken’s Mac',
+        shared: true,
+      );
+      app.machineStates['s'] = MachineState(shared)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agents = [Agent.fromJson(agentJson(stopped: true))];
+
+      expect(phoneAgentStopped(app, 's', 'b'), isNull);
+      expect(
+        await phoneResumeAgent(app, 's', 'b'),
+        'Only the person whose machine runs this agent can resume it.',
+      );
+      expect(conn.requests, isEmpty);
+    });
+
+    test(
+      'resumes stopped work, then answers once its terminal is back',
+      () async {
+        final conn = _ResumeConn()..answer = (_, payload) => created(payload);
+        final app = stoppedApp(conn);
+        addTearDown(app.dispose);
+
+        expect(await phoneResumeAgent(app, 'm', 'b'), isNull);
+        expect(conn.requests.single.$1, 'agent_resume');
+        expect(
+          app.stateOf('m')!.agents.firstWhere((a) => a.id == 'b').isStopped,
+          isFalse,
+        );
+      },
+    );
+
+    test('work no longer stopped is opened as it is, asking the machine '
+        'nothing', () async {
+      final conn = _ResumeConn();
+      final app = stoppedApp(conn);
+      addTearDown(app.dispose);
+
+      expect(await phoneResumeAgent(app, 'm', 'a'), isNull);
+      expect(conn.requests, isEmpty);
+    });
+
+    test('a harness its machine no longer lists says so', () async {
+      final conn = _ResumeConn();
+      final app = stoppedApp(conn);
+      addTearDown(app.dispose);
+
+      expect(
+        await phoneResumeAgent(app, 'm', 'gone'),
+        'This harness is no longer on Test host.',
+      );
+      expect(
+        await phoneResumeAgent(app, 'nowhere', 'b'),
+        'This harness is no longer on this machine.',
+      );
+      expect(conn.requests, isEmpty);
+    });
+
+    test(
+      "a resume the machine refuses comes back in the machine's words",
+      () async {
+        final conn = _ResumeConn()
+          ..answer = (_, payload) => {
+            'creationId': payload['creationId'],
+            'state': 'failed',
+            'failure': {
+              'code': 'ENGINE_LAUNCH_REFUSED',
+              'detail': 'Use another engine.',
+            },
+          };
+        final app = stoppedApp(conn);
+        addTearDown(app.dispose);
+
+        expect(await phoneResumeAgent(app, 'm', 'b'), 'Use another engine.');
+      },
+    );
   });
 }

@@ -7,6 +7,9 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
+import { wavDurationMs } from '../lib/wav.js'
+import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import { githubRepository } from '../github/repository.js'
@@ -357,6 +360,19 @@ export interface SuperTabStoreHooks {
   /** A commit changed a Swarm these people are in, or were in before it: each one's apps read it again
    *  (lib/swarmClientPushes.ts). Called after the write commits; it must not throw. */
   swarmChanged?: (change: SwarmChanged) => void
+  /** Transcribes voice messages (readVoice), on the transcription service and the daily voice quota the voice route uses. Left
+   *  out, voice messages are refused. */
+  voice?: VoiceTranscription
+}
+
+/** What readVoice needs of the voice service: the daily quota of the person who sends, keyed by an id that makes a retry no new
+ *  charge, and the words of a WAV. */
+export interface VoiceTranscription {
+  /** Charges [durationMs] to [user]'s day; 'limit' when that would pass their plan's daily voice seconds. */
+  reserve(user: AuthUser, id: string, durationMs: number): Promise<'ok' | 'limit'>
+  transcribe(wav: Buffer, lang: string): Promise<string>
+  commit(id: string): Promise<void>
+  release(id: string): Promise<void>
 }
 
 /** A report call's host checks that need no Swarm (SuperTabStore.machineHost): the caller's account row for the machine. */
@@ -1620,7 +1636,7 @@ export class SuperTabStore {
       // stays with that message, and a proposal may carry one its Buddy's owner sent in their chat.
       let claimed: string[] = [], proposed: string[] = []
       if (command.type === 'message.send' && command.attachmentIds?.length) {
-        context.attachments = await this.sendable(tx, tabId, actor, command)
+        ({ attachments: context.attachments, voiceWords: context.voiceWords } = await this.sendable(tx, tabId, actor, command))
         claimed = context.attachments.map(a => a.id)
       }
       if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
@@ -2129,6 +2145,107 @@ export class SuperTabStore {
     return now && !now.purpose && !now.usedBy ? sendable(now.mime) : unavailable()
   }
 
+  /**
+   * A voice message's file, read once before it is sent (voiceMessages.ts): its length and waveform from its bytes, and its words
+   * from the transcription service, charged to the sender's daily voice quota. The words stay on the row for message.send, which
+   * makes them the message's text; they are never answered here or logged. Only the person who uploaded it, while they may post in
+   * its conversation, and only before it is sent. A second call answers what the first stored; one made while the first
+   * transcribes is told to wait, and a claim left for VOICE_CLAIM_MS is taken over. No words is final for the file: the message
+   * still sends, and says so.
+   */
+  async readVoice(user: AuthUser, tabId: string, attachmentId: string, lang: string, asAgentId?: string): Promise<{ voice: VoiceFacts }> {
+    const unavailable = () => fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
+    // Who may reach the Swarm first, as on every person route: one they cannot reach is answered as one that does not exist.
+    const row = await transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId, {})
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      if (actor.kind === 'agent') fail('VOICE_PEOPLE_ONLY', 'Only people send voice messages.', 403)
+      const found = await tx.superTabAttachment.findFirst({ where: { tabId, id: attachmentId } })
+      if (!found || found.actorKey !== actorKey(actor) || found.usedBy || found.purpose) unavailable()
+      await this.poster(tx, user, tabId, found!.conversationId)
+      return found!
+    })
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Voice messages cannot be sent to this server.', 503)
+    const voice = this.hooks.voice ?? fail('VOICE_UNAVAILABLE', 'Voice messages are not available on this server.', 503)
+    const stored = voiceFacts(row.voice)
+    if (stored) return { voice: stored }
+    if (!VOICE_TYPES.has(row.mime)) fail('UNSUPPORTED_AUDIO', 'A voice message is a WAV recording.', 415)
+    if (row.size > MAX_VOICE_BYTES) fail('VOICE_TOO_LONG', 'A voice message can be up to 10 minutes long.', 413)
+    const since = new Date(this.now())
+    // Read and claimed in one transaction: a call that stores its words writes the same row, so one of the two is retried after
+    // the other and sees what it did.
+    const claimed = await transaction(this.db, async tx => {
+      const now = await tx.superTabAttachment.findFirst({ where: { id: row.id, tabId }, select: { voice: true, voiceSince: true, usedBy: true } })
+      if (!now || now.usedBy) unavailable()
+      const done = voiceFacts(now!.voice)
+      if (done) return done
+      if (now!.voiceSince && now!.voiceSince.getTime() > since.getTime() - VOICE_CLAIM_MS) return null
+      await tx.superTabAttachment.update({ where: { id: row.id }, data: { voiceSince: since } })
+      return 'claimed' as const
+    })
+    if (claimed !== 'claimed') return claimed ? { voice: claimed } : fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
+    const unclaim = () => this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, voiceSince: since }, data: { voiceSince: { unset: true } } })
+    if (!reserveVoice(row.size)) {
+      await unclaim()
+      fail('VOICE_BUSY', 'Voice is busy right now. Try again in a moment.', 503)
+    }
+    const started = this.now()
+    let facts: StoredVoice
+    try {
+      let wav: Buffer
+      try { wav = await direct.head(row.objectKey, row.size) } catch (error) {
+        logger.error('super-tab voice read failed', { tabId, code: errorCode(error) })
+        await unclaim()
+        fail('ATTACHMENTS_UNAVAILABLE', 'Could not read the voice message just now. Try again.', 503)
+      }
+      const durationMs = wavDurationMs(wav!)
+      if (durationMs === null || durationMs > MAX_VOICE_MS) {
+        await unclaim()
+        if (durationMs === null) fail('UNSUPPORTED_AUDIO', 'A voice message is a WAV recording.', 415)
+        fail('VOICE_TOO_LONG', 'A voice message can be up to 10 minutes long.', 413)
+      }
+      facts = { durationMs: durationMs!, waveform: voiceWaveform(wav!), ...await this.transcribed(voice, user, `voice:${row.id}`, wav!, durationMs!, lang) }
+    } finally { releaseVoice(row.size) }
+    const kept = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, voiceSince: since },
+      data: { voice: facts as unknown as Prisma.InputJsonValue, voiceSince: { unset: true } } })
+    // The words are never logged: whether they came, how long the clip was and how long it took tell all that is needed.
+    logger.info('super-tab voice', { tabId, outcome: facts.failure ?? 'transcribed', durationMs: facts.durationMs, bytes: row.size,
+      ms: this.now() - started, chars: facts.transcript?.length ?? 0 })
+    if (kept.count !== 1) return this.voiceOf(tabId, row.id)
+    return { voice: voiceFacts(facts)! }
+  }
+
+  /** The words of [wav], charged to [user]'s day under [id]: none, and why, past their limit or when the service fails. */
+  private async transcribed(voice: VoiceTranscription, user: AuthUser, id: string, wav: Buffer, durationMs: number, lang: string):
+    Promise<Pick<StoredVoice, 'transcribed' | 'failure' | 'transcript'>> {
+    const none = (failure: 'limit' | 'failed') => ({ transcribed: false, failure, transcript: null })
+    let quota: 'ok' | 'limit'
+    try { quota = await voice.reserve(user, id, durationMs) } catch (error) {
+      logger.error('super-tab voice quota unavailable', { error: error instanceof Error ? error.name : 'unknown' })
+      return none('failed')
+    }
+    if (quota === 'limit') return none('limit')
+    try {
+      const transcript = await voice.transcribe(wav, lang)
+      // Left pending, the cleanup worker hands these seconds back: logged, never silent.
+      await voice.commit(id).catch(() => logger.error('super-tab voice quota commit failed', { id }))
+      return { transcribed: true, transcript }
+    } catch (error) {
+      await voice.release(id).catch(() => { /* the cleanup worker releases a stale pending one */ })
+      logger.error('super-tab voice transcription failed', { error: error instanceof Error ? error.message.slice(0, 120) : 'unknown' })
+      return none('failed')
+    }
+  }
+
+  /** What another call stored for this file, or that it is still transcribing it. */
+  private async voiceOf(tabId: string, id: string): Promise<{ voice: VoiceFacts }> {
+    const now = await this.db.superTabAttachment.findFirst({ where: { id, tabId }, select: { voice: true } })
+    const facts = voiceFacts(now?.voice)
+    return facts ? { voice: facts } : fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
+  }
+
   /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
    *  member who may write uploads one; the command that sets it decides whose it becomes. */
   async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
@@ -2193,19 +2310,23 @@ export class SuperTabStore {
     return { state, actor }
   }
 
-  private async sendable(tx: Transaction, tabId: string, actor: Actor, command: SendCommand): Promise<Attachment[]> {
+  private async sendable(tx: Transaction, tabId: string, actor: Actor, command: SendCommand): Promise<{ attachments: Attachment[]; voiceWords: Record<string, string> }> {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
     const ids = [...new Set(command.attachmentIds)]
     const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
-    return ids.map(id => {
+    const voiceWords: Record<string, string> = {}
+    return { voiceWords, attachments: ids.map(id => {
       const row = rows.find(r => r.id === id)
       if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
       if (row.usedBy === EXPIRED_UPLOAD) fail('ATTACHMENT_EXPIRED', 'This file was not sent within a day and was removed. Attach it again.', 410)
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
-      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
-    })
+      const voice = voiceFacts(row.voice)
+      if (!voice && row.voiceSince) fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
+      if (voice) voiceWords[row.id] = voiceTranscript(row.voice)
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {} }
+    }) }
   }
 
   /**
@@ -3752,7 +3873,9 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
-      const message = row && isBuddy(target) ? rowForBuddy(row) : row
+      const shown = row && isBuddy(target) ? rowForBuddy(row) : row
+      // A voice message reaches an agent as its words, marked as one (voiceMessages.ts); people hear the clip.
+      const message = shown && { ...shown, text: agentText(shown.text, shown.attachments) }
       // Only a claim's answer is typed: an acknowledgement reads nothing for it.
       const other = row && action.type === 'claim' ? await this.otherAccounts(tx, state, target, row) : { message: false, quoted: [] }
       return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {},

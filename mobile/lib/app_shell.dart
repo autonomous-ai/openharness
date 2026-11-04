@@ -11,13 +11,18 @@ import 'state/app_state.dart';
 import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
+import 'shared/theme/appearance_builder.dart';
 import 'shared/theme/appearance_prefs_store.dart';
+import 'shared/theme/color_palette.dart';
+import 'shared/theme/system_bars.dart';
 import 'core/machine_cache.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'logging/launch_frames.dart';
 import 'logging/startup_trace.dart';
+
+export 'shared/theme/system_bars.dart' show systemBarsFor;
 
 /// A screen the app puts up for one of its states — signed in, signed out, starting.
 typedef AuthenticatedScreenBuilder = Widget Function(AppNotifier app);
@@ -113,14 +118,15 @@ class HarnessApp extends StatelessWidget {
     // `buildAppTheme` bakes `AppControl.*Scaled` into plain numbers at the
     // moment it runs, so a UI size that changed without rebuilding this would
     // repaint nothing at all.
-    return ValueListenableBuilder<AppearancePrefs>(
-      valueListenable: appearancePrefsStore,
-      builder: (context, prefs, _) => _app(prefs),
+    //
+    // The palette is on `AppTheme` by the time `_app` runs: the one Theme
+    // resolves to for this phone's light or dark, and a terminal's beside it.
+    return AppearanceBuilder(
+      builder: (context, prefs, palette) => _app(prefs, palette),
     );
   }
 
-  Widget _app(AppearancePrefs prefs) {
-    grid.AppTheme.palette.value = prefs.palette;
+  Widget _app(AppearancePrefs prefs, HarnessPalette palette) {
     // ⚠️ ORDER MATTERS, and it is why this is a statement rather than something
     // tucked into the tree below: `buildAppTheme` reads `AppFont.sans` and
     // `AppControl.*Scaled`, so the settings have to be on `AppFont` BEFORE the
@@ -153,9 +159,10 @@ class HarnessApp extends StatelessWidget {
       ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
-      // One theme, no `darkTheme`/`themeMode` to resolve between: the chosen
-      // palette says whether it is light or dark.
-      theme: grid.buildAppTheme(brightness: prefs.palette.brightness),
+      // One theme, no `darkTheme`/`themeMode` to resolve between: the palette
+      // says whether it is light or dark, and Settings' Theme (System, Dark or
+      // Light) has already chosen which palette — see [AppearanceBuilder].
+      theme: grid.buildAppTheme(brightness: palette.brightness),
       // The UI size reaches every `Text` as a text SCALE rather than as hundreds
       // of edited call sites. `withClampedTextScaling` with both bounds equal IS
       // the way to force a factor — MediaQuery has no "set the scale"
@@ -219,23 +226,6 @@ class _GridTokenScope extends StatelessWidget {
       child: grid.BrightnessScope(child: child),
     );
   }
-}
-
-/// The system bars' style for an app of [brightness]: icons that contrast with it, over the
-/// transparent bars `main.dart` draws edge to edge under. The colours are restated because an
-/// [AnnotatedRegion]'s style replaces the one set at launch.
-SystemUiOverlayStyle systemBarsFor(Brightness brightness) {
-  // The icons are the opposite of the app; iOS's `statusBarBrightness` names the GROUND instead.
-  final icons = brightness == Brightness.dark
-      ? Brightness.light
-      : Brightness.dark;
-  return SystemUiOverlayStyle(
-    statusBarColor: const Color(0x00000000),
-    systemNavigationBarColor: const Color(0x00000000),
-    statusBarIconBrightness: icons,
-    systemNavigationBarIconBrightness: icons,
-    statusBarBrightness: brightness,
-  );
 }
 
 /// Which screen the app's state calls for.

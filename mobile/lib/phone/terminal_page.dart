@@ -29,6 +29,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/image_transcode.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 import 'package:harness_mobile/terminal/elicitation_press.dart';
@@ -2522,7 +2523,8 @@ class _TerminalPageState extends State<TerminalPage>
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
+      // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
+      backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
       // ⚠️ No fab. New agent is the `+` in the header — see the note there.
       // A Scaffold fab floats over the body, and the body here is the
       // terminal: it covered the newest line of output, which on a page
@@ -3828,8 +3830,11 @@ class _AgentGone extends StatelessWidget {
 
   final VoidCallback onPickAnother;
 
+  // Its tokens read on the terminal's palette, which stays dark in a light app ([TerminalLook]).
   @override
-  Widget build(BuildContext context) => Center(
+  Widget build(BuildContext context) => TerminalLook.read(context, _body);
+
+  Widget _body() => Center(
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
@@ -4012,7 +4017,11 @@ class _ReconnectingState extends State<_Reconnecting> {
                     // Still with animations off: three quarters of a ring, so it reads as waiting.
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: AppPalette.accent,
+                      // The terminal's accent, which stays dark in a light app ([TerminalLook]).
+                      color: TerminalLook.read(
+                        context,
+                        () => AppPalette.accent,
+                      ),
                       value: still ? 0.75 : null,
                     ),
                   ),
@@ -4198,9 +4207,10 @@ class _AttachingState extends State<_Attaching> with TickerProviderStateMixin {
     // same band. `height` is xterm's line-height multiplier.
     final lineHeight = fontSize * style.height;
     // Resolved exactly as [TerminalPanel] resolves it for the view underneath,
-    // so the skeleton's ground and the terminal's are the same colour.
+    // so the skeleton's ground and the terminal's are the same colour — on the
+    // terminal's palette, as the panel's is ([TerminalLook]).
     final ground = terminalScreenThemeFor(
-      AppTheme.palette.value,
+      TerminalLook.paletteOf(context),
       terminalThemeStore.value,
     ).background;
     // ⚠️ **Mixed against the terminal's OWN ground, not taken from

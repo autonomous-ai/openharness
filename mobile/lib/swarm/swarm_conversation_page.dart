@@ -9,6 +9,8 @@ import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/phone/voice_language_store.dart';
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -58,6 +60,9 @@ import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
 import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
+import 'swarm_voice_bubble.dart';
+import 'swarm_voice_send.dart' show SwarmVoicePosted;
+import 'voice_length.dart';
 import 'team_glance.dart';
 
 final _conversationReferencePattern = RegExp(r'(?<![\w/])#([1-9][0-9]*)(?!\w)');
@@ -338,13 +343,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
-        _voice = SwarmVoice(
-          create: create,
-          dictation: SwarmScope.dictationOf(context),
-          draft: () => _conversation?.draft ?? '',
-          write: (text) => _conversation?.draft = text,
-          post: _voiceSend,
-        );
+        _voice = SwarmVoice(recorder: create, post: _voiceSend);
       }
     }
     // A covered chat hears nothing: its take goes with it.
@@ -837,11 +836,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     });
   }
 
-  /// The voice row's Send, once its take has ended into the draft: the
-  /// composer's own Send, in the chat shown now.
-  void _voiceSend() {
+  /// The voice row's Send: the take as a voice message, in the chat shown
+  /// now, its words heard in the mic's language.
+  Future<SwarmVoicePosted> _voiceSend(VoiceTake take) async {
     final c = _conversation;
-    if (mounted && c != null && c.canSend) _send(c);
+    if (!mounted || c == null) return (sent: false, notice: null);
+    _target = null;
+    return c.sendVoice(take, voiceLanguageStore.value);
   }
 
   /// Sends the draft, back at the foot of the chat where the post shows.
@@ -1030,6 +1031,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             (picture: null, status: null),
         text: post.text,
         files: post.files,
+        voice: post.voice,
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
         state: post.state,
         quote: null,
@@ -2093,7 +2095,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   : SwarmQuote(
                       key: ValueKey('swarm-quote-${m.id}'),
                       author: quoted,
-                      text: reply.text,
+                      text: swarmQuoteText(reply),
                       onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
                     ),
               actions: acting,
@@ -2226,13 +2228,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 (picture: null, status: null),
             text: post.text,
             files: post.files,
+            voice: post.voice,
             mentions: view.mentions,
             state: post.state,
             quote: post.replyTo == null
                 ? null
                 : reply == null
                 ? _readQuote(session, c, c.id, post.replyTo!)
-                : SwarmQuote(author: _quoted(c, reply), text: reply.text),
+                : SwarmQuote(
+                    author: _quoted(c, reply),
+                    text: swarmQuoteText(reply),
+                  ),
             onSendAgain: () => unawaited(_retry(c, post)),
             onDelete: () => c.deletePost(post),
           );
@@ -2333,7 +2339,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final query = c.mentionQuery;
     final replying = c.replyingTo;
     final voice = _voice;
-    final talking = voice?.face != null;
+    final talking = voice?.active ?? false;
     // A post on its way never holds the next back; one not confirmed is sent
     // again from where it shows. Files alone are a post too.
     final canSend = c.canSend;
@@ -2392,7 +2398,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                             ),
                             TextSpan(
                               text:
-                                  ': ${replying.text.replaceAll(RegExp(r'\s+'), ' ')}',
+                                  ': ${swarmQuoteText(replying).replaceAll(RegExp(r'\s+'), ' ')}',
                             ),
                           ],
                         ),
@@ -2448,21 +2454,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 notice,
                 key: const ValueKey('swarm-voice-note'),
                 style: AppType.caption(color: tty.yellow),
-              ),
-            ),
-          // Quiet: nothing went wrong, the words stay in the box.
-          if (_voice?.stopped case final stopped?)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.xs,
-                0,
-                AppSpace.xs,
-                AppSpace.s,
-              ),
-              child: Text(
-                stopped,
-                key: const ValueKey('swarm-voice-stopped'),
-                style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
           ValueListenableBuilder(
@@ -3253,6 +3244,7 @@ class _Pending extends StatelessWidget {
     required this.name,
     required this.text,
     required this.files,
+    this.voice,
     required this.mentions,
     required this.state,
     required this.quote,
@@ -3266,6 +3258,10 @@ class _Pending extends StatelessWidget {
   /// The files going with it, already uploaded: shown as chips that open
   /// nothing until the post is read back with their links.
   final List<SwarmOutgoingFile> files;
+
+  /// What makes it a voice message, its one file the clip: drawn as its
+  /// bubble, which plays once the post is read back.
+  final SuperTabVoice? voice;
 
   /// The person's own face.
   final SwarmLook look;
@@ -3311,17 +3307,30 @@ class _Pending extends StatelessWidget {
                   ),
                 ),
               ),
-          for (final file in files)
-            SwarmFileChip(
+          if (voice case final voice? when files.length == 1)
+            SwarmVoiceBubble(
               file: SuperTabAttachment.fromJson({
                 'id': '',
-                'name': file.name,
-                'mime': swarmMimeForName(file.name),
-                'size': file.size,
+                'name': files.single.name,
+                'mime': swarmMimeForName(files.single.name),
+                'size': files.single.size,
                 'url': '',
               }),
-              link: null,
-            ),
+              voice: voice,
+              words: '',
+            )
+          else
+            for (final file in files)
+              SwarmFileChip(
+                file: SuperTabAttachment.fromJson({
+                  'id': '',
+                  'name': file.name,
+                  'mime': swarmMimeForName(file.name),
+                  'size': file.size,
+                  'url': '',
+                }),
+                link: null,
+              ),
           if (state != SwarmPostState.confirmed)
             Padding(
               padding: const EdgeInsets.only(top: AppSpace.xs),
