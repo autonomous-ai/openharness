@@ -8,7 +8,7 @@ import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage }
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
 import { wavDurationMs } from '../lib/wav.js'
-import { MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
+import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import { githubRepository } from '../github/repository.js'
@@ -3846,7 +3846,9 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
-      const message = row && isBuddy(target) ? rowForBuddy(row) : row
+      const shown = row && isBuddy(target) ? rowForBuddy(row) : row
+      // A voice message reaches an agent as its words, marked as one (voiceMessages.ts); people hear the clip.
+      const message = shown && { ...shown, text: agentText(shown.text, shown.attachments) }
       // Only a claim's answer is typed: an acknowledgement reads nothing for it.
       const other = row && action.type === 'claim' ? await this.otherAccounts(tx, state, target, row) : { message: false, quoted: [] }
       return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {},

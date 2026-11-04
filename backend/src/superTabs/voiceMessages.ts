@@ -64,3 +64,20 @@ export function voiceFacts(stored: unknown): VoiceFacts | null {
 /** The words a row keeps, or '' when it has none. */
 export const voiceTranscript = (stored: unknown): string =>
   stored && typeof stored === 'object' && typeof (stored as StoredVoice).transcript === 'string' ? (stored as StoredVoice).transcript! : ''
+
+/** The length of the voice message among [attachments] (a message's stored files), or null when it holds none. */
+export function voiceMsOf(attachments: unknown): number | null {
+  if (!Array.isArray(attachments)) return null
+  for (const file of attachments) {
+    const facts = file && typeof file === 'object' ? voiceFacts((file as { voice?: unknown }).voice) : null
+    if (facts) return facts.durationMs
+  }
+  return null
+}
+
+/** What an agent is handed for a message: a voice message's words, marked as one with its length; any other message's text. */
+export function agentText(text: string, attachments: unknown): string {
+  const ms = voiceMsOf(attachments)
+  if (ms === null) return text
+  return text ? `${voiceLabel(ms)}: ${text}` : `${voiceLabel(ms)}, not transcribed.`
+}
