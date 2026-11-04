@@ -861,8 +861,9 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
-// Project instructions, phase 4: the route ranks by facts and notes the rest; no build, review or grid rule is the help's.
-it('tells every agent what the route leaves out, how it ranks the rest, and which kinds of work may go to the grid', async () => {
+// Project instructions, phase 4: the route shows facts and notes the rest; no build, review or grid rule is the help's. Task #2901:
+// it ranks nothing and names no pick, so the help sends the choice to the Routing instructions and asks for the rule followed.
+it('tells every agent what the route leaves out, that it ranks the rest by nothing, and which kinds of work may go to the grid', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
   expect(help.route).toContain('The route leaves out what cannot run, and says why')
   // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
@@ -873,8 +874,11 @@ it('tells every agent what the route leaves out, how it ranks the rest, and whic
   for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
   expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
   expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
-  expect(help.route).toContain('It ranks the rest by strength, then price and quota fit, then an idle agent before a new one')
-  expect(help.route).toContain('Your project\'s instructions say how to choose')
+  expect(help.route).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
+  expect(help.route).toContain('weekly % left and reset time')
+  expect(help.route).toContain('choose by your project\'s Routing instructions')
+  expect(help.route).toContain('routeDecisionId and overrideReason, the Routing rule that chose it')
+  expect(help.route).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on/)
   expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)
   expect(help.commands.map(c => c.type)).not.toContain('rule.set')
 })

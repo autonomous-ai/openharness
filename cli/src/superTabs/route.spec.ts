@@ -715,9 +715,9 @@ describe('local models on the Swarm\'s grid', () => {
   })
 })
 
-// Project instructions, phase 4: the route leaves out only what cannot run, and ranks the rest by strength, price, quota fit
-// and idle members. Rules, floors and kinds are gone; what they said is a note on the candidate.
-describe('ranking by facts', () => {
+// Project instructions, phase 4: the route leaves out only what cannot run, and shows the rest with their facts; since task
+// #2901 it ranks none of them. Rules, floors and kinds are gone; what they said is a note on the candidate.
+describe('facts, not ranking', () => {
   const NOTE = 'Not offered by default: no Engineer runs on Claude Sonnet or Claude Haiku (Ken and Dee, 2026-10-30).'
   const catalog: Catalog = { models: [
     { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
