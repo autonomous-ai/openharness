@@ -463,9 +463,13 @@ class SwarmBuddyMenuButton extends StatelessWidget {
     required this.chatId,
     this.swarmId,
     this.swarmSwitch,
+    this.onFind,
   });
 
   final SwarmBuddyActions actions;
+
+  /// Find in chat, where the page holding the chat offers it (task #2826).
+  final VoidCallback? onFind;
 
   /// The Buddy chat it is on: what Rename names the Buddy of, by its id
   /// rather than its project. Null while that chat is not known yet.
@@ -603,6 +607,12 @@ class SwarmBuddyMenuButton extends StatelessWidget {
                   onTap: () => unawaited(_rename(context, chatId)),
                 ),
               ],
+              if (onFind case final find?)
+                PhoneSheetAction(
+                  icon: LucideIcons.search300,
+                  label: 'Find in chat',
+                  onTap: find,
+                ),
               if (_oldChats(reader).isNotEmpty)
                 PhoneSheetAction(
                   icon: LucideIcons.history,

@@ -104,8 +104,7 @@ void main() {
       };
       server.messages.last['source'] = {
         'kind': 'native',
-        'phase': 'prompt',
-        'operator': {'name': 'peer@example.com'},
+        'phase': 'answer',
         'truncated': true,
       };
       final controller = server.controller();
@@ -125,10 +124,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Builder'), findsOneWidget);
-      expect(
-        find.text('Terminal input · session opened by peer@example.com'),
-        findsOneWidget,
-      );
+      expect(find.text('Terminal answer'), findsOneWidget);
       expect(
         find.text('Excerpt · open the terminal for the full response'),
         findsOneWidget,

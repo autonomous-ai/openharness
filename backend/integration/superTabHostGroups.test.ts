@@ -257,3 +257,56 @@ describe('a host check', () => {
     expect(entries.filter(e => e.planSummary?.includes('hostDigest'))).toEqual([])
   })
 })
+
+describe('the host signature\'s member, agent and start stamps through the patched cache (#2839)', () => {
+  /** A start that failed before it had a harness: finished, and kept live for 7 days as a Swarm's history of starts is. */
+  const startData = (key: string, error: string | null = 'failed before a harness') => ({ id: key, creationId: key, actorKey: 'test', contributorId: 'test',
+    membershipGeneration: 'g', machineOwnerId: 'o', hostGrant: null, harnessId: null, dispatched: false, error, request: { conversationId: 'lead',
+      machineId: 'm-test', engine: 'codex', name: key, cwd: '/repo', worktree: false,
+      requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })
+  /** STARTS starts, last changed ten minutes ago: more than one batch's 101, past the cache's overlap. */
+  const STARTS = 150
+  async function withStarts() {
+    const { tabId, web } = await scene()
+    await swarmTransaction(db, async tx => {
+      for (let i = 0; i < STARTS; i++) await guardedWrite(tx, tabId, { op: 'insert', kind: 'start', key: `start-${i}`, ordinal: 40_000 + i, data: startData(`start-${i}`) }, Date.now())
+    })
+    await db.swarmStart.updateMany({ where: { tabId }, data: { changedAt: new Date(Date.now() - 600_000) } })
+    return { tabId, web }
+  }
+  const start = (all: parts.SwarmParts, key: string) => all.starts.find(s => s.key === key && !s.deleted)!
+
+  it('a change reads no live start whose stamp did not move, and the signature stays the pipeline\'s', { timeout: 60_000 }, async () => {
+    const { tabId, web } = await withStarts()
+    const cache = new SwarmCache(stamps, { delta: readDelta(db) })
+    expect(await cachedInputs(cache, tabId)).toBe(await pipeline(tabId))
+    await write(tabId, update(web, g => ({ ...g, archived: true })))
+    const expected = await pipeline(tabId)
+    let got: string | null = null
+    const patched = await profiled(db, async () => { got = await cachedInputs(cache, tabId) })
+    expect(got).toBe(expected)
+    // Starts read only by what changed since the last check, never every live one.
+    expect(reads(patched, 'SwarmStart', ['tabId'], ['changedAt'])).toEqual([])
+  })
+
+  it('gives the pipeline\'s string after start, agent and member writes, and a touch', { timeout: 120_000 }, async () => {
+    const { tabId } = await withStarts()
+    const cache = new SwarmCache(stamps, { delta: readDelta(db) })
+    const steps: Array<[string, (all: parts.SwarmParts) => parts.PartWrite | null]> = [
+      ['a start added', () => ({ op: 'insert', kind: 'start', key: 'late-start', ordinal: 50_000, data: startData('late-start', null) })],
+      ['a start finished', all => ({ op: 'update', kind: 'start', key: 'late-start', seen: start(all, 'late-start').version, data: startData('late-start', 'failed') })],
+      ['a start removed', all => ({ op: 'remove', kind: 'start', key: 'start-3', seen: start(all, 'start-3').version, data: start(all, 'start-3').data })],
+      ['a start added again under its key', () => ({ op: 'insert', kind: 'start', key: 'start-3', ordinal: 50_001, data: startData('start-3') })],
+      ['an agent renamed', all => { const a = all.agents.find(x => !x.deleted)!; return { op: 'update', kind: 'agent', key: a.key, seen: a.version, data: { ...a.data!, name: 'Renamed' } } }],
+      ['a member changed', all => { const m = all.members.find(x => !x.deleted)!; return { op: 'update', kind: 'member', key: m.key, seen: m.version, data: { ...m.data! as object } } }],
+      ['a start touched', all => ({ op: 'touch', kind: 'start', key: 'start-4', seen: start(all, 'start-4').version })],
+    ]
+    expect(await cachedInputs(cache, tabId)).toBe(await pipeline(tabId))
+    for (const [name, step] of steps) {
+      await write(tabId, step)
+      const expected = await pipeline(tabId)
+      expect(await cachedInputs(cache, tabId), `${name}, patched`).toBe(expected)
+      expect(await hostInputs(db, DIRECT, tabId), `${name}, no cache`).toBe(expected)
+    }
+  })
+})

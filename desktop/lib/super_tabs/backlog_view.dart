@@ -89,9 +89,6 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
   String? _project;
   bool _mine = false;
   String _query = '';
-
-  /// Mine with nothing open was asked to show what the reader shipped.
-  bool _mineShipped = false;
   bool _allShipped = false;
   final _folded = <SuperTabBacklogGroup>{};
 
@@ -140,10 +137,7 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     _watched = next;
   }
 
-  void _setMine(bool mine) => setState(() {
-    _mine = mine;
-    _mineShipped = false;
-  });
+  void _setMine(bool mine) => setState(() => _mine = mine);
 
   /// Whether [task] answers the search: its title, its number, or the name
   /// of the agent on it.
@@ -194,20 +188,12 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
             _matches(task, query))
           (task, group),
     ];
-    // Mine with nothing open says so and links to what shipped (#2551). All
-    // of it is shipped here, or it would be open.
-    final noneOpen =
-        _mine &&
-        !_mineShipped &&
-        query.isEmpty &&
-        matching.every((e) => e.$2 == SuperTabBacklogGroup.shipped);
-    final shown = noneOpen
-        ? const <(SuperTabConversation, SuperTabBacklogGroup)>[]
-        : matching;
+    // Shipped lists with nothing open too, as the mockup does (#2885): the
+    // list is what the cards count.
     final byGroup = <SuperTabBacklogGroup, List<SuperTabConversation>>{
       for (final group in SuperTabBacklogGroup.values)
         group: [
-          for (final (task, g) in shown)
+          for (final (task, g) in matching)
             if (g == group) task,
         ],
     };
@@ -241,8 +227,7 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
       }
       if (cut < tasks.length) entries.add(_More(tasks.length - cut));
     }
-    // The cards count what the filters match, Mine's shipped tasks too while
-    // its empty list links to them.
+    // The cards count what the filters match.
     int count(SuperTabBacklogGroup group) =>
         matching.where((e) => e.$2 == group).length;
     final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
@@ -379,36 +364,17 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
                 ),
               Expanded(
                 child: entries.isEmpty
+                    // Nothing open and nothing shipped.
                     ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              noneOpen
-                                  ? 'No open tasks of yours'
-                                  : query.isNotEmpty
-                                  ? 'No tasks match “${_query.trim()}”'
-                                  : _mine
-                                  ? 'No tasks you asked for'
-                                  : 'No tasks',
-                              style: DesktopChrome.control(
-                                color: DesktopChrome.muted,
-                              ),
-                            ),
-                            if (noneOpen && matching.isNotEmpty)
-                              DesktopPill(
-                                key: const ValueKey(
-                                  'super-backlog-mine-shipped',
-                                ),
-                                label:
-                                    'Your shipped tasks from the last 7 days · '
-                                    '${matching.length}',
-                                quiet: true,
-                                compact: true,
-                                onPressed: () =>
-                                    setState(() => _mineShipped = true),
-                              ),
-                          ],
+                        child: Text(
+                          query.isNotEmpty
+                              ? 'No tasks match “${_query.trim()}”'
+                              : _mine
+                              ? 'No open tasks of yours'
+                              : 'No tasks',
+                          style: DesktopChrome.control(
+                            color: DesktopChrome.muted,
+                          ),
                         ),
                       )
                     : LaidOutListView.builder(

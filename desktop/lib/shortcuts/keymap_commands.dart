@@ -30,9 +30,14 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
-    if (id == 'swarm.quick_switcher') {
+    // The Swarm chat's own letters are Cmd's on a Mac and Ctrl's elsewhere,
+    // as in a browser: no terminal is there to take Ctrl.
+    if (const {'swarm.quick_switcher': 'k', 'swarm.find_in_chat': 'f'}[id]
+        case final letter?) {
       return [
-        defaultTargetPlatform == TargetPlatform.macOS ? 'cmd+k' : 'ctrl+k',
+        defaultTargetPlatform == TargetPlatform.macOS
+            ? 'cmd+$letter'
+            : 'ctrl+$letter',
       ];
     }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
@@ -252,6 +257,15 @@ final harnessCommands = <HarnessCommand>[
     context: KeymapContext.swarmChat,
     keywords: ['unread', 'chat', 'Swarm', 'Slack'],
     repeatable: true,
+  ),
+  // Find in the open chat or thread (task #2826). A focused terminal keeps
+  // the same key for its own find.
+  const HarnessCommand(
+    'swarm.find_in_chat',
+    'Find in chat',
+    ShortcutGroup.navigate,
+    context: KeymapContext.swarmChat,
+    keywords: ['find', 'search', 'chat', 'Swarm'],
   ),
   // The current project's Buddy chat, in a Swarm tab, where the PM's private
   // lines land since Buddies replaced Chat with PM: the id stays, so a key a

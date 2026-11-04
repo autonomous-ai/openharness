@@ -631,11 +631,13 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         superTabPersonName(recorded);
   }
 
-  /// Every thread listed is unread (Activity lists today's new replies), so
-  /// there is no Unreads only here.
+  /// Every thread the reader follows (Darren, task #2835): those with new
+  /// replies first, bold, as before; then the ones they have read, plain,
+  /// newest reply first, 50 at a time as they scroll. Only the new ones have
+  /// Mark read.
   List<Widget> _threads() {
     final a = _activity;
-    final rows = a.threadRows;
+    final rows = a.threadRows, read = a.readThreadRows;
     return [
       _bar([
         _markAll(
@@ -647,48 +649,80 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
                 },
         ),
       ]),
-      if (rows.isEmpty)
-        _empty('No threads with new replies')
-      else
-        ..._byDay<SuperTabFollowedThread>(rows, (t) => t.lastReplyAt, (t) {
-          // The data holds the root and the newest reply's author, not the
-          // reply's text: the preview is the root, said by the root's author.
-          final author = _authorName(t.rootAuthor);
-          final replier = _authorName(t.lastReplier ?? const {});
-          final project = _snapshot?.projectFor(t.conversationId);
-          final subject = threadSubject(t.rootText);
-          final root = _oneLine(t.rootText);
-          return _ActivityRow(
-            key: ValueKey('super-activity-row-thread:${t.key}'),
-            avatarName: author.isEmpty ? subject : author,
-            who: subject.isEmpty ? 'Thread' : subject,
-            where: project?.name,
-            privateWhere: project?.isPrivate == true,
-            forThread: true,
-            repliedBy: replier.isEmpty ? null : replier,
-            trailing: '${a.attention.newCount(t)} new',
-            preview: author.isEmpty ? root : '$author: $root',
-            previewLead: author.isEmpty ? null : author.length + 1,
-            actions: [
-              (
-                label: 'Mark read',
-                run: () {
-                  _settle();
-                  a.attention.markRead(t);
-                },
-              ),
-              (
-                label: 'Unfollow',
-                run: () {
-                  _settle();
-                  unawaited(a.attention.setFollow(t, false));
-                },
-              ),
-            ],
-            onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
-          );
-        }),
+      if (rows.isEmpty && read.isEmpty)
+        _empty('No threads yet')
+      else ...[
+        ..._byDay<SuperTabFollowedThread>(
+          rows,
+          (t) => t.lastReplyAt,
+          (t) => _threadRow(t, unread: true),
+        ),
+        if (read.isNotEmpty) ...[
+          KeyedSubtree(
+            key: const ValueKey('super-activity-threads-read'),
+            child: _heading('Read'),
+          ),
+          ..._byDay<SuperTabFollowedThread>(
+            read,
+            (t) => t.lastReplyAt,
+            (t) => _threadRow(t, unread: false),
+          ),
+          if (a.attention.canReadMore)
+            _ReadMore(
+              key: const ValueKey('super-activity-threads-more'),
+              onShown: a.attention.readMore,
+            ),
+        ],
+      ],
     ];
+  }
+
+  /// One followed thread's row: bold with its new count when [unread], plain
+  /// with its last reply's time when read.
+  Widget _threadRow(SuperTabFollowedThread t, {required bool unread}) {
+    final a = _activity;
+    // The data holds the root and the newest reply's author, not the
+    // reply's text: the preview is the root, said by the root's author.
+    final author = _authorName(t.rootAuthor);
+    final replier = _authorName(t.lastReplier ?? const {});
+    final project = _snapshot?.projectFor(t.conversationId);
+    final subject = threadSubject(t.rootText);
+    final root = _oneLine(t.rootText);
+    return _ActivityRow(
+      key: ValueKey('super-activity-row-thread:${t.key}'),
+      unread: unread && a.attention.isNew(t),
+      avatarName: author.isEmpty ? subject : author,
+      who: subject.isEmpty ? 'Thread' : subject,
+      where: project?.name,
+      privateWhere: project?.isPrivate == true,
+      forThread: true,
+      repliedBy: replier.isEmpty ? null : replier,
+      trailing: unread
+          ? '${a.attention.newCount(t)} new'
+          : t.lastReplyAt == null
+          ? ''
+          : _when(t.lastReplyAt!),
+      preview: author.isEmpty ? root : '$author: $root',
+      previewLead: author.isEmpty ? null : author.length + 1,
+      actions: [
+        if (unread)
+          (
+            label: 'Mark read',
+            run: () {
+              _settle();
+              a.attention.markRead(t);
+            },
+          ),
+        (
+          label: 'Unfollow',
+          run: () {
+            _settle();
+            unawaited(a.attention.setFollow(t, false));
+          },
+        ),
+      ],
+      onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
+    );
   }
 
   @override
@@ -761,12 +795,14 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 }
 
 /// One row, Slack's way: an unread dot, an avatar, who and where and when,
-/// then a preview and whatever hangs under it. Every row Activity lists is
-/// unread, so there is no read style. Hover actions float at the
+/// then a preview and whatever hangs under it. Every row is unread but a
+/// read thread's (Threads lists those below the new ones): it has no dot, a
+/// regular muted name and a faint preview. Hover actions float at the
 /// right, over the time.
 class _ActivityRow extends StatefulWidget {
   const _ActivityRow({
     super.key,
+    this.unread = true,
     required this.avatarName,
     required this.who,
     this.where,
@@ -784,6 +820,7 @@ class _ActivityRow extends StatefulWidget {
     this.actions = const [],
     required this.onTap,
   });
+  final bool unread;
   final String avatarName, who, trailing;
   final String? where;
 
@@ -871,9 +908,13 @@ class _ActivityRowState extends State<_ActivityRow> {
     final text = widget.preview;
     if (text == null) return const SizedBox.shrink();
     final strong = widget.previewStrong;
-    // In the foreground: muted read too close to faint (Diego, #2887).
-    final base = DesktopChrome.control(color: DesktopChrome.foreground)
-        .copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
+    // Unread in the foreground, read faint: muted read too close to faint to
+    // tell apart (Diego, #2887).
+    final base = DesktopChrome.control(
+      color: strong || widget.unread
+          ? DesktopChrome.foreground
+          : grid.AppPalette.textFaint,
+    ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
     final lead = widget.previewLead;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -903,8 +944,10 @@ class _ActivityRowState extends State<_ActivityRow> {
 
   @override
   Widget build(BuildContext context) {
-    final whoStyle = DesktopChrome.control(color: DesktopChrome.foreground)
-        .copyWith(fontWeight: grid.AppFont.semibold);
+    final unread = widget.unread;
+    final whoStyle = DesktopChrome.control(
+      color: unread ? DesktopChrome.foreground : DesktopChrome.muted,
+    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     final actions = widget.actions;
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -931,7 +974,7 @@ class _ActivityRowState extends State<_ActivityRow> {
                   hoverColor: grid.AppSurface.hoverFill,
                   focusColor: grid.AppSurface.hoverFill,
                   child: Semantics(
-                    label: 'New',
+                    label: unread ? 'New' : null,
                     // The hover actions, for a screen reader that cannot hover.
                     customSemanticsActions: {
                       for (final action in actions)
@@ -947,21 +990,28 @@ class _ActivityRowState extends State<_ActivityRow> {
                         children: [
                           SizedBox(
                             width: grid.AppDesktop.controlGap,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 13),
-                                DecoratedBox(
-                                  key: const ValueKey('super-activity-dot'),
-                                  decoration: BoxDecoration(
-                                    color: DesktopChrome.accent,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const SizedBox.square(dimension: 7),
-                                ),
-                              ],
-                            ),
+                            child: unread
+                                ? Column(
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 13),
+                                      DecoratedBox(
+                                        key: const ValueKey(
+                                          'super-activity-dot',
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: DesktopChrome.accent,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const SizedBox.square(
+                                          dimension: 7,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : null,
                           ),
                           const SizedBox(width: grid.AppDesktop.controlGap),
                           SuperTabAvatarFace(
@@ -1085,4 +1135,36 @@ class _ActivityRowState extends State<_ActivityRow> {
       ),
     );
   }
+}
+
+/// The end of the read threads while there are more: built only once the list
+/// scrolls to it, it asks for the next page.
+class _ReadMore extends StatefulWidget {
+  const _ReadMore({super.key, required this.onShown});
+
+  final Future<void> Function() onShown;
+
+  @override
+  State<_ReadMore> createState() => _ReadMoreState();
+}
+
+class _ReadMoreState extends State<_ReadMore> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(widget.onShown());
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.all(grid.AppDesktop.groupGap),
+    child: Center(
+      child: SizedBox.square(
+        dimension: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    ),
+  );
 }
