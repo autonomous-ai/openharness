@@ -167,7 +167,10 @@ class SwarmHomeProjectRow extends StatelessWidget {
     AppTheme.watch(context);
     final news = project.news;
     final bright = news.bold || news.tags > 0;
-    final name = '#${project.project.name}';
+    // A private project's lock takes the # mark's place, as the desktop's
+    // sidebar marks it (#2876): the row's right side is for its notifications.
+    final private = project.project.isPrivate;
+    final name = private ? project.project.name : '#${project.project.name}';
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -180,6 +183,16 @@ class SwarmHomeProjectRow extends StatelessWidget {
           ),
           child: Row(
             children: [
+              if (private) ...[
+                Icon(
+                  LucideIcons.lock300,
+                  key: const ValueKey('swarm-project-private'),
+                  size: 14,
+                  color: AppPalette.textSecondary,
+                  semanticLabel: 'Private project',
+                ),
+                const SizedBox(width: AppSpace.xs),
+              ],
               Expanded(
                 child: Semantics(
                   label: bright && news.tags == 0 ? 'Unread messages' : null,
@@ -222,18 +235,6 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   width: 36,
                   height: 20,
                   radius: 10,
-                ),
-              ],
-              // At its end, after its tags, as the desktop's sidebar marks
-              // it: in sight however long the name.
-              if (project.project.isPrivate) ...[
-                const SizedBox(width: AppSpace.s),
-                Icon(
-                  LucideIcons.lock300,
-                  key: const ValueKey('swarm-project-private'),
-                  size: 14,
-                  color: AppPalette.textSecondary,
-                  semanticLabel: 'Private project',
                 ),
               ],
             ],

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_sheet.dart';
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -495,7 +496,11 @@ class _SwarmProjectSharingSheetState extends State<SwarmProjectSharingSheet> {
     final on = (id == 'private') == _private;
     return SwarmRow(
       key: ValueKey('swarm-sharing-$id'),
-      leading: Icon(icon, size: 20, color: AppPalette.textSecondary),
+      leading: Icon(
+        icon,
+        size: AppIconSize.besideText,
+        color: AppPalette.textSecondary,
+      ),
       title: title,
       detail: SwarmRow.line(detail),
       trailing: on
@@ -504,7 +509,7 @@ class _SwarmProjectSharingSheetState extends State<SwarmProjectSharingSheet> {
               excludeSemantics: true,
               child: Icon(
                 LucideIcons.check300,
-                size: 20,
+                size: AppIconSize.besideText,
                 color: AppPalette.swarmAccent,
               ),
             )
