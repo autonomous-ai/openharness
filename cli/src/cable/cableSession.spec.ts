@@ -5607,6 +5607,20 @@ describe('swarm cards', () => {
       }
     })
 
+    it('logs why a voice turn ended in an error: the failed post and the words the dial was shown', async () => {
+      const lines: string[] = []
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay: offline, log: (l: string) => lines.push(l) })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY); await settle()
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error')).toBe(true))
+      } finally { await session.stop() }
+      expect(lines).toContain('cable: voice → Swarm chat of h1 failed (offline)')
+      expect(lines).toContain('cable: voice → error "Could not reach your Buddy. Try again."')
+    })
+
     it('on the Buddy face an unreachable post shows voice.error and types nothing', async () => {
       const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
       expect(await spoken(BUDDY, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })

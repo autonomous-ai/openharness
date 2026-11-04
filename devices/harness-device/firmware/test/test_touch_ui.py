@@ -2161,28 +2161,17 @@ static bool teal_ring(void) {
     return false;
 }
 // The label is "Thread" with a teal hook arrow of boxes left of it (Inter has no U+21B3, and no "›" stands in); the card starts at
-// x 60 and "chat" ends 8 px or more left of it.
+// x 63. No "‹ chat" at the left edge and no teal spine on the card (Diego, 2026-11-04): the swipe out needs no label.
 static void thread_chrome_checks(void) {
-    const ht_run_t *label = NULL, *chat = NULL; int card_x = -1;
+    const ht_run_t *label = NULL; int card_x = -1, spines = 0;
     for (int i = 0; i < scene.count; i++) {
         const ht_run_t *r = &scene.runs[i];
         if (!strcmp(r->text, "Thread")) label = r;
-        if (!strcmp(r->text, "chat")) chat = r;
         if (!r->text[0] && r->w == 340 && r->box.h >= 60) card_x = r->x;
+        if (!r->text[0] && r->w == 7 && r->box.fill == ht_rgb(0x2dd4bf)) spines++;
     }
-    assert(label && chat && card_x == 63 && !scene_says("\xe2\x80\xba"));
-    assert(chat->x + chat->w + 8 <= card_x);
-    // Both runs of the way out: every corner of the box is 6 px or more inside the ring's inner edge (r 226.5 from 233, 233).
-    const ht_run_t *out[2] = {chat, NULL};
-    for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, "\xe2\x80\xb9")) out[1] = &scene.runs[i];
-    assert(out[1]);
-    for (int k = 0; k < 2; k++) {
-        ht_rect_t b = ht_run_bounds(out[k]);
-        for (int c = 0; c < 4; c++) {
-            int dx = (c & 1 ? b.x + b.w : b.x) - 233, dy = (c & 2 ? b.y + b.h : b.y) - 233;
-            assert(dx * dx + dy * dy <= 220 * 220 + 220 / 2);   // 220.5 squared, to the pixel
-        }
-    }
+    assert(label && card_x == 63 && !scene_says("\xe2\x80\xba"));
+    assert(!scene_says("chat") && !scene_says("\xe2\x80\xb9") && spines == 0);
     int strokes = 0;
     for (int i = 0; i < scene.count; i++) {
         const ht_run_t *r = &scene.runs[i];
@@ -2205,7 +2194,7 @@ static void swarm_thread_checks(const char *dir) {
     assert(title_is("web-api") && scene_says("Thread") && scene_says("Fix the login bug on Safari") && scene_says("session expires"));
     thread_chrome_checks();
     portrait(dir, "thread-a-waiting-1line");
-    assert(scene_says("Waiting for the PM") && scene_says("chat") && !scene_says("Working") && teal_ring() && !pet_frame());
+    assert(scene_says("Waiting for the PM") && !scene_says("Working") && teal_ring() && !pet_frame());
     // The main chat's recap is not the thread's; the thread's is, with who spoke and how many.
     ui_supertab_recap("s1", "T0", "pm1", "", "Merged #2704.", 1792560000u, false); scene_take();
     assert(!scene_says("Merged") && scene_says("Waiting for the PM"));
