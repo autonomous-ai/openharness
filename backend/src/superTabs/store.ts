@@ -21,7 +21,7 @@ import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, may
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, type PageDelivery } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -40,6 +40,7 @@ import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
+import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
@@ -104,6 +105,19 @@ import { emailDomain } from '../lib/publicEmailDomains.js'
 
 type Transaction = Prisma.TransactionClient
 type ReactCommand = Extract<Command, { type: 'message.react' }>
+type MessageChangeCommand = Extract<Command, { type: 'message.edit' | 'message.delete' }>
+/** How far back a delete looks for the rows its group's counters step back to (messageEdits.ts deleteMessage). */
+const COUNTERS_LOOKBACK = 100
+/** The newest sequence before `row` of each of a group's counters (parts/commit.ts numberMessages): any shown row, a main-stream
+ *  row, a person's own main-stream post. Within COUNTERS_LOOKBACK rows; a counter with none found there is left out. */
+async function countersBefore(tx: Transaction, tabId: string, conversationId: string, row: { id: string; sequence: number }) {
+  const rows = await messagesPast(tx, { tabId, conversationId }, { sequence: row.sequence, id: row.id }, false, COUNTERS_LOOKBACK)
+  const shown = rows.filter(m => m.id !== row.id && !agentOnly(m.source, m.recipientIds))
+  const main = shown.filter(m => !m.thread || m.thread === m.id || m.alsoInChat)
+  const person = main.filter(m => (m.author as { kind?: string } | null)?.kind === 'person' && m.source == null)
+  const newest = (list: SuperTabMessage[]) => list.length ? Math.max(...list.map(m => m.sequence)) : undefined
+  return { message: newest(shown), main: newest(main), person: newest(person) }
+}
 const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
@@ -1643,6 +1657,7 @@ export class SuperTabStore {
       }
       if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
+      if (command.type === 'message.edit' || command.type === 'message.delete') context.messageChange = await this.messageChangeTarget(tx, tabId, actor, command, original)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
       }
@@ -1897,6 +1912,10 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
+      if (command.type === 'message.edit' && effects.result.changed) {
+        await tx.superTabMessage.update({ where: { id: command.messageId }, data: { text: command.text, editedAt: new Date(context.now) } })
+      }
+      if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, effects.state.people.map(p => p.id), context.now)
       if (context.avatarUpload) {
         // Conflicts with a concurrent use of the same picture: only one command can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
@@ -2390,6 +2409,60 @@ export class SuperTabStore {
     if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
     await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
       messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
+  }
+
+  /** The message `message.edit` or `message.delete` names (messageEdits.ts), found as a reaction's is (reactionTarget): in that
+   *  conversation and readable by this actor, else absent, which refuses it as unavailable. A delete also reads whether
+   *  anything replies in its thread, and the counters' rows before it. */
+  private async messageChangeTarget(tx: Transaction, tabId: string, actor: Actor, command: MessageChangeCommand,
+    state: SuperTabState): Promise<MessageChangeTarget | undefined> {
+    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+      select: { id: true, source: true, recipientIds: true, thread: true, buddySession: true, author: true, buddyProject: true, text: true,
+        attachments: true, sequence: true, deletedAt: true, alsoInChat: true } })
+    if (!message || (agentOnly(message.source, message.recipientIds) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    const group = state.conversations.find(c => c.id === command.conversationId)
+    const reader = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+    if (group && !sessionReadsRow(reader, group, state)(message)) return undefined
+    if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
+    const author = message.author as { kind?: string; id?: string } | null
+    const target: MessageChangeTarget = { messageId: message.id, author: { kind: String(author?.kind ?? ''), id: String(author?.id ?? '') },
+      plain: message.source == null, deleted: !!message.deletedAt, hasFiles: Array.isArray(message.attachments) && message.attachments.length > 0,
+      hasReplies: false, text: message.text, sequence: message.sequence }
+    // Only an author's delete reads further; anyone else is refused on the row alone.
+    if (command.type !== 'message.delete' || actor.kind !== 'person' || target.author.id !== actor.userId) return target
+    // A root with replies stays (by the thread index, one reply at most, never itself).
+    if (!message.thread || message.thread === message.id) {
+      const replies = await messagesPast(tx, { tabId, conversationId: command.conversationId, thread: message.id }, { sequence: message.sequence, id: message.id }, true, 1)
+      target.hasReplies = replies.some(r => r.id !== message.id)
+    }
+    if (!target.hasReplies) target.before = await countersBefore(tx, tabId, command.conversationId, message)
+    return target
+  }
+
+  /** What a delete removes beside its row (messageEdits.ts): its reactions and their Activity, the Activity of the reply it was,
+   *  deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
+   *  A root with replies stays as DELETED_TEXT with nothing else of what it said; a reply's thread summary is written again. */
+  private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, people: string[], now: number) {
+    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
+    const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
+    // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
+    if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [{ q: { _id: { $in: files }, tabId }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true }] })
+    // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
+    // the reply's for every member it could have told.
+    const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
+    const activityIds = [...reactions.map(r => stableId(tabId, 'reaction', r.id)), ...people.map(personId => stableId(tabId, 'reply', row.id, personId))]
+    await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })
+    if (activityIds.length) await tx.$runCommandRaw({ delete: 'SuperTabActivity', deletes: [{ q: { _id: { $in: activityIds }, tabId }, limit: 0 }] })
+    await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
+      u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
+    if (kept) {
+      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it.
+      await tx.$runCommandRaw({ update: 'SuperTabMessage', updates: [{ q: { _id: row.id, tabId }, u: { $set: { text: DELETED_TEXT, mentions: [],
+        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '' } } }] })
+      return
+    }
+    await tx.superTabMessage.delete({ where: { id: row.id } })
+    if (row.thread && row.thread !== row.id) await refreshThreads(tx, tabId, row.conversationId, [row.thread])
   }
 
   /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */

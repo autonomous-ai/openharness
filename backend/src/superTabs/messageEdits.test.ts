@@ -28,7 +28,7 @@ function fixture() {
 const edit = (text = 'Fixed text'): Command => commandSchema.parse({ type: 'message.edit', conversationId: 'lead', messageId: 'm1', text })
 const remove = (): Command => commandSchema.parse({ type: 'message.delete', conversationId: 'lead', messageId: 'm1' })
 const target = (extra: Partial<MessageChangeTarget> = {}): Partial<CommandContext> => ({ messageChange: { messageId: 'm1',
-  author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies: false, text: 'Old text', ...extra } })
+  author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies: false, text: 'Old text', sequence: 1, ...extra } })
 
 describe('message edits', () => {
   it('lets the author edit their own post and bumps the group only on a change', () => {

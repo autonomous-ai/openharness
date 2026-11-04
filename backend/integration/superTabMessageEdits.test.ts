@@ -13,6 +13,7 @@ import { EXPIRED_UPLOAD, MemoryAttachmentStore } from '../src/superTabs/attachme
 import type { Command } from '../src/superTabs/commands.js'
 import { DELETED_TEXT } from '../src/superTabs/messageEdits.js'
 import { poolRows } from './hostRows.test-support.js'
+import { profiled } from './plans.test-support.js'
 
 // Edit and delete your own message (task #2746): only the author, a person, on their own post. A fresh loopback replica set.
 let replica: MongoMemoryReplSet
@@ -100,7 +101,7 @@ describe('message.edit', () => {
     const read = await f.page(f.web.conversationId)
     expect(read.reactionSeq).toBeGreaterThan(before)
     const shown = read.messages.find(m => m.id === id)!
-    expect(shown).toMatchObject({ text: 'The build is green now.', editedAt: expect.any(String) })
+    expect(shown).toMatchObject({ text: 'The build is green now.', editedAt: expect.any(Date) })
     expect((await f.page(f.web.conversationId, other, { messageId: id })).messages.find(m => m.id === id)?.text).toBe('The build is green now.')
     // No history: the stored row holds the new text alone, and nothing anywhere holds the old.
     const row = await db.superTabMessage.findUniqueOrThrow({ where: { id } })
@@ -178,7 +179,7 @@ describe('message.delete', () => {
     expect((await f.remove(f.web.conversationId, root)).result).toMatchObject({ changed: true, kept: true })
     const main = await f.page(f.web.conversationId, other)
     const tomb = main.messages.find(m => m.id === root)!
-    expect(tomb).toMatchObject({ text: DELETED_TEXT, deletedAt: expect.any(String) })
+    expect(tomb).toMatchObject({ text: DELETED_TEXT, deletedAt: expect.any(Date) })
     expect(tomb.attachments ?? null).toBeNull()
     expect(JSON.stringify(await db.superTabMessage.findUniqueOrThrow({ where: { id: root } }))).not.toContain('Secret detail')
     const thread = await f.page(f.web.conversationId, other, { thread: root })
@@ -189,6 +190,19 @@ describe('message.delete', () => {
     await expect(f.remove(f.web.conversationId, root)).rejects.toThrow(refused('MESSAGE_DELETED'))
     await f.send(f.web.conversationId, 'Shipped.', owner, { replyTo: root })
     expect((await f.page(f.web.conversationId, other, { thread: root })).messages).toHaveLength(3)
+  })
+
+  it('reads and writes every row it touches through an index, never by scanning a collection', async () => {
+    const f = await swarm()
+    const root = await f.send(f.web.conversationId, 'Owner root', owner)
+    const reply = await f.send(f.web.conversationId, 'Reply', peer, { replyTo: root, recipientIds: [f.pm] })
+    await f.execute({ type: 'message.react', conversationId: f.web.conversationId, messageId: reply, emoji: 'thumbs_up', on: true }, owner)
+    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread']
+    const entries = await profiled(db, () => f.remove(f.web.conversationId, reply))
+    // The profiler saw the delete's writes (so the check below is not empty by accident).
+    for (const c of ['SuperTabMessage', 'SuperTabDelivery', 'SuperTabActivity']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)
+    const scans = entries.filter(e => touched.some(c => e.ns.endsWith(`.${c}`)) && /COLLSCAN/.test(String(e.planSummary)))
+    expect(scans.map(e => [e.ns, e.op, JSON.stringify(e.command?.filter ?? e.command?.q ?? e.command?.pipeline)])).toEqual([])
   })
 
   it('steps the chat\'s newest-message counters back, so a deleted newest message leaves nobody unread', async () => {

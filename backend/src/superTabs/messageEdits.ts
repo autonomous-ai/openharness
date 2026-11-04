@@ -16,7 +16,13 @@ export interface MessageChangeTarget {
   /** For a delete: some other row replies in its thread, so it stays as DELETED_TEXT. */
   hasReplies: boolean
   text: string
+  sequence: number
+  /** For a delete that removes the row: the newest sequence left of each of the group's counters (model.ts lastMessageSequence,
+   *  lastMainSequence, lastPersonSequence), so a chat whose newest message goes is not left unread. Absent when none was found. */
+  before?: { message?: number; main?: number; person?: number }
 }
+
+type Counters = { reactionSeq?: number; lastMessageSequence: number; lastMainSequence?: number; lastPersonSequence?: number }
 
 /** Only the author changes a message: a person, on their own plain post. An agent (a Buddy too) never does, for anyone.
  *  A message the actor cannot see reads as unavailable, so a refusal tells nothing about it. */
@@ -41,9 +47,15 @@ export function editMessage(group: { reactionSeq?: number }, actor: Actor, messa
 }
 
 /** `message.delete`: the row goes, or stays as DELETED_TEXT while replies hang under it. The store removes the rest. */
-export function deleteMessage(group: { reactionSeq?: number }, actor: Actor, messageId: string,
+export function deleteMessage(group: Counters, actor: Actor, messageId: string,
   target: MessageChangeTarget | undefined): { kept: boolean } {
   const found = changeable(actor, messageId, target)
   group.reactionSeq = (group.reactionSeq ?? 0) + 1
-  return { kept: found.hasReplies }
+  if (found.hasReplies) return { kept: true }
+  // Each counter that pointed at the row steps back to the newest row left of its kind (parts/commit.ts numberMessages).
+  const before = found.before ?? {}
+  if (group.lastMessageSequence === found.sequence) group.lastMessageSequence = before.message ?? 0
+  if (group.lastMainSequence === found.sequence) group.lastMainSequence = before.main ?? 0
+  if (group.lastPersonSequence === found.sequence) group.lastPersonSequence = before.person ?? 0
+  return { kept: false }
 }

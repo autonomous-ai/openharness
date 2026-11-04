@@ -1127,6 +1127,11 @@ model SuperTabMessage {
   /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
   /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
   buddyProject    String?
+  /// When its author last edited its text (superTabs/messageEdits.ts); no earlier text is kept.
+  editedAt        DateTime?
+  /// When its author deleted it while replies hung under it: its text is then DELETED_TEXT and its files are gone. A deleted
+  /// message with no replies is removed, row and all.
+  deletedAt       DateTime?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
