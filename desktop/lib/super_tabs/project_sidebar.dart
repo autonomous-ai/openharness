@@ -33,6 +33,7 @@ import 'task_groups.dart';
 import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
+import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
 
@@ -213,16 +214,18 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// A project, or the Product Managers' conversation, reads as a channel: "# openharness".
-  Widget _channelMark() => Text(
-    '#',
-    textAlign: TextAlign.center,
-    style: SwarmType.sidebar(
-      compact: compact,
-      color: DesktopChrome.muted,
-      medium: true,
-    ),
-  );
+  /// A project reads as a channel; a private one keeps its lock in this mark slot.
+  Widget _channelMark({required bool isPrivate}) => isPrivate
+      ? PrivateProjectLock(size: 14, color: DesktopChrome.muted)
+      : Text(
+          '#',
+          textAlign: TextAlign.center,
+          style: SwarmType.sidebar(
+            compact: compact,
+            color: DesktopChrome.muted,
+            medium: true,
+          ),
+        );
 
   void _openBuddyChat(String projectId) => onOpenBuddyChat != null
       ? onOpenBuddyChat!(projectId)
@@ -377,7 +380,7 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(
                         width: _iconColumn,
                         child: project != null
-                            ? _channelMark()
+                            ? _channelMark(isPrivate: project.isPrivate)
                             : label != null
                             ? Icon(
                                 AppIcons.bot,
@@ -508,17 +511,6 @@ class ProjectSidebar extends StatelessWidget {
                                             key: ValueKey(
                                               'super-muted-${group.id}',
                                             ),
-                                            size: 14,
-                                            color: DesktopChrome.muted,
-                                          ),
-                                        ),
-                                      ],
-                                      if (project?.isPrivate == true) ...[
-                                        const SizedBox(width: 8),
-                                        Tooltip(
-                                          message: 'Private project',
-                                          child: Icon(
-                                            AppIcons.lock,
                                             size: 14,
                                             color: DesktopChrome.muted,
                                           ),

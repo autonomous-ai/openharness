@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the project rows' pictures there: a project
 /// collapsed and expanded, in both themes.
@@ -26,12 +28,28 @@ void main() {
       tester.view.physicalSize = const Size(2000, 1400);
       addTearDown(tester.view.reset);
       final server = humansSwarm();
+      server.state['projects'] = [
+        projectFixture('lead', 'public project', 'lead'),
+        projectFixture(
+          'private',
+          'private project',
+          'private-lead',
+          visibility: 'private',
+        ),
+      ];
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('private-lead', 'Private Lead'),
+        'projectId': 'private',
+      });
       addNumberedWorkgroups(server, 11);
       final controller = server.controller(
         account: 'peer',
         initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
       );
       await controller.refresh();
+      server.tag('sidebar-shot-mention', conversationId: 'lead');
+      await controller.refresh();
+      await SuperTabAttention.of(controller).mentions.load();
       // Unread, so the project's dot shows beside its chevron.
       server.append('New work', conversationId: 'g11');
       await controller.refresh();
