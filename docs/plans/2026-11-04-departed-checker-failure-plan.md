@@ -44,11 +44,11 @@
 
 **Interfaces:** `recordCheckVerdict(check, verdict, clears?: (by: string) => boolean)`.
 
-- [ ] Write failing tests in the steps fixture: R fails, R is removed, R2 passes: still failed. The owner passes: passed, `passedBy` and evidence from that pass. The task's PM passes: the same. A live checker's failure isn't cleared by the owner. Commit; watch them fail.
-- [ ] Implement; commit; watch them pass.
+- [x] Write failing tests in the steps fixture: R fails, R is removed, R2 passes: still failed. The owner passes: passed, `passedBy` and evidence from that pass. The task's PM passes: the same. A live checker's failure isn't cleared by the owner. Commit; watch them fail.
+- [x] Implement; commit; watch them pass.
 
 ## Task 2: The CLI names a departed checker
 
 **Files:** `cli/src/superTabs/agentContext.spec.ts`
 
-- [ ] Test that a departed checker's failure reads with its last known name. If it already passes, say so in the PR.
+- [x] Test that a departed checker's failure reads with its last known name. It already passed: the task read names stopped agents from the backend's known names.
