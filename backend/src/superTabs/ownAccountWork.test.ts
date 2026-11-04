@@ -124,7 +124,9 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     f.choose(true)
     // Turning it off only tightens it: the Lead may, on the owner's own message. Recorded as Gray's choice, whose word it is.
     f.choose(false, f.leadActor, 'gray-mac', said('gray'), askedIn)
-    expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString() })
+    // With the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
+    expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString(),
+      askedIn: { conversationId: 'lead', messageId: 'm-gray' } })
   })
 
   it('counts only a choice recorded as the machine owner\'s', () => {
