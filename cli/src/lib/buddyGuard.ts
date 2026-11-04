@@ -657,13 +657,32 @@ function superTabAllowed(rest) {
   return true
 }
 
+// harness tell|reply NAME [--json] -- WORDS (#2626): its owner's words for one of their own harnesses on this Mac, only while
+// its owner is with it here (granted(): they wrote to it in their own chat, signed in on this machine, within the hour). No
+// --machine, --port or any other option: this Mac only. The machine checks the rest from its own records (messages/tell.ts
+// relayRefusal): whose harness it is, and the person's agents-tell-agents switch. Nothing comes back to read.
+const AWAY = 'You pass words to your owner\'s harnesses only while they are with you: once they write to you in your chat, on ' +
+  'this Mac signed in as them, for an hour. It was refused, and nobody will be asked. Tell your owner in one line.'
+function relayAllowed(rest) {
+  const dash = rest.indexOf('--')
+  if (dash < 1) return false
+  const before = rest.slice(0, dash), text = rest.slice(dash + 1)
+  const names = before.filter((word) => word !== '--json')
+  if (names.length !== 1 || before.length > 2 || !/^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$/.test(names[0])) return false
+  if (!text.join(' ').trim()) return false
+  if (!granted()) { reason = AWAY; return false }
+  const kind = text.map(secretIn).find(Boolean) ?? leakIn(text)
+  if (kind) { reason = SECRET(kind); return false }
+  return true
+}
+
 function bashAllowed(command) {
   if (typeof command !== 'string') return false
   const w = words(command)
   if (!w || w.length === 0) return false
   const [name, sub, verb] = w
   const rest = w.slice(1)
-  if (name === 'harness') return sub === 'super-tab' && superTabAllowed(w.slice(2))
+  if (name === 'harness') return sub === 'super-tab' ? superTabAllowed(w.slice(2)) : (sub === 'tell' || sub === 'reply') && relayAllowed(w.slice(2))
   const out = rest.filter(outward)
   if (out.length) {
     // In wide mode the plain readers take a path outside the folder as a word of its own: a file (a folder for ls, and not
