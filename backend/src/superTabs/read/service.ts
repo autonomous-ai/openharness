@@ -230,10 +230,18 @@ export class SwarmReads {
     })
   }
 
-  /** One conversation by id as the reader may read it (design 4.5). */
+  /** One conversation by id as the reader may read it (design 4.5). Identical reads in flight on this process share one answer:
+   *  the same sign-in, agent, Swarm and conversation get the same one (task #2875: many agents' hosts may ask at once). */
   async group(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
-    return this.oneGroup(user, tabId, conversationId, asAgentId)
+    const key = JSON.stringify([tabId, conversationId, asAgentId ?? null, user])
+    const running = this.groupReads.get(key)
+    if (running) return running
+    const read = this.oneGroup(user, tabId, conversationId, asAgentId).finally(() => this.groupReads.delete(key))
+    this.groupReads.set(key, read)
+    return read
   }
+  /** The one-group reads running now, by everything their answer depends on (group). */
+  private readonly groupReads = new Map<string, Promise<OneGroup>>()
   /** The group rows one-group reads read last, by Swarm and key, least recently read first, within GROUP_ROWS_BYTES: the
    *  next read of one asks for its data only when its version moved (parts/load.ts loadGroupUnless). */
   private readonly groupRows = new Map<string, Part<GroupData>>()
