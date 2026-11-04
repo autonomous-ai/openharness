@@ -882,13 +882,16 @@ describe('Linux', () => {
 })
 
 describe("the macOS root script trusts no PATH of the owner's (#2765)", () => {
-  it('pins PATH to system folders before its first command', () => {
-    const script = buildSetupScript(input())
-    const lines = script.split('\n')
+  it.each([
+    ['setup', () => buildSetupScript(input())],
+    // Security review 2: removal runs as root too, with sudo in the owner's terminal, which keeps their PATH.
+    ['removal', () => buildRemoveScript({ user: 'harnessteam', home: '/Users/harnessteam', ownerHome: OWNER_HOME })],
+  ])('the %s script pins PATH to system folders before its first command', (_, build) => {
+    const lines = build().split('\n')
     const pin = lines.indexOf('PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH')
     expect(pin).toBeGreaterThan(0)
     // Only the shell's own settings come before it.
-    expect(lines.slice(0, pin).filter((l) => l && !l.startsWith('#'))).toEqual(['#!/bin/sh', 'set -eu'].filter((l) => !l.startsWith('#')))
+    expect(lines.slice(0, pin).filter((l) => l && !l.startsWith('#'))).toEqual(['set -eu'])
   })
 
   it.runIf(process.platform === 'darwin')('checks that / is root\'s with a GNU stat first on the PATH (micromamba)', () => {
