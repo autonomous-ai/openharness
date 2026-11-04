@@ -110,6 +110,24 @@ it('sends commands to the receipts collection only', async () => {
   expect([...collections].filter(name => name !== 'system.profile' && name !== '$cmd')).toEqual(['product_usage_receipts'])
 })
 
+it('a chunk is as large as asked, and its delete reads only the receipts it removes (prod 11-04: 101 a chunk, ~4M examined each)', async () => {
+  // Mongo's first batch holds 101 documents unless asked for more, and a delete matching on both _id and the expiry range was
+  // planned on the expiry index: it examined every old receipt to remove a few hundred.
+  await db.productUsageReceipt.createMany({ data: Array.from({ length: 400 }, (_, i) => ({ id: `bulk-${i}`, expiresAt: at('2026-10-10', 36) })) })
+  await db.$runCommandRaw({ profile: 2 })
+  const since = new Date()
+  expect(await sweep.sweepOldReceipts(db, now, { chunk: 300, chunks: 1, pauseMs: 0 })).toMatchObject({ removed: 300 })
+  await db.$runCommandRaw({ profile: 0 })
+  const answer = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gt: { $date: since.toISOString() } }, op: 'remove' },
+    projection: { docsExamined: 1, planSummary: 1 }, batchSize: 100_000, singleBatch: true }) as
+    { cursor: { firstBatch: Array<{ docsExamined: number; planSummary: string }> } }
+  expect(answer.cursor.firstBatch.length).toBeGreaterThan(0)
+  for (const op of answer.cursor.firstBatch) {
+    expect(op.planSummary).toMatch(/_id/)
+    expect(op.docsExamined).toBeLessThanOrEqual(300)
+  }
+})
+
 const late = (day = '2026-10-29') => ({ id: randomUUID(), day, counters: { turns_ended: 2 } })
 const turnsEnded = async (day: string) =>
   (await db.productUsageTotal.findUnique({ where: { dayUtc_metric: { dayUtc: new Date(day), metric: 'turns_ended' } } }))?.value

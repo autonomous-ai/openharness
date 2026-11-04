@@ -86,15 +86,17 @@ export async function lastOldReceipt(db: PrismaClient, now: Date): Promise<Date 
   return newest ? dateOf(newest.expiresAt) : null
 }
 
-/** One chunk: up to [chunk] old receipts in expiresAt order, then exactly those, their range checked again. */
+/** One chunk: up to [chunk] old receipts in expiresAt order (a first batch holds only 101 unless asked for more), then exactly
+ *  those, their range checked again. */
 async function removeChunk(db: PrismaClient, now: Date, chunk: number): Promise<number> {
   const range = { expiresAt: { $gt: oldFloor(now),
     $lte: date(now.getTime() + (OLD_EXPIRY_DAYS - PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS) * DAY) } }
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: range, projection: { _id: 1 }, sort: { expiresAt: 1 },
-    hint: 'product_usage_expiry', limit: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
+    hint: 'product_usage_expiry', limit: chunk, batchSize: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
   const ids = found.cursor.firstBatch.map(receipt => receipt._id)
   if (!ids.length) return 0
-  const answer = await db.$runCommandRaw({ delete: COLLECTION, deletes: [{ q: { _id: { $in: ids }, ...range }, limit: 0 }] } as never) as
+  // By _id: on both _id and the range Mongo planned the expiry index and examined every old receipt (~4M, ~17 s a delete, 11-04).
+  const answer = await db.$runCommandRaw({ delete: COLLECTION, deletes: [{ q: { _id: { $in: ids }, ...range }, limit: 0, hint: { _id: 1 } }] } as never) as
     { n?: number; writeErrors?: unknown[] }
   if (answer.writeErrors?.length) throw new Error('The database refused some receipt removals')
   return answer.n ?? 0
