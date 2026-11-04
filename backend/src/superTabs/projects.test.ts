@@ -677,6 +677,9 @@ describe('whom a task\'s pull requests are for', () => {
     // The name they show, written as plain words (personNames.ts writtenNameOf).
     f.state.people.find(p => p.id === 'owner')!.name = 'Ken *15*'
     expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('Ken \\*15\\*'))
+    // Never an email, even one they took as their name.
+    f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
     delete f.state.people.find(p => p.id === 'owner')!.name
     expect(requestedByLine(f.state, project, group(plain), agentOf('owner'))).toBeNull()
     expect(requestedByLine(f.state, project, group(review), agentOf('host'))).toBeNull()

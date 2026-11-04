@@ -192,6 +192,14 @@ describe('a person author as an agent reads it', () => {
       .toEqual({ kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' })
   })
 
+  // A person may take their own email as their name (member.name): an agent still never reads it.
+  it('names a person whose name is their own email by username', () => {
+    const f = fixture()
+    f.setName(relay.email)
+    expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state)))
+      .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'wkpnjjhbnm', membershipGeneration: 'g' })
+  })
+
   it('names someone who left as a person, and leaves an agent author as it is', () => {
     const f = fixture()
     const names = swarmUsernames(f.state)

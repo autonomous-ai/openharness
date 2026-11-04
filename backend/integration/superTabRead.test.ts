@@ -1188,7 +1188,7 @@ describe('decisions asked of one person (v2)', () => {
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
-      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked ${peer.email}.`)
+      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked peer.`)
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
   })
 
