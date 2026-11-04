@@ -1296,6 +1296,8 @@ model SuperTabThreadMark {
 /// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
 /// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
 /// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
+/// A root closed by hand (proposal.close, task #2926) stays, with sequence -2 and `closed` { reason, by, at }, out of every
+/// read, so no seed opens it again: one row per closed proposal (about 50 per project at first), removed with its Swarm.
 model SuperTabOpenProposal {
   /// The root message's id, or the chat's seed mark.
   id             String   @id @map("_id")

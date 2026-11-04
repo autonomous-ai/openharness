@@ -2,14 +2,16 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import { env } from '../config/env.js'
 import { POOL_DEFAULTS, withPoolDefaults } from './databaseUrl.js'
 import { withQueryStats } from './queryStats.js'
+import { metrics } from './metrics.js'
 
 // The Prisma CLI (db push) reads env("DATABASE_URL"); keep it in sync for any manual run.
 process.env.DATABASE_URL ??= env.DATABASE_URL
 
-// Every query is timed for the per-minute `db by shape` log (lib/queryStats.ts, DB roadmap Phase 1).
+// Every query is timed for the per-minute `db by shape` log (lib/queryStats.ts, DB roadmap Phase 1) and into
+// prisma_query_duration_seconds (lib/metrics.ts).
 export const prisma = withQueryStats(new PrismaClient({
   datasources: { db: { url: withPoolDefaults(env.DATABASE_URL, POOL_DEFAULTS) } },
-}))
+}), undefined, undefined, metrics.observeQuery)
 
 /** "Not soft-deleted" filter for Machine findMany where-clauses. Mongo-Prisma gotcha: legacy
  *  rows have NO `deletedAt` field and `{deletedAt: null}` matches only an explicit null, so the

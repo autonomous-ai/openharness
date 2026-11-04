@@ -54,6 +54,19 @@ describe('built-in Swarm skills', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
+  it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
+    const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
+    expect(text).toContain("reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID --answers MESSAGE_ID, right below your owner's message; "
+      + 'to a message in a thread, with --reply-to MESSAGE_ID, inside that thread.')
+  })
+
+  it('tells every agent in swarm-tools to answer right below a message in the main chat, and in its thread inside one (task #2929)', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...`\n'
+      + '- Answer a message once, where it was asked: `--answers MESSAGE_ID` puts your answer right below a message in the main chat; `--reply-to MESSAGE_ID` puts it in the thread of a message that is in one. '
+      + 'Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.\n')
+    expect(SWARM_TOOLS_SKILL).not.toContain('answers in the main chat bury each other')
+  })
+
   it('gives a Buddy no tools file and leaves its line unchanged', () => {
     const workspace = fixture()
     const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'buddy-session' })
@@ -108,7 +121,8 @@ describe('built-in Swarm skills', () => {
   // with allowance can take it now, and the morning digest. The Lead's alone, in both modes, right after the lost-work line.
   // The thread line (Dee's threads, 2026-10-29): the Lead answers inside the thread of the message it answers. The Lead's
   // alone, in both modes, right after its write-like-a-colleague line.
-  const thread = '- Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.\n'
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  const thread = '- Answer a message where it was asked: one in the main chat right below it, with post --answers that message; one in a thread inside that thread, with post --reply-to it. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.\n'
   // The Next-up line (Tasks view, #2569): the Lead's alone, in both modes, where it keeps work moving.
   const queue = '- Keep the project\'s Next up in the order work should start: work.queue with after (null for the top) moves a task, and notBefore (YYYY-MM-DD) marks a promise such as removing a route after a date.\n'
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'
@@ -809,6 +823,13 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     // Diego (10-29): it tells its owner how their proposals go, unasked, one note per milestone and nothing otherwise.
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
+    // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
+    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: "I\'ll post this as you: …", and wait for their ok.')
+    expect(text).toContain('"text":"the line they okayed, or their own words"')
+    expect(text).toContain('Only what follows "I\'ll post this as you:" in your message counts as shown')
+    expect(text).toContain('in full, never cut, as their own message, with no reply from you in the chat')
+    expect(text).not.toContain('Short name (at most 80 characters)')
+    expect(text).not.toContain('with your full proposal as the first reply in its thread')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
 })

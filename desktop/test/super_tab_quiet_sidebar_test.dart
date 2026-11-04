@@ -33,7 +33,6 @@ void main() {
           body: ProjectSidebar(
             controller: c,
             app: app,
-            needsHuman: (_) => 0,
             onSelect: c.select,
             onNewSwarm: () {},
             onNewProject: onNewProject ?? () {},
