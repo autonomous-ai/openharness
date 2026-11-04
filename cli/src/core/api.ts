@@ -1617,6 +1617,9 @@ export type BackendNotice =
   /** A Lead's terminal request waits for an agent of this machine (backend lib/swarmDeliveryPushes.ts): its Swarm host picks
    *  it up now rather than at its next poll (superTabs/terminal.ts). The backend's `__` frame, kept by name. */
   | { type: '__terminal_waiting'; tabId: string; agentId: string }
+  /** The server renews the Swarm host's delivery push lease, each minute through Redis (backend lib/swarmDeliveryPushes.ts):
+   *  the host keeps reading an idle worker's list only when told (superTabs/host.ts PUSH_LEASE_MS). A `__` frame, kept by name. */
+  | { type: '__deliveries_lease' }
   /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
    *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
   | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
