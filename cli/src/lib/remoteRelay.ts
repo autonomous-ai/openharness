@@ -59,6 +59,11 @@ const ISOLATED_DIAL_COOLDOWN_MS = 30_000
 // median 0.4 s, open, sign in, select, refused, closed, because the window's pool dialled again on every
 // select its local clients made: the app's retry, a TUI, a CLI command.
 const REFUSED_BACKOFF_MAX_MS = 30_000
+// A machine refused as offline, which no list says is offline (LISTED_RECHECK_MS), is asked again after 30 s, then 1, 2,
+// 4 minutes, and at most every 5: a machine that is off is usually off for long, and every ask is a socket and a sign-in.
+// A list that shows it online lifts this at once.
+const OFFLINE_BACKOFF_FIRST_MS = 30_000
+const OFFLINE_BACKOFF_MAX_MS = 5 * 60_000
 // A retry-after longer than this is read as this: a wrong answer must not shut a machine out for long.
 const RETRY_AFTER_MAX_MS = 5 * 60_000
 // A machine the account's machine list shows offline is not dialled at all: its selects are answered MACHINE_OFFLINE
@@ -296,8 +301,8 @@ export interface RemoteRelayPoolOptions {
 export interface ListedOffline { ids: Set<string>; at: number; asked: number }
 
 /** A machine whose last dials failed `count` times in a row: selects of it before `until` get `error` back.
- *  `asked`: the backend set `until` (its retry-after), which even an explicit redial waits out. */
-interface Refusal { until: number; error: unknown; count: number; asked: boolean }
+ *  `askedUntil`: the end of the backend's own retry-after, which even an explicit redial waits out. */
+interface Refusal { until: number; error: unknown; count: number; askedUntil: number }
 
 const DENIED_TRIES = 3
 const DENIED_WINDOW_MS = 60_000
@@ -509,7 +514,7 @@ export class RemoteRelayPool {
     // Not even an explicit redial: the backend, whose list this is, would refuse it.
     if (this.heldByList(machineId)) return Promise.reject(new RelayConnectError('MACHINE_OFFLINE', 1013))
     const refused = this.refusals.get(machineId)
-    if (refused && this.now() < refused.until && (refused.asked || !redial)) return Promise.reject(refused.error)
+    if (refused && this.now() < (redial ? refused.askedUntil : refused.until)) return Promise.reject(refused.error)
     const failed = this.lastDialFailure.get(machineId)
     if (failed && this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs) {
       return Promise.reject(failed.error)
@@ -558,10 +563,13 @@ export class RemoteRelayPool {
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
-    const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
+    const offline = error instanceof RelayConnectError && error.message === 'MACHINE_OFFLINE'
+    const backoff = offline
+      ? Math.min(OFFLINE_BACKOFF_MAX_MS, OFFLINE_BACKOFF_FIRST_MS * 2 ** (count - 1))
+      : Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
     const asked = error instanceof RelayConnectError && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
       ? Math.min(Math.max(error.retryAfterMs, 0), RETRY_AFTER_MAX_MS) : 0
-    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, asked: asked > backoff })
+    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, askedUntil: this.now() + asked })
   }
 
   private async dial(machineId: string, autonomousEnv: string, selectFrame: Frame, forceRefresh: boolean): Promise<Entry> {
