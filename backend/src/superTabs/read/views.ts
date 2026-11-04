@@ -7,7 +7,7 @@ import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
+import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -137,7 +137,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
-    return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - slots(stored)),
+    return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
