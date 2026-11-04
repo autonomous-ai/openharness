@@ -57,8 +57,10 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
 /// Swarm, the one shown ticked and what waits in each other one counted,
 /// then Sort and filter ([onView]) and the agents on the person's computers
 /// ([agents]), where Home has them — moved here from Home's filter icon and
-/// Agents tile (anh Dee, 2026-11-04: less on Home) — and Join or create a
-/// Swarm. A Swarm the account loses, or whose read is taken away, while it
+/// Agents tile (anh Dee, 2026-11-04: less on Home) — then New project, for
+/// someone who may write in a Swarm Home shows ([offersNewProject]; moved
+/// from the foot of Home, River 2026-11-04: Home keeps one +, New
+/// message's), and Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
 /// is open leaves it, and a tap on it shows nothing. A Swarm with a menu for
 /// the person ([swarmHasMenu]) shows a ⋮ on its row; the ⋮, or holding the
 /// row, closes it for that menu over Home ([showSwarmMenu]). Each of the
@@ -68,6 +70,8 @@ Future<void> showSwarmSwitcher(
   SwarmSession session, {
   VoidCallback? onView,
   SwarmAgents? agents,
+  bool Function()? offersNewProject,
+  VoidCallback? onNewProject,
 }) => showModalBottomSheet<void>(
   context: context,
   backgroundColor: AppGlass.rowFill,
@@ -87,6 +91,8 @@ Future<void> showSwarmSwitcher(
       onView: onView == null ? null : then(onView),
       agents: agents,
       onAgents: agents == null ? null : then(() => agents.openList(context)),
+      offersNewProject: offersNewProject,
+      onNewProject: onNewProject == null ? null : then(onNewProject),
     );
   },
 );
@@ -99,14 +105,20 @@ class _Switcher extends StatelessWidget {
     this.onView,
     this.agents,
     this.onAgents,
+    this.offersNewProject,
+    this.onNewProject,
   });
 
   final SwarmSession session;
   final VoidCallback onJoin;
 
   /// Sort and filter, and the agents' list: null, no row.
-  final VoidCallback? onView, onAgents;
+  final VoidCallback? onView, onAgents, onNewProject;
   final SwarmAgents? agents;
+
+  /// Whether New project is offered now: read on each build, so a role
+  /// taken away while it is open takes the row with it.
+  final bool Function()? offersNewProject;
 
   /// A Swarm's menu asked for, from its row's ⋮ or by holding the row,
   /// with its id.
@@ -261,6 +273,15 @@ class _Switcher extends StatelessWidget {
                   },
                   chevron: null,
                   onTap: onAgents,
+                ),
+              if ((offersNewProject, onNewProject)
+                  case (final offers?, final onNewProject?) when offers())
+                SwarmRow(
+                  key: const ValueKey('swarm-switch-new-project'),
+                  leading: const _Glyph(LucideIcons.squarePlus300),
+                  title: 'New project',
+                  chevron: null,
+                  onTap: onNewProject,
                 ),
               SwarmRow(
                 key: const ValueKey('swarm-switch-join'),

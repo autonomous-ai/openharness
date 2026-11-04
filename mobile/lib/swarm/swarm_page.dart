@@ -389,6 +389,10 @@ class _SwarmPageState extends State<SwarmPage> {
           session,
           onView: () => _openView(context, session),
           agents: swarmAgentsOf(context),
+          // For someone who may write in a Swarm shown: never a viewer.
+          offersNewProject: () => _shown(session)
+              .any((swarm) => swarmMayCreateProject(session.inbox, swarm.id)),
+          onNewProject: () => unawaited(_newProject(session, _shown(session))),
         ),
       ),
     );
@@ -675,13 +679,6 @@ class _SwarmPageState extends State<SwarmPage> {
       onLongPress: () => unawaited(_pin(context, session, project)),
     );
     final empty = !any && reading.isEmpty && failed.isEmpty;
-    // Last, for someone who may write in a Swarm shown: never a viewer.
-    final create = shown.any((swarm) => swarmMayCreateProject(inbox, swarm.id))
-        ? SwarmNewProjectRow(
-            key: const ValueKey('swarm-new-project'),
-            onTap: () => unawaited(_newProject(session, shown)),
-          )
-        : null;
     // Filtered with some listed: what is left out is said, never silent.
     final filterOn =
         filter != SwarmHomeFilter.all && !nothingListed && !mentionsFailed
@@ -797,17 +794,13 @@ class _SwarmPageState extends State<SwarmPage> {
         const SizedBox(height: AppSpace.s),
         SwarmSkeletonRows(id: 'swarm-mentions-loading', nameOnly: true),
       ],
-      if (create != null) ...[
-        const SizedBox(height: AppSpace.s),
-        SwarmGroup(children: [create]),
-      ],
     ];
   }
 
-  /// + New project: its sheet over Home, for every Swarm listed, opening on
-  /// the one [shown] if Home shows one and it is not paused (Dee, 11-01);
-  /// the project it made opens, unless Home or the account changed
-  /// meanwhile, or the project is no longer Home's to list.
+  /// New project, from the Swarm switcher: its sheet over Home, for every
+  /// Swarm listed, opening on the one [shown] if Home shows one and it is
+  /// not paused (Dee, 11-01); the project it made opens, unless Home or the
+  /// account changed meanwhile, or the project is no longer Home's to list.
   Future<void> _newProject(
     SwarmSession session,
     List<SwarmListing> shown,
