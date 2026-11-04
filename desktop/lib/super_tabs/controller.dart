@@ -16,6 +16,7 @@ import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
+import 'task_groups.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
@@ -23,7 +24,6 @@ import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
 import 'task_steps.dart';
-import 'task_groups.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -200,9 +200,6 @@ class SuperTabController extends ChangeNotifier {
       final order = initial['sendOrder'];
       if (order is List) _sendOrder.addAll(order.whereType<String>());
       _savedSelection = initial['selectedId'] is String;
-      expandedProjects.addAll(
-        (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
-      );
       expandedMachines.addAll(
         (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
       );
@@ -993,7 +990,6 @@ class SuperTabController extends ChangeNotifier {
   /// Each conversation's reads under way, newest and older apart: an older
   /// page asked for during a poll's read is a read of its own.
   final _reading = <(String, bool), Future<void>>{};
-  final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
@@ -1039,42 +1035,6 @@ class SuperTabController extends ChangeNotifier {
     if (sessionProjectId == projectId) return;
     sessionProjectId = projectId;
     _saveSoon();
-    _changed();
-  }
-
-  void toggleProject(String id) {
-    if (!expandedProjects.remove(id)) {
-      expandedProjects.add(id);
-      unawaited(loadDormant(id));
-    }
-    _saveSoon();
-    _changed();
-  }
-
-  /// Projects whose "Closed (N)" row is open; every one starts collapsed and
-  /// the choice is not saved.
-  final closedOpenProjects = <String>{};
-
-  void toggleClosed(String projectId) {
-    if (!closedOpenProjects.remove(projectId)) {
-      closedOpenProjects.add(projectId);
-    }
-    _changed();
-  }
-
-  /// Each project's task groups folded or unfolded against their default
-  /// (`<project>/<group>`), remembered as Closed is: not saved.
-  final _taskGroupsToggled = <String>{};
-
-  /// Whether [group] of [projectId]'s tasks is folded in the sidebar; only
-  /// The rest starts folded.
-  bool taskGroupFolded(String projectId, SuperTabTaskGroup group) =>
-      group.foldedByDefault !=
-      _taskGroupsToggled.contains('$projectId/${group.name}');
-
-  void toggleTaskGroup(String projectId, SuperTabTaskGroup group) {
-    final key = '$projectId/${group.name}';
-    if (!_taskGroupsToggled.remove(key)) _taskGroupsToggled.add(key);
     _changed();
   }
 
@@ -2685,7 +2645,6 @@ class SuperTabController extends ChangeNotifier {
     'tabId': tabId,
     'accountId': accountId,
     'selectedId': selectedId,
-    'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
@@ -3112,6 +3071,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Moves [taskId] right after [after] in its project's shared Next up, or to
+  /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
+  /// once the server took it; otherwise why it did not.
+  Future<String?> queueTask(String taskId, {required String? after}) async {
+    final done = await command({
+      'type': 'work.queue',
+      'conversationId': taskId,
+      'after': after,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves the reader's one Buddy onto [gridModel], a model shared in the
   /// Swarm, or back to their own subscription when null (backend
   /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
@@ -3390,12 +3363,10 @@ class SuperTabController extends ChangeNotifier {
     if (id == selectedId && !devicesSelected) return true;
     _acted();
     final group = snapshot!.conversation(id)!;
-    // A workgroup is shown under its project, so its project opens. A Buddy
-    // chat has its own row under Buddies and leaves projects as they were.
+    // A task's project's closed tasks, read once: the quick switcher finds an
+    // archived one by its number (#N). A Buddy chat reads none.
     if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
-      expandedProjects.add(group.projectId);
       unawaited(loadDormant(group.projectId));
-      if (group.closed) closedOpenProjects.add(group.projectId);
     }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
@@ -3678,10 +3649,7 @@ class SuperTabController extends ChangeNotifier {
               ..._readAt.keys,
               ..._refused.keys,
               ..._threadDraftConversations.values,
-            ].any(removed.contains) ||
-            expandedProjects.any(
-              (id) => !next.projects.any((project) => project.id == id),
-            );
+            ].any(removed.contains);
         _messages.removeWhere((id, _) => !allowed.contains(id));
         _staleHeld.removeWhere((id) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
@@ -3708,9 +3676,6 @@ class SuperTabController extends ChangeNotifier {
         _refused.removeWhere((id, _) => removed.contains(id));
         _before.removeWhere((id, _) => !allowed.contains(id));
         _readAt.removeWhere((id, _) => removed.contains(id));
-        expandedProjects.removeWhere(
-          (id) => !next.projects.any((project) => project.id == id),
-        );
         if (!allowed.contains(selectedId)) {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
@@ -3727,9 +3692,6 @@ class SuperTabController extends ChangeNotifier {
           // A read for the parts before has nothing to give these.
           _dormantPages.clear();
           _dormantReads.clear();
-          for (final project in expandedProjects) {
-            unawaited(loadDormant(project));
-          }
           if (_closedShippedSince case final since?) {
             _forgetClosedShipped();
             unawaited(readClosedShipped(since));
@@ -4111,6 +4073,83 @@ class SuperTabController extends ChangeNotifier {
       'swarm',
       'closed tasks read stopped at $_closedSincePages pages',
     );
+  }
+
+  /// Each project's Buddy proposals the PM has not answered, oldest first, as
+  /// last read (backend proposals read, #2867's rule, task #2569), and the
+  /// project chat's last sequence that read saw: the next read waits for the
+  /// chat to move, as only a message there can answer or add one, and for a
+  /// minute since the last (the PM, 2026-11-04: the read looks through the
+  /// whole chat, and repeated reads are the backend's biggest cost).
+  final _proposals = <String, List<SuperTabProposal>>{};
+  final _proposalsAt = <String, int>{};
+  final _proposalsReadAt = <String, DateTime>{};
+  final _proposalReads = <String, Future<void>>{};
+  final _proposalsLater = <String, Timer>{};
+  static const proposalsEvery = Duration(minutes: 1);
+
+  List<SuperTabProposal> proposalsOf(String projectId) =>
+      _proposals[projectId] ?? const [];
+
+  /// Reads [projectId]'s open proposals once its chat has moved since the last
+  /// read; joins a read under way. A failed read keeps what was shown and is
+  /// tried again when the chat next moves.
+  Future<void> readProposals(String projectId) {
+    final project = snapshot?.projectById(projectId);
+    if (_disposed || accessRevoked || project == null) return Future.value();
+    final at =
+        snapshot!
+            .conversation(project.leadConversationId)
+            ?.lastMessageSequence ??
+        0;
+    if (_proposalsAt[projectId] == at) return Future.value();
+    if (_proposalReads[projectId] case final reading?) return reading;
+    final last = _proposalsReadAt[projectId];
+    final wait = last == null
+        ? Duration.zero
+        : proposalsEvery - clock.now().difference(last);
+    if (wait > Duration.zero) {
+      // One read for every move in the minute, once it is up.
+      _proposalsLater[projectId] ??= Timer(wait, () {
+        _proposalsLater.remove(projectId);
+        unawaited(readProposals(projectId));
+      });
+      return Future.value();
+    }
+    _proposalsReadAt[projectId] = clock.now();
+    late final Future<void> reading;
+    reading = _readProposals(projectId, at).whenComplete(() {
+      if (identical(_proposalReads[projectId], reading)) {
+        _proposalReads.remove(projectId);
+      }
+    });
+    return _proposalReads[projectId] = reading;
+  }
+
+  Future<void> _readProposals(String projectId, int at) async {
+    _proposalsAt[projectId] = at;
+    try {
+      final answer = await request(
+        'GET',
+        '$_path/proposals?projectId=${Uri.encodeQueryComponent(projectId)}',
+      );
+      if (_disposed || accessRevoked) return;
+      _proposals[projectId] = List.unmodifiable([
+        for (final raw in answer['proposals'] as List? ?? const [])
+          if (raw is Map && raw['messageId'] is String)
+            SuperTabProposal.fromJson(superTabMap(raw)),
+      ]);
+      _changed();
+    } catch (failure) {
+      if (_disposed) return;
+      if (_isUpdateRequired(failure)) return _requireUpdate();
+      // A backend from before the read has none to give (404): said once.
+      appLog.warn(
+        'swarm',
+        'proposals read failed: '
+            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+      );
+    }
   }
 
   void _forgetClosedShipped() {
@@ -5254,6 +5293,9 @@ class SuperTabController extends ChangeNotifier {
     _machinesChanged.dispose();
     _closedShippedChanged.dispose();
     _silenceWatch?.cancel();
+    for (final later in _proposalsLater.values) {
+      later.cancel();
+    }
     for (final then in _onDispose) {
       then();
     }

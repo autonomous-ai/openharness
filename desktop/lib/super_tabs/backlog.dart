@@ -25,9 +25,9 @@ const superTabBacklogShippedWindow = Duration(days: 7);
 /// Whether [task] has shipped (task #2558): a recorded merge of any of its pull
 /// requests (a batch's counts, its own closed), or Done with none to merge. Its
 /// `shippedAt` alone cannot say: the server sets that at the first Done.
-bool _shipped(SuperTabConversation task, Object? status) =>
+bool superTabTaskShipped(SuperTabConversation task) =>
     task.cards.pullRequests.any((card) => card.merged) ||
-    (status == 'done' &&
+    (task.assignment?['status'] == 'done' &&
         task.cards.pullRequests.isEmpty &&
         task.pullRequestUrls.isEmpty);
 
@@ -43,7 +43,7 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(
   final at = task.shippedAt;
   final inWindow =
       at != null && now.difference(at) <= superTabBacklogShippedWindow;
-  if (at != null && _shipped(task, status)) {
+  if (at != null && superTabTaskShipped(task)) {
     if (inWindow) return SuperTabBacklogGroup.shipped;
     // Past the window, unless it is back at work.
     if (task.closed || status == 'done') return null;
@@ -79,31 +79,45 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(
 }
 
 /// Every task of the Swarm the controller holds, open and closed, and of
-/// [closed], those read for the list alone, across projects, newest first: the
-/// groups the server lets this reader read, less project chats, Buddy chats,
-/// steps and private chats, as the sidebar lists a project's work
-/// (project_sidebar.dart superTabOpenWorkgroups). What the controller holds is
-/// newer than a read, so it wins.
+/// [closed], those read for the list alone, across projects, newest first.
 List<SuperTabConversation> superTabBacklogTasks(
   SuperTabController c, {
   Iterable<SuperTabConversation> closed = const [],
 }) {
-  final snapshot = c.snapshot;
-  if (snapshot == null) return const [];
   final byProject = closed.groupListsBy((g) => g.projectId);
   final tasks = [
-    for (final project in snapshot.projects)
-      for (final g in superTabListedWork([
-        ...c.projectConversations(project.id),
-        for (final g in byProject[project.id] ?? const <SuperTabConversation>[])
-          if (snapshot.conversation(g.id) == null) g,
-      ]))
-        if (g.id != project.leadConversationId &&
-            !g.isBuddyChat &&
-            !c.hiddenByBuddies(g))
-          g,
+    for (final project in c.snapshot?.projects ?? const <SuperTabProject>[])
+      ...superTabProjectTasks(
+        c,
+        project,
+        closed: byProject[project.id] ?? const [],
+      ),
   ];
   // A stable sort keeps the snapshot's order among unnumbered ones.
   mergeSort(tasks, compare: (a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
   return tasks;
+}
+
+/// [project]'s tasks the controller holds, open and closed, and of [closed],
+/// those read for a list alone: the groups the server lets this reader read,
+/// less its chat, Buddy chats, steps and private chats. What the controller
+/// holds is newer than a read, so it wins.
+List<SuperTabConversation> superTabProjectTasks(
+  SuperTabController c,
+  SuperTabProject project, {
+  Iterable<SuperTabConversation> closed = const [],
+}) {
+  final snapshot = c.snapshot;
+  if (snapshot == null) return const [];
+  return [
+    for (final g in superTabListedWork([
+      ...c.projectConversations(project.id),
+      for (final g in closed)
+        if (snapshot.conversation(g.id) == null) g,
+    ]))
+      if (g.id != project.leadConversationId &&
+          !g.isBuddyChat &&
+          !c.hiddenByBuddies(g))
+        g,
+  ];
 }

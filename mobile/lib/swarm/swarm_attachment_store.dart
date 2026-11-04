@@ -21,7 +21,7 @@ const swarmAttachmentStale = Duration(days: 7);
 const swarmAttachmentCap = 200;
 
 /// The phone's copies of Swarm's files, for the pictures shown in a chat
-/// ([SwarmAttachment]).
+/// ([SwarmAttachment]) and the text files read in one (`SwarmFileViewer`).
 ///
 /// Fetched exactly as the chip opens them: the public link on Harness's file
 /// storage, with no credential of the app's. Kept in the app's private
@@ -95,6 +95,58 @@ class SwarmAttachmentStore {
       (await (_cache ??= _cacheFor(
         account,
       ))).getSingleFile(url.toString(), key: key);
+
+  /// Hands [use] a copy of [kept], one of the account's files ([file]), named
+  /// [name]: the share sheet names what it hands on by its path, and a kept
+  /// file's path is the cache's own. The copy lies in the account's folder, so
+  /// it goes with the rest, and goes itself once [use] ends. Throws for a
+  /// file that is not the account's.
+  Future<void> named(
+    File kept,
+    String name,
+    Future<void> Function(File copy) use,
+  ) async {
+    await _changing;
+    final account = _account;
+    if (account == null) throw StateError('No account to keep files for.');
+    // Waited for like a fetch, so no emptying runs under it: counted from
+    // here, before the first wait, as an emptying asked for meanwhile would
+    // otherwise run under the copy.
+    final copying = () async {
+      final folder = await _folderOf(account);
+      final inside = '${folder.absolute.path}/';
+      if (!File(kept.path).absolute.path.startsWith(inside)) {
+        throw StateError('Not a file kept for this account.');
+      }
+      final shared = Directory('${folder.path}/shared');
+      await shared.create(recursive: true);
+      final into = await shared.createTemp();
+      return kept.copy('${into.path}/${swarmFileName(name)}');
+    }();
+    final done = copying.then<void>((_) {}, onError: (Object _) {});
+    _fetching.add(done);
+    final File copy;
+    try {
+      copy = await copying;
+    } finally {
+      _fetching.remove(done);
+    }
+    try {
+      await use(copy);
+    } finally {
+      try {
+        await _delete(copy.parent);
+      } catch (error) {
+        // Left for the account's emptying. Its kind only: the error's path
+        // carries the file's name.
+        appLog.failure(
+          'swarm',
+          'A shared copy of a Swarm file could not be deleted: '
+              '${error.runtimeType}',
+        );
+      }
+    }
+  }
 
   /// Keeps [accountId]'s files and empties every other account's; with null
   /// (nobody signed in, or Swarm off) empties everything. A file that could
@@ -204,6 +256,31 @@ class SwarmAttachmentStore {
       // Already gone.
     }
   }
+}
+
+/// [name], a message's file name, as one a phone's file system takes: no
+/// folder or control character in it, never empty, at most 255 bytes, the
+/// extension kept when it has to be shortened.
+@visibleForTesting
+String swarmFileName(String name) {
+  var safe = name.replaceAll(RegExp(r'[/\\\x00-\x1f\x7f]'), '_').trim();
+  if (safe.isEmpty || safe == '.' || safe == '..') return 'file';
+  const most = 255;
+  if (utf8.encode(safe).length <= most) return safe;
+  final dot = safe.lastIndexOf('.');
+  final extension = dot > 0 && safe.length - dot <= 16
+      ? safe.substring(dot)
+      : '';
+  final room = most - utf8.encode(extension).length;
+  final stem = StringBuffer();
+  var bytes = 0;
+  for (final rune in safe.substring(0, safe.length - extension.length).runes) {
+    final size = utf8.encode(String.fromCharCode(rune)).length;
+    if (bytes + size > room) break;
+    stem.writeCharCode(rune);
+    bytes += size;
+  }
+  return '$stem$extension';
 }
 
 /// The app's one store of Swarm's files; review screenshots put in one
