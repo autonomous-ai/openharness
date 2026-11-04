@@ -143,19 +143,19 @@ void main() {
           closeTo(tag.left - plus.right, .5),
           reason: 'mic and send spacing',
         );
-        if (!phone) {
-          // Desktop's 32pt targets: the row's air, then the arrow as far up
-          // from the bottom as the text is down from the top. A phone's 44pt
-          // targets take what they need.
-          final glyphInTarget =
-              (grid.AppControl.height - AppIcons.inlineSize) / 2;
-          expect(
-            plus.top - field.bottom,
-            closeTo(rowGap + glyphInTarget, .5),
-            reason: 'row gap',
-          );
-          expect(surface.bottom - send.bottom, closeTo(top, .5));
-        }
+        // The row's air over Desktop's 32pt targets, the same over a phone's
+        // 44pt ones, which would otherwise push a short phone's box past the
+        // keyboard.
+        final glyphInTarget =
+            (grid.AppControl.height - AppIcons.inlineSize) / 2;
+        expect(
+          plus.top - field.bottom,
+          closeTo(rowGap + glyphInTarget, .5),
+          reason: 'row gap',
+        );
+        // On Desktop the arrow sits as far up from the bottom as the text sits
+        // down from the top; a phone's finger targets take what they need.
+        if (!phone) expect(surface.bottom - send.bottom, closeTo(top, .5));
         final box = tester.widget<DecoratedBox>(surfaceKey).decoration;
         expect(
           (box as BoxDecoration).borderRadius,
