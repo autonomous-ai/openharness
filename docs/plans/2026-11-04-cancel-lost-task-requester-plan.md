@@ -15,6 +15,9 @@
 - Only `lost` or `stopped` attempts widen; `working`, `review`, `blocked`, `needs_human` and `reconciling` stay as today.
 - Only the task's requester or its own project's owner widen, as a person; a viewer is still refused before the handler (READ_ONLY), and a person who can no longer read the task is still refused (readConversation).
 - The unassigned and ended-step paths of `work.cancel` are unchanged.
+- An already-cancelled attempt also lets the requester and the project's owner through, where it changes nothing (a retry keeps the first reason and tells nobody).
+- Cancelling a lost or stopped task ends its open steps, as any cancel does (`endStepsOf`): with no worker left, a Reviewer or Tester still on a step has nothing to check.
+- Among people, only the Swarm owner or the project's owner names or clears a task's requester (`conversation.requester`), since the requester may now close it; agents of the project name it as before. No app sends it as a person (security reviews 1 and 2 of #2907).
 - Two independent security reviews by two different Reviewers.
 - PR body first line: "Requested by diego@autonomous.ai through Harness."
 - Swarm code stays out of cli/src/core.
@@ -26,13 +29,14 @@
 - The requester cannot cancel their own task while its agent is still working (live work stays the project's agents' and the Swarm owner's).
 - After the requester cancels and archives, nobody is tagged; after the project owner cancels and the requester did not archive, the requester is still tagged as today.
 - A retry of the requester's cancel changes nothing (the existing `cancelled` early return).
+- A collaborator who names themselves requester of a lost task is refused, so they still cannot cancel it (security reviews 1 and 2).
 
 ---
 
 ### Task 1: Requester and project owner cancel a lost or stopped task
 
 **Files:**
-- Modify: `backend/src/superTabs/commands.ts` (`work.cancel`, `conversation.archive`'s WORK_UNFINISHED message)
+- Modify: `backend/src/superTabs/commands.ts` (`work.cancel`, `conversation.archive`'s WORK_UNFINISHED message, `conversation.requester`)
 - Test: `backend/src/superTabs/commands.test.ts` (`archiving unfinished work`)
 
 **Interfaces:**

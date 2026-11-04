@@ -2059,6 +2059,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
       const group = open(state, command.conversationId)
+      // Its requester may close it once it is lost or stopped (work.cancel), so among people only an owner names who asked;
+      // anyone else could name themselves and cancel a task they never asked for (security review 2 of #2907). Agents name
+      // the person they opened it for, as before.
+      if (actor.kind === 'person' && ![state.ownerId, groupProject(state, group).ownerId].includes(actor.userId)) {
+        fail('FORBIDDEN', 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.', 403)
+      }
       if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
       else delete group.requesterId
       break
