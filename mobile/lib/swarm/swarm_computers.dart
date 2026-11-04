@@ -122,14 +122,21 @@ class AppSwarmComputers extends ChangeNotifier
         ),
   ];
 
+  /// The computers whose engines the card asked for: once each, as a computer
+  /// that cannot answer stays unread and would be asked at every draw.
+  final _probed = <String>{};
+  bool _disposed = false;
+
   List<String> _leadEngines(MachineState machine) {
     final engines = machine.engines;
     if (!engines.loaded) {
-      unawaited(
-        notifier
-            .probeEngines(machine.machine.machineId)
-            .then((_) => notifyListeners()),
-      );
+      if (_probed.add(machine.machine.machineId)) {
+        unawaited(
+          notifier.probeEngines(machine.machine.machineId).then((_) {
+            if (!_disposed) notifyListeners();
+          }),
+        );
+      }
       return const ['claude'];
     }
     return [
@@ -224,6 +231,7 @@ class AppSwarmComputers extends ChangeNotifier
 
   @override
   void dispose() {
+    _disposed = true;
     notifier.removeListener(_changed);
     agents.dispose();
     super.dispose();
