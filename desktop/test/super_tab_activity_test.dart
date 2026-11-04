@@ -551,8 +551,10 @@ void main() {
 
   group('sidebar', () {
     for (final brightness in Brightness.values) {
-      testWidgets('Activity takes Notifications\' place; a muted chat is '
-          'greyed with its mark and no number ($brightness)', (tester) async {
+      testWidgets('Activity takes Notifications\' place and counts the tag; a '
+          'muted chat is greyed with its mark and no number ($brightness)', (
+        tester,
+      ) async {
         final server = projectServer();
         fromLead(server, 'News');
         server.tag('message-1');
@@ -562,8 +564,9 @@ void main() {
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
         expect(inRow('super-activity', find.text('Activity')), findsOneWidget);
-        // A tag is no longer counted: Activity shows no number for it.
-        expect(inRow('super-activity', find.text('1')), findsNothing);
+        // Activity counts the unread tag as its Mentions tab does (#2887);
+        // the muted chat's own row carries no number.
+        expect(inRow('super-activity', find.text('1')), findsOneWidget);
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -752,8 +755,8 @@ void main() {
     test('a tag answered but not read past still counts; read past, it does '
         'not', () async {
       final server = withAgent();
-      conversation(server, 'lead')['lastMessageSequence'] = 20;
       server.tag('message-1', messageSequence: 5);
+      conversation(server, 'lead')['lastMessageSequence'] = 20;
       server.mentions.last
         ..['resolvedAt'] = '2026-10-24T06:00:00Z'
         ..['resolvedBy'] = 'answer';

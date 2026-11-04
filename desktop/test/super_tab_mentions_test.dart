@@ -577,8 +577,8 @@ void main() {
 
   group('notifications view', () {
     testWidgets(
-      'the entry counts no tag; the Mentions tab bolds what waits and '
-      'Unreads only lists only that',
+      'the entry counts the unread tag; the Mentions tab bolds what waits '
+      'and Unreads only lists only that',
       (tester) async {
         final server = ConversationServer()
           ..append('Earlier ask')
@@ -590,10 +590,11 @@ void main() {
           ..['resolvedBy'] = 'reply';
         server.state['mentionsWaiting'] = 1;
         await showView(tester, server);
-        // A tag asks for nothing: the Activity row carries no number for it.
+        // The Activity row counts the unread tag, as the Mentions tab does
+        // (#2887); the one answered before this server said where is read.
         expect(
           find.descendant(of: notificationsEntry(), matching: find.text('1')),
-          findsNothing,
+          findsOneWidget,
         );
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();

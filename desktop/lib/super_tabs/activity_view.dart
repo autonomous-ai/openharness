@@ -760,8 +760,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _tabs(
-            needs: a.count,
-            mentions: a.mentionRows.where((r) => r.unread).length,
+            needs: a.needsCount,
+            mentions: a.mentionsUnread,
             threads: a.threadRows.length,
           ),
           Expanded(

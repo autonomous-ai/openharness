@@ -120,12 +120,6 @@ class SuperTabActivity extends ChangeNotifier {
     ];
   }
 
-  /// The tags that are not read past (the number clears by reading). They are
-  /// bold in Mentions but never counted: a tag asks for nothing.
-  Iterable<SuperTabMention> get _tags {
-    return mentions.waiting.where(mentionUnread);
-  }
-
   /// The tasks whose agent asked the reader by name, newest chat first. Only
   /// once the decisions are loaded: that list says which of them is already
   /// a decision, and a task with one must not count twice.
@@ -210,11 +204,11 @@ class SuperTabActivity extends ChangeNotifier {
       if (attention.isNew(t)) t,
   ];
 
-  /// The Activity row's red number: what was asked of the reader and is
-  /// unanswered, plus the reminders they set that are due. Tags, replies and
-  /// stuck tasks nobody was asked about are in Activity but add nothing. Until
-  /// the decisions are read the server's count stands in for them.
-  int get count {
+  /// Needs you's number: what was asked of the reader and is unanswered, plus
+  /// the reminders they set that are due. Replies and stuck tasks nobody was
+  /// asked about add nothing. Until the decisions are read the server's count
+  /// stands in for them.
+  int get needsCount {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
     return (decisions.loaded
@@ -224,9 +218,24 @@ class SuperTabActivity extends ChangeNotifier {
         reminders.due.length;
   }
 
-  /// Whether the Activity row is bold: something needs the reader, or a tag
-  /// or a thread they follow has news they have not read.
-  bool get unread => count > 0 || _tags.isNotEmpty || attention.threadsUnread;
+  /// The Mentions tab's number: every unread tag once, folded or not.
+  int get mentionsUnread =>
+      [...mentions.waiting, ...mentions.earlier].where(mentionUnread).length;
+
+  /// The Activity row's red number: Needs you and the unread tags, so it
+  /// always agrees with the tabs (Diego, #2887). Until the tags are read the
+  /// server's waiting ones stand in for them.
+  int get count {
+    if (_snapshot case final snapshot?) {
+      return needsCount +
+          (mentions.loaded ? mentionsUnread : snapshot.mentionsWaiting);
+    }
+    return 0;
+  }
+
+  /// Whether the Activity row is bold: something needs the reader, or a
+  /// thread they follow has news they have not read.
+  bool get unread => count > 0 || attention.threadsUnread;
 
   /// What the reader's PM answered for them today, newest first: decisions
   /// they left to the PM, or that waited 24 hours.
