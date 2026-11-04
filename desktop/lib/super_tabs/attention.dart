@@ -100,6 +100,31 @@ class SuperTabAttention extends ChangeNotifier {
   /// The server stopped short of everything (its bounds).
   bool more = false;
 
+  /// Read threads asked for at a time, and at most (backend read/followedThreads.ts `READ_THREADS_ASKED_MAX`): Activity's
+  /// Threads lists them 50 at a time as the reader scrolls (task #2835).
+  static const readPage = 50, readMax = 250;
+
+  /// How many read threads the next read asks for.
+  int readWanted = readPage;
+
+  /// The server takes `read`; false on one before it (it refuses the query), which answers its own number and cannot page.
+  bool readPaging = true;
+
+  /// Whether the end of the read threads can ask for more.
+  bool get canReadMore =>
+      loaded &&
+      more &&
+      readPaging &&
+      read.length >= readWanted &&
+      readWanted < readMax;
+
+  /// Asks for the next [readPage] read threads, when there are more.
+  Future<void> readMore() {
+    if (_disposed || !canReadMore) return Future.value();
+    readWanted = (readWanted + readPage).clamp(readPage, readMax);
+    return load();
+  }
+
   /// Threads shown as new in this visit of Activity: they stay new
   /// until the view is left, though opening them marked them read.
   final Set<String> _newThisVisit = {};
@@ -301,6 +326,7 @@ class SuperTabAttention extends ChangeNotifier {
 
   void _clear() {
     unread = read = const [];
+    readWanted = readPage;
     loaded = false;
     error = null;
     more = false;
@@ -392,7 +418,18 @@ class SuperTabAttention extends ChangeNotifier {
       var full = followSupported;
       if (full) {
         try {
-          answer = await controller.request('GET', '$_path/threads');
+          try {
+            answer = await controller.request(
+              'GET',
+              readPaging ? '$_path/threads?read=$readWanted' : '$_path/threads',
+            );
+          } on SuperTabFailure catch (failure) {
+            // A server before paging refuses `read`: read as it takes it.
+            if (failure.statusCode != 400 || !readPaging) rethrow;
+            readPaging = false;
+            if (!current()) return;
+            answer = await controller.request('GET', '$_path/threads');
+          }
         } on SuperTabFailure catch (failure) {
           if (failure.statusCode != 404) rethrow;
           full = false;

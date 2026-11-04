@@ -233,6 +233,13 @@ class SuperTabActivity extends ChangeNotifier {
   /// The followed threads with news today.
   List<SuperTabFollowedThread> get threadRows => newReplies;
 
+  /// The followed threads the reader has read, newest reply first, below the
+  /// new ones (Darren, task #2835).
+  List<SuperTabFollowedThread> get readThreadRows => [
+    for (final t in attention.shown)
+      if (!attention.isNew(t)) t,
+  ];
+
   /// What the listed [decided] call their PM: the coordinator of their
   /// project, or `the PMs` when they come from several.
   String coordinatorFor(Iterable<SuperTabDecision> decided) {

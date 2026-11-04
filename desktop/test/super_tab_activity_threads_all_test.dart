@@ -197,15 +197,13 @@ void main() {
           server.threadListReads.where((p) => p.contains('/threads')).last,
           endsWith('/threads?read=50'),
         );
+        // The marker is not on screen until the list nears its end.
         expect(_key('super-activity-threads-more'), findsNothing);
-        await tester.scrollUntilVisible(
-          _key('super-activity-threads-more'),
-          600,
-          scrollable: find.descendant(
-            of: _key('super-activity-list'),
-            matching: find.byType(Scrollable),
-          ),
+        expect(
+          server.threadListReads.where((p) => p.contains('read=100')),
+          isEmpty,
         );
+        // The server's next page: 60 in all, nothing after.
         server.followedThreads = {
           'unread': [],
           'read': [
@@ -218,6 +216,14 @@ void main() {
           ],
           'more': false,
         };
+        await tester.scrollUntilVisible(
+          _key('super-activity-row-thread:offline/read-49'),
+          600,
+          scrollable: find.descendant(
+            of: _key('super-activity-list'),
+            matching: find.byType(Scrollable),
+          ),
+        );
         await _settle(tester);
         expect(
           server.threadListReads.where((p) => p.contains('/threads')).last,
