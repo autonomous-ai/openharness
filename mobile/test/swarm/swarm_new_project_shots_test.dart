@@ -175,13 +175,12 @@ void main() {
           await tester.pumpAndSettle();
         }
 
-        // Home: + New project, the last of Projects.
-        await tester.ensureVisible(key('swarm-new-project'));
-        await tester.pumpAndSettle();
+        // The Swarm switcher, with New project before Join or create.
+        await tap('swarm-title-button');
         await capture('home');
 
         // The sheet, its brief written and its machine picked.
-        await tap('swarm-new-project');
+        await tap('swarm-switch-new-project');
         await tester.enterText(
           key('swarm-new-project-brief'),
           'Let people start a project from the phone, with its Product '
@@ -307,7 +306,8 @@ void main() {
         ];
         await host.session!.inbox.reader(tab)!.refresh();
         await tester.pumpAndSettle();
-        await tap('swarm-new-project');
+        await tap('swarm-title-button');
+        await tap('swarm-switch-new-project');
         await tap('swarm-new-project-machine');
         await capture('none');
 
@@ -397,7 +397,8 @@ void main() {
       // Home shows the paused Swarm alone, as Dee's did.
       host.session!.home.show(tab);
       await tester.pumpAndSettle();
-      await tap('swarm-new-project');
+      await tap('swarm-title-button');
+      await tap('swarm-switch-new-project');
       await tap('swarm-new-project-machine');
       await tap('swarm-new-project-pick-machine-mac-studio');
       await capture('paused-default');
