@@ -11,6 +11,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
@@ -614,6 +615,50 @@ void main() {
       expect(server.posts, isEmpty);
     });
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('an unread mention row reads like an unread thread row; a '
+        'read one is quiet ($brightness)', (tester) async {
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      await withClock(Clock.fixed(_now), () async {
+        final server = swarm()..followedThreads = null;
+        server.tag('message-1', messageSequence: 9, leadId: 'a', text: 'New');
+        server.mentions.last['leadName'] = 'Avery';
+        server.tag('message-2', messageSequence: 1, leadId: 'b', text: 'Old');
+        server.mentions.last['leadName'] = 'Blake';
+        server.state['readMarks'] = {
+          'owner': {'lead': 4},
+        };
+        await show(
+          tester,
+          await loaded(tester, server),
+          brightness: brightness,
+        );
+        await tester.tap(_key('super-activity-unreads-only'));
+        await tester.pumpAndSettle();
+        TextStyle? who(String name) =>
+            tester.widget<Text>(find.text(name)).style;
+        Color? preview(String text) =>
+            (tester.widget<Text>(find.text(text)).textSpan! as TextSpan)
+                .style
+                ?.color;
+        Finder dot(String id) => find.descendant(
+          of: _key('super-activity-row-mention:$id'),
+          matching: _key('super-activity-dot'),
+        );
+        expect(dot('mention-1'), findsOneWidget);
+        expect(who('Avery')?.color, DesktopChrome.foreground);
+        expect(who('Avery')?.fontWeight, grid.AppFont.semibold);
+        expect(preview('New'), DesktopChrome.foreground);
+        expect(dot('mention-2'), findsNothing);
+        expect(who('Blake')?.color, DesktopChrome.muted);
+        expect(who('Blake')?.fontWeight, isNot(grid.AppFont.semibold));
+        expect(preview('Old'), grid.AppPalette.textFaint);
+      });
+    });
+  }
 
   testWidgets('a thread row shows its subject, root and who replied', (
     tester,
