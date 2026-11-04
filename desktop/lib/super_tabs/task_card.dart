@@ -10,6 +10,8 @@ import '../widgets/desktop_chrome.dart';
 ///
 /// On the Board it is a [tile] (task #2948): an inset tile set into its
 /// column's panel, one step less rounded than the panel, with no shadow.
+/// The task the reader has open is [selected]: the sidebar's selected-row
+/// fill, not the blue keyboard selection, and said to a screen reader.
 class SuperTabTaskCard extends StatelessWidget {
   const SuperTabTaskCard({
     super.key,
@@ -20,6 +22,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.onOpen,
     this.titleLines = 2,
     this.tile = false,
+    this.selected = false,
     this.trailing,
   });
 
@@ -27,7 +30,7 @@ class SuperTabTaskCard extends StatelessWidget {
   final bool needsYou, unread;
   final VoidCallback onOpen;
   final int titleLines;
-  final bool tile;
+  final bool tile, selected;
   final Widget? trailing;
 
   @override
@@ -45,6 +48,7 @@ class SuperTabTaskCard extends StatelessWidget {
     );
     return Semantics(
       button: true,
+      selected: selected ? true : null,
       label: [
         title,
         caption,
@@ -124,9 +128,9 @@ class SuperTabTaskCard extends StatelessWidget {
     );
   }
 
-  /// A List row is a plain row that takes the list's hover; a Board tile is
-  /// inset material of its own, which its own [Material] lets the hover paint
-  /// over inside its column's panel.
+  /// A List row is a plain row that takes the list's hover, filled when it is
+  /// selected; a Board tile is inset material of its own. Each fill is [Ink]
+  /// on its own [Material], so the hover paints over it inside its panel.
   Widget _surface(Widget body) {
     final radius = BorderRadius.circular(
       tile ? grid.AppCard.insetRadius : DesktopChrome.rowRadius,
@@ -138,15 +142,20 @@ class SuperTabTaskCard extends StatelessWidget {
       borderRadius: radius,
       child: body,
     );
-    if (!tile) return ink;
+    if (!tile && !selected) return ink;
+    final fill = grid.AppSurface.selectedFill;
     return Material(
       type: MaterialType.transparency,
       child: Ink(
-        decoration: BoxDecoration(
-          color: grid.AppCard.inset,
-          borderRadius: radius,
-          border: Border.all(color: grid.AppCard.insetHair),
-        ),
+        decoration: tile
+            ? BoxDecoration(
+                color: selected
+                    ? Color.alphaBlend(fill, grid.AppCard.inset)
+                    : grid.AppCard.inset,
+                borderRadius: radius,
+                border: Border.all(color: grid.AppCard.insetHair),
+              )
+            : BoxDecoration(color: fill, borderRadius: radius),
         child: ink,
       ),
     );

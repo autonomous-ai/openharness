@@ -29,6 +29,7 @@ class SuperTabTasksView extends StatefulWidget {
     required this.needsHuman,
     required this.onOpenTask,
     required this.onOpenProposal,
+    this.selectedId,
     this.storage,
     this.now = DateTime.now,
   });
@@ -42,6 +43,10 @@ class SuperTabTasksView extends StatefulWidget {
 
   /// Opens a proposal's thread in the project chat, by its message id.
   final ValueChanged<String> onOpenProposal;
+
+  /// The task (or proposal, by its message id) the reader has open: its card
+  /// shows selected (task #2948).
+  final String? selectedId;
 
   /// Where Board or List, and Mine, are kept for this reader on this Mac.
   final LocalKeyValueStore? storage;
@@ -340,6 +345,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       unread: task != null && widget.controller.unreadShown(task),
       titleLines: list ? 1 : 3,
       tile: !list,
+      selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
     );
