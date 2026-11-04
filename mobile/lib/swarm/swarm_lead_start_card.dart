@@ -66,6 +66,10 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
       AppTheme.watch(context);
       final status = _starter.statusOf(widget.chatId);
       final starting = status != null && !status.failed;
+      // A Lead started there whose join did not go through: Start again
+      // joins it, so its computer and engine are the only ones.
+      final kept = _starter.kept(widget.chatId);
+      final picked = kept?.machineId ?? _machine;
       SwarmLeadPlan? plan;
       String? unavailable;
       try {
@@ -73,16 +77,16 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
           widget.reader,
           widget.computers,
           widget.chatId,
-          machineId: widget.computers.leadComputers.any((c) => c.id == _machine)
-              ? _machine
+          machineId: widget.computers.leadComputers.any((c) => c.id == picked)
+              ? picked
               : null,
-          engine: _engine,
+          engine: kept?.engine ?? _engine,
         );
       } on SuperTabFailure catch (failure) {
         unavailable = failure.message;
       }
       // The plan's computer; with no plan, the one picked, so another can be.
-      final shownId = plan?.machineId ?? _machine;
+      final shownId = plan?.machineId ?? picked;
       final machine = widget.computers.leadComputers
           .where((c) => c.id == shownId)
           .firstOrNull;
@@ -115,7 +119,7 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                     child: InkWell(
                       key: const ValueKey('swarm-lead-start-machine'),
                       borderRadius: BorderRadius.circular(AppControl.radius),
-                      onTap: starting
+                      onTap: starting || kept != null
                           ? null
                           : () => unawaited(_pickMachine(machine.id)),
                       child: ConstrainedBox(
@@ -161,7 +165,7 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                             icon: engine == plan.engine
                                 ? LucideIcons.check
                                 : null,
-                            onPressed: starting
+                            onPressed: starting || kept != null
                                 ? null
                                 : () => setState(() => _engine = engine),
                           ),

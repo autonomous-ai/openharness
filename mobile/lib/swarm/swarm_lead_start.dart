@@ -155,6 +155,18 @@ class SwarmLeadStarter extends ChangeNotifier {
   final _started =
       <String, ({String machineId, String engine, SwarmLeadStarted started})>{};
 
+  /// The computer and engine of [chatId]'s harness started but not joined
+  /// yet: Start again claims that computer and joins it, so the card shows it
+  /// and offers no other.
+  ({String machineId, String engine})? kept(String chatId) =>
+      switch (_started[chatId]) {
+        (:final machineId, :final engine, started: _) => (
+          machineId: machineId,
+          engine: engine,
+        ),
+        null => null,
+      };
+
   /// [chatId]'s start as the phone knows it: one starting for longer than
   /// the claim holds is no longer shown.
   SwarmLeadStatus? statusOf(String chatId) {
@@ -190,13 +202,19 @@ class SwarmLeadStarter extends ChangeNotifier {
           'this project is no longer available',
         );
       }
-      final plan = swarmLeadPlan(
-        reader,
-        computers,
-        chatId,
-        machineId: machineId,
-        engine: engine,
-      );
+      // A harness already started whose join did not go through is the one:
+      // its computer is claimed and it joins, whatever was picked since
+      // (review of #3029).
+      final kept = _started[chatId];
+      final plan = kept != null
+          ? (machineId: kept.machineId, engine: kept.engine, folder: null)
+          : swarmLeadPlan(
+              reader,
+              computers,
+              chatId,
+              machineId: machineId,
+              engine: engine,
+            );
       final claim = await _command(reader, {
         'type': 'lead.claim',
         'projectId': project.id,
@@ -204,9 +222,8 @@ class SwarmLeadStarter extends ChangeNotifier {
       });
       // Another of the person's machines starts it: its join ends the note.
       if (claim['leadStart'] == 'waiting') return;
-      final kept = _started[chatId];
-      final machine = kept?.machineId ?? plan.machineId;
-      final runs = kept?.engine ?? plan.engine;
+      final machine = plan.machineId;
+      final runs = plan.engine;
       final started =
           kept?.started ??
           await computers.startLead(plan.machineId, (

@@ -55,6 +55,13 @@ call.
 - None of the person's computers is connected, or no engine is signed in on the one picked: the card says why and
   offers no Start.
 - The Lead joins while the card shows (another machine started it): the card goes on the next read.
+- A failed join, then another computer picked: Start again claims the kept harness's computer and joins it; the card
+  shows that computer and engine and offers no other until it joins (review of #3029).
+
+Known limits (review of #3029, Minor): the harness kept for a failed join lives in memory only, so after the app
+restarts Start Lead starts a second one; Desktop resumes its journal, the phone has none. The new folder is
+`ProjectFolderRequest.forTask(projectName)` where Desktop sends `generated(label: Lead, name: projectName)`: both send
+the project's name as a suggested folder name the computer numbers past one that exists.
 
 ---
 
