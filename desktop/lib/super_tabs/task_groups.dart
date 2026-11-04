@@ -139,6 +139,18 @@ typedef SuperTabTaskEntry = ({
 double _queueKey(SuperTabConversation task) =>
     task.queueRank ?? (task.number ?? 0).toDouble();
 
+int _queueOrder(SuperTabConversation a, SuperTabConversation b) =>
+    switch (_queueKey(a).compareTo(_queueKey(b))) {
+      0 => (a.number ?? 0).compareTo(b.number ?? 0),
+      final c => c,
+    };
+
+/// [tasks] in their project's shared Next-up order, as the server keeps it
+/// (backend taskQueue.ts): what a move is placed against.
+List<SuperTabConversation> superTabQueueOrder(
+  Iterable<SuperTabConversation> tasks,
+) => [...tasks]..sort(_queueOrder);
+
 /// The project's Tasks view, read by Board, List and the badges alike: every
 /// column, in order and empty or not, each listing what needs the reader
 /// first, then proposals oldest first, Next up in the shared order, Working
@@ -187,11 +199,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
     final (x, y) = (a.task, b.task);
     if (x == null || y == null) return 0;
     return switch (column) {
-      SuperTabTaskColumn.nextUp => switch (_queueKey(x)
-          .compareTo(_queueKey(y))) {
-        0 => (x.number ?? 0).compareTo(y.number ?? 0),
-        final c => c,
-      },
+      SuperTabTaskColumn.nextUp => _queueOrder(x, y),
       SuperTabTaskColumn.shipped => (y.shippedAt ?? now).compareTo(
         x.shippedAt ?? now,
       ),

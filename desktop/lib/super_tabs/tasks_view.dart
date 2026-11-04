@@ -413,9 +413,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// Puts [ordered]'s card at [to] in place, right after the card now above
-  /// it (none: the top), and tells the server, which keeps the order for
-  /// everyone. Refused, the card goes back and the bar says why.
+  /// Puts [ordered]'s card at [to] in place and tells the server, which keeps
+  /// the order for everyone. Refused, the card goes back and the bar says why.
   Future<void> _move(List<SuperTabTaskEntry> ordered, int from, int to) async {
     if (from == to || to < 0 || to >= ordered.length) return;
     final ids = [for (final e in ordered) e.task!.id];
@@ -425,9 +424,18 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       _moving = ids;
       _moveError = null;
     });
+    // The column lifts what needs the reader, so the card shown above is not
+    // always its neighbour in the shared order: it goes right before the card
+    // under it (review of #2883), or last.
+    final queue = [
+      for (final task in superTabQueueOrder([for (final e in ordered) e.task!]))
+        if (task.id != id) task.id,
+    ];
+    final below = to + 1 < ids.length ? ids[to + 1] : null;
+    final at = below == null ? queue.length : queue.indexOf(below);
     final refused = await widget.controller.queueTask(
       id,
-      after: to == 0 ? null : ids[to - 1],
+      after: at == 0 ? null : queue[at - 1],
     );
     if (!mounted) return;
     setState(() {
