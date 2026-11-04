@@ -108,7 +108,9 @@ export const userService = {
       const data = {
         ...(claimsProvisional ? signUpAttribution : {}),
         ...(existing.email !== em ? { email: em } : {}),
-        ...(input.name && existing.name !== input.name ? { name: input.name } : {}),
+        // The name is taken from SSO once, while the account has none: later sign-ins never change it, so a name set
+        // in Harness (or by an admin) stays (Ken, 2026-11-04).
+        ...(input.name && !existing.name ? { name: input.name } : {}),
         ...(existing.role !== role ? { role } : {}),
         // A new production subject on this row makes its stored Google subject (lib/googleSubject.ts)
         // somebody else's answer: forget it, so the account is unchecked until a live read of THIS
