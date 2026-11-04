@@ -148,6 +148,8 @@ void main() {
   test('a web page is sent as an unknown kind, never as html', () {
     expect(mimeForName('page.html'), 'application/octet-stream');
     expect(mimeForName('shot.PNG'), 'image/png');
+    // The server takes a voice message only as a WAV by its type (backend VOICE_TYPES): a real one, on Windows, was refused.
+    expect(mimeForName('Voice message.wav'), 'audio/wav');
     expect(mimeForName('old.bmp'), 'application/octet-stream');
   });
 
