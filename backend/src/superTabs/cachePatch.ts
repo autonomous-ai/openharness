@@ -19,6 +19,10 @@ import { boardGroup, lastActive } from './leaderboard/boardGroups.js'
 export interface PatchRule<T> {
   /** The part kinds whose changes this entry holds: a refresh reads only those. */
   kinds: readonly PartKind[]
+  /** Its refresh reads its own kinds alone (cache.ts deltaFor): never widened to the kinds of the Swarm's other stale entries,
+   *  nor they to its, so a small entry read at every stamp never makes each pod read the Swarm's group, machine and progress
+   *  feeds (task #2875). */
+  alone?: true
   /** The held value with the delta applied, or 'reload' when the delta cannot be applied and the entry loads again. */
   apply(held: T, delta: SwarmDelta): T | 'reload'
   /** What of a patched value and a fresh load the verify sample compares (cache.ts verify), when not the whole: a fresh load
