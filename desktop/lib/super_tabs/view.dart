@@ -677,7 +677,17 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll != null &&
         scroll.hasClients &&
         scroll.position.extentAfter >= 40;
-    if ((away == _unread.away &&
+    // At the end with nothing newer to load, the reader has read everything
+    // a bar would lead back to.
+    final readThrough =
+        scroll != null &&
+        scroll.hasClients &&
+        !awayFromEnd &&
+        !landing &&
+        !c.hasNewer(id) &&
+        _unread.readThrough(id);
+    if ((!readThrough &&
+            away == _unread.away &&
             below == _unread.below &&
             awayFromEnd == _awayFromEnd.contains(id)) ||
         !mounted) {

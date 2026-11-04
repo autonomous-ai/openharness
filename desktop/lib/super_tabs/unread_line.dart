@@ -55,12 +55,23 @@ class SuperTabUnreadLines {
   /// Conversations whose line has been in view this visit.
   final _seen = <String>{};
 
+  /// Conversations read through this visit: their line seen, then the end
+  /// reached with nothing newer to load.
+  final _readThrough = <String>{};
+
   /// [id]'s line came into view: reading on needs no way back to it.
   void saw(String id) => _seen.add(id);
 
+  /// [id] reached its end: once its line was seen, everything from it was
+  /// read, and the bar goes for the visit. A link landing at the end skipped
+  /// the line, so the bar stays to lead back to it. True when this call read
+  /// it through.
+  bool readThrough(String id) => _seen.contains(id) && _readThrough.add(id);
+
   /// Whether [id] shows the bar back to its line: placed and above the
-  /// reader, seen or not (Slack's "N new messages").
-  bool offersBar(String id) => away && !below && _at[id] != null;
+  /// reader, seen or not (Slack's "N new messages"), until read through.
+  bool offersBar(String id) =>
+      away && !below && _at[id] != null && !_readThrough.contains(id);
 
   /// Whether [id] offers the pill down to its line: placed, below the reader
   /// (a link opened the chat above it), and not yet seen this visit.
@@ -85,6 +96,7 @@ class SuperTabUnreadLines {
   void placeAt(String id, String messageId) {
     _at[id] = messageId;
     _seen.remove(id);
+    _readThrough.remove(id);
   }
 
   /// Whether [id]'s line waits for older messages: loading, or a read back that failed and is not yet done. Nothing is
@@ -138,6 +150,7 @@ class SuperTabUnreadLines {
     _loaded.remove(id);
     _failed.remove(id);
     _seen.remove(id);
+    _readThrough.remove(id);
     away = below = false;
   }
 
@@ -153,6 +166,7 @@ class SuperTabUnreadLines {
     _loaded.clear();
     _failed.clear();
     _seen.clear();
+    _readThrough.clear();
     away = below = false;
   }
 }
