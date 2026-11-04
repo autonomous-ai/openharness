@@ -693,7 +693,17 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll != null &&
         scroll.hasClients &&
         scroll.position.extentAfter >= 40;
-    if ((away == _unread.away &&
+    // At the end with nothing newer to load, the reader has read everything
+    // a bar would lead back to.
+    final readThrough =
+        scroll != null &&
+        scroll.hasClients &&
+        !awayFromEnd &&
+        !landing &&
+        !c.hasNewer(id) &&
+        _unread.readThrough(id);
+    if ((!readThrough &&
+            away == _unread.away &&
             below == _unread.below &&
             awayFromEnd == _awayFromEnd.contains(id)) ||
         !mounted) {
@@ -842,6 +852,13 @@ class _SuperTabViewState extends State<SuperTabView>
       keeps: region?.keeps,
       child: child,
     );
+  }
+
+  /// The bar's Mark as read: Esc's read, with typing back in the composer as
+  /// after a click on the bar.
+  void _markReadFromBar() {
+    _focus.requestFocus();
+    _readAll();
   }
 
   bool _readAll() {
@@ -4221,6 +4238,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               count: _newFromLine(c.selectedId),
                               more: c.hasNewer(c.selectedId),
                               onPressed: () => _jumpToUnreadLine(c.selectedId),
+                              onMarkRead: _markReadFromBar,
                             )
                           : _unread.offersDown(c.selectedId)
                           ? Padding(
