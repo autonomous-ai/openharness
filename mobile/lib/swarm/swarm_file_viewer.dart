@@ -300,7 +300,7 @@ class _SwarmFileViewerState extends State<SwarmFileViewer> {
         ),
       );
     }
-    final style = tty.style(size: 13.5).copyWith(height: 1.4);
+    final style = tty.style();
     // A line at a time, built as it scrolls in: a file may run to 2 MB.
     return SelectionArea(
       child: ListView.builder(
