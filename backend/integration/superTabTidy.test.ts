@@ -276,6 +276,31 @@ describe('a finished group', () => {
     expect(await open()).toBe(false)
   })
 
+  /** A task in a project whose repository is acme/app, cancelled with [reason]: its group's key. */
+  const cancelledIn = async (f: Awaited<ReturnType<typeof swarm>>, reason: string) => {
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } }), data = head.data as unknown as HeadData
+    const repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: (data.projects
+      ? { ...data, projects: data.projects.map(p => p.id === 'lead' ? { ...p, repository } : p) } : { ...data, project: repository }) as object } })
+    const task = String((await f.execute({ type: 'conversation.create', title: 'Port', brief: 'Port it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(task, 'test-host', randomUUID(), 'Porter')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: task, assignmentId: work, reason })
+    return task
+  }
+  const isArchived = async (f: Awaited<ReturnType<typeof swarm>>, key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).archived
+
+  // Diego, 11-04 (#2602): another repository's number, read in this one, kept the task open forever.
+  it('waits on no "PR #N" another repository\'s name sits next to', async () => {
+    const f = await swarm()
+    const task = await cancelledIn(f, 'Merged PR #40. Ported from autonomous-harness PR #2716.')
+    f.clock.now += 40 * MINUTE
+    const prs = github({ 'https://github.com/acme/app/pull/40': 'merged' })
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(prs.read).not.toContain('https://github.com/acme/app/pull/2716')
+    expect(await isArchived(f, task)).toBe(true)
+  })
+
   it('stays open when its work names "PR #N" and the project has no repository to read it in', async () => {
     const f = await swarm()
     const handed = String((await f.execute({ type: 'conversation.create', title: 'Sidebar', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)

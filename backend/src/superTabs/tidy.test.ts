@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { ARCHIVE_QUIET_MS, archivable, IDLE_NOTICE_MS, idleNotices, linkPending, staleSwitches, SWITCH_UNCLAIMED_MS, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archivable, archiveWaitsFor, IDLE_NOTICE_MS, idleNotices, linkPending, staleSwitches, SWITCH_UNCLAIMED_MS, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 
 const MINUTE = 60_000
 const START = Date.parse('2026-10-27T08:00:00.000Z')
@@ -168,6 +168,30 @@ describe('which finished groups archive', () => {
     const off = swarm()
     off.tidy = false
     expect(archivable(off, off.conversations[1]!, quiet)).toBe(false)
+  })
+})
+
+// Diego, 11-04: "Ported from autonomous-harness PR #2716" read as this project's pull/2716 kept the task open forever (#2602).
+describe('what a finished group\'s archive waits on', () => {
+  const repo = 'https://github.com/acme/openharness', pull = (n: number) => `${repo}/pull/${n}`
+  const named = (result: string) => group({ assignment: done({ result }) })
+  it('waits on a "PR #N" of its project\'s repository, never on one another repository\'s name sits next to', () => {
+    expect(archiveWaitsFor(named('Merged PR #40. Ported from autonomous-harness PR #2716.'), repo)).toEqual([pull(40)])
+    for (const result of ['other/tool PR #12', 'PR #12 in other/tool', 'PR #12 of autonomous-harness', 'Ported (from autonomous-harness PR #12)']) {
+      expect(archiveWaitsFor(named(result), repo)).toEqual([])
+    }
+  })
+
+  it('still reads a number its own repository names, or an ordinary word sits next to, as its project\'s', () => {
+    for (const result of ['acme/openharness PR #12', 'ACME/OpenHarness PR #12', 'openharness PR #12', 'Follow-up PR #12', 'Re-opened PR #12',
+      'Merged. PR #12', 'Merged PR #12', 'PR #12 in review', 'PR #12 of the batch']) {
+      expect(archiveWaitsFor(named(result), repo)).toEqual([pull(12)])
+    }
+  })
+
+  it('stays open for a bare number with no repository to read it in, but not for another repository\'s', () => {
+    expect(archiveWaitsFor(named('PR #12'), null)).toBeNull()
+    expect(archiveWaitsFor(named('Ported from autonomous-harness PR #2716.'), null)).toEqual([])
   })
 })
 
