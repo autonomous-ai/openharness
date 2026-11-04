@@ -27,8 +27,7 @@ class SuperTabShipRow extends StatefulWidget {
   @visibleForTesting
   static void resetPlayed() => _played.clear();
 
-  static bool shows(SuperTabMessage message) =>
-      message.source['kind'] == 'ship';
+  static bool shows(SuperTabMessage message) => message.shipLine;
 
   @override
   State<SuperTabShipRow> createState() => _SuperTabShipRowState();

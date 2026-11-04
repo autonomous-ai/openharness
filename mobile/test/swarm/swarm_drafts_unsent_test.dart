@@ -131,6 +131,30 @@ void main() {
       expect(after.threadDraft('root-1'), 'in the thread');
     });
 
+    test('a thread reply keeps its mentions too, across a restart', () async {
+      final before = await app();
+      final c = await chat(before);
+      final t = SwarmThread(c, 'root-1');
+      addTearDown(t.dispose);
+      t.draft = 'ask';
+      t.mention('agent-lead');
+      final draft = t.draft;
+      await before.kept.flush();
+      final again = await app();
+      final after = SwarmThread(await chat(again), 'root-1');
+      addTearDown(after.dispose);
+      expect(after.draft, draft);
+      expect(after.mentions, {'agent-lead': '@River'});
+      expect(again.kept.draft(tab, 'g1', 'root-1')?.mentions.keys, [
+        'agent-lead',
+      ]);
+      expect(
+        again.kept.draft(tab, 'g1', null),
+        isNull,
+        reason: 'the chat\'s own draft is apart',
+      );
+    });
+
     test(
       'goes once sent, and a kill right after brings nothing back',
       () async {
@@ -307,6 +331,32 @@ void main() {
       expect(again.outgoing.single.text, 'reply');
       again.deletePost(again.outgoing.single);
       expect((await app()).kept.posts(tab, 'g1', 'root-1'), isEmpty);
+    });
+
+    test('a thread reply refused after a restart comes back with its '
+        'mentions, which go with it again', () async {
+      final c = await chat(await app());
+      swarm.routes[commands] = lost;
+      final t = SwarmThread(c, 'root-1');
+      addTearDown(t.dispose);
+      t.draft = 'ask';
+      t.mention('agent-lead');
+      await t.send();
+      expect(t.outgoing.single.state, SwarmPostState.unconfirmed);
+
+      final after = await chat(await app());
+      final again = SwarmThread(after, 'root-1');
+      addTearDown(again.dispose);
+      swarm.routes[commands] = (_) =>
+          throw const SuperTabFailure('INVALID', 'Refused.', statusCode: 400);
+      await again.retry(again.outgoing.single);
+
+      expect(again.outgoing, isEmpty);
+      expect(again.draft, 'ask @River');
+      expect(again.mentions, {'agent-lead': '@River'});
+      swarm.routes[commands] = (_) => {'ok': true};
+      expect(await again.send(), isTrue);
+      expect(swarm.commands.last['recipientIds'], ['agent-lead']);
     });
 
     testWidgets('its row has Retry and Delete; Sending… has neither', (

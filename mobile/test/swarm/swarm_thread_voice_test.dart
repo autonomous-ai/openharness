@@ -206,20 +206,22 @@ void main() {
     await frames(tester);
   }
 
-  testWidgets('the thread\'s reply box: +, Also send, then the main chat\'s '
-      'mic just left of Send, in one row', (tester) async {
+  testWidgets('the thread\'s reply box: +, then the main chat\'s mic just '
+      'left of Send, in one row; Reply options on its own line under it', (
+    tester,
+  ) async {
     await pump(tester);
 
     expect(inBox(key('swarm-mic')), findsOneWidget);
     final mic = tester.getCenter(inBox(key('swarm-mic')));
     final send = tester.getCenter(key('swarm-thread-send'));
     final attach = tester.getCenter(key('swarm-thread-attach'));
-    final also = tester.getCenter(key('swarm-thread-also-send'));
-    for (final other in [send, attach, also]) {
+    final options = tester.getCenter(key('swarm-thread-options'));
+    for (final other in [send, attach]) {
       expect(mic.dy, other.dy, reason: 'in one row');
     }
-    expect(attach.dx, lessThan(also.dx), reason: '+ moved to the left');
-    expect(also.dx, lessThan(mic.dx));
+    expect(options.dy, greaterThan(send.dy), reason: 'its own line, under');
+    expect(attach.dx, lessThan(mic.dx), reason: '+ moved to the left');
     expect(mic.dx, lessThan(send.dx));
   });
 
@@ -282,14 +284,33 @@ void main() {
   });
 
   testWidgets('Also send ticked, a take, stop, then Send posts to the chat '
-      'too: the tick survives the take', (tester) async {
+      'too: the tick survives the take, and takes no taps during it', (
+    tester,
+  ) async {
     await pump(tester);
+    await tester.tap(key('swarm-thread-options'));
+    await tester.pump();
     await tester.tap(key('swarm-thread-also-send'));
     await tester.pump();
     stt.replies.add('also for everyone');
+    final box = tester.getRect(key('swarm-thread-box'));
+    bool? ticked() => tester
+        .widget<Semantics>(key('swarm-thread-also-send'))
+        .properties
+        .checked;
 
     await tapMic(tester);
-    expect(key('swarm-thread-also-send'), findsNothing, reason: 'hidden');
+    expect(
+      tester.getRect(key('swarm-thread-box')),
+      box,
+      reason: 'Reply options stays as it was: the box does not jump',
+    );
+    // In sight, as it will be sent: a tap during the take changes nothing.
+    await tester.tap(key('swarm-thread-also-send'), warnIfMissed: false);
+    await tester.tap(key('swarm-thread-options'), warnIfMissed: false);
+    await tester.pump();
+    expect(ticked(), isTrue);
+    expect(key('swarm-thread-also-send'), findsOneWidget, reason: 'still open');
     await stop(tester);
     await tester.pumpAndSettle();
     expect(fake.commands, isEmpty);
@@ -314,6 +335,8 @@ void main() {
   testWidgets("the row's Send ends the take and posts it as one reply, to the "
       'chat too with Also send ticked', (tester) async {
     await pump(tester);
+    await tester.tap(key('swarm-thread-options'));
+    await tester.pump();
     await tester.tap(key('swarm-thread-also-send'));
     await tester.pump();
     await tester.enterText(key('swarm-thread-field'), 'Nova:');
@@ -418,8 +441,8 @@ void main() {
   });
 
   testWidgets("during a take the toolbar is cancel, the wave, stop and the "
-      "row's Send: no box Send, Also send, + or X, which come back after "
-      'stop', (tester) async {
+      "row's Send: no box Send, + or X, which come back after stop; Reply "
+      'options stays, folded', (tester) async {
     await pump(tester);
     await tester.enterText(key('swarm-thread-field'), 'Nova:');
     await tester.pump();
@@ -430,7 +453,6 @@ void main() {
 
     for (final gone in [
       'swarm-thread-send',
-      'swarm-thread-also-send',
       'swarm-thread-attach',
       'swarm-thread-clear',
       'swarm-mic',
@@ -442,16 +464,21 @@ void main() {
       'swarm-voice-wave',
       'swarm-voice-stop',
       'swarm-voice-send',
+      'swarm-thread-options',
     ]) {
       expect(inBox(key(shown)), findsOneWidget, reason: shown);
     }
+    // Folded it stays: a tap during the take does not open it.
+    await tester.tap(key('swarm-thread-options'), warnIfMissed: false);
+    await tester.pump();
+    expect(inBox(key('swarm-thread-also-send')), findsNothing);
 
     await stop(tester);
     await tester.pumpAndSettle();
 
     for (final back in [
       'swarm-thread-send',
-      'swarm-thread-also-send',
+      'swarm-thread-options',
       'swarm-thread-attach',
       'swarm-thread-clear',
       'swarm-mic',

@@ -202,10 +202,14 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
 export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean
   count?: number
   /** A reply in a Buddy thread session's thread (buddySessions.ts), which the main Buddy never counts. */
-  session?: boolean }
+  session?: boolean
+  /** Its source's kind, and what it says for its task's row (threads.ts). */
+  kind?: unknown
+  ask?: import('./taskLine.js').TaskAsk }
 
 /** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
-interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null }
+interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null
+  ask?: import('./taskLine.js').TaskAsk }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
 /** What the database sums up of some threads' rows (threadFacet), as it returns it: the same whoever reads. */
@@ -224,7 +228,7 @@ export interface ThreadFacet {
  */
 export async function threadFacet(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
   const root = { $eq: ['$_id', '$thread'] }
-  const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
+  const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly', ask: '$source.ask',
     to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
     session: { $eq: ['$buddySession', true] } }
   // (sequence, id) lead each place, so the database's min and max order rows as threadReplies sorts them (ids are ASCII).
@@ -253,7 +257,8 @@ export async function threadReplies(tx: Transaction, tabId: string, { parts, men
   const row = (key: ThreadPart, at: ThreadPlace) => {
     let kept = rows.get(at.i)
     if (!kept) rows.set(at.i, kept = { thread: key.thread, id: at.i, author: at.author, mentions: [], sequence: at.s, createdAt: new Date(ms(at.at)),
-      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), ...(key.session ? { session: true } : {}), count: 0, slots: [] })
+      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), ...(key.session ? { session: true } : {}), kind: key.kind,
+      ...(key.ask ? { ask: key.ask } : {}), count: 0, slots: [] })
     return kept
   }
   for (const p of parts) {
