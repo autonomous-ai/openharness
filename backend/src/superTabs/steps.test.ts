@@ -642,6 +642,50 @@ describe('checks with several checkers', () => {
       [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
   })
 
+  // Diego, 2026-11-04 (#2656): a check failed by a checker who then left the Swarm could never pass again in that attempt.
+  // A later pass by the task's PM or an owner clears departed checkers' failures; nobody else's does.
+  describe('a failure by a checker who left the Swarm', () => {
+    const departed = () => {
+      const c = checkers()
+      c.check(c.reviewer, false, 'Drops the session')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const second = c.f.add('reviewer-2', c.f.task)
+      c.check(second, true, 'Session kept')
+      return { ...c, second }
+    }
+
+    it('stays failed after another checker passes it', () => {
+      const { f, check, read } = departed()
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      check(f.dev, true, 'Fixed it')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+    })
+
+    it('is cleared by the owner\'s pass, which then names the check\'s passer and evidence', () => {
+      const { f, second, read } = departed()
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Reviewer left; Reviewer 2 passed it' } as Command)
+      expect(read()).toMatchObject({ passedBy: 'person:owner', evidence: 'Reviewer left; Reviewer 2 passed it' })
+      expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${second}`, true], ['person:owner', true]])
+    })
+
+    it('is cleared by the task\'s PM\'s pass', () => {
+      const { f, check, read } = departed()
+      check(f.lead, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${f.lead}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
+    it('leaves a live checker\'s failure standing, whoever passes', () => {
+      const { f, tester, check, read } = departed()
+      check(tester, false, 'Crashes offline')
+      check(f.lead, true, 'Looks fine')
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Looks fine' } as Command)
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+      expect(read().verdicts!.map(v => v.by)).toEqual(expect.arrayContaining([`agent:${tester}`]))
+    })
+  })
+
   it('a new attempt starts with no verdicts', () => {
     const { f, tester, check, read } = checkers()
     check(tester, false, 'Crashes offline')
