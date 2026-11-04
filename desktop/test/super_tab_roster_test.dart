@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/relative_time.dart';
@@ -936,12 +937,12 @@ void main() {
     await f.show(tester);
     await tester.tap(f.row(0), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
-    final remove = find.widgetWithText(
-      PopupMenuItem<String>,
-      'Remove from Swarm',
+    final remove = find.ancestor(
+      of: find.text('Remove from Swarm'),
+      matching: find.byType(AppMenuItem),
     );
     expect(remove, findsOneWidget);
-    expect(tester.widget<PopupMenuItem<String>>(remove).enabled, isFalse);
+    expect(tester.widget<AppMenuItem>(remove).onPressed, isNull);
     expect(
       find.text(
         'Atlas is the Product Manager of project openharness. Delete the project first.',

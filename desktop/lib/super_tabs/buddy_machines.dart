@@ -141,57 +141,48 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     if (!widget.busy) _menu.open();
   }
 
-  Widget _heading(double width) => SizedBox(
-    width: width,
-    child: Padding(
-      padding: EdgeInsets.fromLTRB(
-        AppMenuRowMetrics.roomy.padding.left + grid.AppDesktop.menuInset,
-        grid.AppDesktop.menuInset,
-        AppMenuRowMetrics.roomy.padding.right + grid.AppDesktop.menuInset,
-        grid.AppDesktop.listRowGap,
-      ),
-      child: Semantics(
-        header: true,
-        child: Text(
-          kBuddyOwnMachines,
-          style: DesktopChrome.control(medium: true),
-        ),
+  Widget _heading() => Padding(
+    padding: EdgeInsets.fromLTRB(
+      AppMenuRowMetrics.compact.padding.left + grid.AppDesktop.menuInset,
+      grid.AppDesktop.menuInset,
+      AppMenuRowMetrics.compact.padding.right + grid.AppDesktop.menuInset,
+      grid.AppDesktop.listRowGap,
+    ),
+    child: Semantics(
+      header: true,
+      child: Text(
+        kBuddyOwnMachines,
+        style: DesktopChrome.control(medium: true),
       ),
     ),
   );
 
-  Widget _row(BuddyMachine m, double width, String? focusId) {
+  Widget _row(BuddyMachine m, String? focusId) {
     final block = buddyMachineBlock(m);
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.menuInset,
-        vertical: grid.AppDesktop.listRowGap / 2,
-      ),
-      child: SizedBox(
-        width: width - 2 * grid.AppDesktop.menuInset,
-        child: MenuItemButton(
-          key: ValueKey('super-buddy-machine-option-${m.id}'),
-          autofocus: m.id == focusId,
-          overflowAxis: Axis.vertical,
-          semanticsLabel: [m.name, ?block].join(', '),
-          style: ButtonStyle(
-            side: const WidgetStatePropertyAll(BorderSide.none),
-            padding: WidgetStatePropertyAll(AppMenuRowMetrics.roomy.padding),
-          ),
-          onPressed: widget.busy || block != null
-              ? null
-              : () => widget.onChanged(m.id),
-          // In words, never by its grey alone (design system, Color and state).
-          trailingIcon: block != null
-              ? Text(
-                  block,
-                  style: DesktopChrome.metadata(color: DesktopChrome.muted),
-                )
-              : m.id == widget.value
-              ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
-              : null,
-          child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
+    final choose = widget.busy || block != null
+        ? null
+        : () => widget.onChanged(m.id);
+    return Semantics(
+      button: true,
+      enabled: choose != null,
+      selected: m.id == widget.value,
+      onTap: choose,
+      label: [m.name, ?block].join(', '),
+      excludeSemantics: true,
+      child: AppMenuItem(
+        key: ValueKey('super-buddy-machine-option-${m.id}'),
+        autofocus: m.id == focusId,
+        leadingSlot: false,
+        label: m.name,
+        selected: block == null && m.id == widget.value,
+        // In words, never by its grey alone (design system, Color and state).
+        trailing: block == null
+            ? null
+            : Text(
+                block,
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
+              ),
+        onPressed: choose,
       ),
     );
   }
@@ -224,17 +215,15 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
         final menuWidth = width < BuddyMachineField.menuMinWidth
             ? BuddyMachineField.menuMinWidth
             : width;
-        return MenuAnchor(
+        return AppDropdown(
           controller: _menu,
           childFocusNode: _focus,
-          consumeOutsideTap: true,
-          alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-          style: grid.AppMenu.style(minWidth: menuWidth, maxWidth: menuWidth),
+          width: menuWidth,
           onOpen: () => setState(() {}),
           onClose: () => setState(() {}),
-          menuChildren: [
-            _heading(menuWidth),
-            for (final m in widget.machines) _row(m, menuWidth, focusId),
+          children: [
+            _heading(),
+            for (final m in widget.machines) _row(m, focusId),
           ],
           builder: (context, menu, _) => CallbackShortcuts(
             bindings: {

@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -175,7 +176,7 @@ void main() {
     Future<void> openStatus(WidgetTester tester) async {
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Status'));
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Status'));
       await tester.pumpAndSettle();
     }
 

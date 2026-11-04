@@ -143,7 +143,7 @@ class SuperTabReplyBox extends StatelessWidget {
                     hintText: hint,
                     hintStyle: SwarmType.composer(
                       context,
-                      color: DesktopChrome.muted,
+                      color: DesktopChrome.hint,
                     ),
                     contentPadding: EdgeInsets.zero,
                     border: InputBorder.none,

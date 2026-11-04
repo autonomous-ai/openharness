@@ -18,8 +18,11 @@ class WorkspaceNotificationsButton extends StatelessWidget {
   final Color foreground;
   final VoidCallback? onPressed;
 
-  static double widthOf(BuildContext context) =>
-      workspaceBarCellSizeOf(context).width * 4;
+  /// The desktop slot matches the account avatar's, so the two ends of the
+  /// title row read as one pair. A phone keeps its finger-sized cell.
+  static double widthOf(BuildContext context) => workspaceIsCompact(context)
+      ? workspaceBarCellSizeOf(context).width * 4
+      : 32;
 
   @override
   Widget build(BuildContext context) => WorkspaceBarControl(
@@ -35,11 +38,11 @@ class WorkspaceNotificationsButton extends StatelessWidget {
           isLabelVisible: count > 0,
           backgroundColor: const Color(0xffcf4038),
           textColor: Colors.white,
-          smallSize: 6,
-          largeSize: 13,
+          smallSize: 5,
+          largeSize: 12,
           label: Text(
             count > 99 ? '99+' : '$count',
-            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600),
           ),
           child: Icon(
             AppIcons.bell,

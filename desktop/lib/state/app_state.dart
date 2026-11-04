@@ -24,7 +24,8 @@ import 'package:dio/dio.dart';
 import 'dart:ui'
     show
         Color,
-        Rect; // Rect: activeTileShape, the same one pane_preset.dart returns
+        Rect, // Rect: activeTileShape, the same one pane_preset.dart returns
+        Size;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart'
@@ -20150,8 +20151,9 @@ class AppNotifier extends ChangeNotifier {
         (_, slot) => slot >= insertion ? slot + 1 : slot,
       );
       final key = '${targetPanes.length}:manual';
-      target.savePaneSizes(key, split.after);
-      target.arranged = split.after;
+      final after = _balancedIfAsked(split.after, target.arrangedMinimum);
+      target.savePaneSizes(key, after);
+      target.arranged = after;
       target.arrangedKey = key;
     }
     if (firstAgent &&
@@ -20448,6 +20450,81 @@ class AppNotifier extends ChangeNotifier {
   /// Focus follows the PANE, not the slot: `focusedPaneId` is an id, so a tile
   /// that was focused stays focused after it moves, which is what the hand that
   /// dragged it expects.
+  /// The arrangement after [paneId] lands on [side] of [targetPaneId]; null
+  /// when it can't, or when it is already there.
+  PaneArrangement? _moveBesideShape(
+    int paneId,
+    int targetPaneId,
+    PaneSide side,
+  ) {
+    if (paneId == targetPaneId || zoomedPaneId != null) return null;
+    if (activeSwarm.isUtility || activeSwarm.isOrchestrator) return null;
+    final shape = activeTileShape;
+    final from = panes.indexWhere((pane) => pane.id == paneId);
+    final to = panes.indexWhere((pane) => pane.id == targetPaneId);
+    if (shape == null || from == -1 || to == -1) return null;
+    final current = PaneArrangement(shape);
+    if (current.isBeside(from, to, side)) return null;
+    final minimum = activeSwarm.arrangedMinimum ?? Size.zero;
+    final moved = current.moveBeside(from, to, side, minimum: minimum);
+    if (moved != null) return moved;
+    // A layout whose hole no neighbour can fill: the rest fall back to their
+    // count's shape, as closing a pane there does, so an edge always moves it.
+    final rest = panes.length - 1;
+    final tiles = (presetFor(rest) ?? PanePreset.defaultFor(rest))?.tilesFor(
+      rest,
+    );
+    if (tiles == null || tiles.length != rest) return null;
+    return PaneArrangement(tiles)
+        .fillRowEnds()
+        .split(to > from ? to - 1 : to, side.axis, minimum: minimum);
+  }
+
+  /// Whether [paneId] is already on [side] of [targetPaneId], so a drop there
+  /// changes nothing.
+  bool isPaneBeside(int paneId, int targetPaneId, PaneSide side) {
+    final shape = activeTileShape;
+    final from = panes.indexWhere((pane) => pane.id == paneId);
+    final to = panes.indexWhere((pane) => pane.id == targetPaneId);
+    if (shape == null || from == -1 || to == -1 || from == to) return false;
+    return PaneArrangement(shape).isBeside(from, to, side);
+  }
+
+  /// Whether a drop on [side] of [targetPaneId] can land [paneId] there.
+  bool canMovePaneBeside(int paneId, int targetPaneId, PaneSide side) =>
+      _moveBesideShape(paneId, targetPaneId, side) != null;
+
+  /// Dragging a pane to another's edge: it takes half of that pane's room, as
+  /// the TUI's join-pane does, and its sessions stay untouched.
+  bool movePaneBeside(int paneId, int targetPaneId, PaneSide side) {
+    final next = _moveBesideShape(paneId, targetPaneId, side);
+    if (next == null) return false;
+    final moved = panes.removeAt(panes.indexWhere((p) => p.id == paneId));
+    final target = panes.indexWhere((p) => p.id == targetPaneId);
+    panes.insert(side.before ? target : target + 1, moved);
+    // Pins stay with their panes, wherever the list moved them.
+    for (final (slot, pane) in panes.indexed) {
+      if (isPanePinned(pane)) _setPin(pane, slot);
+    }
+    final key = '${panes.length}:manual';
+    final after = _balancedIfAsked(next, activeSwarm.arrangedMinimum);
+    activeSwarm.savePaneSizes(key, after);
+    activeSwarm.arranged = after;
+    activeSwarm.arrangedKey = key;
+    _paneLayoutRequest++;
+    _persistLayout();
+    notifyListeners();
+    return true;
+  }
+
+  /// [arrangement] evened out when Autobalance splits is on.
+  PaneArrangement _balancedIfAsked(
+    PaneArrangement arrangement,
+    Size? minimum,
+  ) => appearancePrefsStore.value.panes.autobalanceSplits
+      ? arrangement.balanced(minimum: minimum ?? Size.zero)
+      : arrangement;
+
   void reorderPane(int paneId, int targetPaneId, {bool reveal = false}) {
     if (paneId == targetPaneId) return;
     final from = panes.indexWhere((pane) => pane.id == paneId);

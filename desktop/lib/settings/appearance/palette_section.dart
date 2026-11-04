@@ -90,9 +90,7 @@ class _PaletteChoice extends StatelessWidget {
             ),
             side: WidgetStateProperty.resolveWith(
               (states) => BorderSide(
-                color: states.contains(WidgetState.focused)
-                    ? palette.foreground
-                    : selected
+                color: selected
                     ? palette.accent
                     : MediaQuery.highContrastOf(context)
                     ? palette.foreground.withValues(alpha: .6)

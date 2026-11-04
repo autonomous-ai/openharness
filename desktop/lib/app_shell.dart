@@ -148,10 +148,11 @@ class HarnessApp extends StatelessWidget {
       // 2026-09-16). It never appears in a release build whatever this says.
       // A preview capture that wants a clean corner passes
       // `--dart-define=HARNESS_CLEAN_PREVIEW=true` instead of turning it off
-      // for everyone.
-      debugShowCheckedModeBanner: !const bool.fromEnvironment(
-        'HARNESS_CLEAN_PREVIEW',
-      ),
+      // for everyone. Not on Windows, where the corner it covers is the window's
+      // close button.
+      debugShowCheckedModeBanner:
+          !RuntimePlatform.isWindows &&
+          !const bool.fromEnvironment('HARNESS_CLEAN_PREVIEW'),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
       // The chosen palette owns the appearance; platform text scaling remains
@@ -284,6 +285,10 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // The Windows tab strip's ☰ is built below this shell, so it dispatches
+    // through the sink instead of a callback threaded through three
+    // constructors (desktop/design/windows-app-menu.md).
+    appMenuActionSink = runAppMenuAction;
     // Available from startup, including sign-in and setup.
     if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
@@ -293,6 +298,7 @@ class _RootShellState extends ConsumerState<RootShell>
     flushAppLog();
     WidgetsBinding.instance.removeObserver(this);
     _appMenuChannel.setMethodCallHandler(null);
+    appMenuActionSink = null;
     super.dispose();
   }
 
@@ -485,10 +491,14 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux and Windows; macOS
-            // carries them in its native menu bar, and this renders nothing
-            // there).
-            InWindowMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip. Linux always (on GNOME it
+            // is the title bar); macOS carries them in its native menu bar and
+            // renders nothing. Windows draws a ☰ in the workspace tab strip
+            // instead, but the screens before it — sign-in, setup, the tour —
+            // have no tab strip, so they keep the strip until the workspace is
+            // up.
+            if (!RuntimePlatform.isWindows || !home)
+              InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

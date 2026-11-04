@@ -195,9 +195,7 @@ class _AppIconButtonState extends State<AppIconButton>
           side: WidgetStateProperty.resolveWith(
             (states) => BorderSide(
               width: highContrast ? 2 : 1.5,
-              color: enabled && states.contains(WidgetState.focused)
-                  ? AppPalette.accentOnSurface
-                  : highContrast && enabled
+              color: highContrast && enabled
                   ? AppPalette.textSecondary
                   : Colors.transparent,
             ),

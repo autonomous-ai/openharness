@@ -3,6 +3,44 @@ import 'dart:ui';
 
 enum PaneResizeAxis { x, y }
 
+/// Which edge of a pane another pane lands on.
+enum PaneSide {
+  left,
+  right,
+  top,
+  bottom;
+
+  PaneResizeAxis get axis =>
+      this == left || this == right ? PaneResizeAxis.x : PaneResizeAxis.y;
+
+  /// Whether the pane landing here comes before the pane it lands on.
+  bool get before => this == left || this == top;
+}
+
+/// The edge a pointer at [local] in a pane of [size] means: within a quarter of
+/// an edge, the nearest one, measured as a share of its band so a wide pane's
+/// bands read alike. Null in the middle, which means trade places.
+PaneSide? paneSideAt(Offset local, Size size) {
+  if (size.isEmpty) return null;
+  final x = (local.dx / size.width).clamp(0.0, 1.0);
+  final y = (local.dy / size.height).clamp(0.0, 1.0);
+  const band = 0.25;
+  PaneSide? nearest;
+  var closest = band;
+  for (final (distance, side) in [
+    (x, PaneSide.left),
+    (1 - x, PaneSide.right),
+    (y, PaneSide.top),
+    (1 - y, PaneSide.bottom),
+  ]) {
+    if (distance < closest) {
+      closest = distance;
+      nearest = side;
+    }
+  }
+  return nearest;
+}
+
 /// Normalized rectangles preserve the preset's topology while its dividers
 /// move. They describe slots, not sessions, so moving agents keeps their sizes.
 class PaneArrangement {
@@ -42,6 +80,62 @@ class PaneArrangement {
       );
     }
     return changed ? PaneArrangement(filled) : this;
+  }
+
+  /// Whether tile [from] already sits on [side] of tile [to], the whole edge
+  /// shared: landing there would only halve [to].
+  bool isBeside(int from, int to, PaneSide side) {
+    final a = tiles[from], b = tiles[to];
+    bool same(double one, double other) => (one - other).abs() < _epsilon;
+    return switch (side) {
+      PaneSide.left =>
+        same(a.right, b.left) && same(a.top, b.top) && same(a.bottom, b.bottom),
+      PaneSide.right =>
+        same(a.left, b.right) && same(a.top, b.top) && same(a.bottom, b.bottom),
+      PaneSide.top =>
+        same(a.bottom, b.top) && same(a.left, b.left) && same(a.right, b.right),
+      PaneSide.bottom =>
+        same(a.top, b.bottom) && same(a.left, b.left) && same(a.right, b.right),
+    };
+  }
+
+  /// Tile [from] taken out and landed on [side] of tile [to], which gives up
+  /// half its room. In the list, it sits just before or after [to]; the caller
+  /// moves its pane to match. Null when the hole it leaves can't be filled.
+  PaneArrangement? moveBeside(
+    int from,
+    int to,
+    PaneSide side, {
+    required Size minimum,
+  }) {
+    if (from == to || to < 0 || to >= tiles.length) return null;
+    final rest = remove(from);
+    if (rest == null) return null;
+    return rest.split(to > from ? to - 1 : to, side.axis, minimum: minimum);
+  }
+
+  /// Every divider midway between its neighbours, as far as [minimum] allows.
+  /// One pass only halves the difference along a run of tiles, so it repeats
+  /// until nothing moves.
+  PaneArrangement balanced({required Size minimum}) {
+    var current = this;
+    for (var pass = 0; pass < 32; pass++) {
+      var moved = false;
+      for (var i = 0; i < current.dividers.length; i++) {
+        final divider = current.dividers[i];
+        final next = current.resize(
+          divider,
+          current.balancedPosition(divider),
+          minimum: minimum,
+        );
+        if (!identical(next, current)) {
+          current = next;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    return current;
   }
 
   PaneArrangement? split(

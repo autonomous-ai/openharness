@@ -341,10 +341,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // A strip of the design system's one gradient just outside the pane's
-      // left edge, darkest at the pane, fading out over the chat. A gradient,
-      // not a blurred shadow: a straight edge needs no blur, and a blur costs
-      // every repaint of the window (ENGINEERING.md 4).
+      // No pane casts a shade: the 1-point rule between them separates them.
       Finder shadesIn(Finder pane) => find.descendant(
         of: pane,
         matching: find.byWidgetPredicate(
@@ -357,25 +354,10 @@ void main() {
       );
       expect(shadesIn(center), findsNothing);
       expect(shadesIn(left), findsNothing);
-      final shade = shadesIn(right);
-      expect(shade, findsOne);
-      final decoration =
-          tester.widget<DecoratedBox>(shade).decoration as BoxDecoration;
-      expect(decoration.boxShadow, isNull);
-      final gradient = grid.AppDesktop.paneEdgeShade;
-      expect(decoration.gradient, gradient);
-      expect(gradient.begin, Alignment.centerRight);
-      expect(gradient.colors.first.a, greaterThan(0));
-      expect(gradient.colors.last.a, 0);
-      final strip = tester.getRect(shade), pane = tester.getRect(right);
-      expect(strip.right, pane.left);
-      expect(strip.width, grid.AppDesktop.paneEdgeShadeWidth);
-      expect(strip.top, pane.top);
-      expect(strip.bottom, pane.bottom);
-      expect(strip.left, greaterThan(tester.getRect(center).left));
+      expect(shadesIn(right), findsNothing);
 
-      // It never takes a click meant for the chat beneath it.
-      await tester.tapAt(strip.centerLeft + const Offset(2, 0));
+      // A click beside the pane is the chat's.
+      await tester.tapAt(tester.getRect(right).centerLeft - const Offset(6, 0));
       expect(chatTaps, 1);
 
       final row = tester.widget<Row>(
