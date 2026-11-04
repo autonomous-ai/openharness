@@ -1056,6 +1056,109 @@ void main() {
     },
   );
 
+  // thaibao56 (11-04, #2738): Open terminal on Finn's card closed the card and
+  // nothing opened. A terminal opens only in a conversation that holds the
+  // agent, and no open one held Finn: the card says so in place instead.
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'Open terminal on the card of an agent no open conversation holds says why, and opens once one does ($brightness)',
+      (tester) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(const Size(560, 420));
+        final previous = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = previous);
+        await f.show(tester, brightness: brightness);
+        const reason =
+            'Not in a task or chat now. Give it work or add it to a chat to open its terminal.';
+        final card = find.byKey(const ValueKey('super-agent-card'));
+        Finder open() => find.descendant(
+          of: card,
+          matching: find.widgetWithText(TextButton, 'Open terminal'),
+        );
+        await f.card(tester, 3);
+        expect(tester.widget<TextButton>(open()).onPressed, isNull);
+        expect(
+          find.descendant(of: card, matching: find.text(reason)),
+          findsOneWidget,
+        );
+        await captureBoundary(
+          tester,
+          f.boundary.currentContext!.findRenderObject()!
+              as RenderRepaintBoundary,
+          captureDir,
+          'agent-card-no-terminal-${brightness.name}',
+        );
+        await tester.tap(open(), warnIfMissed: false);
+        await tester.pumpAndSettle();
+        expect(card, findsOneWidget, reason: 'the card stays open');
+        expect(f.opened, isNull);
+        await tester.tap(find.text('Details…'));
+        await tester.pumpAndSettle();
+        final details = find.widgetWithText(FilledButton, 'Open terminal');
+        expect(tester.widget<FilledButton>(details).onPressed, isNull);
+        expect(find.text(reason), findsOneWidget);
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.pumpAndSettle();
+
+        // Once a task holds Finn, Open terminal opens it, with no reason.
+        (f.server.state['conversations'] as List)[1]['agentIds'] = ['agent-3'];
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        await f.card(tester, 3);
+        expect(find.text(reason), findsNothing);
+        await tester.tap(open());
+        await tester.pumpAndSettle();
+        expect(f.opened?.id, 'agent-3');
+        await f.close(tester);
+      },
+    );
+  }
+
+  // Review of #2951 (Kite): the backend opens a terminal in any conversation
+  // that holds the agent but an archived one, a finished (dormant) task the
+  // Desktop holds included.
+  for (final archived in [false, true]) {
+    testWidgets(
+      'Open terminal on the card of an agent held only by a ${archived ? 'archived' : 'finished'} task the Desktop holds ${archived ? 'stays off' : 'opens there'}',
+      (tester) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(const Size(560, 420));
+        // Held while it was open, then finished (or archived) as the Swarm
+        // sweeps it: the Desktop still holds it.
+        final done = <String, dynamic>{
+          ...conversationFixture('done', 'Finished work'),
+          'projectId': 'lead',
+          'agentIds': ['agent-3'],
+        };
+        (f.server.state['conversations'] as List).add(done);
+        await f.controller.refresh();
+        done[archived ? 'archived' : 'dormant'] = true;
+        await f.controller.refresh();
+        await f.controller.loadGroup('done');
+        expect(f.controller.snapshot!.conversation('done'), isNotNull);
+        await f.show(tester);
+        await f.card(tester, 3);
+        final card = find.byKey(const ValueKey('super-agent-card'));
+        final open = find.descendant(
+          of: card,
+          matching: find.widgetWithText(TextButton, 'Open terminal'),
+        );
+        expect(tester.widget<TextButton>(open).onPressed == null, archived);
+        expect(
+          find.byKey(const ValueKey('super-card-terminal-blocked')),
+          archived ? findsOneWidget : findsNothing,
+        );
+        if (!archived) {
+          await tester.tap(open);
+          await tester.pumpAndSettle();
+          expect(f.opened?.id, 'agent-3');
+        }
+        await f.close(tester);
+      },
+    );
+  }
+
   testWidgets('a reviewer reads Rev; an agent without a role stays Dev', (
     tester,
   ) async {
@@ -1389,6 +1492,10 @@ void main() {
       tester.getTopLeft(f.row(1)).dy,
       lessThan(tester.getTopLeft(f.row(3)).dy),
     );
+    // A terminal opens in a conversation that holds the agent (#2738).
+    (f.server.state['conversations'] as List)[1]['agentIds'] = ['agent-1'];
+    await f.controller.refresh();
+    await tester.pumpAndSettle();
     await f.details(tester, 1);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);

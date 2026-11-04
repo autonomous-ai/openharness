@@ -11,7 +11,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
-import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_threads_page.dart';
 
@@ -217,7 +217,9 @@ void main() {
     return fake;
   }
 
-  testWidgets('Home\'s Threads row and the Threads page', (tester) async {
+  testWidgets('Activity\'s Threads button and the Threads page', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
     for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
@@ -254,15 +256,19 @@ void main() {
             theme: buildAppTheme(brightness: brightness),
             builder: (_, child) => SwarmScope(notifier: host, child: child!),
             onGenerateRoute: (_) => CupertinoPageRoute<void>(
-              builder: (_) => SwarmPage(now: () => now),
+              builder: (_) => const Scaffold(body: SwarmActivityView()),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('swarm-threads-row')), findsOneWidget);
-      expect(find.byKey(const ValueKey('swarm-threads-tags')), findsOneWidget);
-      await capture('home');
+      // Threads is in Activity's top bar since Home lost its tiles
+      // (anh Dee, 2026-11-04).
+      expect(
+        find.byKey(const ValueKey('swarm-activity-threads')),
+        findsOneWidget,
+      );
+      await capture('activity');
 
       await tester.pumpWidget(
         RepaintBoundary(
