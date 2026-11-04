@@ -33,8 +33,9 @@ class SuperTabChatScroll extends ScrollController {
   /// The list's dividing row moved [by] down the rows: the view and the
   /// place it keeps move with them, so nothing on screen moves. [across]: it
   /// moved up past the rows on screen, which now lie below it, where a row's
-  /// kept edge is its top rather than its bottom: the place is taken afresh
-  /// from the next layout, which [by] already lines up.
+  /// kept edge is its top rather than its bottom, or the list was replaced
+  /// (a jump): the place is taken afresh from the next layout, which [by]
+  /// already lines up.
   void moveContent(double by, {bool across = false}) {
     for (final position in positions) {
       if (position is _AnchoredPosition) {
@@ -79,7 +80,10 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
   void _moveContent(double by, {bool forget = false}) {
     correctPixels(pixels + by);
     if (forget) {
-      _anchor = null;
+      // Nor is the view at the end it was at: kept there, the next layout
+      // would lay out every row to reach it.
+      _anchor = _settledPixels = _settledMax = null;
+      return;
     } else if (_anchor case final anchor?) {
       _anchor = (messageId: anchor.messageId, top: anchor.top + by);
     }

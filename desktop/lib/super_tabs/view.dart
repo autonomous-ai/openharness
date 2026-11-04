@@ -229,7 +229,10 @@ class _SuperTabViewState extends State<SuperTabView>
   final _anchors = <String, ({String messageId, double top})>{};
   // Each list's dividing row: see [_splitAt].
   final _split = <String, SuperTabMessage>{};
-  final _newerRows = UniqueKey();
+  // The two lists of rows, made afresh for a jump's window: kept, each would
+  // rebuild the rows at the places it held and lay out every row back from
+  // there (a week back, 108 rows built in the landing frame, not 40).
+  Key _newerRows = UniqueKey(), _olderRows = UniqueKey();
   // The composer's completions are drawn by builders of their own, so typing
   // and choosing among them never rebuild the transcript.
   final _mentionIndex = ValueNotifier(0);
@@ -2043,6 +2046,11 @@ class _SuperTabViewState extends State<SuperTabView>
         !c.accessRevoked;
     String? target;
     _movingWindow.add(id);
+    // Stop following the end at once: the window landing is no news to
+    // follow, and kept at the end the list would lay out every row to it.
+    _scrollRequest++;
+    _jumpingToEnd = false;
+    _follow(id, false);
     try {
       target = await c.jumpTo(id, from);
     } catch (_) {
@@ -2062,6 +2070,8 @@ class _SuperTabViewState extends State<SuperTabView>
       // The window is a new list, divided at the row it lands on, with the
       // view's top there: the rows before it grow up and those after it down,
       // so landing lays out only the rows around it, not every row above.
+      _newerRows = UniqueKey();
+      _olderRows = UniqueKey();
       if (landing != null) {
         _split[id] = landing;
         c.keepFrom(id, landing);
@@ -4735,6 +4745,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ),
                                     ),
                                     LaidOutSliverList(
+                                      key: _olderRows,
                                       delegate: SliverChildBuilderDelegate(
                                         (context, index) =>
                                             row(split - 1 - index),
