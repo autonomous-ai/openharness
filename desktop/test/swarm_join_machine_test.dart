@@ -100,6 +100,8 @@ void main() {
         'engines': ['claude', 'codex'],
         // Half its memory in agents, at most 16: 32 GiB suggests 8.
         'maxAgents': 8,
+        // Joining sets no limit (Dee, 2026-11-04: "remove the limit").
+        'agents': 'memory',
         'teamAccountOnly': true,
       },
     ]);
