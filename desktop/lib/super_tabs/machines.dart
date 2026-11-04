@@ -1529,6 +1529,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       name: name,
       problem: problem,
       setUpTeam: setUpTeam,
+      setUpTeamLabel: superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -2027,7 +2028,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         : null,
                     onSetUpTeam: view.setUpTeam
                         ? () async {
-                            await showTeamAccountSetup(context, widget.app!);
+                            await showTeamAccountSetup(
+                              context,
+                              widget.app!,
+                              missing: _teamSetup?.state == 'incomplete'
+                                  ? _teamSetup?.detail ?? ''
+                                  : null,
+                            );
                             await _readTeamSetup();
                           }
                         : null,
@@ -2643,6 +2650,7 @@ class _MachineView {
     required this.tip,
     this.problem,
     this.setUpTeam = false,
+    this.setUpTeamLabel = 'Set up',
     this.apiModels = const [],
     this.localModels = const [],
   });
@@ -2651,6 +2659,9 @@ class _MachineView {
 
   /// Its [problem] is this Mac's, its own person looking: no Harness Team account yet, which they can set up here.
   final bool setUpTeam;
+
+  /// Its button's word: Repair for an account that is there with a part missing (#2765), else Set up.
+  final String setUpTeamLabel;
 
   /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
   final String? problem;
@@ -2736,10 +2747,19 @@ String? superTabTeamSetupLine(({String state, String? detail})? setup) {
       'setup failed: $detail',
     'failed' => 'setup failed',
     'running' => 'setting up',
+    // The account is there, a part of it is not (cli/src/team/autoSetup.ts `missingDetail`, #2765).
+    'incomplete' when detail != null && detail.isNotEmpty =>
+      'Harness Team is not finished ($detail)',
+    'incomplete' => 'Harness Team is not finished',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";
 }
+
+/// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), else
+/// Set up.
+String superTabTeamSetupAction(({String state, String? detail})? setup) =>
+    setup?.state == 'incomplete' ? 'Repair' : 'Set up';
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
@@ -2962,7 +2982,7 @@ class _MachineLine extends StatelessWidget {
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             alignment: Alignment.centerLeft,
                           ),
-                          child: const Text('Set up'),
+                          child: Text(view.setUpTeamLabel),
                         ),
                     ],
                   );

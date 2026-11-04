@@ -21,12 +21,14 @@ Future<void> showTeamAccountSetup(
   AppNotifier app, {
   bool asked = false,
   String? operatingSystem,
+  String? missing,
 }) => showAppDialog<void>(
   context: context,
   barrierDismissible: false,
   builder: (context) => _TeamAccountSetup(
     app: app,
     asked: asked,
+    missing: missing,
     words: _Words.of(operatingSystem ?? RuntimePlatform.operatingSystem),
   ),
 );
@@ -141,6 +143,14 @@ class _Words {
   static const _computerLead =
       'This computer joined a Swarm, so it needs Harness Team before you go on.';
 
+  /// The dialog's title when it repairs (#2765): "Repair Harness Team on this Mac".
+  String get repairTitle => title.replaceFirst('Set up', 'Repair');
+
+  /// What it says first when it repairs: what is missing, and that Repair runs the setup again.
+  String unfinished(String missing) => missing.isEmpty
+      ? 'Harness Team is not finished on $here. Repair runs its setup again.'
+      : 'Harness Team is not finished on $here: $missing. Repair runs its setup again.';
+
   /// Once Remove was refused: Not now is the way on, and it says so instead
   /// of asking for Remove again.
   String get notNowWhy =>
@@ -253,11 +263,16 @@ class _TeamAccountSetup extends StatefulWidget {
     required this.app,
     required this.asked,
     required this.words,
+    this.missing,
   });
 
   final AppNotifier app;
   final bool asked;
   final _Words words;
+
+  /// The account is there and these parts are not (cli/src/team/autoSetup.ts `missingDetail`, #2765): the dialog
+  /// repairs instead of setting up. Empty for a part it could not name.
+  final String? missing;
 
   @override
   State<_TeamAccountSetup> createState() => _TeamAccountSetupState();
@@ -309,9 +324,10 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
     final muted = body.copyWith(color: Theme.of(context).hintColor);
     final outcome = _outcome;
     final words = widget.words;
+    final missing = widget.missing;
     return AlertDialog(
       key: const Key('team-account-setup'),
-      title: Text(words.title),
+      title: Text(missing == null ? words.title : words.repairTitle),
       content: SizedBox(
         width: 420,
         child: outcome != null
@@ -324,7 +340,10 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(words.account, style: body),
+                  Text(
+                    missing == null ? words.account : words.unfinished(missing),
+                    style: body,
+                  ),
                   const SizedBox(height: 12),
                   Text(words.prompt, style: body),
                   const SizedBox(height: 12),
@@ -353,7 +372,7 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
               FilledButton(
                 key: const Key('team-account-setup-continue'),
                 onPressed: _busy ? null : _continue,
-                child: const Text('Continue'),
+                child: Text(missing == null ? 'Continue' : 'Repair'),
               ),
             ],
     );
@@ -540,6 +559,16 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
         return;
       case 'declined':
         _show(_LockStep.cancelled, _words.cancelled);
+        return;
+      // It ended with the account there and a part not (#2765): said, and Try again repairs it.
+      case 'incomplete':
+        final missing = setup?.detail?.trim();
+        _show(
+          _LockStep.retry,
+          missing == null || missing.isEmpty
+              ? 'Setup ended, but Harness Team is not finished. Try again.'
+              : 'Setup ended, but Harness Team is not finished: ${_sentence(missing)} Try again.',
+        );
         return;
       case 'running':
         final since = _since;
