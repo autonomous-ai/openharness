@@ -486,6 +486,14 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
     );
   }
 
+  /// A bar keeps every click on it: one on a control that can't act (minus
+  /// at 100%), a label or the space between them is no click on the veil.
+  Widget _bar(Widget bar) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () {},
+    child: bar,
+  );
+
   static const _side = 72.0;
   static const _ink = grid.AppDesktop.mediaInk;
 
@@ -676,7 +684,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
             padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
             child: Column(
               children: [
-                _header(),
+                _bar(_header()),
                 const SizedBox(height: grid.AppDesktop.groupGap),
                 Expanded(
                   child: Row(
@@ -705,7 +713,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
                   ),
                 ),
                 const SizedBox(height: grid.AppDesktop.groupGap),
-                _controls(),
+                _bar(_controls()),
               ],
             ),
           ),
