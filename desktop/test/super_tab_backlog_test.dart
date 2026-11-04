@@ -707,6 +707,45 @@ void main() {
         }
       });
 
+      testWidgets('it reads each project through that project\'s index, never '
+          'the whole Swarm\'s list, which no index can sort', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(tester, server, today: at);
+        expect(row('here'), findsOneWidget);
+        expect(row('there'), findsOneWidget);
+        final pages = server.parts.reads.where((p) => p.contains('dormant=1'));
+        expect(pages, isNotEmpty);
+        expect(pages.where((p) => !p.contains('projectId=')), isEmpty);
+      });
+
+      testWidgets('a project that cannot be read does not stop the others', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () => server.failReadsOf = 'projectId=lead',
+        );
+        expect(row('here'), findsNothing);
+        expect(row('there'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-backlog-shipped-retry')),
+          findsOneWidget,
+        );
+      });
+
       testWidgets('a page that reaches past 7 days ends the read', (
         tester,
       ) async {
@@ -727,7 +766,9 @@ void main() {
           },
         );
         expect(row('fresh'), findsOneWidget);
-        final pages = server.parts.reads.where((p) => p.contains('dormant=1'));
+        final pages = server.parts.reads.where(
+          (p) => p.contains('dormant=1') && p.contains('projectId=lead'),
+        );
         // The fresh task's page, then the first whose task is past the window.
         expect(pages, hasLength(2));
       });

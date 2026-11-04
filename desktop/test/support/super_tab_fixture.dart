@@ -447,6 +447,9 @@ class ConversationServer {
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
 
+  /// Fails, as if offline, each read whose path holds this.
+  String? failReadsOf;
+
   /// Names a person's message as the backend does: a hash of the Swarm, the
   /// sender and the send's receipt id (backend model.ts `stableId`, used by
   /// `message.send` in commands.ts), not `message-N`.
@@ -1498,6 +1501,9 @@ class ConversationServer {
     }
     if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
+    if (failReadsOf case final part? when path.contains(part)) {
+      throw StateError('Offline');
+    }
     final uri = Uri.parse(path);
     if (uri.pathSegments.length > 5 &&
         uri.pathSegments[3] == 'projects' &&
