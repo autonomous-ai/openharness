@@ -246,6 +246,44 @@ void main() {
     },
   );
 
+  // Review of #2993 (Alder2878): the threads are read again on every Swarm change. Only the open view asks for read
+  // threads, the pages it shows; closed, it asks as before, and the next visit starts at 50 again.
+  testWidgets(
+    'only the open view asks for read pages, and closing it starts over',
+    (tester) async {
+      final server = swarm();
+      final fifty = [
+        for (var i = 0; i < 50; i++)
+          readThread(
+            'read-$i',
+            at: DateTime(2026, 11, 2, 16).subtract(Duration(minutes: i)),
+          ),
+      ];
+      server.followedThreads = {'unread': [], 'read': fifty, 'more': true};
+      String last() =>
+          server.threadListReads.where((p) => p.contains('/threads')).last;
+      await withClock(Clock.fixed(_now), () async {
+        final activity = await _loaded(tester, server);
+        // Read for the sidebar, with Activity closed: no read pages asked.
+        expect(last(), endsWith('/threads'));
+        await _show(tester, activity);
+        await _threadsTab(tester);
+        expect(last(), endsWith('/threads?read=50'));
+        await tester.runAsync(activity.attention.readMore);
+        expect(last(), endsWith('/threads?read=100'));
+        // Activity closes: the reads that follow ask as before.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+        await tester.runAsync(activity.attention.load);
+        expect(last(), endsWith('/threads'));
+        // The next visit starts at the first page again.
+        await _show(tester, activity);
+        await _settle(tester);
+        expect(last(), endsWith('/threads?read=50'));
+      });
+    },
+  );
+
   testWidgets('a server before paging still lists its read threads', (
     tester,
   ) async {
