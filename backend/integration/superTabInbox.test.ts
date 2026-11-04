@@ -954,6 +954,19 @@ describe('a machine-left line stored before #2742', () => {
     expect((await served(s.tabId, peer)).lastMainSequence).toBe(latest.sequence)
   })
 
+  it('serves a poll the same number when the project chat is sent again, as for a reply in a thread', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, 'lead', 'Project latest')
+    await markRead(s.tabId, 'lead', latest.sequence, peer)
+    await insert(s.tabId, 'lead', [left])
+    const { cursor } = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
+    // A reply only in a thread: the chat comes again whole from the change feed, its newest main row still the hidden line.
+    await send(s.tabId, 'lead', 'A reply', { replyTo: latest.id })
+    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    const chat = (changes.groups as any[]).find(g => g.key === 'lead')
+    expect(chat?.data.lastMainSequence).toBe(latest.sequence)
+  })
+
   it('serves a row people read after the line as the chat\'s newest', async () => {
     const s = await scene()
     await insert(s.tabId, 'lead', [left])
