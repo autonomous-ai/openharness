@@ -57,6 +57,11 @@ export interface SwarmProject {
   roles?: ProjectRole[]
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
+  /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
+   *  (leadStart.ts leadWaits). Ids and times only, at most MAX_LEAD_WAITING; cleared when a Lead joins. */
+  leadWaiting?: Array<{ id: string; at: number }>
+  /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
+  leadClaim?: { id: string; machineId: string; at: number }
   /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
    *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
   reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>

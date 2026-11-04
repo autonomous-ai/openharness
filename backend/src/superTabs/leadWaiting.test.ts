@@ -25,8 +25,9 @@ function fixture(personal = true) {
   }
   const created = run({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
   const project = () => projectsOf(state).find(p => p.id === created.projectId)!
-  const send = (text: string, operationId?: string) => run({ type: 'message.send', conversationId: created.conversationId, text, replyTo: null, recipientIds: [] },
-    owner, {}, operationId)
+  /** The id of the message it sent. */
+  const send = (text: string) => run({ type: 'message.send', conversationId: created.conversationId, text, replyTo: null, recipientIds: [] })
+    .result.messageId as string
   const claim = (machineId: string) => run({ type: 'lead.claim', projectId: created.projectId, machineId }).result.leadStart
   const join = (harnessId: string, repo: boolean) => run({ type: 'agent.add', conversationId: created.conversationId, machineId: 'mac', harnessId, name: 'Lead',
     configuration: config, lead: true, ...(repo ? { project: { cwd: '/Users/huy/games', repositoryUrl: 'https://github.com/huy/games' } } : {}) },
@@ -42,20 +43,19 @@ const refusal = (run: () => unknown) => {
 describe('a Personal Swarm project chat with no Lead', () => {
   it('keeps the message for the Lead, and the first claim starts it', () => {
     const f = fixture()
-    const sent = f.send('make the landing page dark', 'm1')
-    expect(sent.messages.at(-1)).toMatchObject({ id: 'm1', recipients: [] })
-    expect(f.project().leadWaiting).toEqual([{ id: 'm1', at: NOW }])
+    const m1 = f.send('make the landing page dark')
+    expect(f.project().leadWaiting).toEqual([{ id: m1, at: NOW }])
     expect(f.claim('mac')).toBe('start')
     expect(f.project().leadClaim).toMatchObject({ machineId: 'mac', at: NOW })
   })
 
   it('delivers the waiting message to the Lead that joins with a repo, and clears what waited', () => {
     const f = fixture()
-    f.send('make the landing page dark', 'm1')
+    const m1 = f.send('make the landing page dark')
     f.claim('mac')
     const joined = f.join('h1', true)
     const agentId = joined.result.agentId as string
-    expect(joined.lateDeliveries).toEqual([{ messageId: 'm1', conversationId: f.conversationId, agentId, lead: true,
+    expect(joined.lateDeliveries).toEqual([{ messageId: m1, conversationId: f.conversationId, agentId, lead: true,
       author: { kind: 'person', id: 'owner', generation: f.state.people[0]!.generation } }])
     expect(f.project().leadWaiting).toBeUndefined()
     expect(f.project().leadClaim).toBeUndefined()
@@ -64,26 +64,26 @@ describe('a Personal Swarm project chat with no Lead', () => {
 
   it('delivers the waiting message to the Lead that joins with no repo', () => {
     const f = fixture()
-    f.send('a scratch idea', 'm1')
+    const m1 = f.send('a scratch idea')
     f.claim('mac')
     const joined = f.join('h1', false)
-    expect(joined.lateDeliveries?.map(d => d.messageId)).toEqual(['m1'])
+    expect(joined.lateDeliveries?.map(d => d.messageId)).toEqual([m1])
     expect(f.project().repository).toBeUndefined()
   })
 
   it('starts one Lead for two quick sends: the second claim from another machine waits, and both messages reach the Lead', () => {
     const f = fixture()
-    f.send('first', 'm1')
+    const m1 = f.send('first')
     expect(f.claim('mac')).toBe('start')
-    f.send('second', 'm2')
+    const m2 = f.send('second')
     expect(f.claim('mini')).toBe('waiting')
     expect(f.project().leadClaim).toMatchObject({ machineId: 'mac' })
-    expect(f.join('h1', false).lateDeliveries?.map(d => d.messageId)).toEqual(['m1', 'm2'])
+    expect(f.join('h1', false).lateDeliveries?.map(d => d.messageId)).toEqual([m1, m2])
   })
 
   it('lets the claiming machine claim again, and another machine once the claim is 10 minutes old', () => {
     const f = fixture()
-    f.send('first', 'm1')
+    f.send('first')
     expect(f.claim('mac')).toBe('start')
     expect(f.claim('mac')).toBe('start')
     f.advance(9 * MINUTE)
@@ -95,17 +95,17 @@ describe('a Personal Swarm project chat with no Lead', () => {
 
   it('never delivers a message that waited over 30 minutes, and keeps at most 20', () => {
     const f = fixture()
-    f.send('old', 'old')
+    f.send('old')
     f.advance(31 * MINUTE)
-    for (let i = 0; i < 21; i++) f.send(`new ${i}`, `n${i}`)
-    expect(f.project().leadWaiting?.map(w => w.id)).toEqual(Array.from({ length: 20 }, (_, i) => `n${i + 1}`))
-    expect(f.join('h1', false).lateDeliveries?.map(d => d.messageId)).toEqual(Array.from({ length: 20 }, (_, i) => `n${i + 1}`))
+    const sent = Array.from({ length: 21 }, (_, i) => f.send(`new ${i}`))
+    expect(f.project().leadWaiting?.map(w => w.id)).toEqual(sent.slice(1))
+    expect(f.join('h1', false).lateDeliveries?.map(d => d.messageId)).toEqual(sent.slice(1))
   })
 
   it('keeps nothing once the chat has its Lead, and refuses a claim then', () => {
     const f = fixture()
     f.join('h1', false)
-    f.send('hello', 'm1')
+    f.send('hello')
     expect(f.project().leadWaiting).toBeUndefined()
     expect(refusal(() => f.claim('mac'))).toBe('LEAD_EXISTS')
   })
@@ -114,7 +114,7 @@ describe('a Personal Swarm project chat with no Lead', () => {
 describe('a Team Swarm project chat with no Lead', () => {
   it('keeps nothing for a Lead and refuses the claim, so it still says Not sent', () => {
     const f = fixture(false)
-    f.send('hello', 'm1')
+    f.send('hello')
     expect(f.project().leadWaiting).toBeUndefined()
     expect(refusal(() => f.claim('mac'))).toBe('PERSONAL_SWARM_ONLY')
     expect(f.join('h1', false).lateDeliveries).toBeUndefined()
