@@ -1887,77 +1887,6 @@ class _SuperTabViewState extends State<SuperTabView>
     return message;
   }
 
-  /// The date pill's choice (day_jump.dart): [id]'s first message on or
-  /// after [from], lit, as a link opens one. The very beginning (null) is
-  /// its first message, and a time after everything said is its newest.
-  /// Older pages are read until one from before [from] is held, at most 50
-  /// as a link reads; past them it says so, and the list stays.
-  Future<void> _jumpToTime(String id, DateTime? from) async {
-    void say(String text) =>
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text(text)));
-    final request = ++_jumpRequest;
-    bool current() =>
-        mounted &&
-        request == _jumpRequest &&
-        c.selectedId == id &&
-        !c.accessRevoked;
-    bool before(SuperTabMessage m) =>
-        from != null && (m.createdAt?.isBefore(from) ?? false);
-    try {
-      if (from == null) {
-        await c.loadBackTo(id, 0);
-      } else {
-        // A copy read back to an early page holds nothing from then on: the
-        // latest first, then back from there.
-        final newest = _shownMessages(id).lastOrNull;
-        if (c.hasNewer(id) && (newest == null || before(newest))) {
-          await c.showLatest(id);
-        }
-        for (var page = 0; !_shownMessages(id).any(before); page++) {
-          if (!current() || !c.hasOlder(id)) break;
-          if (page == 50) {
-            say('That day is too far back to open.');
-            return;
-          }
-          // A read that fails keeps its error and its place: nothing came.
-          final loaded = c.messages(id).length;
-          await c.loadMessages(id, older: true);
-          if (current() && c.messages(id).length == loaded) {
-            say('Couldn’t load earlier messages.');
-            return;
-          }
-        }
-      }
-    } catch (_) {
-      if (current()) say('Messages could not be read.');
-      return;
-    }
-    if (!current()) return;
-    final shown = _shownMessages(id);
-    final target = from == null
-        ? shown.firstOrNull
-        : shown.where((m) => !before(m)).firstOrNull ?? shown.lastOrNull;
-    if (target == null) return;
-    final row = _rowShowing(id, target.id) ?? target.id;
-    setState(() {
-      _target = row;
-      // Stop following the end: that day's message is what to see.
-      _scrollRequest++;
-      _jumpingToEnd = false;
-      _follow(id, false);
-    });
-    _revealTarget(
-      id,
-      0,
-      arrived: (at) {
-        unawaited(Scrollable.ensureVisible(at, alignment: .3));
-        _light(row);
-      },
-    );
-    _focus.requestFocus();
-  }
-
   /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
   void _takeMessageRequest() {
     final request = c.messageRequest;
@@ -4263,8 +4192,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           SuperTabStickyDay(
                             pillKey: const ValueKey('super-day-pill'),
                             hidden: finding != null,
-                            onJump: (from) =>
-                                unawaited(_jumpToTime(c.selectedId, from)),
                             child: NotificationListener<ScrollNotification>(
                               onNotification: (event) {
                                 if (event.depth != 0) return false;
