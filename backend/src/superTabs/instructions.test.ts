@@ -134,7 +134,7 @@ describe('the built-in template', () => {
     expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')
     expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
     expect(routing).toContain('An idle agent is reused only between candidates equal so far')
-    expect(routing).toContain('"Idle" is not a reason.')
+    expect(routing).toContain('"Idle" or "first in the list" is not a reason.')
     expect(routing).toContain('hands its pushed branch to an agent on another account.')
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
@@ -148,8 +148,17 @@ describe('the built-in template', () => {
     // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
-      + 'fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.')
+      + 'fits or short, weekly quota left and reset time.')
     expect(routing).not.toContain('The route\'s lines show')
+  })
+  it('says the route ranks nothing and picks nothing, and every start from it gives the rule that chose it', () => {
+    // Task #2901 (Ken, 2026-11-04): PMs took the route's first line, nearly always Opus or Astra, against this order and quota.
+    // The route now lists by machine name and names no pick; the reason goes with the start or assignment.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('It lists them by machine name, with no ranking and no pick: the PM applies this order itself.')
+    expect(routing).toContain('Every start or assignment from a route gives as its reason the rule above that chose it: urgency, context or a '
+      + 'machine the work needs where it departs from the order. "Idle" or "first in the list" is not a reason.')
+    for (const gone of ['Its order does not rank by quota', 'Picking against it needs a reason in the route\'s override']) expect(routing).not.toContain(gone)
   })
 })
 
