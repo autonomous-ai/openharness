@@ -194,17 +194,31 @@ describe('sign-in attribution', () => {
   })
 
   it('never gives an existing account an acquisition from a later tagged sign-in', async () => {
-    findUnique.mockResolvedValue(row())
+    findUnique.mockResolvedValue(row({ name: null }))
 
     await userService.upsertFromSso({
       externalId: 'prod-sub-1',
       email: 'a@example.com',
       autonomousEnv: 'prod',
-      name: 'Renamed',
+      name: 'Named',
       signUpAttribution: tags,
     })
 
-    expect(update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: { name: 'Renamed' } })
+    expect(update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: { name: 'Named' } })
+  })
+
+  it('takes the SSO name once: a later sign-in with another name leaves the stored one', async () => {
+    findUnique.mockResolvedValue(row({ name: 'Elvis' }))
+
+    const user = await userService.upsertFromSso({
+      externalId: 'prod-sub-1',
+      email: 'a@example.com',
+      autonomousEnv: 'prod',
+      name: 'Nguyen Phan Thuy',
+    })
+
+    expect(update).not.toHaveBeenCalled()
+    expect(user.name).toBe('Elvis')
   })
 
   it('stays off the write path for a current account even when the sign-in is tagged', async () => {
