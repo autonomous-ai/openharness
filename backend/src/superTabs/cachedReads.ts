@@ -7,7 +7,8 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machinesRule } from './cachePatch.js'
+import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, FEED_MAIN_KINDS, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machineFeedRule,
+  machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
 import { retryTransient } from './retry.js'
@@ -187,13 +188,18 @@ export async function readLastChangedAts(db: Db, view: CacheView, tabIds: string
   })] as const)))
 }
 
-/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */
+/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else
+ *  read. The feed is held in two entries by the stamp each depends on (#2783): a machine's reading refreshes only its
+ *  machine part, and every other kind stays as held. */
 export async function readChanged(db: Db, view: CacheView, tabId: string, since: number): Promise<Part[]> {
   const direct = async () => (await store.loadChanged(db, [tabId], new Date(since))).get(tabId) ?? []
   if (!view.available) return direct()
-  const feed = await view.get(tabId, 'feed', 'all', async () => {
+  const load = (kinds: readonly PartKind[]) => async () => {
     const from = since - FEED_SLACK_MS
-    return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
-  }, feedRule)
-  return since >= feed.from ? feed.parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since) : direct()
+    return { from, parts: (await store.loadChanged(db, [tabId], new Date(from), kinds)).get(tabId) ?? [] }
+  }
+  const [main, machines] = await Promise.all([view.get(tabId, 'feed', 'main', load(FEED_MAIN_KINDS), feedRule),
+    view.get(tabId, 'feed:machines', 'all', load(['machine']), machineFeedRule)])
+  if (since < main.from || since < machines.from) return direct()
+  return [...main.parts, ...machines.parts].filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since)
 }

@@ -4,7 +4,7 @@ import { PART_KINDS, type Part, type PartKind } from './parts/index.js'
 import { deriveLight, namedStarts, readChanged, readDelta, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readMachines, readParts } from './cachedReads.js'
 import { CacheView, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
-import { baseRule, dormantRule, feedRule, machinesRule } from './cachePatch.js'
+import { baseRule, dormantRule, feedRule, machineFeedRule, machinesRule } from './cachePatch.js'
 
 /** A start, finished once it has a harness. `untouchable`: reading its request throws, so a test sees the read hash its
  *  agent (stableId, a sha256 of the request's machine and the harness). */
@@ -89,7 +89,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     vi.spyOn(view, 'get').mockImplementation(async (_tabId, name, _scope, _load, patch) => {
       rules.set(name.startsWith('light:') ? 'light:' : name, patch)
       if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
-      if (name === 'feed') return { from: 0, parts: [] }
+      if (name === 'feed' || name === 'feed:machines') return { from: 0, parts: [] }
       if (name === 'lastChangedAt') return null
       if (name.startsWith('light:')) return { groups: [], starts: [] }
       if (name.startsWith('light-group:')) return null
@@ -113,6 +113,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     expect(rules.get('light:')).toBeUndefined()
     expect(rules.get('light-group:g2')).toBeUndefined()
     expect(rules.get('feed')).toBe(feedRule)
+    expect(rules.get('feed:machines')).toBe(machineFeedRule)
   })
 })
 
