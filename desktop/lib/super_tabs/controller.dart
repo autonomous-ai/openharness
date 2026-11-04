@@ -2259,6 +2259,175 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
+  /// At most about this many rows are held of a conversation read back or
+  /// jumped into: past them, a page read one way drops the rows far the other
+  /// way, read again by scrolling back (task #2911). A week back in a busy
+  /// chat held thousands, and every rebuild walked them all.
+  static const _windowRows = 300;
+
+  /// Rows kept below the view's dividing row when an older page drops the
+  /// newest: the view moves that row to the top of what it shows first, so
+  /// these hold every row on screen.
+  static const _rowsBelowFloor = 100;
+
+  /// A read of the page after the newest held, by conversation ([loadNewer]).
+  final _readingNewer = <String, Future<void>>{};
+
+  /// Waits for a read of [id]'s newest messages under way: one that set out
+  /// before a read replaces what is held would join across the gap.
+  Future<void> _afterReadsUnderWay(String id) async {
+    for (
+      var under = _reading[(id, false)];
+      under != null;
+      under = _reading[(id, false)]
+    ) {
+      await under;
+    }
+  }
+
+  bool _gone(String id) =>
+      _disposed || accessRevoked || snapshot?.conversation(id) == null;
+
+  /// The date pill's Jump to: what [id] holds becomes the window around
+  /// [from] (the very beginning when null), read in one request (backend
+  /// `?at=`): the page before it and the page from it. Newer pages wait for
+  /// [loadNewer] or [showLatest], older ones for scrolling up. The row to land
+  /// on: the first from [from] on, else the newest. Null when nothing came or
+  /// the conversation is gone; a read that failed throws, and nothing moves.
+  Future<String?> jumpTo(String id, DateTime? from) async {
+    _acted();
+    await _afterReadsUnderWay(id);
+    if (_gone(id)) return null;
+    final at = from?.millisecondsSinceEpoch ?? 0;
+    final answer = await request('GET', '${_messagesPath(id)}?at=$at');
+    if (_gone(id)) return null;
+    final rows = answer['messages'] as List;
+    final page = [
+      for (final row in rows) SuperTabMessage.fromJson(superTabMap(row)),
+    ]..sort(superTabMessageOrder);
+    if (page.isEmpty) return null;
+    if (page.any((m) => m.conversationId != id)) {
+      throw const FormatException('A different conversation was returned.');
+    }
+    _heldGeneration[id] = (_heldGeneration[id] ?? 0) + 1;
+    _readMessageSeq.remove(id);
+    _rows.remove(id);
+    _keepRows(id, rows);
+    _keepThreads(id, answer['threads']);
+    _messages[id] = page;
+    _staleHeld.remove(id);
+    _before[id] = SuperTabPage.read(answer['next']);
+    _forgetNewer(id);
+    _readingBack.add(id);
+    if (answer['newer'] != null) {
+      // Held below the window: no poll reads past it, only [loadNewer].
+      _newer.add(id);
+      _pagesBelow[id] = _pagesBelowReader;
+    }
+    if (answer['reactionSeq'] case final int seq) _reactionSeq[id] = seq;
+    _viewVersion++;
+    _changed();
+    final target = from == null
+        ? page.first
+        : page
+                  .where((m) => !(m.createdAt?.isBefore(from) ?? true))
+                  .firstOrNull ??
+              page.last;
+    return target.id;
+  }
+
+  /// Reads the page after the newest of [id] held, while more come after it
+  /// ([hasNewer]): a reader scrolling down a window short of the end. Past
+  /// [_windowRows] the oldest rows go, never from where the view lays its
+  /// list out ([keepFrom]). A read already under way is joined; one that
+  /// fails keeps [hasNewer] and throws.
+  Future<void> loadNewer(String id) {
+    if (!_newer.contains(id)) return Future.value();
+    _acted();
+    return _readingNewer[id] ??= _loadNewer(id).whenComplete(() {
+      // A block: whenComplete would wait on the removed future, itself.
+      _readingNewer.remove(id);
+    });
+  }
+
+  Future<void> _loadNewer(String id) async {
+    await _afterReadsUnderWay(id);
+    final tail = _messages[id]?.lastOrNull;
+    if (_gone(id) || tail == null || !_newer.contains(id)) return;
+    final generation = _heldGeneration[id];
+    final askedUpTo = snapshot!.conversation(id)!.lastMessageSequence;
+    final answer = await request(
+      'GET',
+      '${_messagesPath(id)}?after=${tail.sequence}&afterId=${Uri.encodeQueryComponent(tail.id)}',
+    );
+    // Replaced meanwhile (a jump, Jump to latest), or read on by a poll: this
+    // page would join across a gap, or twice.
+    if (_gone(id) ||
+        _heldGeneration[id] != generation ||
+        _messages[id]?.lastOrNull?.id != tail.id) {
+      return;
+    }
+    final rows = answer['messages'] as List;
+    final incoming = [
+      for (final row in rows) SuperTabMessage.fromJson(superTabMap(row)),
+    ];
+    if (incoming.any((m) => m.conversationId != id)) {
+      throw const FormatException('A different conversation was returned.');
+    }
+    _keepRows(id, rows);
+    _keepThreads(id, answer['threads']);
+    final combined = {
+      for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
+      for (final m in incoming) m.id: m,
+    }.values.toList()..sort(superTabMessageOrder);
+    final floor = _cutBefore[id];
+    final from = floor == null
+        ? -1
+        : combined.indexWhere((m) => superTabMessageOrder(m, floor) >= 0);
+    final cut = max(
+      0,
+      min(combined.length - _windowRows, from < 0 ? combined.length : from),
+    );
+    final kept = cut > 0 ? combined.sublist(cut) : combined;
+    if (cut > 0) {
+      _before[id] = SuperTabPage.of(kept.first);
+      final ids = {for (final m in kept) m.id};
+      _rows[id]?.removeWhere((messageId, _) => !ids.contains(messageId));
+    }
+    _messages[id] = kept;
+    if (answer['next'] == null) {
+      // The live end: polls read what comes after it again.
+      _newer.remove(id);
+      _pagesBelow.remove(id);
+      _readMessageSeq[id] = max(askedUpTo, kept.last.sequence);
+    }
+    _viewVersion++;
+    _changed();
+  }
+
+  /// [sorted], an older page just joined, without its newest rows past
+  /// [_windowRows]: they wait below, as under a reader scrolled up holding
+  /// the pages below ([hasNewer]). Never the view's dividing row or the
+  /// [_rowsBelowFloor] rows after it, which hold what is on screen.
+  List<SuperTabMessage> _dropNewest(String id, List<SuperTabMessage> sorted) {
+    if (sorted.length <= _windowRows) return sorted;
+    final floor = _cutBefore[id];
+    final at = floor == null
+        ? -1
+        : sorted.indexWhere((m) => superTabMessageOrder(m, floor) >= 0);
+    final keep = max(_windowRows, at < 0 ? 0 : at + 1 + _rowsBelowFloor);
+    if (keep >= sorted.length) return sorted;
+    final kept = sorted.sublist(0, keep);
+    final ids = {for (final m in kept) m.id};
+    _rows[id]?.removeWhere((messageId, _) => !ids.contains(messageId));
+    _readMessageSeq.remove(id);
+    _readingBack.add(id);
+    _newer.add(id);
+    _latestWanted.remove(id);
+    _pagesBelow[id] = _pagesBelowReader;
+    return kept;
+  }
+
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
 
@@ -4887,7 +5056,11 @@ class SuperTabController extends ChangeNotifier {
                 below < 0 ? sorted.length : below,
               ),
             );
-      final next = cut > 0 ? sorted.sublist(cut) : sorted;
+      final next = older
+          ? _dropNewest(id, sorted)
+          : cut > 0
+          ? sorted.sublist(cut)
+          : sorted;
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;

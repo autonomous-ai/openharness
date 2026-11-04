@@ -34,24 +34,27 @@ void main() {
     return (c, server, reads);
   }
 
-  String firstFrom(ConversationServer server, DateTime from) => server.messages
-      .firstWhere(
-        (m) => !DateTime.parse(m['createdAt'] as String).isBefore(from),
-      )['id']
-      as String;
+  String firstFrom(ConversationServer server, DateTime from) =>
+      server.messages.firstWhere(
+            (m) => !DateTime.parse(m['createdAt'] as String).isBefore(from),
+          )['id']
+          as String;
 
-  test('a jump a week back is one read, and holds the rows around it', () async {
-    final (c, server, reads) = await chat();
-    final target = await c.jumpTo('lead', weekAgo);
-    expect(reads, hasLength(1));
-    expect(reads.single, contains('at=${weekAgo.millisecondsSinceEpoch}'));
-    expect(target, firstFrom(server, weekAgo));
-    final held = c.messages('lead');
-    expect(held, hasLength(200));
-    expect(held.indexWhere((m) => m.id == target), 100);
-    expect(c.hasOlder('lead'), isTrue);
-    expect(c.hasNewer('lead'), isTrue);
-  });
+  test(
+    'a jump a week back is one read, and holds the rows around it',
+    () async {
+      final (c, server, reads) = await chat();
+      final target = await c.jumpTo('lead', weekAgo);
+      expect(reads, hasLength(1));
+      expect(reads.single, contains('at=${weekAgo.millisecondsSinceEpoch}'));
+      expect(target, firstFrom(server, weekAgo));
+      final held = c.messages('lead');
+      expect(held, hasLength(200));
+      expect(held.indexWhere((m) => m.id == target), 100);
+      expect(c.hasOlder('lead'), isTrue);
+      expect(c.hasNewer('lead'), isTrue);
+    },
+  );
 
   test('the very beginning lands on the first message, one read', () async {
     final (c, server, reads) = await chat();
@@ -82,17 +85,20 @@ void main() {
     expect(reads, hasLength(pages));
   });
 
-  test('scrolling up past 300 rows drops the newest, which wait below', () async {
-    final (c, _, _) = await chat();
-    final target = await c.jumpTo('lead', weekAgo);
-    for (var page = 0; page < 4; page++) {
-      await c.loadMessages('lead', older: true);
-      expect(c.messages('lead').length, lessThanOrEqualTo(300));
-    }
-    expect(c.messages('lead').any((m) => m.id == target), isFalse);
-    expect(c.hasNewer('lead'), isTrue);
-    expect(c.hasOlder('lead'), isTrue);
-  });
+  test(
+    'scrolling up past 300 rows drops the newest, which wait below',
+    () async {
+      final (c, _, _) = await chat();
+      final target = await c.jumpTo('lead', weekAgo);
+      for (var page = 0; page < 4; page++) {
+        await c.loadMessages('lead', older: true);
+        expect(c.messages('lead').length, lessThanOrEqualTo(300));
+      }
+      expect(c.messages('lead').any((m) => m.id == target), isFalse);
+      expect(c.hasNewer('lead'), isTrue);
+      expect(c.hasOlder('lead'), isTrue);
+    },
+  );
 
   test('Jump to latest after a jump is one read, at the live end', () async {
     final (c, server, reads) = await chat();
