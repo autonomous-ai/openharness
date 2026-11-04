@@ -1525,24 +1525,56 @@ void main() {
       return fake;
     }
 
-    testWidgets("every Swarm's projects on Home, each with its Swarm; the "
-        'same project id in two Swarms is two rows, pinned apart', (
-      tester,
-    ) async {
+    testWidgets("every Swarm's projects on Home under one small heading, its "
+        'name, and no row naming its Swarm (anh Dee, 2026-11-04); the same '
+        'project id in two Swarms is two rows, pinned apart, a pin first in '
+        'its own Swarm', (tester) async {
       final host = await pump(tester, two());
 
       const mobileRow = 'swarm-project-$tab-$project';
+      const webRow = 'swarm-project-$tab-$web';
       const backendRow = 'swarm-project-$second-$project';
-      // Its Swarm after its name, on its one line.
-      expect(inside(mobileRow, find.text('#Mobile  Phone Swarm')), findsOne);
-      expect(inside(backendRow, find.text('#Backend  Work Swarm')), findsOne);
+      expect(
+        tester.widget<SwarmCaption>(key('swarm-heading-$tab')).text,
+        'Phone Swarm',
+      );
+      expect(
+        tester.widget<SwarmCaption>(key('swarm-heading-$second')).text,
+        'Work Swarm',
+      );
+      final order = [
+        'swarm-heading-$tab',
+        webRow,
+        mobileRow,
+        'swarm-heading-$second',
+        backendRow,
+      ];
+      for (final (i, k) in order.indexed.skip(1)) {
+        expect(y(tester, order[i - 1]), lessThan(y(tester, k)), reason: k);
+      }
+      expect(inside(mobileRow, find.text('#Mobile')), findsOne);
+      expect(inside(backendRow, find.text('#Backend')), findsOne);
+      expect(
+        inside(mobileRow, find.textContaining('Swarm', findRichText: true)),
+        findsNothing,
+      );
 
-      await tester.longPress(key(backendRow));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-pin'));
-      await tester.pumpAndSettle();
+      for (final row in [backendRow, mobileRow]) {
+        await tester.longPress(key(row));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-pin'));
+        await tester.pumpAndSettle();
+      }
 
-      expect(host.session!.home.pins, {'$second/$project'});
+      expect(host.session!.home.pins, {'$second/$project', '$tab/$project'});
+      expect(y(tester, 'swarm-heading-$tab'), lessThan(y(tester, mobileRow)));
+      expect(y(tester, mobileRow), lessThan(y(tester, webRow)));
+      expect(
+        y(tester, webRow),
+        lessThan(y(tester, 'swarm-heading-$second')),
+        reason: 'a pin stays in its Swarm',
+      );
+      expect(find.text('Pinned'), findsNothing);
     });
 
     testWidgets('over two Swarms the title is All Swarms; one picked in the '
@@ -1599,6 +1631,11 @@ void main() {
         ),
         findsNothing,
         reason: 'one Swarm: its name is not on each row',
+      );
+      expect(
+        key('swarm-heading-$second'),
+        findsNothing,
+        reason: 'one Swarm: the title names it',
       );
 
       await openSwitcher(tester);
@@ -2853,11 +2890,19 @@ void main() {
 
       expect(key('swarm-project-$second-$project'), findsOneWidget);
       expect(key('swarm-projects-loading-$tab'), findsOneWidget);
-      expect(
-        y(tester, 'swarm-projects-loading-$tab'),
-        greaterThan(y(tester, 'swarm-project-$second-$project')),
-        reason: 'after the rows read',
-      );
+      final order = [
+        'swarm-heading-$tab',
+        'swarm-projects-loading-$tab',
+        'swarm-heading-$second',
+        'swarm-project-$second-$project',
+      ];
+      for (final (i, k) in order.indexed.skip(1)) {
+        expect(
+          y(tester, order[i - 1]),
+          lessThan(y(tester, k)),
+          reason: 'each Swarm in its place, its rows on their way: $k',
+        );
+      }
       await tester.tap(key('swarm-title-button'));
       await frames(tester);
       expect(key('swarm-switch-$tab'), findsOneWidget);

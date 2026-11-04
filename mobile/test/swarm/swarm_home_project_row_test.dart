@@ -14,16 +14,29 @@ import 'package:harness_mobile/swarm/swarm_unread.dart';
 import 'swarm_fixture.dart';
 
 /// A project on Swarm Home, one line as Slack's channels (2026-11-03): its
-/// #name — bold with something new — its Swarm where Home shows several, and
-/// its tags at the end. No dot, no second line, no time.
+/// #name — bold with something new — and its tags at the end; no Swarm on it,
+/// as Home heads each Swarm's projects with its name. No dot, no second line, no time.
 void main() {
   final now = DateTime(2026, 10, 27, 9);
 
-  SuperTabSnapshot read({int running = 0}) {
+  SuperTabSnapshot read({int running = 0, String name = 'Mobile'}) {
     final busy = [for (var i = 0; i < running; i++) 'busy-$i'];
     return SuperTabSnapshot.fromJson(
       SuperTabParts.firstLoad(
         firstLoad(
+          head: headData(
+            projects: [
+              {
+                'id': project,
+                'name': name,
+                'ownerId': me,
+                'leadConversationId': leadChat,
+                'visibility': 'public',
+                'members': <Object>[],
+                'updateMinutes': 5,
+              },
+            ],
+          ),
           agents: [for (final id in busy) agent(id)],
           groups: [
             for (final id in busy)
@@ -46,7 +59,7 @@ void main() {
   Future<void> pump(
     WidgetTester tester, {
     int running = 0,
-    String? swarmName,
+    String name = 'Mobile',
     SwarmProjectNews news = swarmNoProjectNews,
     bool tagsLoading = false,
     DateTime? active,
@@ -54,7 +67,7 @@ void main() {
     VoidCallback? onTap,
     VoidCallback? onLongPress,
   }) {
-    final snapshot = read(running: running);
+    final snapshot = read(running: running, name: name);
     return tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -73,7 +86,6 @@ void main() {
                     active: active,
                     news: news,
                   ),
-                  swarmName: swarmName,
                   tagsLoading: tagsLoading,
                   onTap: onTap ?? () {},
                   onLongPress: onLongPress,
@@ -175,23 +187,21 @@ void main() {
     expect(find.byType(Skeleton), findsOneWidget);
   });
 
-  testWidgets('with several Swarms, its Swarm follows the name, faint, and '
-      'is heard after it', (tester) async {
+  testWidgets('has no Swarm on it: one heading per Swarm says it (anh Dee, '
+      '2026-11-04)', (tester) async {
     final semantics = tester.ensureSemantics();
-    await pump(tester, swarmName: 'Acme');
+    await pump(tester);
 
     final text = nameText(tester);
-    final swarm = text.textSpan!.toPlainText();
-    expect(swarm, endsWith('  Acme'));
-    expect(text.semanticsLabel, endsWith(', Acme'));
+    expect(text.textSpan!.toPlainText(), '#Mobile');
+    expect(text.semanticsLabel, '#Mobile');
     semantics.dispose();
   });
 
-  testWidgets('a long name ellipsizes on its one line, the Swarm the first to '
-      'go', (tester) async {
+  testWidgets('a long name ellipsizes on its one line', (tester) async {
     await pump(
       tester,
-      swarmName: 'A Swarm with a name far too long for one row of a phone',
+      name: 'a project with a name far too long for one row of a phone',
       width: 240,
     );
 
