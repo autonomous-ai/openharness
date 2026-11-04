@@ -19,7 +19,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
-import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, SCAN_FIELDS, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
+import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, SCAN_FIELDS, THREAD_CHATS, UNREAD_SCAN } from '../src/superTabs/read/inbox.js'
 import { SEED_SCAN } from '../src/superTabs/read/threadMarkSeeds.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -819,6 +819,25 @@ describe('what the inbox costs the database', () => {
     expect(reply.body.data.more).toBe(true)
     expect(replyBytes).toBeLessThan(60_000)
     expect(bytesFromDatabase).toBeLessThan(250_000)
+  }, 120_000)
+})
+
+// Ken's slow log of 11-04: a getMore of `{tabId, conversationId, sequence $gt}` returning ~419 rows was 32% of the evening's slow
+// message ops. It was the unread scan's second batch: its union over the unread chats asked for Mongo's default first batch.
+describe('the inbox\'s scan of unread chats', () => {
+  it(`reads ${THREAD_CHATS} unread chats of ${UNREAD_SCAN + 1} rows each in one operation, never a getMore`, async () => {
+    const s = await scene(f => { for (let i = 0; i < THREAD_CHATS; i++) f.group(`Busy ${i}`) })
+    const chats = (await store.readLoad(peer, s.tabId)).state.conversations.filter(c => c.title.startsWith('Busy ')).map(c => c.id)
+    for (const chat of chats) {
+      const [root] = await insert(s.tabId, chat, [{ text: `Root in ${chat}`, author: personAuthor(owner), mentions: [peer.sub] }])
+      await markRead(s.tabId, chat, await sequenceOf(root!), peer)
+      await insert(s.tabId, chat, Array.from({ length: UNREAD_SCAN + 5 }, (_, i) => ({ text: `Reply ${i}`, author: agentAuthor(s.worker), thread: root })))
+    }
+    const entries = await profiled(db, async () => expect((await inbox(s.tabId, peer)).status).toBe(200))
+    const messages = entries.filter(e => e.ns.endsWith('.SuperTabMessage'))
+    expect(messages.filter(e => e.op === 'getmore'), JSON.stringify(messages.map(e => [e.op, e.nreturned]))).toEqual([])
+    const scan = messages.filter(e => e.op !== 'getmore' && JSON.stringify(filterOf(e)).includes('"$gt"'))
+    expect(scan.reduce((n, e) => n + (e.nreturned ?? 0), 0)).toBe(THREAD_CHATS * (UNREAD_SCAN + 1))
   }, 120_000)
 })
 
