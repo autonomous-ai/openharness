@@ -998,6 +998,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const project of visible.projects ?? []) {
       const lead = project.lead
       if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+      // Which of its person's machines starts the Lead of a Personal project (leadStart.ts) is a machine too.
+      delete project.leadClaim
     }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules
