@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:video_player/video_player.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
@@ -41,7 +42,13 @@ Future<File?> _cachedCopy(BuildContext context, SwarmFileRef ref) async {
     final link = await swarmOpenableLink(context, ref, stale: stale);
     if (link == null) return null;
     try {
-      return await swarmAttachments.file(link, key: 'voice:${ref.file.id}');
+      // Not the `voice:` copies kept until 11-04: those were kept as .bin,
+      // which an iPhone does not play (swarmKeptExtension). Unopened, they go
+      // after swarmAttachmentStale.
+      return await swarmAttachments.file(
+        link,
+        key: 'voice-clip:${ref.file.id}',
+      );
     } on Object {
       // The link may have run out in between: once more with a fresh one.
     }
@@ -119,7 +126,13 @@ class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
       made.addListener(_changed);
       _player = made;
       await made.play();
-    } on Object {
+    } on Object catch (error, stack) {
+      appLog.failure(
+        'swarm',
+        'A voice message could not be played',
+        error: error,
+        stackTrace: stack,
+      );
       unawaited(made.dispose());
       if (mounted) _problem = "Couldn't play it · tap to try again";
     }

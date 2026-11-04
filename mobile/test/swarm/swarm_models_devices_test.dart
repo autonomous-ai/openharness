@@ -121,7 +121,7 @@ void main() {
   double y(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
   group('from You', () {
-    testWidgets('lists Your models and Your devices under the status', (
+    testWidgets('lists Your models and Your devices under who you are', (
       tester,
     ) async {
       await pump(
@@ -140,7 +140,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        y(tester, 'swarm-you-profile'),
+        y(tester, 'swarm-you-me'),
         lessThan(y(tester, 'swarm-you-models')),
       );
       expect(

@@ -26,7 +26,6 @@ import 'package:harness_mobile/swarm/swarm_style.dart'
         SwarmBackButton,
         SwarmCaption,
         SwarmRowGlyph,
-        SwarmSegments,
         SwarmTopBar;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
@@ -105,7 +104,8 @@ class SettingsPage extends StatelessWidget {
 
   /// Drawn as Swarm's pages are ([SettingsSwarmLook]): opened from Swarm's You. Swarm's top bar
   /// then stands in for the big title, whatever [large] says, and the list is Swarm's shorter one —
-  /// every setting still there, fewer rows and captions (`docs/design/2026-11-03-swarm-settings.md`).
+  /// fewer rows and captions (`docs/design/2026-11-03-swarm-settings.md`). Notifications and Theme
+  /// are not in it: they sit on You itself, one tap nearer (Tony 2026-11-04, `SwarmYouPage`).
   final bool swarm;
 
   /// What Experimental switches: [experimentalFeaturesStore] unless a test hands in its own, so a
@@ -287,12 +287,9 @@ class _Body extends StatelessWidget {
       const SettingsCaption('Appearance'),
       SettingsGroup(
         children: [
-          // Swarm's Settings asks light or dark — System, Dark, Light — where the terminal's offers
-          // the eight palettes. The terminal's own page stays dark under either answer.
-          if (SettingsSwarmLook.of(context))
-            _ThemeRow(store: appearance)
-          else
-            _PaletteRow(store: appearance),
+          // The terminal's Settings offers the eight palettes. Swarm's asks light or dark instead,
+          // on You itself (its Theme), so its Appearance is the text size alone.
+          if (!SettingsSwarmLook.of(context)) _PaletteRow(store: appearance),
           _TextSizeRow(),
         ],
       ),
@@ -395,8 +392,8 @@ class _Body extends StatelessWidget {
       SampleMode.maybeOf(context) ?? SampleMode.ofNotifier(notifier);
 
   /// The account's rows as Swarm splits You's, in cards with no caption (prototype A lean,
-  /// 2026-11-03, `docs/design/2026-11-03-swarm-settings.md`): you and what you use and hear of;
-  /// your computers; this phone.
+  /// 2026-11-03, `docs/design/2026-11-03-swarm-settings.md`): you and what you use; your computers;
+  /// this phone. Notifications is on You, one level up (2026-11-04).
   List<Widget> _swarmAccount(BuildContext context) => [
     if (_sample(context) != null)
       const SwarmCaption('Sample', first: true)
@@ -406,7 +403,6 @@ class _Body extends StatelessWidget {
       children: [
         _accountRow(context),
         buildUsageSettingsRow(context, notifier),
-        ?_notificationsRow(context),
         ?_privacyRow(context),
       ],
     ),
@@ -535,8 +531,9 @@ class _Body extends StatelessWidget {
   );
 
   /// Not in the sample, whose notices go nowhere.
-  Widget? _notificationsRow(BuildContext context) =>
-      _sample(context) == null ? _NotificationsRow(notifier: notifier) : null;
+  Widget? _notificationsRow(BuildContext context) => _sample(context) == null
+      ? NotificationsSettingsRow(notices: notifier.agentNotices.system)
+      : null;
 
   /// Who is signed in — or, in sample mode, which has no account to show or sign out of, the
   /// way back out of it.
@@ -807,20 +804,24 @@ class _VoiceLanguageRow extends StatelessWidget {
 /// asks once; Android stops after a refusal or two) the answer is still no, so the way to the
 /// phone's own switch is offered. On, a tap goes straight to that switch. Read again on the way back
 /// from Settings. No value at all where the answer cannot be read (a stand-in notice centre).
-class _NotificationsRow extends StatefulWidget {
-  const _NotificationsRow({required this.notifier});
+///
+/// In the terminal's Settings, and on Swarm's You ([SettingsSwarmLook] around it there), whose
+/// Settings leaves it out.
+class NotificationsSettingsRow extends StatefulWidget {
+  const NotificationsSettingsRow({super.key, required this.notices});
 
-  final AppNotifier notifier;
+  /// The phone's notice centre (`AgentAnnouncer.system`).
+  final SystemNotices notices;
 
   @override
-  State<_NotificationsRow> createState() => _NotificationsRowState();
+  State<NotificationsSettingsRow> createState() => _NotificationsSettingsRowState();
 }
 
-class _NotificationsRowState extends State<_NotificationsRow>
+class _NotificationsSettingsRowState extends State<NotificationsSettingsRow>
     with WidgetsBindingObserver {
   bool? _on;
 
-  SystemNotices get _notices => widget.notifier.agentNotices.system;
+  SystemNotices get _notices => widget.notices;
 
   @override
   void initState() {
@@ -1177,7 +1178,7 @@ class _TerminalThemeRow extends StatelessWidget {
 /// writes — so the preview IS the app behind the sheet, at full size, which no swatch can beat.
 ///
 /// Under Dark and Light captions, because a light palette is the whole of light mode in the
-/// terminal's Settings: Swarm's Settings asks light or dark instead ([_ThemeRow]).
+/// terminal's Settings: Swarm asks light or dark instead, with the Theme on its You.
 ///
 /// It names the palette on screen — which Swarm's Theme may have chosen (Paper, under Light) — and
 /// a pick here hands light and dark back to the palette ([AppearancePrefsStore.setPalette]).
@@ -1222,48 +1223,6 @@ class _PaletteRow extends StatelessWidget {
                 ],
               ),
           ],
-        ),
-      );
-    },
-  );
-}
-
-/// Light or dark, in Settings opened from Swarm: System | Dark | Light, in App colors' place.
-///
-/// One tap, and every screen turns at once — the page behind is the preview — except the
-/// terminal's page, which keeps the dark side ([AppearancePrefs.terminalPalette]). Dark and Light
-/// keep the palette App colors chose while it is on their side, else Graphite and Paper. System
-/// follows the phone as it turns. Until it is touched, the control shows the side the palette is
-/// on, which is what that answer would draw.
-class _ThemeRow extends StatelessWidget {
-  const _ThemeRow({required this.store});
-
-  final AppearancePrefsStore store;
-
-  @override
-  Widget build(BuildContext context) => ValueListenableBuilder<AppearancePrefs>(
-    valueListenable: store,
-    builder: (context, prefs, _) {
-      AppTheme.watch(context);
-      return SettingsRow(
-        key: const ValueKey('settings-theme'),
-        title: 'Theme',
-        glyph: LucideIcons.sunMoon300,
-        // A little over half the row, so the title keeps its word at the largest text size; past
-        // that the control shrinks rather than pushing the row over its edge.
-        trailing: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.sizeOf(context).width * .55,
-          ),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: SwarmSegments<AppThemeMode>(
-              values: AppThemeMode.values,
-              selected: prefs.shownThemeMode,
-              label: (mode) => mode.label,
-              onSelected: (mode) => unawaited(store.setThemeMode(mode)),
-            ),
-          ),
         ),
       );
     },

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -67,13 +68,21 @@ void main() {
     'createdAt': DateTime.utc(2026, 10, 29, 1, minute).toIso8601String(),
   };
 
-  Map<String, dynamic> machine(String id, String name, {String owner = me}) => {
+  Map<String, dynamic> machine(
+    String id,
+    String name, {
+    String owner = me,
+    Duration ago = Duration.zero,
+  }) => {
     'machineId': id,
     'name': name,
     'contributorId': owner,
     'engines': ['claude', 'codex'],
-    // Reporting now: in no account list here, so only this says it is up.
-    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+    // Reporting [ago] (now by default): in no account list here, so only this
+    // says it is up.
+    'observation': {
+      'receivedAt': clock.now().subtract(ago).millisecondsSinceEpoch,
+    },
   };
 
   Map<String, dynamic> wren({String? downSince}) => {
@@ -574,6 +583,126 @@ void main() {
           'engine': 'codex',
         },
       ]);
+    });
+
+    // Tony, 11-04: while its computer is offline, the line under the message
+    // sent to it says so, and nothing starts there until it is back.
+    group('down on a computer that is offline', () {
+      testWidgets('shows no bar under the header, and the chat stays', (
+        tester,
+      ) async {
+        await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              machine(
+                'mac-1',
+                'Tonys-MacBook-Pro',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+        expect(find.text('Wren is offline. Your chat stays.'), findsNothing);
+        expect(key('swarm-buddy-start-again'), findsNothing);
+        expect(find.byType(TextField), findsOneWidget);
+      });
+
+      testWidgets('one that never reported is offline too', (tester) async {
+        await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              {...machine('mac-1', 'Tonys-MacBook-Pro')}..remove('observation'),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets('the message sent says its computer is offline instead', (
+        tester,
+      ) async {
+        final host = await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              machine(
+                'mac-1',
+                'Tonys-MacBook-Pro',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+            page: [
+              {
+                ...message('m1', 1, author: me, text: 'Hi'),
+                'deliveries': [
+                  {'id': 'd1', 'agentId': 'agent-wren', 'status': 'queued'},
+                ],
+              },
+            ],
+          ),
+        );
+        await readAgain(tester, host);
+
+        expect(find.text("Wren's computer is offline"), findsOneWidget);
+        expect(
+          find.text(
+            'Tonys-MacBook-Pro was last seen 4 h ago. '
+            "Your message goes in when it's back online.",
+          ),
+          findsOneWidget,
+        );
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets('its offline line goes at the next read once the computer '
+          'stops reporting', (tester) async {
+        final host = await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
+          ),
+        );
+        expect(find.text('Wren is offline. Your chat stays.'), findsOneWidget);
+
+        await tester.pump(const Duration(seconds: 36));
+        await readAgain(tester, host);
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets("on someone else's machine, only who can see its terminal "
+          'stays', (tester) async {
+        await pump(
+          tester,
+          backend(
+            buddy: {
+              ...wren(downSince: offline),
+              'machineOwnerId': 'person-dee',
+            },
+            machines: [
+              machine(
+                'mac-1',
+                'Dee Studio',
+                owner: 'person-dee',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-where'), findsOneWidget);
+        expect(key('swarm-buddy-offline'), findsNothing);
+        expect(key('swarm-buddy-start-again'), findsNothing);
+      });
     });
 
     testWidgets('⋮ has Find in chat, which opens the find field (#2826)', (
