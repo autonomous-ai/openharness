@@ -24,12 +24,6 @@ ConversationServer _read(int count) {
   return server..markReadElsewhere('lead', count);
 }
 
-void _addWeb(ConversationServer server) =>
-    (server.state['conversations'] as List).add({
-      ...conversationFixture('web', 'Web'),
-      'projectId': 'lead',
-    });
-
 void main() {
   late SuperTabController c;
 
@@ -65,12 +59,13 @@ void main() {
   Future<void> markUnread(WidgetTester tester, String id) async {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
-    addTearDown(mouse.removePointer);
     await mouse.moveTo(tester.getCenter(row(id)));
     await tester.pumpAndSettle();
     await tester.tap(more(id));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mark unread'));
+    await tester.pumpAndSettle();
+    await mouse.removePointer();
     await tester.pumpAndSettle();
   }
 
@@ -114,35 +109,35 @@ void main() {
     // Polls and the visible end being read do not read it again.
     await c.refresh();
     await tester.pumpAndSettle();
+    c.markRead('lead');
+    await tester.pumpAndSettle();
     expect(server.readMarkPosts, sent);
     expect(leadUnread(), isTrue);
     expect(find.byKey(_line), findsOneWidget);
     expect(c.readMark('lead'), 3);
 
     // Left and opened again: read as any chat is.
-    _addWeb(server);
-    await c.refresh();
-    await c.select('web');
+    await c.select('offline');
     await tester.pumpAndSettle();
     await c.select('lead');
+    await tester.pumpAndSettle();
+    c.markRead('lead');
     await tester.pumpAndSettle();
     expect(c.readMark('lead'), 6);
     expect(server.readMarkPosts.last, {
       'conversationId': 'lead',
       'sequence': 6,
     });
+    // The view's short timers (a highlight) end before the tree goes.
+    await tester.pump(const Duration(seconds: 5));
   });
 
-  testWidgets('a mark lowered on another device is taken here', (
-    tester,
-  ) async {
+  testWidgets('a mark lowered on another device is taken here', (tester) async {
     final server = _read(6);
     await show(tester, server);
     expect(c.readMark('lead'), 6);
     // Another chat is open, so nothing here reads Lead again.
-    _addWeb(server);
-    await c.refresh();
-    await c.select('web');
+    await c.select('offline');
     await tester.pumpAndSettle();
 
     server.markUnreadElsewhere('lead', 2);
@@ -154,6 +149,7 @@ void main() {
     // A read after it, here or elsewhere, wins again.
     server.markReadElsewhere('lead', 5);
     await c.refresh();
+    await tester.pumpAndSettle();
     expect(c.readMark('lead'), 5);
   });
 

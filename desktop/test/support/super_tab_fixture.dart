@@ -694,10 +694,9 @@ class ConversationServer {
 
   Map _unreadMarksOf(String reader) =>
       ((state['unreadMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
-            reader,
-            () => <String, dynamic>{},
-          )
-          as Map;
+        reader,
+        () => <String, dynamic>{},
+      ) as Map;
 
   /// The Mark unread writes this device sent, in order: {conversationId,
   /// sequence} with the message's own sequence.

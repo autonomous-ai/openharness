@@ -776,8 +776,24 @@ class _SuperTabViewState extends State<SuperTabView>
       _unread.clear(id);
       _newAfter.remove(id);
     });
-    c.markRead(id);
+    c.markRead(id, explicit: true);
     return true;
+  }
+
+  /// More ▸ Mark unread: the New messages line goes above [message] at once,
+  /// and back where it was if the server did not keep it.
+  Future<void> _markUnread(SuperTabMessage message) async {
+    final id = message.conversationId;
+    final kept = c.markUnread(id, message);
+    void place() => setState(() {
+      _unread.forget(id);
+      _unread.decide(id, _ownShown(id), c.readMark(id), own: c.isOwn);
+    });
+    if (c.selectedId == id) place();
+    if (await kept || !mounted) return;
+    if (c.selectedId == id) place();
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text("Couldn't mark unread")));
   }
 
   void _jumpToLatest() {
@@ -3149,6 +3165,10 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       linkTarget: _linkTarget,
       onOpenLink: _openLink,
+      // A reply only in its thread is read with its thread's own mark.
+      onMarkUnread: inThread || !message.inMainStream
+          ? null
+          : () => unawaited(_markUnread(message)),
       // A message with a thread is answered there; one from before threads
       // keeps the inline reply.
       onReply: !writable || inThread

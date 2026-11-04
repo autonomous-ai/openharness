@@ -65,6 +65,7 @@ class SuperTabParts {
     // Read marks are held apart from the other derived values (_readMarks).
     final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
     final marks = derived.remove('readMarks');
+    final unreadMarks = derived.remove('unreadMarks');
     final threadMarks = derived.remove('threadMarks');
     final chatSettings = derived.remove('chatSettings');
     final parts = SuperTabParts._(
@@ -86,6 +87,8 @@ class SuperTabParts {
       }
     }
     parts._takeReadMarks(marks);
+    // Every one is news to a device whose own mark is higher.
+    parts._takeUnreadMarks(unreadMarks, all: true);
     parts._takeThreadMarks(threadMarks);
     parts._takeChatSettings(chatSettings);
     return parts;
@@ -154,6 +157,44 @@ class SuperTabParts {
       moved = true;
     }
     return moved;
+  }
+
+  /// The marks a Mark unread moved back (backend readMarks.ts `unreadMarks`) since [takeLowered] last ran: the one
+  /// way a mark goes down, on every device of the reader.
+  final _lowered = <String, int>{};
+
+  /// Takes the marks in [marks] that a Mark unread moved below the one held (or, [all], each one sent); whether any
+  /// moved.
+  bool _takeUnreadMarks(Object? marks, {required bool all}) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(:key, :value) in marks.entries) {
+      if (key is! String || value is! num) continue;
+      final sequence = value.toInt();
+      if (!all && (_readMarks[key] ?? 0) <= sequence) continue;
+      _readMarks[key] = sequence;
+      _lowered[key] = sequence;
+      moved = true;
+    }
+    return moved;
+  }
+
+  /// This device marked [conversationId] unread back to [sequence]: the mark held goes there.
+  void lowerReadMark(String conversationId, int sequence) {
+    if ((_readMarks[conversationId] ?? sequence + 1) > sequence) {
+      _readMarks[conversationId] = sequence;
+    }
+  }
+
+  /// A Mark unread this device asked for was not kept: the mark held goes back to [sequence].
+  void raiseReadMark(String conversationId, int sequence) =>
+      _takeReadMarks({conversationId: sequence});
+
+  /// The marks lowered by a Mark unread elsewhere since the last call, by conversation.
+  Map<String, int> takeLowered() {
+    final taken = Map.of(_lowered);
+    _lowered.clear();
+    return taken;
   }
 
   /// The reader's own thread marks (backend readMarks.ts): by conversation, the newest message sequence read in each
@@ -284,7 +325,9 @@ class SuperTabParts {
       }
     }
     final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
-    final readMarksMoved = _takeReadMarks(derived.remove('readMarks'));
+    final readMarksMoved =
+        _takeReadMarks(derived.remove('readMarks')) |
+        _takeUnreadMarks(derived.remove('unreadMarks'), all: false);
     // Both run: one moving never skips the other.
     final marksMoved =
         _takeThreadMarks(derived.remove('threadMarks')) |
