@@ -101,7 +101,7 @@ void main() {
       await remind(tester, 'message-3', 'In 20 minutes');
       expect(server.reminderWrites, hasLength(1));
       final write = server.reminderWrites.single;
-      expect(write['method'], 'PUT');
+      expect(write['method'], 'set');
       expect(write['conversationId'], 'lead');
       expect(write['messageId'], 'message-3');
       final at = DateTime.parse(write['at'] as String);
@@ -176,7 +176,7 @@ void main() {
     await tester.tap(reminderRow('message-3'));
     await tester.pumpAndSettle();
     expect(server.reminderWrites.last, {
-      'method': 'DELETE',
+      'method': 'clear',
       'conversationId': 'lead',
       'messageId': 'message-3',
     });

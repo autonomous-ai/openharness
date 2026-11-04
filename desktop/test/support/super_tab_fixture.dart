@@ -1059,11 +1059,14 @@ class ConversationServer {
     final reminder = RegExp(
       r'/conversations/([^/]+)/messages/([^/]+)/reminder$',
     ).firstMatch(path);
-    if (reminder != null && (method == 'PUT' || method == 'DELETE')) {
+    // A POST, as the daemon forwards only GET and POST: a time sets it, none
+    // clears it.
+    if (reminder != null && method == 'POST') {
       final conversationId = Uri.decodeComponent(reminder.group(1)!);
       final messageId = Uri.decodeComponent(reminder.group(2)!);
+      final clears = body?['at'] == null;
       reminderWrites.add({
-        'method': method,
+        'method': clears ? 'clear' : 'set',
         'conversationId': conversationId,
         'messageId': messageId,
         if (body?['at'] case final at?) 'at': at,
@@ -1073,7 +1076,7 @@ class ConversationServer {
       }
       final id = 'reminder-$messageId';
       final held = reminders.indexWhere((r) => r['id'] == id);
-      if (method == 'DELETE') {
+      if (clears) {
         if (held >= 0) reminders.removeAt(held);
         state['remindersDigest'] = 'r${++_reminderTurn}';
         return {'cleared': held >= 0};

@@ -81,7 +81,7 @@ const run = async (tabId: string, command: Command, as: AuthUser = owner, asAgen
   (await store.execute(as, tabId, { operationId: randomUUID(), command }, asAgentId)) as { result: Record<string, unknown> }
 const send = async (tabId: string, conversationId: string, text: string, as: AuthUser = owner, replyTo: string | null = null, asAgentId?: string) =>
   (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [] }, as, asAgentId)).result.messageId as string
-const call = async (method: 'GET' | 'PUT' | 'DELETE', url: string, as: AuthUser = owner, payload?: unknown) => {
+const call = async (method: 'GET' | 'POST', url: string, as: AuthUser = owner, payload?: unknown) => {
   const response = await app.inject({ method, url, headers: { authorization: as === ownerTeam ? 'Bearer team' : `Bearer ${as.sub}` },
     ...(payload === undefined ? {} : { payload: payload as never }) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } }, headers: response.headers }
@@ -90,9 +90,10 @@ const iso = (at: number) => new Date(at).toISOString()
 const reminderUrl = (tabId: string, conversationId: string, messageId: string, query = '') =>
   `/api/super-tabs/${tabId}/conversations/${conversationId}/messages/${messageId}/reminder${query}`
 const set = (tabId: string, conversationId: string, messageId: string, at: number | string, as: AuthUser = owner, query = '') =>
-  call('PUT', reminderUrl(tabId, conversationId, messageId, query), as, { at: typeof at === 'number' ? iso(at) : at })
+  call('POST', reminderUrl(tabId, conversationId, messageId, query), as, { at: typeof at === 'number' ? iso(at) : at })
 const clear = (tabId: string, conversationId: string, messageId: string, as: AuthUser = owner, query = '') =>
-  call('DELETE', reminderUrl(tabId, conversationId, messageId, query), as)
+  // Desktop reaches the backend through the daemon, which forwards only GET and POST: a clear is a POST of no time.
+  call('POST', reminderUrl(tabId, conversationId, messageId, query), as, { at: null })
 const list = (tabId: string, as: AuthUser = owner, query = '') => call('GET', `/api/super-tabs/${tabId}/reminders${query}`, as)
 const due = async (tabId: string, as: AuthUser = owner) => {
   const answer = await list(tabId, as)
