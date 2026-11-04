@@ -668,6 +668,22 @@ describe('routeHistory', () => {
     expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
     expect(lead).not.toHaveProperty('account')
   })
+  // Task #2901: a route names no pick; the start or assignment the coordinator made records the candidate it matched, and that
+  // candidate's account and spend are what the open decision holds (the backend keeps every candidate's slim fit).
+  it('takes the title, account and spend of the candidate a pick-less decision\'s start chose', async () => {
+    const slim = (account: string, weekly: number) => ({ account, spend: { '5-hour': weekly * 7, weekly } })
+    const record = { via: 'instructions', assessment: { size: 'small' }, candidates: [{ id: 'c0', title: 'New agent · Claude opus high · a', fit: slim('ka', 1) },
+      { id: 'c1', title: 'New agent · Codex default default · b', fit: slim('kb', 2) }] }
+    const chosen = { id: 'd1', conversationId: 'g1', record, override: null, outcome: null, assignmentId: 'as1', createdAt: '2026-11-04T10:00:00Z',
+      final: { kind: 'new', startId: 's', machineId: 'b', engine: 'codex', model: 'default', effort: 'default', candidateId: 'c1' } }
+    const waiting = { ...chosen, id: 'd2', final: null, assignmentId: null }
+    const { value } = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([chosen, waiting]))
+    const [started, unstarted] = value.decisions as Array<Record<string, unknown>>
+    expect(started).toMatchObject({ title: 'New agent · Codex default default · b', account: 'kb', spend: { '5-hour': 14, weekly: 2 }, size: 'small', via: 'instructions' })
+    // Nothing chosen yet holds nothing, and says so.
+    expect(unstarted).toMatchObject({ title: 'not chosen yet' })
+    expect(unstarted).not.toHaveProperty('account')
+  })
   it('gives every attempt of the group, newest first, with only what the route needs and no more than fifty', async () => {
     const t = setup()
     const row = (i: number) => ({ id: `as${i}`, agentId: i % 2 ? 'a2' : 'gone', status: 'stopped', result: i === 0 ? 'Tests failed.' : i === 2 ? 'y'.repeat(900) : null, createdAt: '2026-10-19T10:00:00Z',
