@@ -26,11 +26,13 @@ afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: 
 
 describe('the Harness Team account, set up on its own', () => {
   it('starts setup as the person joins or adds this Mac, once at a time, and answers at once', async () => {
-    const f = fake()
+    let made = false
+    const f = fake({ accountExists: vi.fn(async () => made) })
     let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
     ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     expect(await f.auto.offer('join')).toEqual({ state: 'started' })
     expect(await f.auto.offer('contribute')).toEqual({ state: 'running' })
+    made = true
     finish({ code: 0, result: { ok: true } })
     await f.auto.settled()
     expect(f.deps.setup).toHaveBeenCalledTimes(1)
@@ -93,7 +95,9 @@ describe('the Harness Team account, set up on its own', () => {
     await threw.auto.offer('join'); await threw.auto.settled()
     expect(threw.decision()).toMatchObject({ state: 'failed', detail: 'osascript missing' })
     // The account was made: only the report is late.
-    const slow = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, privacy: null } })), accountExists: vi.fn(async () => true) })
+    let slowMade = false
+    const slow = fake({ setup: vi.fn(async () => { slowMade = true; return { code: 1, result: { ok: false, privacy: null } } }),
+      accountExists: vi.fn(async () => slowMade) })
     await slow.auto.offer('join'); await slow.auto.settled()
     expect(slow.decision()).toBeNull()
     expect(slow.log.join('\n')).toContain('harness team status')
@@ -168,7 +172,7 @@ describe('the Harness Team account, set up on its own', () => {
     let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
     ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     await f.auto.offer('manual')
-    expect(await f.auto.status()).toEqual({ state: 'running' })
+    expect(await f.auto.status()).toEqual({ state: 'running', elapsedMs: 0 })
     finish({ code: 0, result: { ok: true } })
     await f.auto.settled()
     // Made since: whatever was remembered before no longer explains anything.

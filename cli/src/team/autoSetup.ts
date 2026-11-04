@@ -59,8 +59,9 @@ export const AUTO_SETUP_RETRY_MS = 24 * 60 * 60_000
 export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared'
   | 'no-prompt' | 'wanted' | 'started'
 
-/** What [TeamAutoSetup.status] answers. `detail`: a failed setup's own sentence, at most 300 characters. */
-export interface TeamSetupStatus { state: 'none' | 'running' | 'exists' | 'declined' | 'failed'; detail?: string }
+/** What [TeamAutoSetup.status] answers. `detail`: a failed setup's own sentence, at most 300 characters. While it runs,
+ *  `step`: the step it is on (./command.ts `progress`), once one is said, and `elapsedMs`: how long it has run. */
+export interface TeamSetupStatus { state: 'none' | 'running' | 'exists' | 'declined' | 'failed'; detail?: string; step?: string; elapsedMs?: number }
 
 /** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`); or
  *  they asked for it (`manual`: Desktop's explanation was accepted, or the machine row's Set up button). */
@@ -74,8 +75,9 @@ export interface AutoSetupDeps {
   accountExists(user: string): Promise<boolean>
   readDecision(): TeamSetupDecision | null
   writeDecision(decision: TeamSetupDecision): void
-  /** `harness team setup --json`, as this account: its exit code and the JSON it answered (null when it said none). */
-  setup(): Promise<{ code: number; result: Record<string, unknown> | null }>
+  /** `harness team setup --json`, as this account: its exit code and the JSON it answered (null when it said none).
+   *  [progress] hears each step as it goes. */
+  setup(progress?: (step: string) => void): Promise<{ code: number; result: Record<string, unknown> | null }>
   now(): number
   log(line: string): void
   /** Linux: whether the administrator prompt can be shown from here (pkexec and a desktop session, ./admin.ts
@@ -90,6 +92,9 @@ const MADE_NOTHING = new Set(['SETUP_FAILED', 'NOT_INSTALLED', 'NOT_SIGNED_IN', 
 
 export class TeamAutoSetup {
   private running: Promise<void> | null = null
+  /** The running setup's start and step, for [status]. */
+  private startedAt = 0
+  private step: string | null = null
   constructor(private readonly deps: AutoSetupDeps) {}
 
   /**
@@ -136,7 +141,9 @@ export class TeamAutoSetup {
    */
   async status(): Promise<TeamSetupStatus> {
     const { deps } = this
-    if (this.running) return { state: 'running' }
+    if (this.running) {
+      return { state: 'running', ...(this.step ? { step: this.step } : {}), elapsedMs: Math.max(0, deps.now() - this.startedAt) }
+    }
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
     const decision = deps.readDecision()
     if (!decision) return { state: 'none' }
@@ -155,9 +162,11 @@ export class TeamAutoSetup {
     const { deps } = this
     deps.log(deps.platform === 'win32' ? 'setting up the Harness Team account: Windows asks for permission (User Account Control)'
       : `setting up the Harness Team account: ${deps.platform === 'darwin' ? 'macOS' : 'the system'} asks for an administrator password`)
+    this.startedAt = deps.now()
+    this.step = null
     let outcome: { code: number; result: Record<string, unknown> | null }
     try {
-      outcome = await deps.setup()
+      outcome = await deps.setup((step) => { this.step = step })
     } catch (error) {
       outcome = { code: 1, result: { ok: false, code: 'SETUP_FAILED', message: error instanceof Error ? error.message : String(error) } }
     }
@@ -170,13 +179,32 @@ export class TeamAutoSetup {
       } else if (outcome.code !== 0 && code !== null && MADE_NOTHING.has(code)) {
         deps.writeDecision({ state: 'failed', at: deps.now(), ...(message ? { detail: message } : {}) })
         deps.log(`the Harness Team account was not set up: ${message ?? code}`)
+      } else if (!deps.readConfig() && !await deps.accountExists(TEAM_USER).catch(() => false)) {
+        // Whatever it answered, there is no account: remembered with why, so Desktop's lock ends with a reason instead of
+        // waiting on a `none` (Scholes, 2026-11-04: osascript's 15 minutes, a code this CLI does not know, no answer).
+        const detail = message ?? `Setup ended (exit ${outcome.code}) without making the Harness Team account.`
+        deps.writeDecision({ state: 'failed', at: deps.now(), detail })
+        deps.log(`the Harness Team account was not set up: ${detail}`)
       } else {
         deps.log(outcome.code === 0 ? 'the Harness Team account is set up' : `the Harness Team account was set up, with something to look at: harness team status`)
+        for (const line of missingEngines(outcome.result)) deps.log(line)
       }
     } catch (error) {
       deps.log(`could not remember the Harness Team account setup: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
+}
+
+/** What setup's JSON says of the engines it installed: one line for each that is not there, and how to add it. */
+function missingEngines(result: Record<string, unknown> | null): string[] {
+  const engines = result?.engines
+  if (!engines || typeof engines !== 'object') return []
+  const names: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
+  return Object.entries(names).flatMap(([key, name]) => {
+    const engine = (engines as Record<string, unknown>)[key]
+    return engine && typeof engine === 'object' && (engine as { installed?: unknown }).installed === false
+      ? [`${name} is not installed in the Harness Team account: harness team setup installs it`] : []
+  })
 }
 
 /** The owner's daemon's own: this account's sign-in and data folder, and `harness team setup --json` run in this process. */
@@ -192,12 +220,12 @@ export async function realTeamAutoSetup(dataDir: string, log: (line: string) => 
     accountExists: teamAccountExists(runGuestCommand),
     readDecision: () => readTeamSetupDecision(file),
     writeDecision: (decision) => writeTeamSetupDecision(file, decision),
-    setup: async () => {
+    setup: async (progress) => {
       const [{ teamCommand }, { teamCommandDeps }] = await Promise.all([import('./command.js'), import('./deps.js')])
       const lines: string[] = []
       const refuse = async (): Promise<never> => { throw new Error('setup does not restart the daemon') }
       const code = await teamCommand(['setup', '--json'], { ...teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse }),
-        out: (line) => lines.push(line), err: (line) => lines.push(line), interactive: false })
+        out: (line) => lines.push(line), err: (line) => lines.push(line), interactive: false, ...(progress ? { progress } : {}) })
       const last = [...lines].reverse().find((line) => line.startsWith('{'))
       let result: Record<string, unknown> | null = null
       try { result = last ? JSON.parse(last) as Record<string, unknown> : null } catch { /* said nothing readable */ }

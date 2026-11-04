@@ -94,7 +94,7 @@ describe('setup script', () => {
     const script = buildSetupScript(input())
     const order = [
       'owned_by_root "$dir"', 'dscl . -create "/Users/$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
-      'as_owner /bin/sh -c', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+      'sh "$SENTINEL"', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
       'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
       'install -o 0 -g 0 -m 0644 "$STAGE/team.plist" "$PLIST"', 'launchctl bootstrap system "$PLIST"',
     ].map((needle) => at(script, needle))
