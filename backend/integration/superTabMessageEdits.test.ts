@@ -107,6 +107,12 @@ describe('message.edit', () => {
     const row = await db.superTabMessage.findUniqueOrThrow({ where: { id } })
     expect(JSON.stringify(row)).not.toContain('The build is green.')
     expect(Object.keys(row).filter(k => /history|previous|original/i.test(k))).toEqual([])
+    // A credential edited in is removed before it is stored, as in a send (credentials.ts).
+    const token = ['ghp', 'Q7mZ2xK9pL4vB8nR1tY6wC3sD5fG0hJ2kM4n'].join('_')
+    await f.edit(f.web.conversationId, id, `Token: ${token}`)
+    expect(JSON.stringify(await db.superTabMessage.findUniqueOrThrow({ where: { id } }))).not.toContain(token)
+    expect((await f.page(f.web.conversationId, other)).messages.find(m => m.id === id)?.text).toBe('Token: [credential removed]')
+    await f.edit(f.web.conversationId, id, 'The build is green now.')
     // The same text again changes nothing.
     expect((await f.edit(f.web.conversationId, id, 'The build is green now.')).result).toMatchObject({ changed: false })
   })

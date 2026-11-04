@@ -84,4 +84,14 @@ describe('message edits', () => {
     expect(() => f.run(commandSchema.parse({ type: 'message.edit', conversationId: group, messageId: 'm1', text: 'x' }), owner, target()))
       .toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
   })
+
+  it('removes a credential edited into a message, as a send does, and tells the author', () => {
+    const f = fixture()
+    // Built at run time so no token-shaped literal sits in the source.
+    const token = ['ghp', 'Q7mZ2xK9pL4vB8nR1tY6wC3sD5fG0hJ2kM4n'].join('_')
+    const effects = f.run(edit(`Use ${token} for the deploy`), owner, target())
+    expect(effects.result).toMatchObject({ changed: true, credentialNotice: expect.stringContaining('Removed a credential') })
+    expect(effects.messageEdit).toEqual({ messageId: 'm1', text: 'Use [credential removed] for the deploy' })
+    expect(JSON.stringify(effects)).not.toContain(token)
+  })
 })
