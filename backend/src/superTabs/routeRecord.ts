@@ -73,19 +73,29 @@ export const routeRecordSchema = z.object({
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
-/** A record as stored (routeDecisions.ts): the pick keeps its label, and the exclusions are kept once per reason. On production
- *  (2026-11-03) labels were 5.4 KB of a 20.9 KB row and exclusions 8.9 KB, 47 of them sharing ~5 reasons (task #2488). Rows
- *  written before keep `excluded` and no `unavailable`. */
-export interface StoredRouteRecord extends Omit<RouteRecord, 'excluded'> {
+/** A candidate as a decision keeps it: the pick whole; any other only who and where it is and its title (storedRecord). */
+export type KeptCandidate = Omit<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'> & Partial<Pick<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'>>
+/** A record as its readers get it back (readRecord): its candidates as kept. */
+export type ReadRouteRecord = Omit<RouteRecord, 'candidates'> & { candidates: KeptCandidate[] }
+
+/** A record as stored (routeDecisions.ts): the pick whole, the other candidates as KeptCandidate, and the exclusions kept once
+ *  per reason. On production (2026-11-03) labels were 5.4 KB of a 20.9 KB row and exclusions 8.9 KB, 47 of them sharing ~5
+ *  reasons (task #2488); the 42 candidates of an 11-04 route were still ~18.9 KB, ~8.5 KB of it quota fits (task #2769). Rows
+ *  written before keep `excluded` and no `unavailable`, and every candidate whole. */
+export interface StoredRouteRecord extends Omit<ReadRouteRecord, 'excluded'> {
   excluded?: RouteRecord['excluded']
   unavailable?: Array<{ reason: string; titles: string[] }>
 }
 
-/** What a decision keeps of [record]: a label only on the pick (the route showed the others when it ran; Desktop's Details shows
- *  a candidate's label only when it has one), and each exclusion reason once, with its titles in order. */
+/** What a decision keeps of [record]: the pick whole, and of every other candidate only what a reader takes back of one: who
+ *  and where it is (a start or assignment matching it, startedAs; a person choosing it, route.override; its Team-work check) and
+ *  its title (the chat lines, Desktop's Details). Its label, strength, cost and quota fit are read of the pick only: the route
+ *  showed the others when it ran, and the route history takes the account and spend of the pick (cli service.ts routeHistory).
+ *  Each exclusion reason is kept once, with its titles in order. */
 export function storedRecord(record: RouteRecord): StoredRouteRecord {
   const { excluded, ...rest } = record
-  const candidates = record.candidates.map(({ label, ...c }) => c.id === record.pick ? { ...c, label } : c) as RouteCandidate[]
+  const candidates = record.candidates.map(({ label: _label, quality: _quality, cost: _cost, fit: _fit, ...c }, i) =>
+    c.id === record.pick ? record.candidates[i]! : c)
   const byReason = new Map<string, string[]>()
   for (const { title, reason } of excluded) byReason.set(reason, [...byReason.get(reason) ?? [], title])
   return { ...rest, candidates, ...byReason.size ? { unavailable: [...byReason].map(([reason, titles]) => ({ reason, titles })) } : { excluded: [] } }
@@ -93,23 +103,23 @@ export function storedRecord(record: RouteRecord): StoredRouteRecord {
 
 /** Either stored form back as readers get a record: `unavailable` expanded into `excluded`, reason by reason in the order each
  *  first appeared. A record written before this is returned as it is. */
-export function readRecord(stored: StoredRouteRecord | RouteRecord): RouteRecord {
-  if (!('unavailable' in stored) || !stored.unavailable) return stored as RouteRecord
+export function readRecord(stored: StoredRouteRecord | RouteRecord): ReadRouteRecord {
+  if (!('unavailable' in stored) || !stored.unavailable) return stored as ReadRouteRecord
   const { unavailable, ...rest } = stored
-  return { ...rest, excluded: unavailable.flatMap(({ reason, titles }) => titles.map(title => ({ title, reason }))) } as RouteRecord
+  return { ...rest, excluded: unavailable.flatMap(({ reason, titles }) => titles.map(title => ({ title, reason }))) } as ReadRouteRecord
 }
 
 /**
  * Whether a started agent is the candidate's: the same machine, engine, and the model and effort that were
  * requested. After a failed switch `final` holds what ran, so the request is the one that names the candidate.
  */
-export const startedAs = (candidate: RouteCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
+export const startedAs = (candidate: KeptCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
   final.machineId === candidate.machineId && final.engine === candidate.engine &&
   (final.requested?.model ?? final.model) === candidate.model && (final.requested?.effort ?? final.effort) === candidate.effort &&
   (final.gridModel ?? null) === (candidate.gridModel ?? null) && (final.gridName ?? null) === (candidate.gridName ?? null)
 
 /** Whether a decision's final names this candidate: the same agent, or the same start. */
-export const finalMatches = (candidate: RouteCandidate, final: RouteFinal | null): boolean => !!final && (candidate.kind === 'member'
+export const finalMatches = (candidate: KeptCandidate, final: RouteFinal | null): boolean => !!final && (candidate.kind === 'member'
   ? final.kind === 'member' && final.agentId === candidate.agentId
   : final.kind === 'new' && startedAs(candidate, final))
 
@@ -122,7 +132,7 @@ export type RouteFinal =
       gridModel?: string; gridName?: string }
 export interface RouteOverride { by: 'lead' | 'person'; actorKey: string; candidateId?: string; reason: string }
 export interface RouteDecision {
-  id: string; conversationId: string; record: RouteRecord
+  id: string; conversationId: string; record: ReadRouteRecord
   final: RouteFinal | null; override: RouteOverride | null; assignmentId: string | null; outcome: string | null
   /** Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (costs/attempts.ts). */
   run: RouteRun | null
