@@ -97,50 +97,46 @@ ConversationServer tasksServer({bool empty = false}) {
       'configuration': {'engine': 'claude'},
     },
   ];
+  (server.state['conversations'] as List).removeWhere(
+    (g) => (g as Map)['id'] == 'offline',
+  );
   if (!empty) {
-    (server.state['conversations'] as List)
-      ..removeWhere((g) => (g as Map)['id'] == 'offline')
-      ..addAll([
-        _task(
-          'shipped-means',
-          'Shipped means merged',
-          10,
-          requester: 'scholes',
-        ),
-        _task('preview', 'Remove the old preview route', 11),
-        _task(
-          'tag',
-          'One tag per ask',
-          12,
-          requester: 'owner',
-          status: 'working',
-          pullRequest: 2867,
-        ),
-        _task(
-          'test-copy',
-          'First run of the test copy',
-          13,
-          requester: 'ken',
-          status: 'needs_human',
-          liveness: {
-            'state': 'waiting',
-            'why': 'person',
-            'personId': 'owner',
-            'since': 1,
-          },
-        ),
-        _task(
-          'sender',
-          'Task chat keeps its sender',
-          9,
-          requester: 'scholes',
-          status: 'done',
-          pullRequest: 2870,
-          merged: true,
-          archived: true,
-          shippedAt: _now.subtract(const Duration(days: 2)),
-        ),
-      ]);
+    (server.state['conversations'] as List)..addAll(<Map<String, dynamic>>[
+      _task('shipped-means', 'Shipped means merged', 10, requester: 'scholes'),
+      _task('preview', 'Remove the old preview route', 11),
+      _task(
+        'tag',
+        'One tag per ask',
+        12,
+        requester: 'owner',
+        status: 'working',
+        pullRequest: 2867,
+      ),
+      _task(
+        'test-copy',
+        'First run of the test copy',
+        13,
+        requester: 'ken',
+        status: 'needs_human',
+        liveness: {
+          'state': 'waiting',
+          'why': 'person',
+          'personId': 'owner',
+          'since': 1,
+        },
+      ),
+      _task(
+        'sender',
+        'Task chat keeps its sender',
+        9,
+        requester: 'scholes',
+        status: 'done',
+        pullRequest: 2870,
+        merged: true,
+        archived: true,
+        shippedAt: _now.subtract(const Duration(days: 2)),
+      ),
+    ]);
   }
   return server;
 }
