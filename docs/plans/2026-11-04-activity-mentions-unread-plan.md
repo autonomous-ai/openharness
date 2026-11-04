@@ -4,7 +4,7 @@
 > Engineer). One independent review on the pull request.
 
 **Goal:** In Activity > Mentions, a tag the reader never opened looks unread, even after the server resolved it because
-they answered someone or posted in a chat. Mentions opens on Unreads only, an unread row reads like an unread thread row,
+they answered someone or posted in a chat. Mentions lists only unread tags, an unread row reads like an unread thread row,
 and a Threads row names a person by the name the Swarm shows, not their email (task #2887, Diego, 2026-11-04, a
 follow-up to #2929).
 
@@ -27,10 +27,12 @@ passed it) or `done` (Mark read) (backend/src/superTabs/mentions.ts). Only `read
   `SuperTabController.markThreadRead` for a thread reply, and a new `SuperTabController.markReadThrough(id, sequence)`
   for the chat. `markRead(id, through:)` can't be used: it stops at the chat's loaded messages (a transcript passes
   what it displayed), and Activity marks chats that aren't open. The new call stops at the chat's newest message.
-- Mentions starts with Unreads only on.
-- `_ActivityRow`: an unread row's preview is in the foreground colour (it was muted, close to a read row's faint). The
-  dot and the semibold foreground name are unchanged. A read row stays regular weight, with a muted name and a faint
-  preview. Mention and thread rows share the row, so both read the same.
+- Mentions lists only unread tags (Diego changed point 1, 11-04: first "opens on Unreads only", then no switch at all).
+  `mentionRows` folds only unread tags; Mark read or Mark all read removes the rows and lowers the count with them, and
+  with nothing unread the tab says "No unread mentions". The switch, its state and the read-row style are deleted.
+- `_ActivityRow`: every row Activity lists is unread, so the row has no `unread` flag: the dot, the semibold
+  foreground name and a foreground preview (it was muted, close to a read row's faint). Mention and thread rows share
+  the row, so both read the same.
 - A Threads row's root author and replier are named from the snapshot: a person by `shownName`, an agent by
   `agentName`, else the server's recorded name (an email becomes its local part, as the chat does).
 
@@ -66,7 +68,7 @@ sign-in).
   `mention.done` for it.
 - `markReadThrough` never moves a mark back and never past the chat's newest message.
 
-## Task 1: Mentions opens on Unreads only
+## Task 1: Mentions opens on Unreads only (replaced by Task 6)
 
 **Files:** desktop/lib/super_tabs/activity_view.dart, desktop/test/super_tab_activity_view_test.dart
 
@@ -114,6 +116,18 @@ desktop/lib/super_tabs/project_sidebar.dart, desktop/test/super_tab_activity_tes
       as answered but not read past still counts 1; three folded tags count 3; before the tags are read the sidebar
       shows decisions waiting + mentions waiting.
 - [ ] Run red, commit; implement; run green, commit.
+
+## Task 6: Mentions lists only unread tags, with no switch
+
+**Files:** desktop/lib/super_tabs/activity.dart, desktop/lib/super_tabs/activity_rows.dart,
+desktop/lib/super_tabs/activity_view.dart, desktop/test/super_tab_activity_view_test.dart,
+desktop/test/super_tab_activity_rows_test.dart, desktop/test/super_tab_mentions_test.dart
+
+- [ ] Test: read past, `done` and `read` tags are not listed, a read tag between two unread ones from one author is not
+      folded in, and no "Unreads only" shows; Mark read on a folded row of 3 removes it and lowers Mentions and
+      Activity by 3.
+- [ ] Run red, commit; delete the switch, its state and the read-row style; update the tests that used the switch; run
+      green, commit.
 
 ## Finish
 
