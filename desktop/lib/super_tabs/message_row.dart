@@ -1043,22 +1043,29 @@ class SuperTabReplyPreview extends StatelessWidget {
   }
 }
 
-/// Lights a message briefly, as the one a quote was followed to.
+/// Lights a message briefly, as the one a quote was followed to, or while it
+/// is find's current match; a [match] of find's others is lit more quietly.
 class SuperTabMessageHighlight extends StatelessWidget {
   const SuperTabMessageHighlight({
     super.key,
     required this.on,
+    this.match = false,
     required this.child,
   });
-  final bool on;
+  final bool on, match;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final selection = DesktopChrome.selection;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 400),
-      color: on ? DesktopChrome.selection : Colors.transparent,
+      color: on
+          ? selection
+          : match
+          ? selection.withValues(alpha: selection.a / 2)
+          : Colors.transparent,
       child: child,
     );
   }
