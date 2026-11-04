@@ -218,6 +218,8 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectIndexed(changed)
     expect(where(changed, ['_id']).map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { _id: 1 }'], 1]])
     expectOnlyReturned(where(changed, ['_id']))
+  })
+
   it('a read past 101 conversations comes in one reply, with no getMore, however many a Swarm has (#2839)', async () => {
     let keys: string[] = []
     const reads = await profiled(async () => {
