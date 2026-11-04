@@ -204,7 +204,9 @@ async function everyKind() {
   const needs = s.group('Needs a machine')
   const privateId = s.group('Peer and PM')
   const quietSecret = s.group('Quiet secret', secret)
-  for (const id of [done, needs, quietSecret]) s.run({ type: 'conversation.archive', conversationId: id, archived: true })
+  const legacy = s.group('Legacy work')
+  const quietLegacy = s.group('Quiet legacy work')
+  for (const id of [done, needs, quietSecret, quietLegacy]) s.run({ type: 'conversation.archive', conversationId: id, archived: true })
   let buddyChat = ''
   const buddy = 'peer-buddy'
   s.edit(state => {
@@ -230,6 +232,9 @@ async function everyKind() {
   await writeLegacySwarm(db, { state, revision: 700 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
+  // Stored without a number, as 111 live groups on prod are (11-04): a whole read numbers an awake one after every other
+  // (model.ts numberConversations); a quiet one reads without. Migration numbers them, so the number goes after it.
+  await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId, key: { $in: [legacy, quietLegacy] } }, u: { $unset: { 'data.number': '' } }, multi: true }] })
   const groups = (await parts.loadAll(db, tabId)).groups.filter(g => !g.deleted).map(g => g.key)
   return { tabId, groups, readers: [[owner], [peer], [outsider], [owner, lead], [owner, worker], [owner, secretWorker], [owner, sharedLead],
     [owner, unprojected], [owner, buddy], [peer, buddy], [owner, 'no-such-agent']] as Array<[AuthUser, string?]> }
@@ -296,10 +301,30 @@ describe('one group read by id (task #2875)', () => {
       expect(value.status).toBe(200)
       expect(value.body.data.group).toMatchObject({ key: quiet, data: { id: quiet, dormant: true } })
       expect(feedReads(rows), describeRows(feedReads(rows))).toEqual([])
-      // One group row by its key, never the Swarm's active groups.
+      // One group row by its key, never the Swarm's active groups (backend/AGENTS.md rule 3: its index, examined = returned).
       const groupRows = rows.filter(r => r.ns.endsWith('.SwarmGroup') && r.op !== 'getmore')
       expect(groupRows.reduce((n, r) => n + (r.nreturned ?? 0), 0), describeRows(groupRows)).toBeLessThanOrEqual(asAgentId ? 4 : 1)
+      const byKey = groupRows.filter(r => /^IXSCAN \{ tabId: 1, deleted: 1, key: 1/.test(r.planSummary ?? ''))
+      expect(byKey, describeRows(groupRows)).toHaveLength(1)
+      expect(byKey[0]!.docsExamined).toBe(1)
+      // An agent's machine: its account fields by _id, one document.
+      const machineRows = rows.filter(r => r.ns.endsWith('.SwarmMachine') && r.op !== 'getmore')
+      expect(machineRows.map(r => [r.planSummary, r.docsExamined]), describeRows(machineRows)).toEqual(asAgentId ? [['IXSCAN { _id: 1 }', 1]] : [])
     }
+  }, 120_000)
+
+  // Security review 1 of #3002, Minor 4: a key made again after its tombstone was purged starts at version 1 again.
+  it('never serves the row it kept for a key made again at the same version', async () => {
+    const s = await scene()
+    const [quiet] = s.quiet
+    const first = await read(s.tabId, quiet!)
+    expect(first.body.data.group.data.title).toBe('Old task 0')
+    // The same key and version, written anew with other data at a later time.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: s.tabId, key: quiet },
+      u: { $set: { 'data.title': 'Made again', changedAt: { $date: new Date(Date.now() + 1_000).toISOString() } } } }] })
+    const again = await read(s.tabId, quiet!)
+    expect(again.body.data.group.version).toBe(first.body.data.group.version)
+    expect(again.body.data.group.data.title).toBe('Made again')
   }, 120_000)
 
   it('makes one read for identical reads in flight on one process, and each reader its own', async () => {
