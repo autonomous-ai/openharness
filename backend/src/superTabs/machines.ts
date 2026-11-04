@@ -20,7 +20,12 @@ export interface ContributedMachine {
   cwd: string
   scope?: 'swarm'
   engines: string[]
+  /** The count its owner allows when [agents] is `atMost` (and for an older row, see agentLimit). Kept as a number every
+   *  client reads; with As memory allows it is only what the owner last saw, never a limit. */
   maxAgents: number
+  /** Its Agents setting (Dee, 11-04: "remove the limit"): `memory`, as many as free memory allows, checked at each start;
+   *  `atMost`, its owner's own [maxAgents]. Absent on a row saved by an older client: agentLimit reads it. */
+  agents?: 'memory' | 'atMost'
   paused: boolean
   /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
    *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings.
@@ -829,9 +834,87 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start && slots(pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
   return pool
+}
+
+/** What one agent needs to start, as the CLI asks (capacity.ts START_REQUIREMENTS.memoryBytes). */
+export const AGENT_MEMORY_BYTES = 2 * 1024 ** 3
+/** The most agents any machine runs, as machine.contribute's own bound: a ceiling on growth, never a setting. */
+export const MACHINE_AGENTS_CEILING = 1024
+/** What joining suggested before 11-04 (CLI prepareContribution, Desktop superTabSuggestedAgentSlots): one agent per 4 GiB,
+ *  1 to 16. Joining stored it as a limit; Mac 3 refused Milo's engineer at 16 (Dee, 11-04). */
+export const joinSuggestion = (memoryTotalBytes: number): number =>
+  Math.max(1, Math.min(16, Math.floor(memoryTotalBytes / (2 * AGENT_MEMORY_BYTES))))
+/** The count its owner holds a machine to, or null when it takes agents as memory allows. A Buddy-only machine counts its
+ *  own Buddies (commands.ts). An older row says neither (a compatibility rule: review it once Desktop and the CLI send
+ *  `agents`, and remove it when no stored row lacks it): a stored number that is the old join suggestion (16, or the one its
+ *  measured memory gave) was never the owner's own limit; any other number is. Desktop's old As memory allows stored the
+ *  machine's maximum (one per 2 GiB), which free memory reaches first anyway. */
+export function agentLimit(pool: Pick<ContributedMachine, 'maxAgents' | 'agents' | 'buddyOnly' | 'observation'>): number | null {
+  if (pool.buddyOnly || pool.agents === 'atMost') return pool.maxAgents
+  if (pool.agents === 'memory') return null
+  if (pool.maxAgents === 16) return null
+  const total = pool.observation?.resources?.memoryTotalBytes
+  // Under 4 GiB the suggestion was its floor of 1, not a figure from memory.
+  if (typeof total === 'number' && total >= 2 * AGENT_MEMORY_BYTES && pool.maxAgents === joinSuggestion(total)) return null
+  return pool.maxAgents
+}
+
+/** Its measured free memory, from its last reading; null with none. */
+export function freeMemoryBytes(pool: Pick<ContributedMachine, 'observation'>): number | null {
+  const r = pool.observation?.resources
+  return r && typeof r.memoryTotalBytes === 'number' && typeof r.memoryUsedBytes === 'number' ? Math.max(0, r.memoryTotalBytes - r.memoryUsedBytes) : null
+}
+
+/** A Mac and its Harness Team account: one machine, one memory (slotCounter counts their slots together too). */
+function memoryPair(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
+  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
+  return [...new Set([pool, mac, mac && teamPoolOf(state, mac)])].filter((m): m is ContributedMachine => !!m)
+}
+
+/** What a new start can use on [pool] as memory allows: the least free memory its Mac and Team account last read, less what
+ *  starts admitted there and not yet launched will take, which no reading shows yet (review of #3001: three 2 GiB starts
+ *  were all admitted on 5 GiB free). Null with no reading. */
+export function startableMemoryBytes(state: SuperTabState, pool: ContributedMachine): number | null {
+  const pair = memoryPair(state, pool)
+  const readings = pair.map(freeMemoryBytes).filter((free): free is number => free !== null)
+  if (!readings.length) return null
+  const machines = new Set(pair.map(m => m.machineId))
+  let held = 0
+  for (const start of state.starts ?? []) {
+    if (start.error || start.harnessId || !machines.has(start.request.machineId)) continue
+    held += start.request.requirements?.memoryBytes || AGENT_MEMORY_BYTES
+  }
+  return Math.max(0, Math.min(...readings) - held)
+}
+
+/** How many more agents it takes now, for the route and Desktop: its owner's count less what runs, or, as memory allows,
+ *  one per AGENT_MEMORY_BYTES of startable memory (none with no reading). Its host checks free memory and disk again at
+ *  each launch. */
+export function availableSlots(state: SuperTabState, pool: ContributedMachine, used: number): number {
+  const limit = agentLimit(pool)
+  const ceiling = Math.max(0, (limit ?? MACHINE_AGENTS_CEILING) - used)
+  if (limit !== null) return ceiling
+  const free = startableMemoryBytes(state, pool)
+  return free === null ? 0 : Math.min(ceiling, Math.floor(free / AGENT_MEMORY_BYTES))
+}
+
+const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 10) / 10} GB`
+/** A new start's room on [pool], said in words its owner can act on: its own count, or its free memory. */
+export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number) {
+  const limit = agentLimit(pool)
+  if (limit !== null) {
+    if (used >= limit) fail('MACHINE_FULL', `${pool.name} is set to run at most ${limit} agent${limit === 1 ? '' : 's'} and runs ${used}. Its owner can change that in its settings, or try again when one finishes.`)
+    return
+  }
+  if (used >= MACHINE_AGENTS_CEILING) fail('MACHINE_FULL', `${pool.name} already runs ${used} agents, the most any machine runs.`)
+  const free = startableMemoryBytes(state, pool)
+  if (free !== null && free < memoryBytes) {
+    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and an agent needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
+      409, { reason: 'memory' })
+  }
 }

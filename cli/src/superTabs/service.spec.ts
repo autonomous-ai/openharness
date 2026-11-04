@@ -552,7 +552,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
   const giveBack = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, creationOf: vi.fn(() => null), stop }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, ended: vi.fn(), creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
@@ -572,10 +572,25 @@ it('keeps host capacity separate from account authority and closes it on disconn
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
 })
 
+// Issue #2989: a start the Swarm failed gives its reservation back at once. Only this machine's own host, which read that
+// verdict from the Swarm, may say so: a relayed caller with machine access could otherwise free memory still starting.
+it('ends a failed start\'s reservation only for a caller on this machine', async () => {
+  const core = fakeCore()
+  const ended = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended, creationOf: vi.fn(() => null), stop: vi.fn() }))
+  const service = superTabService(core, { reservations: factory })
+  const closed = new AbortController().signal
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, visitor, closed)).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(ended).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, { local: true, owner: false }, closed))
+    .toMatchObject({ ok: true, returned: true })
+  expect(ended).toHaveBeenCalledWith('native-creation-id', closed)
+})
+
 it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
   const core = fakeCore()
   const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
-  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), creationOf, stop: vi.fn() }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended: vi.fn(), creationOf, stop: vi.fn() }))
   let options: SuperTabHostOptions = {}
   const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
     options = given
