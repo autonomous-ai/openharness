@@ -3,17 +3,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/day_jump.dart';
 import 'package:harness/super_tabs/day_pill.dart';
+import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/view.dart';
+
+import 'support/super_tab_fixture.dart';
 
 const _pill = ValueKey('super-day-pill');
 
 /// A list of 40 rows on Oct 20 and 21, 2026 under a sticky day that jumps
 /// with [onJump], scrolled so its pill shows.
-Future<void> _list(
-  WidgetTester tester,
-  ValueChanged<DateTime?> onJump,
-) async {
+Future<void> _list(WidgetTester tester, ValueChanged<DateTime?> onJump) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
@@ -156,6 +158,164 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Jump to…'), findsNothing);
       expect(jumped, isEmpty);
+    });
+  });
+
+  group('the chat lands on the first message from that time', () {
+    /// The Lead chat with [said] in order, everything read, [page] messages
+    /// to a page.
+    Future<SuperTabController> chat(
+      WidgetTester tester,
+      List<(String, DateTime)> said, {
+      int page = 20,
+    }) async {
+      final server = ConversationServer()..messagePage = page;
+      for (final (text, at) in said) {
+        server.append(text);
+        server.messages.last['createdAt'] = at.toUtc().toIso8601String();
+      }
+      server.markReadElsewhere('lead', said.length);
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    DateTime daysAgo(int days, [int minute = 0]) =>
+        DateTime(today.year, today.month, today.day - days, 10, minute);
+    List<(String, DateTime)> run(
+      String name,
+      int count,
+      DateTime Function(int) at,
+    ) => [for (var i = 1; i <= count; i++) ('$name $i', at(i))];
+
+    Finder row(String text) => find
+        .ancestor(
+          of: find.text(text),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'super-message-message-',
+                ),
+          ),
+        )
+        .first;
+    bool lit(WidgetTester tester, String text) => tester
+        .widget<SuperTabMessageHighlight>(
+          find.ancestor(
+            of: row(text),
+            matching: find.byType(SuperTabMessageHighlight),
+          ),
+        )
+        .on;
+    bool onScreen(WidgetTester tester, String text) {
+      final list = tester.getRect(
+        find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      );
+      final at = tester.getRect(row(text));
+      return at.top >= list.top - 1 && at.top < list.bottom;
+    }
+
+    Future<void> choose(WidgetTester tester, String label) async {
+      await tester.tap(find.byKey(_pill));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      // The highlight lasts 2 seconds: look while it is on.
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    // Older days first, then yesterday and today: one page holds today alone.
+    List<(String, DateTime)> days() => [
+      ...run('Old', 40, (i) => daysAgo(20, i)),
+      ...run('Week', 20, (i) => daysAgo(7, i)),
+      ...run('Yesterday', 20, (i) => daysAgo(1, i)),
+      ...run('Today', 20, (i) => now.subtract(Duration(minutes: 40 - i))),
+    ];
+
+    testWidgets(
+      'Yesterday lands on yesterday\'s first message, and lights it',
+      (tester) async {
+        await chat(tester, days(), page: 40);
+        await choose(tester, 'Yesterday');
+        expect(onScreen(tester, 'Yesterday 1'), isTrue);
+        expect(lit(tester, 'Yesterday 1'), isTrue);
+        await tester.pumpAndSettle(const Duration(seconds: 3));
+      },
+    );
+
+    testWidgets('Last week reads older pages to reach its first message', (
+      tester,
+    ) async {
+      final c = await chat(tester, days());
+      expect(c.messages('lead').any((m) => m.text == 'Week 1'), isFalse);
+      await choose(tester, 'Last week');
+      await tester.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(onScreen(tester, 'Week 1'), isTrue);
+      expect(lit(tester, 'Week 1'), isTrue);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('The very beginning lands on the chat\'s first message', (
+      tester,
+    ) async {
+      await chat(tester, days(), page: 10);
+      await choose(tester, 'The very beginning');
+      await tester.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(onScreen(tester, 'Old 1'), isTrue);
+      expect(lit(tester, 'Old 1'), isTrue);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('with nothing said since, it lands on the newest message', (
+      tester,
+    ) async {
+      await chat(tester, run('Earlier', 40, (i) => daysAgo(3, i)));
+      await choose(tester, 'Yesterday');
+      expect(onScreen(tester, 'Earlier 40'), isTrue);
+      expect(lit(tester, 'Earlier 40'), isTrue);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('a time more than 50 pages back says so, and the list stays', (
+      tester,
+    ) async {
+      await chat(tester, [
+        ...run('Old', 2, (i) => daysAgo(40, i)),
+        ...run('Recent', 120, (i) => daysAgo(20, i)),
+        ...run('Today', 20, (i) => now.subtract(Duration(minutes: 40 - i))),
+      ], page: 2);
+      final scroll = tester
+          .widget<ScrollView>(
+            find.byKey(const PageStorageKey('super-messages-tab-lead')),
+          )
+          .controller!
+          .position;
+      final before = scroll.extentAfter;
+      await choose(tester, 'Last month');
+      await tester.pumpAndSettle();
+      expect(find.text('That day is too far back to open.'), findsOneWidget);
+      expect(find.text('Recent 1'), findsNothing);
+      expect(scroll.extentAfter, moreOrLessEquals(before, epsilon: 1));
     });
   });
 }
