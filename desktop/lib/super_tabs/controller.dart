@@ -198,6 +198,10 @@ const kSwarmPushSafetyNet = Duration(seconds: 60);
 /// often; a change to one asks for a read at once (`SuperTabClient`).
 const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
 
+/// While a Swarm's reads are refused, the account's Swarm list is read for it
+/// at most this often to learn whether it is gone (task #2767).
+const kSwarmListRecheckEvery = Duration(minutes: 1);
+
 /// The files waiting in a Swarm's boxes: by conversation, and by a thread's
 /// conversation and root.
 typedef SuperTabKeptFiles = ({
