@@ -2,6 +2,7 @@ import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccount
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -294,6 +295,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional(), down: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
+  // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
+  z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
@@ -377,6 +380,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'buddy.propose': ['title', 'goal', 'scope'],
   'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
+  'agent.rename': ['name'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
@@ -2257,6 +2261,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // agent it re-added a person's Buddy to a task, added to the project chat, and registered any session of its
       // contributor's machines, the Swarm's or not, past conversation.agent's checks (security review S2).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person adds a session already running. Start a new agent instead.', 403)
+      const addedName = addedAgentName(state, actor, command.name)
       const group = open(state, command.conversationId)
       const project = groupProject(state, group)
       if (state.projects && group.id === project.leadConversationId && command.lead && command.project) {
@@ -2308,7 +2313,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
-        name: command.name, configuration: command.configuration, configurationVersion: operationId,
+        name: addedName, configuration: command.configuration, configurationVersion: operationId,
         ...(roleKind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(command.roleId ? { roleId: command.roleId } : {}),
         ...(roleName ? { roleName } : {}),
         ...(teamPool ? { teamAccount: true as const } : {}) })
@@ -2318,9 +2323,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
-        undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
-      else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
+      // Named as readers' lists show it, never the name the rules refused (security review 2 of #3015).
+      if (sharedHere && !existing) {
+        const shown = quotedName(agentDisplayName(state.agents, agentId) ?? addedName)
+        message(group.id, `${who} added ${shown} to the project. The project chat holds only its coordinator among agents, so ${shown} works in its tasks.`, [], null, SYSTEM_ROW,
+          undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
+      } else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
@@ -2972,6 +2980,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       result.expiresAt = context.now + 120_000
       break
     }
+    case 'agent.rename':
+      renameAgentTo(state, actor, agent(state, command.agentId), command.name)
+      break
     case 'agent.remove': {
       const target = agent(state, command.agentId)
       const hostStop = actor.kind === 'agent' && actor.agentId === target.id && target.workDecision === 'stop'

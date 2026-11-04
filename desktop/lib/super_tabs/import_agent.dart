@@ -11,6 +11,7 @@ import '../state/agent_handoff_file.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/engine_identity.dart';
+import 'actions.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -395,7 +396,8 @@ Future<ImportResult> importAgent(
               'conversationId': conversation,
               'machineId': teamId,
               'engine': agent.agent.engine,
-              'name': name,
+              // Never the session title an automatic name shows (task #2912).
+              'name': superTabAddName(agent.agent),
               'cwd': cwd,
               'roleName': 'Engineer',
               'worktree': true,
