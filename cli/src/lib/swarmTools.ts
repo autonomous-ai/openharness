@@ -36,6 +36,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`--to AGENT\` names the agents it reaches: any agent of this project, by id from status, up to 16. Named agents are told and join the conversation if they are not in it. A post reaches exactly the agents you name, no others.
 - With no \`--to\`, an agent's post reaches the project's coordinator; the coordinator's post in a task reaches the task's assigned agent. Name the agent whenever you answer one.
 - Nothing is dropped: a post that names no one still goes to its default addressee.
+- In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person's answer to its line reaches it; \`--to\` there adds no agent, so name only the coordinator.
 - A post stays inside your project. Private chats and Buddy chats keep their own members.
 
 ## Reactions
@@ -64,6 +65,7 @@ Task and group commands:
 - \`{"type":"work.check","conversationId":"GROUP","assignmentId":"current","checkId":"CHECK","passed":true,"evidence":"exact command, revision and observed result"}\` records one acceptance check.
 - \`{"type":"work.cancel","conversationId":"GROUP","assignmentId":"current","reason":"one short sentence"}\` cancels a task.
 - \`{"type":"agent.release","agentId":"AGENT","decision":"keep|stop"}\` records keep or requests stop of an agent whose work is finished; wait for its machine to confirm a stop.
+- \`{"type":"proposal.close","projectId":"PROJECT","messageId":"PROPOSAL","reason":"built in #N, declined or duplicate"}\` closes a Buddy's proposal that is still listed as open though it was answered or built (before threads, or opened as a task without its proposalMessageId): it leaves the open proposals for good with its reason kept, and posts nothing in the chat. The project's coordinator, or a person who reads the project.
 - \`{"type":"conversation.merged","conversationId":"GROUP","pullRequestUrl":"https://github.com/OWNER/REPOSITORY/pull/NUMBER","mergedAt":"optional ISO time"}\` records that a group's pull request merged; the requester's request counts as shipped from that record.
 - \`{"type":"decision.ask","conversationId":"GROUP","personId":"PERSON","questions":[{"question":"...","options":["A","B"],"recommended":0,"unblocks":"..."}]}\` puts up to 10 questions to one person at once, each with 2 to 5 options.
 - \`{"type":"person.tell","personId":"PERSON","text":"..."}\` lands in that person's Buddy chat, which you cannot read. It is not private: members watching your terminal see what you send.

@@ -70,7 +70,6 @@ Future<void> pumpSidebar(
           builder: (context, _) => ProjectSidebar(
             controller: controller,
             app: app,
-            needsHuman: (_) => 0,
             attention: SuperTabAttention.of(controller),
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},

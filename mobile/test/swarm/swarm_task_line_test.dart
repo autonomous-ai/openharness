@@ -444,11 +444,7 @@ void main() {
       expect(thread(null).askTag, isNull);
     });
 
-    for (final (ask, tag) in [
-      ('proposal', '✋ Proposal'),
-      ('on-it', '● On it'),
-      ('shipped', '✓ Shipped'),
-    ]) {
+    for (final (ask, tag) in [('proposal', '✋ Proposal')]) {
       testWidgets('$ask shows $tag after the time in the project chat', (
         tester,
       ) async {
@@ -487,19 +483,25 @@ void main() {
       }
     });
 
-    testWidgets('tags a person\'s own message a task was opened from', (
-      tester,
-    ) async {
-      final root = {
-        ...taskLine(),
-        'text': 'can we save drafts offline?',
-        'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
-        'thread': 'line-1',
-        'source': null,
-      };
-      await pumpTaskChat(tester, taskLineBackend([root], ask: 'on-it'));
-      expect(find.text('● On it'), findsOneWidget);
-    });
+    // Anh Dee, 11-04 ('bot messages'): a task's agent reacts 👀 and ✅ on
+    // the message that asked; the row draws no On it or Shipped, even from a
+    // server that still sends them.
+    for (final ask in ['on-it', 'shipped']) {
+      testWidgets('draws no tag on a person\'s own message for $ask', (
+        tester,
+      ) async {
+        final root = {
+          ...taskLine(),
+          'text': 'can we save drafts offline?',
+          'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+          'thread': 'line-1',
+          'source': null,
+        };
+        await pumpTaskChat(tester, taskLineBackend([root], ask: ask));
+        expect(find.textContaining('On it'), findsNothing);
+        expect(find.textContaining('Shipped'), findsNothing);
+      });
+    }
 
     testWidgets('a message that is no ask keeps its words and has no tag', (
       tester,
@@ -519,11 +521,11 @@ void main() {
       await pumpRow(tester, {
         ...taskLine(),
         'text': 'Offline drafts',
-      }, askTag: '● On it');
+      }, askTag: '✋ Proposal');
       double left(Finder within) => tester.getTopLeft(within).dx;
       final badge = find.byType(SwarmRoleBadge);
       expect(left(find.text('River')), lessThan(left(badge)));
-      expect(left(badge), lessThan(left(find.text('● On it'))));
+      expect(left(badge), lessThan(left(find.text('✋ Proposal'))));
     });
 
     testWidgets('keeps its header when the same person wrote just before', (
@@ -543,8 +545,11 @@ void main() {
         'thread': 'line-1',
         'source': {'kind': 'buddy-proposal'},
       };
-      await pumpTaskChat(tester, taskLineBackend([before, root], ask: 'on-it'));
-      expect(find.text('● On it'), findsOneWidget);
+      await pumpTaskChat(
+        tester,
+        taskLineBackend([before, root], ask: 'proposal'),
+      );
+      expect(find.text('✋ Proposal'), findsOneWidget);
       expect(find.text('dee'), findsNWidgets(2));
     });
   });

@@ -230,7 +230,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
 }
 
 /// How many cards of [board] need the reader: the red count on the header's
-/// Tasks icon, and what the project's sidebar row adds to its badge.
+/// Tasks icon. The project's sidebar row counts only its chat's tags (#2927).
 int superTabTasksNeedingYouIn(
   Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board,
 ) => board.values.expand((entries) => entries).where((e) => e.needsYou).length;

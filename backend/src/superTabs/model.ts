@@ -449,6 +449,9 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
+  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
+   *  from before it was recorded. */
+  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -706,6 +709,8 @@ export interface CommandEffects {
   messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
+  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
@@ -716,6 +721,9 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
+   *  agent's own `message.react`. */
+  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {

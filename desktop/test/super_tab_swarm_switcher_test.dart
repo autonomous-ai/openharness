@@ -341,7 +341,6 @@ Future<SuperTabController> _pumpBar(
                     key: ValueKey(c.tabId),
                     controller: c,
                     app: app,
-                    needsHuman: (_) => 0,
                     onSelect: c.select,
                     onNewProject: () {},
                     onNewSwarm: onNewSwarm ?? () {},

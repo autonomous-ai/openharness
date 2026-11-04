@@ -532,6 +532,20 @@ void main() {
       },
     );
 
+    // Task #2927: a project's number is its chat's tags alone; decisions are
+    // in Activity and on the chat's own row.
+    test('a decision asked in the project chat raises its chat row, not the '
+        "project's number, even while the chat is unread", () async {
+      final r = await rig(decisions: [decisionRow('d1', conversationId: leadChat)]);
+      await moveOn(r, {
+        leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
+      });
+
+      expect(chat(r, leadChat), (bold: true, tags: 1));
+      expect(swarmProjectNews(r.reader, r.asks)[project]?.tags, 0);
+      expect(r.asks.decisions, hasLength(1), reason: 'Activity keeps it');
+    });
+
     test('a decision answered on another device leaves the count without a '
         'reload', () async {
       final r = await rig(decisions: [decisionRow('d1')]);
