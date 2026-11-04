@@ -84,7 +84,10 @@ Future<void> showProjectAddPeople(
             final canAdd =
                 live != null && live.isPrivate && live.ownerId == c.accountId;
             Widget heading(String text) => Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              padding: const EdgeInsets.only(
+                top: DesktopChrome.controlGap * 1.5,
+                bottom: DesktopChrome.controlGap / 2,
+              ),
               child: Text(text, style: DesktopChrome.metadata()),
             );
             return AlertDialog(
@@ -134,7 +137,9 @@ Future<void> showProjectAddPeople(
                       if (lists.inProject.isNotEmpty) heading('Already in'),
                       for (final person in lists.inProject)
                         Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            vertical: DesktopChrome.controlGap / 2,
+                          ),
                           child: Row(
                             children: [
                               Flexible(
