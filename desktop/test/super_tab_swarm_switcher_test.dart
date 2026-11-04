@@ -1145,6 +1145,42 @@ void main() {
           expect(backend.listReads - before, 2);
         });
       });
+
+      test('another account signed in within the minute reads the list '
+          "afresh: the last account's ask never answers it", () {
+        now = DateTime.utc(2026, 11, 4, 5);
+        return withClock(Clock(() => now), () async {
+          final backend = _Backend()
+            ..add('alpha', 'Alpha', members: ['owner', 'mate']);
+          final app = _computer(backend, MemoryStore());
+          await app.superTabs.refreshTabs();
+          final owners = await app.superTabs.open('alpha');
+          await owners.refresh();
+          await _settle();
+          // The owner's refusal asks, and the list answers with Alpha.
+          backend.stateReadFailure = refusals.last;
+          await owners.refresh();
+          await _settle();
+          expect(owners.accessRevoked, isFalse);
+
+          now = now.add(const Duration(seconds: 10));
+          app.currentUser = const CurrentUserProfile(
+            id: 'mate',
+            email: 'mate@example.com',
+          );
+          backend.account = 'mate';
+          backend.listFailure = dropped;
+          await _settle();
+          // Mate's list has not answered yet: a refusal is no reason to
+          // take Alpha away.
+          final reads = backend.listReads;
+          final mates = await app.superTabs.open('alpha');
+          await mates.refresh();
+          await _settle();
+          expect(mates.accessRevoked, isFalse);
+          expect(backend.listReads, greaterThan(reads));
+        });
+      });
     });
   });
 
