@@ -29,13 +29,14 @@ const provedStopped = (state: SuperTabState, target: Agent, report: Pick<Machine
   return !reservation || !reservation.renewed || !!report.stoppedReservations?.some(r => r.harnessId === target.harnessId && r.generation === reservation.generation)
 }
 
-/** Whether [target]'s machine, reading now, proves its session closed: a fresh reading that lists it stopped and not running.
- *  Such an agent takes no task (commands.ts work.assign): on 11-04 the idle cleanup closed Tern on the Mac Studio and the PM
- *  assigned it six seconds later, so the task was lost at once (task #2744). */
+/** Whether [target]'s machine, reading now, proves its idle cleanup closed its session: a fresh reading that lists it closed
+ *  and stopped, not running. Such an agent takes no task (commands.ts work.assign): on 11-04 the idle cleanup closed Tern on
+ *  the Mac Studio and the PM assigned it six seconds later, so the task was lost at once (task #2744). A session merely
+ *  listed stopped may be a Change agent before its rebind, or a host mid-restart, and keeps taking work (review of #2953). */
 export function sessionClosed(state: SuperTabState, target: Agent, now: number): boolean {
   const reading = state.machines?.find(m => m.machineId === target.machineId)?.observation
   return !!reading && now - reading.receivedAt <= MACHINE_FRESH_MS && !reading.runningHarnessIds.includes(target.harnessId)
-    && provedStopped(state, target, reading)
+    && !!reading.closedHarnessIds?.includes(target.harnessId) && provedStopped(state, target, reading)
 }
 
 /**
