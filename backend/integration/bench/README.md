@@ -71,6 +71,15 @@ NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/changesPollCost.ts
 ```
 
+To see what each hot call costs MongoDB once a Swarm has grown (task #2839): the benchmark's Swarm gets `--starts` finished
+starts (3000) and `--dormant` quiet Lead conversations (1500) as rows, then each call runs once after a post, and the
+profiler counts its commands and getMores by collection. `GROWN_SHAPES=1` prints each large part read and its plan:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/grownFeedOps.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash
