@@ -36,6 +36,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`--to AGENT\` names the agents it reaches: any agent of this project, by id from status, up to 16. Named agents are told and join the conversation if they are not in it. A post reaches exactly the agents you name, no others.
 - With no \`--to\`, an agent's post reaches the project's coordinator; the coordinator's post in a task reaches the task's assigned agent. Name the agent whenever you answer one.
 - Nothing is dropped: a post that names no one still goes to its default addressee.
+- In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person's answer to its line reaches it; \`--to\` there adds no agent, so name only the coordinator.
 - A post stays inside your project. Private chats and Buddy chats keep their own members.
 
 ## Reactions

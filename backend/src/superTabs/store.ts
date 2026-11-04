@@ -18,7 +18,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, reserveHarnessSlot, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -124,6 +124,8 @@ async function countersBefore(tx: Transaction, tabId: string, conversationId: st
 const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
+/** How many of a project chat's newest rows are read to find the top-level line above a person's (thread replies come between). */
+const ABOVE_ROWS = 20
 type ProposeCommand = Extract<Command, { type: 'buddy.propose' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
@@ -1632,6 +1634,14 @@ export class SuperTabStore {
           ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
+      // A person's top-level line in a project chat: the top-level line right above it, whose agent it may answer (commands.ts,
+      // #2924). The chat's newest rows by its sequence index; a thread's replies and agent-only notices are not in the chat.
+      if (command.type === 'message.send' && actor.kind === 'person' && !command.replyTo && projectsOf(original).some(p => p.leadConversationId === command.conversationId)) {
+        const newest = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
+          orderBy: [{ sequence: 'desc' }, { id: 'desc' }], take: ABOVE_ROWS, select: { id: true, author: true, source: true, recipientIds: true, thread: true } })
+        const above = newest.find(m => (!m.thread || m.thread === m.id) && !agentOnly(m.source, m.recipientIds))
+        if (above) context.above = { author: above.author as unknown as Author }
+      }
       // A stale save is refused with the stored text, to merge (instructions.ts); an older client's rule.set appends to it
       // (commands.ts ruleProject: the project it names, quotes or acts in).
       if (command.type === 'instructions.save' || command.type === 'rule.set') {
@@ -3650,8 +3660,9 @@ export class SuperTabStore {
     if (!target || target.membershipGeneration !== delivery.membershipGeneration || !group || group.archived) return false
     // The removed Leads conversation hands out nothing, a delivery stored before its removal included (model.ts leadsRemoved).
     if (isLeads(group)) return false
-    // A Buddy also hears its person's news outside its chat (buddyNews.ts), only where it reads as its person would (below).
-    if (!group.agentIds.includes(target.id) && !isBuddy(target)) return false
+    // A Buddy also hears its person's news outside its chat (buddyNews.ts), only where it reads as its person would (below). An
+    // agent with work in the project hears a person's answer to its line in the project chat while that work lasts (#2924).
+    if (!group.agentIds.includes(target.id) && !isBuddy(target) && !worksInProjectChat(state, group, target.id)) return false
     return canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) &&
       canReadGroup(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, group)
   }
@@ -4012,7 +4023,7 @@ export class SuperTabStore {
       const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
         where: { id: delivery.nativeContextId, tabId }, select: { agentId: true } }) : null
       const parts = await loadDeliveryParts(tx, tabId, delivery ? [delivery.conversationId] : [],
-        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId)
+        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId, agentId)
       const state = reassemble(parts, { share: true })
       parkLaterConversations(state)
       author(state, await this.actor(tx, user, state, agentId), true)

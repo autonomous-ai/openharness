@@ -471,6 +471,9 @@ export interface CommandContext {
     sessionThread?: true
     /** The project of the thread's latest session row: a session reopened there keeps it (Scholes, 11-02). */
     sessionProject?: string }
+  /** For a person's top-level `message.send` in a project chat: the last top-level message there before it, read by the store,
+   *  so a line right below an agent's reaches that agent (#2924). */
+  above?: { author: Author }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
@@ -718,11 +721,25 @@ export function joinsProject(state: SuperTabState, group: Conversation, agentId:
   const project = groupProject(state, group)
   return agentProjectId(state, target) === project.id && group.id !== project.leadConversationId
 }
+/** Whether agent [agentId] does work in [group], its project's chat: an agent of that project, never a Buddy, not stopping,
+ *  assigned a task or step of the project that is not archived and did not end lost, stopped or cancelled. A done task counts
+ *  until it archives with its pull request, so its agent posts its result line (Dee, 2026-11-04, #2924: the agent doing the
+ *  work answers people there itself; security reviews of #2924). */
+export function worksInProjectChat(state: SuperTabState, group: Conversation, agentId: string): boolean {
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  const target = state.agents.find(a => a.id === agentId)
+  if (!project || !target || isBuddy(target) || target.workDecision === 'stop' || agentProjectId(state, target) !== project.id) return false
+  return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
+    && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
+}
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
- *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). */
+ *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). An agent with
+ *  work in the project posts in its project chat without joining it, so the chat keeps only its coordinator among agents
+ *  and opens no second terminal (#2207). */
 export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
   const group = open(state, conversationId)
   if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
+    if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return group
     if (!joinsProject(state, group, actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
     group.agentIds.push(actor.agentId)
   }
@@ -3087,9 +3104,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       setTimeZone(state, actor, command.timeZone)
       break
     case 'message.react': {
-      // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4).
+      // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4), or in its project's
+      // chat while it works in the project, joining nothing there either (River, 2026-11-04, #2924).
       const group = open(state, command.conversationId)
-      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)
+        && !(projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId))) {
+        fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+      }
       result.changed = react(group, command.messageId, command.on, context.reaction)
       break
     }
@@ -3143,7 +3164,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'message.send': {
       const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
       const group = postable(state, actor, command.conversationId)
-      if (joining) teamJoin(groupProject(state, group), actor.agentId, group)
+      // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
+      if (joining && group.agentIds.includes(actor.agentId)) teamJoin(groupProject(state, group), actor.agentId, group)
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
@@ -3218,10 +3240,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // the phone and older apps keep a working Buddy (spec: Older apps). Started on this message, which waits for it.
       const buddyDown = actor.kind === 'person' && isBuddyChat(group) && !isSwarmBuddyChat(group) && !session?.inSession && !mainBuddyOf(state, group)
         ? startOldChatBuddy(group) : undefined
+      // A person answering, in the project chat, the line of an agent with work in the project reaches that agent without it
+      // joining (River, 2026-11-04, #2924): in its thread alone, as a member's; right below it with the coordinator, whose new
+      // ask that may be. No other agent is reached this way.
+      const chatWorker = (id: string | null | undefined) => actor.kind === 'person' && !command.agentOnly && id && !group.agentIds.includes(id)
+        && worksInProjectChat(state, group, id) ? id : null
+      const answered = chatWorker(replyAgent)
+      const below = !command.replyTo && context.above?.author.kind === 'agent' ? chatWorker(context.above.author.id) : null
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
-        : replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length || !automatic ? [] : [automatic])])]
+        : answered ?? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId)) : agentRecipient
+      const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length ? [] : [below, automatic].filter((id): id is string => !!id))])]
       for (const id of recipients) {
         const target = agent(state, id)
         // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
@@ -3230,7 +3259,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
-        if (!group.agentIds.includes(id)) {
+        if (!group.agentIds.includes(id) && id !== answered && id !== below) {
           // Named only when it is of this chat's project: another's is refused below without its name (Orion's review).
           if (agentProjectId(state, target) === groupProject(state, group).id) projectChatJoin(group, id, target.displayName ?? target.name, true)
           if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
