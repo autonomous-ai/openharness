@@ -50,6 +50,11 @@ void main() {
     expect(f.app.activeSwarmId, swarm);
     expect(c.selectedId, 'task');
     expect(f.app.focusedPane?.agentId, 'native-nova');
+    // Beside the task's chat, which stays on screen.
+    expect(
+      find.byKey(const ValueKey('super-message-composer')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await c.flush();

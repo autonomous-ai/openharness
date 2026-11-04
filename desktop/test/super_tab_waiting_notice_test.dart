@@ -124,6 +124,13 @@ void main() {
     await tester.pump();
   }
 
+  /// The task's chat stays on screen beside the terminal, its composer
+  /// included (Huy, 11-04: side by side, "beside its task chat").
+  void besideChat() => expect(
+    find.byKey(const ValueKey('super-message-composer')),
+    findsOneWidget,
+  );
+
   testWidgets('a Waiting on you toast opens the agent\'s terminal beside the '
       'task it waits in, focused', (tester) async {
     final f = SuperTabLaunchFixture();
@@ -135,6 +142,7 @@ void main() {
     expect(c.terminalAgents('task').single.id, 'nova');
     expect(f.app.panes.single.agentId, 'native-nova');
     expect(f.app.focusedPane?.agentId, 'native-nova');
+    besideChat();
     await done(tester, f, c);
   });
 
@@ -150,6 +158,7 @@ void main() {
     expect(f.app.activeSwarmId, swarm);
     expect(c.selectedId, 'task');
     expect(f.app.focusedPane?.agentId, 'native-nova');
+    besideChat();
     await done(tester, f, c);
   });
 
@@ -192,6 +201,7 @@ void main() {
     expect(c.selectedId, 'task');
     expect(c.terminalAgents('task').single.id, 'nova');
     expect(f.app.focusedPane?.agentId, 'native-nova');
+    besideChat();
     await done(tester, f, c);
   });
 
