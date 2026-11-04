@@ -182,6 +182,13 @@ class SuperTabClient {
   /// on return.
   bool _toldWhileHidden = false;
 
+  /// When the server's word that it pushes was last heard.
+  DateTime? _lastPushWord;
+
+  /// How far from [kSwarmPushRepeat] a repeat may land: a hidden window's socket is read late
+  /// (App Nap), and a reconnect inside this window waits, at worst, for the return.
+  static const _pushBeatSlack = Duration(seconds: 30);
+
   /// Hidden while the server pushes: the reads on a clock rest.
   bool get _restsHidden => !_pageVisible && _pushing;
 
@@ -350,8 +357,16 @@ class SuperTabClient {
     final tabId = payload['tabId'], parts = payload['parts'];
     if (tabId == null && parts == null) {
       // Hidden, the word repeated every 4 minutes renews the lease and reads nothing until the
-      // page shows; once the lease had lapsed the away poll was reading all along.
-      if (_restsHidden) {
+      // page shows; once the lease had lapsed the away poll was reading all along. A word off that
+      // beat is a socket that reconnected, the same payload (review of #3035): a push may have been
+      // lost meanwhile, so Desktop reads once, as shown, for the menu bar and notices. The web
+      // reads nothing while away anyway ([SuperTabReading.pausesAway]).
+      final now = clock.now(), last = _lastPushWord;
+      _lastPushWord = now;
+      final onBeat =
+          last != null &&
+          (now.difference(last) - kSwarmPushRepeat).abs() <= _pushBeatSlack;
+      if (_restsHidden && (onBeat || _reading.pausesAway)) {
         _pushUntil = clock.now().add(kSwarmPushLease);
         for (final controller in _loaded.values) {
           controller.pushUntil = _pushUntil;

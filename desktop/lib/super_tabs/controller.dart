@@ -190,6 +190,10 @@ class SuperTabOutgoing {
 /// before.
 const kSwarmPushLease = Duration(minutes: 5);
 
+/// How often a pushing server repeats that word on one socket (backend lib/swarmClientPushes.ts
+/// `PUSHES_REPEAT_MS`). A word off this beat is a socket that (re)connected.
+const kSwarmPushRepeat = Duration(minutes: 4);
+
 /// While the server pushes, a Swarm nothing was said of is still read this
 /// often: the safety net for a push lost on the way.
 const kSwarmPushSafetyNet = Duration(seconds: 60);
