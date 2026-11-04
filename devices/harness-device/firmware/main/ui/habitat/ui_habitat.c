@@ -5468,7 +5468,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
  * A LEAD'S NEW MESSAGE (design 2026-10-28-round-dial-swarm-chat §3), in its Lead conversation or Chat with PM: the one
  * alert a swarmChat daemon raises. It is that Lead's single entry, news rather than a question, the message as its text
  * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
- * once only when that Lead's face shows that very chat. True when the caller should beep (the coalescing is the audio's).
+ * once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its root) that very
+ * thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere (#2463). True
+ * when the caller should beep (the coalescing is the audio's).
  */
 _Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
 static int swarm_said_of(const char *lead)
@@ -5476,10 +5478,10 @@ static int swarm_said_of(const char *lead)
     for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
     return -1;
 }
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at)
 {
     (void)at;
-    if (!tab || !lead || !chat_id || !text) return false;
+    if (!tab || !lead || !chat_id || !thread || !text) return false;
     display_lock();
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
@@ -5507,7 +5509,7 @@ bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, 
     if (slot < 0) slot = 0;
     COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
     s.notice_sequence++;
-    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id);
+    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id) && (!thread[0] || !strcmp(l->thread_root, thread));
     if (face) notice_read_now(l->id);
     else display_wake();
     change();

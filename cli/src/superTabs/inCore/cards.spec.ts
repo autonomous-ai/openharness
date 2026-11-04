@@ -127,6 +127,24 @@ describe('the Swarm cards on the devices', () => {
     cards.recap(recap({ chatId: 'bad id' }))
     expect(swarmCardRecap).toHaveBeenCalledOnce()
   })
+  // A reply inside a thread (#2463): the notice keeps the thread's root, or the desktop and the dial read it as the chat's.
+  it("keeps a notice's thread, a root too long for the dial still a thread's, and drops one that is not a root", () => {
+    const { cards, swarmCards } = setup()
+    const notice = (over: Record<string, unknown> = {}) => ({ chat: 'pm', chatId: 'pm1', id: 'm2', text: 'Fixed.', at: 1792560000, ...over })
+    const sent = (over: Record<string, unknown>) => {
+      cards.cards([card('t1', [lead('l1', { notice: notice(over), buddyNotice: notice({ chat: 'buddy', ...over }) })])])
+      return swarmCards.mock.lastCall![0][0].leads[0]
+    }
+    expect(sent({ thread: 'm1' })).toMatchObject({ notice: notice({ thread: 'm1' }), buddyNotice: { thread: 'm1' } })
+    // Longer than the dial holds: kept, so no face matches it and the dial beeps; cut to a bound so the frame stays small.
+    expect(sent({ thread: 'r'.repeat(60) }).notice.thread).toBe('r'.repeat(60))
+    expect(sent({ thread: 'r'.repeat(300) }).notice.thread).toBe('r'.repeat(128))
+    for (const bad of ['', 5, null]) {
+      const lead = sent({ thread: bad })
+      expect(lead.notice).toEqual(notice())
+      expect(lead.buddyNotice).not.toHaveProperty('thread')
+    }
+  })
   // Round dial PM and Buddy screens (spec 2026-10-29): the swarmBuddy dial's fields, checked as the chat and notice are.
   it('keeps the Buddy\'s session id on its way to the devices service; an unsound one is dropped and the Buddy kept', () => {
     const { cards, swarmCards } = setup()
