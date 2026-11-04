@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
 // The real folder code, with the calls the delivery loop makes held open by the tests that need a pass to be running.
+// Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
+// The tests set it, so they pass the same in an owner account, a Team account and CI; the first reports a Team account.
+const team = vi.hoisted(() => ({ value: true }))
+vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
   return { ...real, refreshBuddyHome: vi.fn(real.refreshBuddyHome), buddyHomeRefreshing: vi.fn(real.buddyHomeRefreshing), stopBuddyHomeRefresh: vi.fn(real.stopBuddyHomeRefresh) }
