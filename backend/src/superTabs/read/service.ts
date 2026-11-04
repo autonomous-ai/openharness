@@ -6,14 +6,16 @@ import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
 import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { lowerReadMark, readMarkRows, readThreadMarks, writeThreadFollow, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
+import { clearReminder, listReminders, REMINDER_AHEAD_MS, remindersDigest, setReminder, type ReminderItem } from '../reminders.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
+import { FIELDS, readable, row as messageRow } from './inbox.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -287,15 +289,7 @@ export class SwarmReads {
   private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
-    const actor = await this.store.actor(this.db, user, state)
-    let newest: number
-    try {
-      newest = readConversation(state, actor, conversationId).lastMessageSequence
-    } catch (error) {
-      if (error instanceof SuperTabError && error.status === 404) unavailable()
-      throw error
-    }
+    const newest = (await this.readableChat(user, tabId, conversationId)).conversation.lastMessageSequence
     const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
       { $project: { source: 1, recipientIds: 1, thread: 1 } }])
     const root = found && { id: found._id as string, source: found.source ?? null, recipientIds: (found.recipientIds as string[] | undefined) ?? [], thread: found.thread }
@@ -325,6 +319,52 @@ export class SwarmReads {
     author(state, actor)
     if (actor.kind !== 'person') return fail('FORBIDDEN', 'Only a person has Activity.', 403)
     return await listActivity(this.db, tabId, state, actor, this.now())
+  }
+
+  /** The person's due reminders in this Swarm and when the next one is due (reminders.ts), those they can read now. A person
+   *  reading as themselves only. */
+  async reminders(user: AuthUser, tabId: string): Promise<{ due: ReminderItem[]; next: string | null }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { state } = await this.store.readLoad(user, tabId)
+    const actor = await this.store.actor(this.db, user, state)
+    author(state, actor)
+    if (actor.kind !== 'person') return fail('FORBIDDEN', 'Only a person has reminders.', 403)
+    return await listReminders(this.db, tabId, state, actor, this.now())
+  }
+
+  /** Sets the person's reminder of one message to `at` (reminders.ts), replacing one they set before: a time after now and at
+   *  most REMINDER_AHEAD_MS ahead, on a message they read as a page shows it, in that chat. Every miss (a chat they cannot read,
+   *  another chat's message, one that does not exist or that a page would not show them) is the same refusal. Only a person
+   *  reading as themselves. */
+  async setReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string, at: string): Promise<{ id: string; dueAt: string }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const now = this.now(), dueAt = Date.parse(at)
+    if (!(dueAt > now) || dueAt > now + REMINDER_AHEAD_MS) fail('INVALID_REMINDER', 'Choose a time in the next 30 days.', 400)
+    const { state } = await this.readableChat(user, tabId, conversationId)
+    const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: messageId, tabId, conversationId } }, { $project: { ...FIELDS, conversationId: 1 } }])
+    if (!found || !(await readable(this.db, tabId, [messageRow(found)], state)).length) fail('NOT_FOUND', 'This message is unavailable.', 404)
+    return await setReminder(this.db, { tabId, personId: user.sub, conversationId, messageId, dueAt, now })
+  }
+
+  /** Clears the person's reminder of one message of a chat they can read (reminders.ts), as Activity's Reminders does when they
+   *  open it, and answers whether there was one. Only their own, as themselves. */
+  async clearReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string): Promise<{ cleared: boolean }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    await this.readableChat(user, tabId, conversationId)
+    return { cleared: await clearReminder(this.db, { tabId, personId: user.sub, conversationId, messageId }) }
+  }
+
+  /** Conversation `conversationId` and the Swarm's state, for a person reading as themselves who reads it: every conversation
+   *  they cannot read, or that does not exist, is the same refusal. The Swarm is read with that conversation alone. */
+  private async readableChat(user: AuthUser, tabId: string, conversationId: string): Promise<{ state: SuperTabState; conversation: Conversation }> {
+    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
+    const actor = await this.store.actor(this.db, user, state)
+    try {
+      return { state, conversation: readConversation(state, actor, conversationId) }
+    } catch (error) {
+      if (error instanceof SuperTabError && error.status === 404) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      throw error
+    }
   }
 
   /** Marks the person's Activity made at or before `through` read on every device, never past now. */
@@ -437,13 +477,13 @@ export class SwarmReads {
     const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor),
-        activityDigest(tx, tabId, actor.userId, t0)]) : undefined,
+        activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
       view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
         ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-          decisionsDigest: counts[1].digest, activityDigest: counts[2] } : {}) }, state) }
+          decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state) }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

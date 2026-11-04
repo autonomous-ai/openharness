@@ -94,6 +94,12 @@ export const NAMED_INDEX = {
   SuperTabActivity: { age: { createdAt: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
+  /** A person's reminders (reminders.ts): `person`, the due list, the next one, the digest and the cap's count; `due`, the
+   *  sweep's reminders due more than 30 days ago. */
+  SuperTabReminder: {
+    person: { tabId: 1, personId: 1, dueAt: 1 },
+    due: { dueAt: 1 },
+  },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

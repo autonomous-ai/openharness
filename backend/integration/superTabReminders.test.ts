@@ -267,10 +267,10 @@ describe('Reminders: a message brought back to its person at a time', () => {
       await sweepReminders(db, clock)
     })
     const person = reads(entries, 'SuperTabReminder', ['personId'])
-    // The due list, the next one, the digest and the cap's count.
+    // The due list, the next one, the digest and the cap's count (an index-only COUNT_SCAN).
     expect(person.length, JSON.stringify(plan(person))).toBeGreaterThanOrEqual(4)
     for (const entry of person) {
-      expect(entry.planSummary, JSON.stringify(plan([entry]))).toMatch(/^IXSCAN \{ tabId: 1, personId: 1, dueAt: 1 \}/)
+      expect(entry.planSummary, JSON.stringify(plan([entry]))).toMatch(/^(IXSCAN|COUNT_SCAN) \{ tabId: 1, personId: 1, dueAt: 1 \}/)
       expect(entry.docsExamined ?? 0, JSON.stringify(plan([entry]))).toBeLessThanOrEqual(2)
     }
     const sweep = reads(entries, 'SuperTabReminder', ['dueAt'], ['personId'])

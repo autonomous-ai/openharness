@@ -32,6 +32,7 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
 import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
 import { activityWait } from '../superTabs/activity.js'
+import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
@@ -98,8 +99,10 @@ const unreadBody = z.object({ sequence: z.number().int().positive().safe() }).st
 const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const activityReadBody = z.object({ through: z.string().datetime() }).strict()
+const reminderBody = z.object({ at: z.string().datetime({ offset: true }) }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
+const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
@@ -519,6 +522,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many Activity reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => reads.activity(req.user!, req.params.tabId))
     })
+  // A person's due reminders and when the next is due (superTabs/reminders.ts), read when its digest moves or at that time.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/reminders',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await reminderWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many reminder reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => reads.reminders(req.user!, req.params.tabId))
+    })
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
@@ -650,6 +660,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof followBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(followBody)] },
     (req, reply) => respond(reply, () => reads.followThread(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.follow)))
+  // A person's own reminder of a message (superTabs/reminders.ts): set or replace its time, or clear it.
+  app.put<{ Params: z.infer<typeof reminderParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof reminderBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
+    { preHandler: [validateParams(reminderParams), validateQuery(noQuery), validateBody(reminderBody)] },
+    (req, reply) => respond(reply, () => reads.setReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId, req.body.at)))
+  app.delete<{ Params: z.infer<typeof reminderParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
+    { preHandler: [validateParams(reminderParams), validateQuery(noQuery)] },
+    (req, reply) => respond(reply, () => reads.clearReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId)))
   // A person's own notification setting for a chat (superTabs/chatSettings.ts): all, mentions or muted.
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof notifyBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/notifications',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(notifyBody)] },
