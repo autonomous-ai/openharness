@@ -275,6 +275,29 @@ void main() {
     expect(sent(), ['lead.claim', 'lead.claim', 'agent.add']);
   });
 
+  testWidgets('after a failed join the card keeps the computer the agent '
+      'started on', (tester) async {
+    await pump(tester);
+    final routes = swarm.routes['/api/super-tabs/$tab/commands']!;
+    swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
+      final command = body!['command'] as Map<String, dynamic>;
+      if (command['type'] == 'agent.add') {
+        throw const SuperTabFailure('UNAVAILABLE', 'The Swarm did not answer.');
+      }
+      return routes(body);
+    };
+    await tester.tap(key('swarm-lead-start-button'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Couldn’t start a Lead: The Swarm did not answer'),
+      findsOneWidget,
+    );
+    // Its agent runs on Studio: no other computer is offered until it joins.
+    await tester.tap(key('swarm-lead-start-machine'));
+    await tester.pumpAndSettle();
+    expect(find.text('Air'), findsNothing);
+  });
+
   testWidgets('no computer online says why and offers no Start', (
     tester,
   ) async {

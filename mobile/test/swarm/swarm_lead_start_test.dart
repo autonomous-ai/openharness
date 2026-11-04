@@ -281,4 +281,58 @@ void main() {
     expect(computers.starts, hasLength(2));
     expect(sent(), ['lead.claim', 'lead.claim', 'agent.add']);
   });
+  test('Start again after a failed join claims the kept computer and joins '
+      'its agent, whatever is picked since', () async {
+    await open();
+    // The server holds one claim: another computer's claim waits (backend
+    // commands.ts lead.claim).
+    String? held;
+    answers['lead.claim'] = (command) {
+      final machine = command['machineId'] as String;
+      if (held != null && held != machine) {
+        return {
+          'result': {'leadStart': 'waiting'},
+        };
+      }
+      held = machine;
+      return {
+        'result': {'leadStart': 'start'},
+      };
+    };
+    answers['agent.add'] = (_) =>
+        throw const SuperTabFailure('UNAVAILABLE', 'The Swarm did not answer.');
+    final starter = SwarmLeadStarter.of(reader);
+    await starter.start(
+      reader,
+      computers,
+      personalChat,
+      machineId: 'mac-1',
+      engine: 'codex',
+    );
+    expect(starter.kept(personalChat), (machineId: 'mac-1', engine: 'codex'));
+
+    answers['agent.add'] = (_) => {'result': <String, Object>{}};
+    await starter.start(
+      reader,
+      computers,
+      personalChat,
+      machineId: 'mac-2',
+      engine: 'claude',
+    );
+    expect(
+      [for (final c in swarm.commands) (c['type'], c['machineId'])],
+      [
+        ('lead.claim', 'mac-1'),
+        ('agent.add', 'mac-1'),
+        ('lead.claim', 'mac-1'),
+        ('agent.add', 'mac-1'),
+      ],
+    );
+    expect(computers.starts, hasLength(1));
+    expect(
+      superTabMap(swarm.commands.last['configuration'])['engine'],
+      'codex',
+    );
+    expect(starter.kept(personalChat), isNull);
+  });
 }
