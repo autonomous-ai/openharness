@@ -54,6 +54,7 @@ void _desk(SuperTabLaunchFixture f, {bool repo = true}) {
 Future<(SuperTabController, String)> _swarm(
   SuperTabLaunchFixture f, {
   bool personal = true,
+  String role = 'owner',
 }) async {
   for (final state in f.app.machineStates.values) {
     state.localOnly = true;
@@ -62,7 +63,7 @@ Future<(SuperTabController, String)> _swarm(
     ..['name'] = personal ? 'Personal' : 'Team'
     ..['ownerId'] = 'owner'
     ..['people'] = [
-      {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+      {'id': 'owner', 'email': 'owner@example.com', 'role': role},
       if (!personal)
         {'id': 'peer', 'email': 'peer@example.com', 'role': 'collaborator'},
     ];
@@ -276,6 +277,32 @@ void main() {
     expect(c.snapshot!.leadOf(project['id'] as String), isNotNull);
     expect(_card, findsNothing);
     expect(find.text('1 pane in this project'), findsOneWidget);
+    await _close(tester, f, c);
+  });
+
+  testWidgets('with none of the person\'s computers online, the card says '
+      'why and offers no Start Lead', (tester) async {
+    final f = SuperTabLaunchFixture();
+    _desk(f);
+    final (c, _) = await _swarm(f);
+    f.app.machineStates['m']!.nodeOnline = false;
+    await _show(tester, f);
+    expect(
+      tester.widget<Text>(_key('super-lead-start-unavailable')).data,
+      'Can’t start a Lead: none of your computers is online',
+    );
+    expect(find.widgetWithText(FilledButton, 'Start Lead'), findsNothing);
+    await _close(tester, f, c);
+  });
+
+  testWidgets('a reader who can\'t write sees no card', (tester) async {
+    final f = SuperTabLaunchFixture();
+    _desk(f);
+    final (c, _) = await _swarm(f, role: 'viewer');
+    await _show(tester, f);
+    expect(c.canWrite, isFalse);
+    expect(find.text('1 pane in this project'), findsOneWidget);
+    expect(_card, findsNothing);
     await _close(tester, f, c);
   });
 
