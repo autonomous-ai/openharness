@@ -304,18 +304,14 @@ void main() {
         ...run('Recent', 120, (i) => daysAgo(20, i)),
         ...run('Today', 20, (i) => now.subtract(Duration(minutes: 40 - i))),
       ], page: 2);
-      final scroll = tester
-          .widget<ScrollView>(
-            find.byKey(const PageStorageKey('super-messages-tab-lead')),
-          )
-          .controller!
-          .position;
-      final before = scroll.extentAfter;
+      expect(onScreen(tester, 'Today 20'), isTrue);
       await choose(tester, 'Last month');
       await tester.pumpAndSettle();
       expect(find.text('That day is too far back to open.'), findsOneWidget);
       expect(find.text('Recent 1'), findsNothing);
-      expect(scroll.extentAfter, moreOrLessEquals(before, epsilon: 1));
+      // Where the reader was: at the newest message, none of them lit.
+      expect(onScreen(tester, 'Today 20'), isTrue);
+      expect(lit(tester, 'Today 20'), isFalse);
     });
   });
 }
