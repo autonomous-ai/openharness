@@ -152,6 +152,7 @@ class SwarmConversationPage extends StatefulWidget {
     required this.swarmId,
     required this.conversationId,
     this.header = true,
+    this.findRequests,
     this.buddy,
     this.messageId,
     this.threadId,
@@ -181,6 +182,10 @@ class SwarmConversationPage extends StatefulWidget {
   /// Buddy chat — Remove Buddy at its end. None in a project's tab
   /// (`swarm_project_page.dart`), under the project's own header.
   final bool header;
+
+  /// Told when the page around the chat asks to find in it: the project's
+  /// own menu, where the chat has no header of its own (task #2826).
+  final Listenable? findRequests;
 
   /// What the person does to their Buddy, where the page around the chat
   /// holds it, for its own header's menu; null makes the chat its own while
@@ -328,6 +333,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     WidgetsBinding.instance.addObserver(this);
     _text.addListener(_typed);
     _scroll.addListener(_scrolled);
+    widget.findRequests?.addListener(_openFind);
+  }
+
+  @override
+  void didUpdateWidget(SwarmConversationPage old) {
+    super.didUpdateWidget(old);
+    if (old.findRequests != widget.findRequests) {
+      old.findRequests?.removeListener(_openFind);
+      widget.findRequests?.addListener(_openFind);
+    }
   }
 
   @override
@@ -728,6 +743,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.findRequests?.removeListener(_openFind);
     _close();
     _voice?.dispose();
     _view.dispose();
@@ -1479,6 +1495,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               final buddy? => SwarmBuddyMenuButton(
                 actions: buddy,
                 chatId: widget.conversationId,
+                onFind: _openFind,
                 swarmId: widget.swarmId,
                 swarmSwitch: widget.swarmSwitch,
               ),
