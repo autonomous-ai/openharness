@@ -32,6 +32,7 @@ import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
+import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -847,6 +848,7 @@ describe('private swarm projects on the real control API', () => {
   // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
   // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
   it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+    wantDefaultDigest()
     // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)

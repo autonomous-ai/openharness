@@ -42,6 +42,7 @@
     "integration/superTabMachineNames.test.ts": 1500,
     "integration/superTabMachineRemovals.test.ts": 900,
     "integration/superTabMachineReports.test.ts": 20300,
+    "integration/superTabDigestHour.test.ts": 1500,
     "integration/superTabMessagePages.test.ts": 1500,
     "integration/superTabMigration.test.ts": 1000,
     "integration/superTabNamedReads.test.ts": 1000,
