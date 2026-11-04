@@ -9,6 +9,8 @@ import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/phone/voice_language_store.dart';
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -57,6 +59,7 @@ import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
 import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
+import 'swarm_voice_send.dart' show SwarmVoicePosted;
 import 'team_glance.dart';
 
 final _conversationReferencePattern = RegExp(r'(?<![\w/])#([1-9][0-9]*)(?!\w)');
@@ -337,13 +340,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
-        _voice = SwarmVoice(
-          create: create,
-          dictation: SwarmScope.dictationOf(context),
-          draft: () => _conversation?.draft ?? '',
-          write: (text) => _conversation?.draft = text,
-          post: _voiceSend,
-        );
+        _voice = SwarmVoice(recorder: create, post: _voiceSend);
       }
     }
     // A covered chat hears nothing: its take goes with it.
@@ -836,11 +833,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     });
   }
 
-  /// The voice row's Send, once its take has ended into the draft: the
-  /// composer's own Send, in the chat shown now.
-  void _voiceSend() {
+  /// The voice row's Send: the take as a voice message, in the chat shown
+  /// now, its words heard in the mic's language.
+  Future<SwarmVoicePosted> _voiceSend(VoiceTake take) async {
     final c = _conversation;
-    if (mounted && c != null && c.canSend) _send(c);
+    if (!mounted || c == null) return (sent: false, notice: null);
+    _target = null;
+    return c.sendVoice(take, voiceLanguageStore.value);
   }
 
   /// Sends the draft, back at the foot of the chat where the post shows.
@@ -2243,7 +2242,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final query = c.mentionQuery;
     final replying = c.replyingTo;
     final voice = _voice;
-    final talking = voice?.face != null;
+    final talking = voice?.active ?? false;
     // A post on its way never holds the next back; one not confirmed is sent
     // again from where it shows. Files alone are a post too.
     final canSend = c.canSend;
@@ -2358,21 +2357,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 notice,
                 key: const ValueKey('swarm-voice-note'),
                 style: AppType.caption(color: tty.yellow),
-              ),
-            ),
-          // Quiet: nothing went wrong, the words stay in the box.
-          if (_voice?.stopped case final stopped?)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.xs,
-                0,
-                AppSpace.xs,
-                AppSpace.s,
-              ),
-              child: Text(
-                stopped,
-                key: const ValueKey('swarm-voice-stopped'),
-                style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
           ValueListenableBuilder(

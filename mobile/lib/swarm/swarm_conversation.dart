@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
+
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
@@ -13,6 +15,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_uploads.dart';
+import 'swarm_voice_send.dart';
 
 /// One conversation on the phone: its messages and what the person posts to
 /// it — the desktop's `SuperTabController` messages and composer, for one
@@ -943,6 +946,58 @@ class SwarmConversation extends ChangeNotifier
   }
 
   String? _startedRoot;
+
+  /// Sends [take] as a voice message, alone, as a reply to [replyingTo] when
+  /// there is one: its clip goes up, the backend reads it once in [lang], and
+  /// the post names that file. What is typed stays in the box. Not sent, the
+  /// take is the voice row's to keep; a post whose answer was lost is the
+  /// outbox's, sent again from where it shows like any other.
+  Future<SwarmVoicePosted> sendVoice(VoiceTake take, String lang) async {
+    final group = conversation;
+    if (uploading || _disposed || !canPost || group == null) {
+      return (sent: false, notice: null);
+    }
+    final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    // A failure says itself in the chat, as a file's does.
+    final ids = await _uploadAll([clip]);
+    if (ids == null || _disposed) return (sent: false, notice: null);
+    final read = await swarmReadVoice(
+      reader.request,
+      tabId: reader.tabId,
+      attachmentId: ids.single,
+      lang: lang,
+    );
+    final voice = read.voice;
+    if (_disposed || voice == null) return (sent: false, notice: read.refused);
+    final operationId = superTabOperationId();
+    final post = SwarmPost(
+      body: {
+        'operationId': operationId,
+        'command': {
+          'type': 'message.send',
+          'conversationId': id,
+          'text': '',
+          'replyTo': _replyingTo?.id,
+          'recipientIds': const <String>[],
+          'attachmentIds': ids,
+          if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
+        },
+      },
+      messageId: superTabMessageId(
+        tabId: reader.tabId,
+        accountId: reader.accountId,
+        operationId: operationId,
+      ),
+      files: [clip],
+    );
+    _replyingTo = null;
+    error = null;
+    final outcome = await _outbox.add(post);
+    _answered(post, outcome);
+    final sent =
+        outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
+    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+  }
 
   /// The thread whose session the last post started, once the backend took
   /// it; read once.

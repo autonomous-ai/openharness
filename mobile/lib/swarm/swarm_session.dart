@@ -5,12 +5,11 @@ import 'package:flutter/widgets.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 import '../notify/system_notices.dart';
-import '../phone/voice_input_controller.dart';
+import '../phone/voice_recorder.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_activity.dart';
 import 'swarm_chat_peeks.dart';
 import 'swarm_choices.dart';
-import 'swarm_dictation.dart';
 import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_prefs.dart';
@@ -345,7 +344,6 @@ class SwarmHost extends ChangeNotifier {
     SwarmKeptStore? kept,
     this.uploadAvatar,
     this.voice,
-    this.dictation,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device(),
        readMarks = readMarks ?? HarnessFileStore.shared,
@@ -392,15 +390,10 @@ class SwarmHost extends ChangeNotifier {
   /// go, and only the built-in pictures are offered.
   final SwarmAvatarUpload? uploadAvatar;
 
-  /// A new voice input for a chat's mic, which owns and disposes it — the
-  /// terminal's speech-to-text; null where none can be heard, and the
+  /// A new microphone for a chat's voice messages (swarm_voice.dart), which
+  /// the chat owns and disposes; null where none can be heard, and the
   /// composer has no mic.
-  final VoiceInputController Function()? voice;
-
-  /// The phone's own speech recognizer, which shows a chat's words as they
-  /// are said; null where there is none, and the mic records and has [voice]
-  /// transcribe the take.
-  final SwarmDictation? dictation;
+  final VoiceRecorder Function()? voice;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -531,15 +524,8 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       ?.notifier
       ?.computers;
 
-  /// How a chat's mic makes its voice input ([SwarmHost.voice]); null
+  /// How a chat's mic makes its microphone ([SwarmHost.voice]); null
   /// outside the shell or where none can be heard.
-  static VoiceInputController Function()? voiceOf(BuildContext context) =>
+  static VoiceRecorder Function()? voiceOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SwarmScope>()?.notifier?.voice;
-
-  /// The phone's own recognizer for a chat's mic ([SwarmHost.dictation]);
-  /// null outside the shell or where there is none.
-  static SwarmDictation? dictationOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<SwarmScope>()
-      ?.notifier
-      ?.dictation;
 }

@@ -1132,7 +1132,7 @@ class SuperTabAttachment {
       expiresAt = row['expiresAt'] is num
           ? (row['expiresAt'] as num).toInt()
           : null,
-      voice = SuperTabVoice._read(row['voice']);
+      voice = SuperTabVoice.read(row['voice']);
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -1181,7 +1181,7 @@ class SuperTabVoice {
 
   /// A voice that does not read as one is none: the file still shows, as a
   /// file.
-  static SuperTabVoice? _read(Object? raw) {
+  static SuperTabVoice? read(Object? raw) {
     if (raw is! Map) return null;
     final ms = raw['durationMs'], bars = raw['waveform'];
     final transcribed = raw['transcribed'];

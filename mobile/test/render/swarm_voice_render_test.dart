@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
@@ -163,11 +162,7 @@ void main() {
         request: backend().request,
         notices: SilentSystemNotices(),
         features: features,
-        voice: () => VoiceInputController(
-          transcriber: stt.call,
-          recorder: recorder,
-          language: ValueNotifier('en'),
-        ),
+        voice: () => recorder,
       )..foreground = false;
       addTearDown(host.dispose);
       final key = GlobalKey();

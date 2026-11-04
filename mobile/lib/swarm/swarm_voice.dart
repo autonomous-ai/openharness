@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -9,603 +10,267 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_language_store.dart';
-import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/phone/voice_notice.dart';
+import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_conversation_page.dart' show SwarmRoundButton;
-import 'swarm_dictation.dart';
+import 'swarm_voice_send.dart' show SwarmVoicePosted;
+import 'voice_length.dart';
 
-/// Talking instead of typing in a chat, into the message box (Tony, 10-28:
-/// "like the Claude app"). Tap the mic to talk. While talking the composer
-/// shows [SwarmVoiceRow]: [stop] ends the take with its words left in the box,
-/// [cancel] throws away what the take added, and [send] ends it and posts
-/// the box. Voice never sends by itself (Tony, 11-01): sending is a tap on
-/// Send, the composer's or the row's. No pause ends a take (10-29:
-/// "until I tap") — save [idle] without a new word, which stops listening
-/// with the words left in the box. A long press on the mic picks the language
-/// ([voiceLanguageStore]).
+/// Where a chat's voice message is.
+enum SwarmVoiceState {
+  /// No take: the composer shows its mic.
+  off,
+
+  /// The microphone is asked for, or opening.
+  starting,
+
+  /// Recording.
+  recording,
+
+  /// Stopped and kept, with Send and X: by a tap, at [SwarmVoice.maxTake], or
+  /// as the chat went out of sight.
+  held,
+
+  /// Its audio is on its way.
+  sending,
+}
+
+/// A chat's voice messages, as Telegram's (Dee, 11-04: "just send the full
+/// audio"). A tap on the mic records; the composer then shows
+/// [SwarmVoiceRow]: X throws the take away, Send posts it as audio
+/// ([post]), and its words come back from the backend for agents to read.
+/// Nothing goes into the message box: the keyboard's own dictation is there
+/// for typing by voice.
 ///
-/// Two ways to hear, the first wherever it can:
-///
-/// - **The phone's own recognizer** ([dictation]), the one the keyboard's
-///   dictation uses: the words show in the box as they are said. Asked for
-///   once, with the microphone.
-/// - **The terminal's voice input** ([VoiceInputController]): the take is
-///   recorded and the backend transcribes it as it ends — at [stop], or at
-///   [VoiceInputController.maxTake] — its words left in the box, unsent.
-///   They reach the box only once transcribed, after the take: no live words.
-///   Where there is no recognizer (Android, sample mode), speech recognition
-///   was refused, or the recognizer has no such language.
-///
-/// ⚠️ **Only while the chat is seen.** A take goes the moment the chat does —
-/// covered by another screen ([hide]) or the app sent to the background — so
-/// nothing is recorded, or sent to be transcribed, behind the person's back.
-/// Behind a system prompt a recorded take is kept, but its time limit ends
-/// it only once the app is back; a take that ended just before goes to be
-/// transcribed only then, too.
+/// A take is never sent by itself. It stops and is kept, Send still there,
+/// at [maxTake], and when the chat goes out of sight: covered by another
+/// screen ([hide]), the phone locked or the app sent away. A system prompt or
+/// Control Center only covers the app, and the take goes on. A long press on
+/// the mic picks the language its words are heard in ([voiceLanguageStore]).
 class SwarmVoice extends ChangeNotifier {
-  SwarmVoice({
-    required this.create,
-    this.dictation,
-    required this.draft,
-    required this.write,
-    required this.post,
-  });
+  SwarmVoice({required this.recorder, required this.post});
 
-  /// How long the recognizer listens without hearing a new word before it
-  /// stops by itself: the microphone is released and the words stay in the
-  /// box, for Send or the next take (Lead, review of #2056: a microphone open
-  /// for nobody). A shorter pause never ends it.
-  static const idle = Duration(minutes: 2);
+  /// The longest take; it stops there with Send ready.
+  static const maxTake = Duration(minutes: 10);
 
-  /// What the chat says, quietly, as the recognizer stops by itself after
-  /// [idle], for [stoppedLinger] (Lead, 10-29: a mic that went still with no
-  /// word said why).
-  static const stoppedListening = 'Stopped listening';
-  static const stoppedLinger = Duration(seconds: 3);
+  /// What a take that came back empty says.
+  static const nothingRecorded = "Couldn't record anything · tap the mic again";
 
-  /// What the chat says as a [send] ends with nothing to post (Tony, 11-01).
-  static const nothingSent = "Couldn't hear anything, nothing sent";
+  /// Makes the microphone on the first tap, which this owns and disposes: a
+  /// recorder opens a platform channel, and a chat nobody talks in should not.
+  final VoiceRecorder Function() recorder;
 
-  /// How long the recognizer has to say it has stopped, after [stop] asked it
-  /// to, before its take is given up with what the box holds left there.
-  static const _endWait = Duration(seconds: 2);
+  /// Posts a take as a voice message, and answers whether it went and what
+  /// to say about it. Not sent, the take is kept for another Send.
+  final Future<SwarmVoicePosted> Function(VoiceTake take) post;
 
-  /// Makes the voice input, which this owns and disposes.
-  final VoiceInputController Function() create;
+  VoiceRecorder? _recorder;
+  SwarmVoiceState _state = SwarmVoiceState.off;
+  VoiceTake? _take;
+  String? _notice;
+  bool _refused = false, _disposed = false;
 
-  /// The phone's own recognizer; null where there is none.
-  final SwarmDictation? dictation;
+  /// Bumped by everything that ends a take, so what an earlier one still
+  /// awaits lands nowhere.
+  int _turn = 0;
+  Timer? _limit;
+  Stopwatch? _clock;
 
-  /// The draft as it is now, and the draft written anew.
-  final String Function() draft;
-  final void Function(String text) write;
-
-  /// Posts the draft through the composer's own Send, once [send]'s take
-  /// has ended into it.
-  final VoidCallback post;
-
-  /// The recognizer's take: asking for it, listening, or waiting for it to
-  /// say it has stopped — as only [stop] asks.
-  _Live _live = _Live.off;
-
-  /// Bumped by everything that ends a recognizer's take, so what an earlier
-  /// one still says lands nowhere.
-  int _liveTake = 0;
-
-  /// Speech recognition was refused: the mic records from now on.
-  bool _liveRefused = false;
-
-  /// What the recognizer shows is spliced into the draft after [_liveFrom]:
-  /// the draft as the take began, or as the person last left it. [_liveShown]
-  /// is the draft as the recognizer last wrote it; a draft that is not, the
-  /// person changed — their change stays, with [_liveHeard] as it was then in
-  /// it ([_liveBase]).
-  String _liveFrom = '', _liveShown = '';
-
-  /// Every word the recognizer has heard in the take, as it last said them;
-  /// and those of them already in [_liveFrom].
-  List<String> _liveHeard = const [], _liveBase = const [];
-  Timer? _liveEnd, _liveIdle, _liveNoticeTimer, _stoppedTimer;
-  final ValueNotifier<double> _liveLevel = ValueNotifier(0);
-  String? _liveNotice;
-
-  /// The row's Send under way ([send]): the take ends, then the draft is
-  /// posted once. Replaced by everything that ends a take otherwise, so a
-  /// take cancelled or gone meanwhile posts nothing.
-  Object? _sending;
-
-  VoiceInputController? _voice;
-  bool _disposed = false;
-
-  /// Hears the app go to the background, from the first tap.
+  /// Stops a take as the app goes out of sight, from the first tap.
   AppLifecycleListener? _lifecycle;
 
-  /// The app is in front: not behind a system prompt or Control Center, nor
-  /// gone. Only then does a take reach its limit and go to be transcribed.
-  bool _inFront = true;
+  SwarmVoiceState get state => _state;
 
-  /// The take reached [VoiceInputController.maxTake] while the app was not
-  /// in front: it ends as the app comes back.
-  bool _limitReached = false;
-
-  /// A take whose microphone closed while the app was not in front, waiting
-  /// for it to come back ([_mayTranscribe]).
-  Completer<bool>? _held;
-
-  /// The voice input, from the first tap: a recorder opens a platform
-  /// channel, and a chat nobody talks to should not.
-  VoiceInputController? get voice => _voice;
-
-  /// What went wrong with the last take, as the terminal says it.
-  String? get notice => _liveNotice ?? _voice?.notice;
-
-  /// [stoppedListening] for a moment after the recognizer stopped by itself;
-  /// null otherwise.
-  String? get stopped => _stoppedTimer == null ? null : stoppedListening;
-
-  /// The mic's face: null at rest.
-  VoiceMicFace? get face => switch (_live) {
-    _Live.asking => VoiceMicFace.starting,
-    _Live.listening => VoiceMicFace.listening,
-    _Live.ending => VoiceMicFace.busy,
-    _Live.off => switch (_voice) {
-      null => null,
-      final voice when voice.isSending => VoiceMicFace.busy,
-      final voice => switch (voice.status) {
-        VoiceInputStatus.starting => VoiceMicFace.starting,
-        VoiceInputStatus.listening => VoiceMicFace.listening,
-        VoiceInputStatus.transcribing => VoiceMicFace.busy,
-        VoiceInputStatus.idle || VoiceInputStatus.unavailable => null,
-      },
-    },
-  };
-
-  /// The row's Send is under way: the take is ending, then the draft posts.
-  /// The row takes no tap meanwhile.
-  bool get sending => _sending != null;
-
-  /// The row's Send can be tapped: listening, and with the phone's
-  /// recognizer only once the box has words — the words a recording heard
-  /// reach it only as it ends.
-  bool get canSend {
-    if (_disposed || _sending != null) return false;
-    if (_live != _Live.off) {
-      return _live == _Live.listening && draft().trim().isNotEmpty;
-    }
-    final voice = _voice;
-    return voice != null &&
-        !voice.isSending &&
-        voice.status == VoiceInputStatus.listening;
-  }
+  /// What went wrong with the last take or send; null otherwise.
+  String? get notice => _notice;
 
   /// The microphone was refused: the mic is off.
-  bool get off =>
-      _live == _Live.off && _voice?.status == VoiceInputStatus.unavailable;
+  bool get off => _refused;
 
-  /// How loud the microphone is, for the face's bars.
-  ValueListenable<double>? get level =>
-      _live == _Live.off ? _voice?.level : _liveLevel;
+  /// The take is under way or kept: the composer shows the voice row.
+  bool get active => _state != SwarmVoiceState.off;
 
-  /// Starts a take, or calls it off while the microphone opens or its
-  /// permission is asked. While listening it is [stop]; while the words are
-  /// on their way it does nothing.
+  /// Send can be tapped: a take is recording or kept.
+  bool get canSend =>
+      _state == SwarmVoiceState.recording || _state == SwarmVoiceState.held;
+
+  /// How long the take has run, or the kept take's length.
+  Duration get length => _take?.length ?? _clock?.elapsed ?? Duration.zero;
+
+  /// How loud the microphone is, for the row's wave; silence from a recorder
+  /// with no meter.
+  ValueListenable<double> get level => switch (_recorder) {
+    final VoiceLevelMeter meter => meter.level,
+    _ => _silence,
+  };
+  static final ValueListenable<double> _silence = ValueNotifier(0);
+
+  /// Starts a take; while one records, stops and keeps it; while the
+  /// microphone opens, calls it off.
   void tap() {
     if (_disposed) return;
-    switch (_live) {
-      case _Live.asking:
-        _offLive();
-        return;
-      case _Live.listening:
-        _endLive();
-        return;
-      case _Live.ending:
-        return;
-      case _Live.off:
-    }
-    _setLiveNotice(null);
-    _stoppedTimer?.cancel();
-    _stoppedTimer = null;
-    final recorded = _voice;
-    final underWay =
-        recorded != null &&
-        (recorded.isSending ||
-            (recorded.status != VoiceInputStatus.idle &&
-                recorded.status != VoiceInputStatus.unavailable));
-    if (!underWay && dictation != null && !_liveRefused) {
-      unawaited(_listen(dictation!));
-      return;
-    }
-    _tapRecorded(recorded ?? _start());
-  }
-
-  /// [tap] on the terminal's voice input.
-  void _tapRecorded(VoiceInputController voice) {
-    if (voice.isSending) return;
-    switch (voice.status) {
-      case VoiceInputStatus.idle || VoiceInputStatus.unavailable:
-        unawaited(voice.startListening());
-      case VoiceInputStatus.starting:
-        unawaited(voice.stopListening());
-      case VoiceInputStatus.listening:
-        _finish(voice);
-      case VoiceInputStatus.transcribing:
+    switch (_state) {
+      case SwarmVoiceState.off:
+        unawaited(_start());
+      case SwarmVoiceState.starting:
+        discard();
+      case SwarmVoiceState.recording:
+        unawaited(_stop());
+      case SwarmVoiceState.held || SwarmVoiceState.sending:
         break;
     }
   }
 
-  /// Ends the take with its words left in the box. Nothing is sent.
-  void stop() {
-    if (_disposed) return;
-    if (_live == _Live.listening) {
-      _endLive();
-      return;
-    }
-    final voice = _voice;
-    if (voice != null && voice.status == VoiceInputStatus.listening) {
-      _finish(voice);
-    }
+  /// Stops the take and keeps it, with Send and X: the chat went out of
+  /// sight. A take still opening is called off.
+  void hide() {
+    if (_state == SwarmVoiceState.starting) discard();
+    if (_state == SwarmVoiceState.recording) unawaited(_stop());
   }
 
-  /// Ends the take and posts the draft with its words, once ([post]): the
-  /// recognizer's last words, waited for no longer than it is at [stop]; or
-  /// the recording, once transcribed. A take that ends with nothing to post
-  /// posts nothing and says [nothingSent]; what was typed stays.
+  /// Throws the take away, recorded or kept, and sends nothing.
+  void discard() {
+    if (_disposed || _state == SwarmVoiceState.sending) return;
+    final recording =
+        _state == SwarmVoiceState.recording ||
+        _state == SwarmVoiceState.starting;
+    _end();
+    if (recording) unawaited(_recorder?.cancel());
+    _notice = null;
+    _set(SwarmVoiceState.off);
+  }
+
+  /// Posts the take, stopping it first while it records.
   void send() {
     if (!canSend) return;
-    final sending = _sending = Object();
-    if (_live == _Live.listening) {
-      _endLive();
-      return;
-    }
-    notifyListeners();
-    unawaited(_sendRecorded(_voice!, sending));
+    unawaited(_send());
   }
 
-  /// [send] on a recording: what was typed, then the words transcribed.
-  Future<void> _sendRecorded(VoiceInputController voice, Object sending) async {
-    var posted = false;
-    await voice.submit((words) async {
-      // Gone meanwhile: its words land nowhere.
-      if (_sending != sending) return true;
-      write(_joined(draft(), words));
-      posted = true;
-      post();
-      return true;
-    });
-    if (_disposed || _sending != sending) return;
-    _sending = null;
-    if (!posted) _setLiveNotice(nothingSent);
-    notifyListeners();
-  }
-
-  /// Throws the take away: what it added leaves the box, the person's edits
-  /// stay. A recorded take is dropped with its words, even while they are
-  /// being transcribed ([VoiceInputController.clear]).
-  void cancel() {
-    if (_disposed) return;
-    _sending = null;
-    if (_live != _Live.off) {
-      if (_live != _Live.asking && draft() == _liveShown) write(_liveFrom);
-      _offLive();
-      return;
-    }
-    final voice = _voice;
-    if (voice != null && !voice.isIdle) voice.clear();
-  }
-
-  /// Throws away the take under way — opening, recording or being
-  /// transcribed — with its words: the chat went out of sight. What it was
-  /// waiting on lands nowhere ([VoiceInputController.clear]), and the next
-  /// tap starts afresh.
-  ///
-  /// ⚠️ `clear`, never `stopListening` or a [_finish]: those transcribe the
-  /// take, and a take nobody can see must not leave the phone.
-  void hide() {
-    _sending = null;
-    _offLive();
-    _release(false);
-    final voice = _voice;
-    if (voice == null || voice.isIdle) return;
-    voice.clear();
-  }
-
-  VoiceInputController _start() {
-    final voice = _voice = create();
-    voice.addListener(_changed);
-    voice.onTakeLimit = () async => _limit(voice);
-    voice.mayTranscribe = _mayTranscribe;
+  Future<void> _start() async {
+    final turn = ++_turn;
+    _notice = null;
+    _set(SwarmVoiceState.starting);
     _watchApp();
-    return voice;
-  }
-
-  /// Hears the app come and go, from the first tap.
-  void _watchApp() {
-    if (_lifecycle != null) return;
-    final state = WidgetsBinding.instance.lifecycleState;
-    _inFront = state == null || state == AppLifecycleState.resumed;
-    _lifecycle = AppLifecycleListener(onStateChange: _lifecycleChanged);
-  }
-
-  /// A take with the phone's recognizer: asked for, then listening in the
-  /// long-press language until the next tap, for as long as the chat is in
-  /// front. Refused, or without the language, the tap records instead.
-  Future<void> _listen(SwarmDictation dictation) async {
-    final take = ++_liveTake;
-    _watchApp();
-    _live = _Live.asking;
-    notifyListeners();
-    final access = await dictation.access();
-    if (_disposed || take != _liveTake) return;
-    if (access != SwarmDictationAccess.allowed) {
-      if (access == SwarmDictationAccess.denied) _liveRefused = true;
-      _live = _Live.off;
-      _tapRecorded(_voice ?? _start());
-      notifyListeners();
+    final mic = _recorder ??= recorder();
+    if (!await mic.allowed()) {
+      if (turn != _turn) return;
+      _refused = true;
+      _notice = VoiceNotice.unavailable;
+      _set(SwarmVoiceState.off);
       return;
     }
-    _liveFrom = _liveShown = draft();
-    _liveHeard = _liveBase = const [];
-    final started = await dictation.start(
-      swarmDictationLocale(voiceLanguageStore.value),
-      onWords: (words) => _liveWords(take, words),
-      onLevel: (level) {
-        if (take == _liveTake) _liveLevel.value = level;
-      },
-      onEnd: (end) => _liveEnded(take, end),
-    );
-    if (_disposed || take != _liveTake) {
-      if (started) unawaited(dictation.cancel());
+    _refused = false;
+    if (turn != _turn) return;
+    try {
+      await mic.start();
+    } on Exception {
+      if (turn != _turn) return;
+      _notice = VoiceNotice.couldNotStart;
+      _set(SwarmVoiceState.off);
       return;
     }
-    if (!started) {
-      _live = _Live.off;
-      _tapRecorded(_voice ?? _start());
-      notifyListeners();
+    // Called off while the microphone opened.
+    if (turn != _turn) {
+      unawaited(mic.cancel());
       return;
     }
-    _live = _Live.listening;
-    _waitForWords(take);
+    _take = null;
+    _clock = clock.stopwatch()..start();
+    _limit = Timer(maxTake, () => unawaited(_stop()));
+    _set(SwarmVoiceState.recording);
+  }
+
+  /// Ends the recording and keeps it; true once there is a take to send.
+  Future<bool> _stop() async {
+    if (_state != SwarmVoiceState.recording) return _take != null;
+    final turn = _turn;
+    _limit?.cancel();
+    _clock?.stop();
+    // Held while the recorder finishes: no second stop, X or Send meanwhile.
+    _set(SwarmVoiceState.held);
+    final take = await _recorder!.stop();
+    if (turn != _turn || _disposed) return false;
+    if (take == null) {
+      _end();
+      _notice = nothingRecorded;
+      _set(SwarmVoiceState.off);
+      return false;
+    }
+    _take = take;
     notifyListeners();
-  }
-
-  /// Starts [idle] over: a take that hears no new word in it is called off.
-  void _waitForWords(int take) {
-    _liveIdle?.cancel();
-    _liveIdle = Timer(idle, () {
-      if (take != _liveTake || _live != _Live.listening) return;
-      _stoppedTimer = Timer(stoppedLinger, () {
-        _stoppedTimer = null;
-        if (!_disposed) notifyListeners();
-      });
-      _offLive();
-    });
-  }
-
-  /// Every word the recognizer has heard so far, into the draft after
-  /// [_liveFrom]: those not already in it, which — after an edit — are the
-  /// ones past what the recognizer said then and says still, however it has
-  /// revised it since. A spoken word may show twice; none is lost.
-  void _liveWords(int take, String text) {
-    if (take != _liveTake || _live == _Live.off) return;
-    final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
-    final now = draft();
-    if (now != _liveShown) {
-      _liveFrom = now;
-      _liveBase = _liveHeard;
-    }
-    final heard = words.toList();
-    final changed = heard.join(' ') != _liveHeard.join(' ');
-    _liveHeard = heard;
-    final kept = _sameStart(_liveBase, heard);
-    _liveShown = _joined(_liveFrom, heard.skip(kept).join(' '));
-    if (_liveShown != now) write(_liveShown);
-    if (changed && _live == _Live.listening) _waitForWords(take);
-  }
-
-  /// How many words [a] and [b] begin with alike, case and punctuation aside.
-  static int _sameStart(List<String> a, List<String> b) {
-    String plain(String word) => word.toLowerCase().replaceAll(
-      RegExp(r'[^\p{L}\p{N}]', unicode: true),
-      '',
-    );
-    var same = 0;
-    while (same < a.length &&
-        same < b.length &&
-        plain(a[same]) == plain(b[same])) {
-      same++;
-    }
-    return same;
-  }
-
-  /// [stop]: asks the recognizer to stop — its last words, then its end
-  /// ([_liveEnded]), with the words left in the box.
-  void _endLive() {
-    final dictation = this.dictation;
-    if (_live != _Live.listening || dictation == null) return;
-    final take = _liveTake;
-    _live = _Live.ending;
-    _stopLiveTimers();
-    _liveEnd = Timer(_endWait, () {
-      if (take != _liveTake) return;
-      unawaited(dictation.cancel());
-      _liveEnded(take, SwarmDictationEnd.failed);
-    });
-    notifyListeners();
-    unawaited(dictation.stop());
-  }
-
-  /// The recognizer has stopped, as [stop] or [send] asked or because it
-  /// cannot go on: its words stay in the box, and only [send]'s are posted.
-  /// No notice after a stop with words in the box, however the recognizer's
-  /// last session ended.
-  void _liveEnded(int take, SwarmDictationEnd end) {
-    if (take != _liveTake || _live == _Live.off) return;
-    final stopped = _live == _Live.ending && draft().trim().isNotEmpty;
-    final send = _sending != null && _live == _Live.ending;
-    _sending = null;
-    _liveTake++;
-    _live = _Live.off;
-    _stopLiveTimers();
-    _liveLevel.value = 0;
-    if (send && stopped) post();
-    _setLiveNotice(switch (end) {
-      _ when send && !stopped => nothingSent,
-      _ when stopped => null,
-      SwarmDictationEnd.failed => VoiceNotice.notTranscribed,
-      _ when _liveHeard.isEmpty => VoiceNotice.nothingHeard,
-      _ => null,
-    });
-    notifyListeners();
-  }
-
-  /// Calls off the recognizer's take, whatever it is doing: the words already
-  /// shown stay in the draft, and nothing is sent.
-  void _offLive() {
-    if (_live == _Live.off) return;
-    _sending = null;
-    final listened = _live != _Live.asking;
-    _liveTake++;
-    _live = _Live.off;
-    _stopLiveTimers();
-    _liveLevel.value = 0;
-    if (listened) unawaited(dictation?.cancel());
-    if (!_disposed) notifyListeners();
-  }
-
-  void _stopLiveTimers() {
-    _liveEnd?.cancel();
-    _liveIdle?.cancel();
-    _liveEnd = _liveIdle = null;
-  }
-
-  /// A notice of the recognizer's, which goes by itself as the terminal's do.
-  void _setLiveNotice(String? notice) {
-    _liveNoticeTimer?.cancel();
-    _liveNoticeTimer = null;
-    _liveNotice = notice;
-    if (notice == null) return;
-    _liveNoticeTimer = Timer(VoiceInputController.noticeLinger, () {
-      _liveNotice = null;
-      if (!_disposed) notifyListeners();
-    });
-  }
-
-  /// [words] after [draft], a space between them unless the draft ends in one.
-  static String _joined(String draft, String words) {
-    if (words.isEmpty) return draft;
-    final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
-    return '$draft${spaced ? '' : ' '}$words';
-  }
-
-  void _lifecycleChanged(AppLifecycleState state) {
-    switch (state) {
-      case AppLifecycleState.resumed:
-        _inFront = true;
-        _release(true);
-        _back();
-      // ⚠️ Kept, not thrown away: the microphone permission prompt itself
-      // leaves the app inactive, and so do Control Center and a call's banner,
-      // and the take asked for must survive them. Only its ending waits.
-      //
-      // The recognizer's take is not, once it listens: it has no prompt left
-      // to survive, and what it hears goes to be recognized at once.
-      case AppLifecycleState.inactive:
-        _inFront = false;
-        if (_live != _Live.asking) _offLive();
-      case AppLifecycleState.hidden ||
-          AppLifecycleState.paused ||
-          AppLifecycleState.detached:
-        _inFront = false;
-        hide();
-    }
-  }
-
-  /// The app is back in front: a take that reached its limit meanwhile ends
-  /// now.
-  void _back() {
-    final voice = _voice;
-    if (voice == null || voice.status != VoiceInputStatus.listening) return;
-    if (!_limitReached) return;
-    _limitReached = false;
-    _finish(voice);
-  }
-
-  /// The take reached [VoiceInputController.maxTake]: it ends into the box,
-  /// as a tap would — once the app is in front, never behind a prompt.
-  void _limit(VoiceInputController voice) {
-    if (_inFront) {
-      _finish(voice);
-    } else {
-      _limitReached = true;
-    }
-  }
-
-  /// Whether a take may go to be transcribed, asked once its microphone has
-  /// closed: at once in front; behind a system prompt, once the app is back —
-  /// and never if it goes away instead ([hide]).
-  ///
-  /// ⚠️ Asked again here, not only as the take ends: the microphone takes a
-  /// moment to close, and Control Center can come down in it.
-  Future<bool> _mayTranscribe() async {
-    while (!_inFront) {
-      if (!await (_held ??= Completer()).future) return false;
-    }
     return true;
   }
 
-  /// Lets a take held by [_mayTranscribe] go to be transcribed, or drops it.
-  void _release(bool go) {
-    final held = _held;
-    _held = null;
-    held?.complete(go);
+  Future<void> _send() async {
+    if (!await _stop()) return;
+    final take = _take!, turn = _turn;
+    _notice = null;
+    _set(SwarmVoiceState.sending);
+    final (:sent, :notice) = await post(take);
+    if (turn != _turn || _disposed) return;
+    _notice = notice;
+    if (!sent) {
+      _set(SwarmVoiceState.held);
+      return;
+    }
+    _end();
+    _set(SwarmVoiceState.off);
   }
 
-  /// Ends the take, its words into the draft. A take that fails keeps the
-  /// draft as it was and leaves its [notice]. Nothing is sent.
-  void _finish(VoiceInputController voice) {
-    unawaited(
-      voice.submit((words) async {
-        write(_joined(draft(), words));
-        return true;
-      }),
-    );
+  void _end() {
+    _turn++;
+    _limit?.cancel();
+    _limit = null;
+    _clock = null;
+    _take = null;
   }
 
-  void _changed() {
-    if (_voice?.status != VoiceInputStatus.listening) _limitReached = false;
+  void _watchApp() => _lifecycle ??= AppLifecycleListener(
+    onStateChange: (state) {
+      if (state == AppLifecycleState.hidden ||
+          state == AppLifecycleState.paused ||
+          state == AppLifecycleState.detached) {
+        hide();
+      }
+    },
+  );
+
+  void _set(SwarmVoiceState state) {
+    if (_disposed) return;
+    _state = state;
     notifyListeners();
   }
 
-  /// Throws away a take still under way: the microphone closes with the chat.
   @override
   void dispose() {
     _disposed = true;
-    _offLive();
-    _liveNoticeTimer?.cancel();
-    _stoppedTimer?.cancel();
-    _liveLevel.dispose();
-    _release(false);
+    final recording =
+        _state == SwarmVoiceState.recording ||
+        _state == SwarmVoiceState.starting;
+    _end();
     _lifecycle?.dispose();
-    if (_voice case final voice?) {
-      voice.removeListener(_changed);
-      voice.dispose();
+    final mic = _recorder;
+    if (mic != null) {
+      unawaited(() async {
+        if (recording) await mic.cancel();
+        await mic.dispose();
+      }());
     }
     super.dispose();
   }
 }
 
 /// The composer's mic: a 36pt circle in a 44pt target, like the card's other
-/// round buttons. A tap starts a take; a long press picks the language, from
-/// the terminal's list. While a take is under way the composer shows
-/// [SwarmVoiceRow] in its place, so the mic draws no live face of its own.
+/// round buttons. A tap starts a voice message; a long press picks the
+/// language its words are heard in, from the terminal's list. While a take is
+/// under way the composer shows [SwarmVoiceRow] in its place.
 class SwarmVoiceMic extends StatelessWidget {
   const SwarmVoiceMic({super.key, required this.voice});
 
@@ -628,7 +293,7 @@ class SwarmVoiceMic extends StatelessWidget {
       enabled: true,
       onTap: talk,
       onLongPress: chooseLanguage,
-      label: off ? 'Voice input is off' : 'Talk',
+      label: off ? 'Voice input is off' : 'Record',
       onLongPressHint: 'Choose language',
       excludeSemantics: true,
       child: GestureDetector(
@@ -649,17 +314,14 @@ class SwarmVoiceMic extends StatelessWidget {
   }
 }
 
-/// The card's toolbar while a take is under way (Tony, 11-01): cancel, the
-/// wave, stop and Send — no +, Tag or mic.
+/// The card's toolbar while a voice message is under way (Dee, 11-04):
 ///
-/// - Opening ([VoiceMicFace.starting]): cancel, a flat wave and Send off.
-/// - Listening: cancel, the wave following [SwarmVoice.level], stop, and
-///   Send ([SwarmVoice.send]) — with the phone's recognizer only once the box
-///   has words; a recording's reach it only as it ends.
-/// - Busy after stop (the recognizer stopping, or the recording being
-///   transcribed): cancel, the terminal's busy face where stop was, Send off.
-/// - Sending ([SwarmVoice.sending]): Send's spinner, and nothing else takes
-///   a tap until the post has gone.
+///     ( X )   ● 0:14   ıllıllıııllıı.ılı           ( ↑ )
+///
+/// X throws the take away; the red dot and the time run while it records,
+/// and the wave follows [SwarmVoice.level]. A kept take shows its length with
+/// the dot and the wave at rest. Send posts it, with a spinner until it has
+/// gone, and nothing else takes a tap meanwhile.
 ///
 /// Every label is one word: VoiceOver reads a label aloud, and a sentence
 /// read into an open microphone lands in the take.
@@ -668,23 +330,23 @@ class SwarmVoiceRow extends StatelessWidget {
 
   final SwarmVoice voice;
 
-  /// The composer could post now, words aside: New message has a chat
-  /// picked and no post on its way.
+  /// The composer could post now: New message has a chat picked and no post
+  /// on its way.
   final bool canPost;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final face = voice.face;
     final fill = tty.text.withValues(alpha: 0.08);
-    final sending = voice.sending;
+    final sending = voice.state == SwarmVoiceState.sending;
+    final recording = voice.state == SwarmVoiceState.recording;
     final canSend = canPost && voice.canSend;
     return Row(
       children: [
         _VoiceButton(
           key: const ValueKey('swarm-voice-cancel'),
-          label: 'Cancel',
-          onTap: sending ? null : voice.cancel,
+          label: 'Discard',
+          onTap: sending ? null : voice.discard,
           child: _VoiceRound(
             fill: fill,
             child: Icon(
@@ -694,51 +356,27 @@ class SwarmVoiceRow extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: AppSpace.xs),
+        const SizedBox(width: AppSpace.s),
+        Container(
+          key: const ValueKey('swarm-voice-dot'),
+          width: AppSpace.s,
+          height: AppSpace.s,
+          decoration: BoxDecoration(
+            color: recording ? tty.red : AppPalette.textFaint,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: AppSpace.s),
+        _TakeClock(voice: voice),
+        const SizedBox(width: AppSpace.s),
         Expanded(
           child: SwarmVoiceWave(
             key: const ValueKey('swarm-voice-wave'),
-            level: face == VoiceMicFace.listening ? voice.level : null,
-            flat: face != VoiceMicFace.listening,
+            level: recording ? voice.level : null,
+            flat: !recording,
           ),
         ),
         const SizedBox(width: AppSpace.xs),
-        switch (face) {
-          _ when sending => const SizedBox(width: 44),
-          VoiceMicFace.listening => _VoiceButton(
-            key: const ValueKey('swarm-voice-stop'),
-            label: 'Stop',
-            onTap: voice.stop,
-            child: _VoiceRound(
-              fill: fill,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  color: AppPalette.textPrimary,
-                  borderRadius: BorderRadius.circular(SwarmComposer.stopRadius),
-                ),
-              ),
-            ),
-          ),
-          VoiceMicFace.starting || null => const SizedBox(width: 44),
-          final face => Semantics(
-            key: const ValueKey('swarm-voice-busy'),
-            label: 'Working',
-            excludeSemantics: true,
-            child: SizedBox.square(
-              dimension: 44,
-              child: Center(
-                child: SizedBox.square(
-                  dimension: 36,
-                  child: FittedBox(
-                    child: VoiceMicCore(face: face, dead: false),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        },
         SwarmRoundButton(
           key: const ValueKey('swarm-voice-send'),
           label: 'Send',
@@ -767,6 +405,46 @@ class SwarmVoiceRow extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// The take's time beside the red dot: it runs, a second at a time, only
+/// while the take records.
+class _TakeClock extends StatefulWidget {
+  const _TakeClock({required this.voice});
+
+  final SwarmVoice voice;
+
+  @override
+  State<_TakeClock> createState() => _TakeClockState();
+}
+
+class _TakeClockState extends State<_TakeClock> {
+  Timer? _tick;
+
+  @override
+  Widget build(BuildContext context) {
+    final recording = widget.voice.state == SwarmVoiceState.recording;
+    if (recording && _tick == null) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!recording) {
+      _tick?.cancel();
+      _tick = null;
+    }
+    return Text(
+      swarmVoiceLength(widget.voice.length),
+      key: const ValueKey('swarm-voice-time'),
+      style: AppType.caption(color: AppPalette.textPrimary)
+          .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+    );
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
   }
 }
 
@@ -999,4 +677,3 @@ class _WavePainter extends CustomPainter {
 }
 
 /// Where [SwarmVoice]'s take with the phone's recognizer is.
-enum _Live { off, asking, listening, ending }
