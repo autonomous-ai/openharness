@@ -1234,7 +1234,8 @@ model SuperTabReadMark {
   updatedAt      DateTime
 
   @@index([tabId, personId, updatedAt])
-  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  /// A mark untouched for 180 days goes: by this index's expiry (superTabs/readMarks.ts ensureReadMarkExpiry), or where the
+  /// database refuses it, by the worker's sweep (startReadMarkSweep). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
 }
 

@@ -238,6 +238,30 @@ describe('the usage-receipt sweep\'s done check (lib/productUsageReceiptSweep.ts
   })
 })
 
+describe('the read-mark sweep where the expiry is refused (superTabs/readMarks.ts sweepReadMarks)', () => {
+  // backend/AGENTS.md rule 3: every 30 s, one chunk of the oldest marks by the read_mark_expiry index, then exactly those by _id
+  // (#2923: a delete on both _id and the range was planned on the range's index and examined every match).
+  it('reads one chunk of the oldest marks by read_mark_expiry and deletes them by _id, examining only those', async () => {
+    const { READ_MARK_EXPIRY_MS, sweepReadMarks } = await import('../src/superTabs/readMarks.js')
+    const now = new Date(NOW)
+    const mark = (n: number, ageMs: number) => ({ id: `plan-mark-${n}`, tabId: 'tab-plan', personId: 'p', conversationId: `c${n}`, sequence: 1,
+      updatedAt: new Date(NOW - ageMs) })
+    // 40 live marks and 10 past 180 days: a read the index does not bound examines them all.
+    await db.superTabReadMark.createMany({ data: [...Array.from({ length: 40 }, (_, i) => mark(i, DAY)),
+      ...Array.from({ length: 10 }, (_, i) => mark(100 + i, READ_MARK_EXPIRY_MS + (i + 1) * DAY))] })
+    let removed = 0
+    const entries = await profiled(db, async () => { removed = await sweepReadMarks(db, now, 4) })
+    expect(removed).toBe(4)
+    const [found] = reads(entries, 'SuperTabReadMark', ['updatedAt'], ['_id'])
+    expect(found?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ updatedAt: 1/)
+    expect(found!.keysExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(5)
+    expect(found!.docsExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(4)
+    const [removal] = reads(entries, 'SuperTabReadMark', ['_id', 'updatedAt'])
+    expect(removal?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ _id: 1/)
+    expect(removal!.docsExamined, JSON.stringify(plan([removal!]))).toBeLessThanOrEqual(4)
+  })
+})
+
 // Dee, #1891; ENGINEERING.md 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
 // mark's index, equality on its first two fields and the activity range last, newest first and capped.
 describe('the pull request watch', () => {
