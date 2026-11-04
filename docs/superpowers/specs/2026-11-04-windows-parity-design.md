@@ -108,7 +108,8 @@ Before: a missing engine stops the launch. After: Harness installs it, then star
 - **Which engines.** npm today: Claude Code, Codex, Pi, Command Code, Kilo, Copilot. The others use
   `curl | bash` (Cursor, OpenCode, oh-my-pi, Hermes, Devin, Muse, Amp, Grok, Antigravity). For each, check the
   vendor's documented Windows install and run it on the PC. An engine with no official Windows install stays
-  refused, by name. Hermes gets a hook runner only if it gets an install.
+  refused, by name. Hermes has one (`install.ps1`), so it has a hook runner too: its home on Windows is
+  `%LOCALAPPDATA%\hermes`, and it splits a hook's line itself (`shlex.split(posix=False)`), as `cmd` quotes it.
 - **Runner.** New `engines/kit/windowsInstall.ts`, with the same result shape as `createNativeInstallations`,
   whose evidence walks POSIX paths and cannot be reused. It takes:
   - one claim per engine, an exclusive-create file holding the pid and its `w:<FILETIME>` start marker, so a dead
