@@ -138,7 +138,6 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            needsHuman: (_) => 0,
             onSelect: c.select,
             attention: attention,
           ),
@@ -322,7 +321,7 @@ void main() {
       testWidgets('Activity at 1 and the project chat open: the project shows '
           'no number, never more than Activity', (tester) async {
         final server = projectServer();
-        (server.state['conversations'] as List).addAll([
+        (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
           for (final (id, number) in [('stuck', 20), ('asks', 21)])
             {
               ...conversationFixture(id, id),
@@ -342,6 +341,8 @@ void main() {
         c.select('lead');
         await tester.pumpAndSettle();
         expect(activity.count, 1);
+        // Before #2927 the row said 3: the task's decision and two tasks
+        // waiting on no one named.
         expect(projectNumber(), findsNothing);
         await close(tester, c);
       });
