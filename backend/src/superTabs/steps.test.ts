@@ -693,6 +693,27 @@ describe('an Engineer waiting on its own steps', () => {
     })
   }
 
+  // Diego, 2026-11-04 (#2578): a step lost inside the PM's poll left its task recorded as waiting on it, so the same poll woke
+  // the PM with a false stall and the Engineer lost its task 30 seconds later instead of after its 30 minutes.
+  it('gets its 30 minutes when its Reviewer goes quiet and the step is lost in the PM\'s poll, with no stall woken', () => {
+    const { f, id, reviewFor, task } = reviewing()
+    reviewFor(36)
+    f.tick(QUIET_RUNNING_MS + 5 * MIN)
+    const rows = sweepForLead(f.state, f.now)
+    expect(f.group(id).assignment).toMatchObject({ status: 'lost' })
+    expect(rows.filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(30_000)
+    expect(sweepForLead(f.state, f.now).filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(QUIET_RUNNING_MS - 30_000 - MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
+
   it('a step in Ready waits on its task owner and never wakes the PM as a stalled review', () => {
     const { f, id, stepStatus } = reviewing()
     stepStatus('review')
