@@ -2875,6 +2875,27 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // Task #2800, review of #2977: the server renews the Swarm host's delivery push lease each minute.
+  it('hands the backend\'s __deliveries_lease to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: '__deliveries_lease' }]))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__deliveries_lease', payload: {} } })
+    socket.handleLocalFrame('local:swarm', { type: '__deliveries_lease', payload: {} })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(1)
+    expect(frames.filter((f) => f.type === '__deliveries_lease')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   // Spec 2026-11-02-poll-cost Part 4.2: the server says a Lead's terminal request waits for this machine.
   it('hands the backend\'s __terminal_waiting to the Swarm host, never to the windows, and only the backend\'s', async () => {
     const socket = relaySocket('token')

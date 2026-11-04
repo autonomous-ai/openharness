@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { stableId } from './model.js'
-import { baseRule, boardRule, cacheDigest, dormantAgentRule, lightDormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import { baseRule, boardRule, cacheDigest, dormantAgentRule, lightDormantAgentRule, feedRule, machineFeedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
 import type { GroupData, Part, PartKind, SwarmParts } from './parts/index.js'
 import { projectLightGroup } from './parts/lightSelect.js'
 import type { SwarmDelta } from './parts/load.js'
@@ -161,8 +161,8 @@ describe('lightDormantAgentRule (B4, #2597)', () => {
 })
 
 describe('feedRule (spec 2026-11-02 poll cost, Part 1.1)', () => {
-  it('keeps tombstones, dormant groups and readAt, takes the newer version', () => {
-    const held = { from: 500, parts: [part('group', 'g1', 1, { a: 1 }), part('machine', 'm1', 1, {}, { readAt: 900 })] }
+  it('keeps tombstones and dormant groups, takes the newer version, and leaves machine parts to the machine feed (#2783)', () => {
+    const held = { from: 500, parts: [part('group', 'g1', 1, { a: 1 })] }
     const next = feedRule.apply(held, delta([
       part('group', 'g1', 2, { a: 2 }),
       part('group', 'g2', 3, {}, { dormant: true }),
@@ -171,10 +171,18 @@ describe('feedRule (spec 2026-11-02 poll cost, Part 1.1)', () => {
       part('group', 'g1', 1, { stale: true }),
     ])) as { from: number; parts: Part[] }
     expect(next.from).toBe(500)
-    expect(next.parts.map(p => [p.kind, p.key, p.version]).sort()).toEqual([['agent', 'a9', 4], ['group', 'g1', 2], ['group', 'g2', 3], ['machine', 'm1', 2]])
+    expect(next.parts.map(p => [p.kind, p.key, p.version]).sort()).toEqual([['agent', 'a9', 4], ['group', 'g1', 2], ['group', 'g2', 3]])
     expect(next.parts.find(p => p.key === 'a9')!.deleted).toBe(true)
     expect(next.parts.find(p => p.key === 'g2')!.dormant).toBe(true)
-    expect(next.parts.find(p => p.key === 'm1')!.readAt).toBe(2_000)
+  })
+
+  it('the machine feed keeps readAt and only machine parts', () => {
+    const held = { from: 500, parts: [part('machine', 'm1', 1, {}, { readAt: 900 })] }
+    const next = machineFeedRule.apply(held, delta([part('machine', 'm1', 2, {}, { readAt: 2_000 }), part('group', 'g1', 2, {})])) as { from: number; parts: Part[] }
+    expect(next.parts.map(p => [p.kind, p.key, p.version])).toEqual([['machine', 'm1', 2]])
+    expect(next.parts[0]!.readAt).toBe(2_000)
+    expect(machineFeedRule.kinds).toEqual(['machine'])
+    expect([...feedRule.kinds].sort()).toEqual(['agent', 'group', 'head', 'member', 'progress', 'start'])
   })
 
   it('returns what it holds when nothing is newer', () => {

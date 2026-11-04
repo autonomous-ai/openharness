@@ -61,6 +61,16 @@ NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/observeReads.ts
 ```
 
+To see what one `GET changes` poll costs MongoDB with many pollers on one backend process (task #2783): every person's
+windows and every worker agent poll together after nothing, one machine reading, every machine reading and one post, and
+it prints per poll the operations, part reads, bytes MongoDB sent, database and wall time, and by collection per round.
+`--windows N` (3), `--rounds N` (5), `--light` (`machines=light`), and the benchmark's options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/changesPollCost.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash

@@ -5,18 +5,9 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/voice_recorder.dart';
 
+import 'support/fake_voice_recorder.dart';
 import 'support/super_tab_fixture.dart';
-
-/// The takes a mic started, as (conversation, thread root).
-class _Recorder implements SuperTabVoiceRecorder {
-  final takes = <(String, String?)>[];
-
-  @override
-  Future<void> start({required String conversationId, String? root}) async =>
-      takes.add((conversationId, root));
-}
 
 /// Huy and Scholes, 11-04: the Desktop and web composer is the phone's. One
 /// rounded box, the text on top and one row under it: + (attach), @ Tag, the
@@ -72,7 +63,7 @@ void main() {
     WidgetTester tester, {
     String chat = 'offline',
     String? thread,
-    SuperTabVoiceRecorder? recorder,
+    FakeVoiceRecorder? recorder,
   }) async {
     final c = server().controller();
     addTearDown(c.dispose);
@@ -89,7 +80,7 @@ void main() {
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
-            voiceRecorder: recorder,
+            voiceRecorder: recorder == null ? null : () => recorder,
           ),
         ),
       ),
@@ -179,7 +170,7 @@ void main() {
 
     testWidgets('puts the mic left of send, and a click starts a take for the '
         'chat', (tester) async {
-      final recorder = _Recorder();
+      final recorder = FakeVoiceRecorder();
       await show(tester, recorder: recorder);
       final mic = tester.getRect(key('super-composer-mic'));
       expect(mic.right, lessThanOrEqualTo(tester.getRect(send()).left));
@@ -189,7 +180,8 @@ void main() {
       );
       await tester.tap(key('super-composer-mic'));
       await tester.pump();
-      expect(recorder.takes, [('offline', null)]);
+      expect(recorder.calls, ['allowed', 'start']);
+      expect(key('super-voice-row'), findsOneWidget);
       // A take is never dictation: the box stays as it was.
       expect(
         tester
@@ -222,7 +214,7 @@ void main() {
 
     testWidgets('Tab goes from the text to +, @ Tag, New session, the mic and '
         'send, in the row\'s order', (tester) async {
-      await show(tester, recorder: _Recorder());
+      await show(tester, recorder: FakeVoiceRecorder());
       await tester.enterText(key('super-message-composer'), 'Ready');
       await tester.pump();
       expect(focusedIn(tester, key('super-message-composer')), isTrue);
@@ -299,7 +291,7 @@ void main() {
 
     testWidgets('puts the mic left of send, and a click starts a take for the '
         'thread', (tester) async {
-      final recorder = _Recorder();
+      final recorder = FakeVoiceRecorder();
       await show(tester, thread: 'message-3', recorder: recorder);
       expect(
         tester.getRect(key('super-thread-mic')).right,
@@ -307,7 +299,8 @@ void main() {
       );
       await tester.tap(key('super-thread-mic'));
       await tester.pump();
-      expect(recorder.takes, [('offline', 'message-3')]);
+      expect(recorder.calls, ['allowed', 'start']);
+      expect(key('super-thread-voice-row'), findsOneWidget);
     });
 
     testWidgets('@ Tag types @ at the caret and opens the tag list', (

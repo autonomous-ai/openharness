@@ -446,7 +446,18 @@ void main() {
       expect(api.reads, greaterThanOrEqualTo(9));
       expect(tester.state(find.byType(SharedHarnessPanel)), same(panel));
       expect(f.app.panes.single, same(pane));
-      expect(find.text('Retry'), findsNothing);
+      // No Retry where the terminal is; its chat beside it, in the right pane
+      // (#2792), answers for its own connection.
+      expect(
+        find.text('Retry').evaluate().length,
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('super-right-pane')),
+              matching: find.text('Retry'),
+            )
+            .evaluate()
+            .length,
+      );
       await _close(tester, f, c);
     },
   );

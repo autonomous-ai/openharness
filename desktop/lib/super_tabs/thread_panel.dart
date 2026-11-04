@@ -14,13 +14,14 @@ import 'composer_toggle.dart';
 import 'day_pill.dart';
 import 'reply_box.dart';
 import 'controller.dart';
-import 'message_row.dart' show SuperTabMessageRow;
+import 'message_row.dart' show SuperTabMessageHighlight, SuperTabMessageRow;
 import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
-import 'voice_recorder.dart';
+import 'voice_row.dart';
+import 'voice_take.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -34,7 +35,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.sessionActivity,
     this.machineName,
     this.onScroll,
-    this.voiceRecorder,
+    this.voice,
   });
 
   final SuperTabController controller;
@@ -57,8 +58,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// so a device scrolling this Swarm scrolls the thread, not the chat.
   final ValueChanged<ScrollController?>? onScroll;
 
-  /// What the reply box's mic records with; without it, no mic shows.
-  final SuperTabVoiceRecorder? voiceRecorder;
+  /// The composers' voice message (the view's one take); without it, no mic
+  /// shows. Its row takes the reply box's row while it is this thread's.
+  final SuperTabVoiceTake? voice;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -94,13 +96,65 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   SuperTabController get c => widget.controller;
 
+  // The reply the thread was opened at (#2814): its row, and the one lit.
+  final _targetKey = GlobalKey();
+  String? _target, _lit;
+  Timer? _litTimer;
+  int _jumps = 0;
+
   /// [row] with its message's time, for the day pill over the list. Keyed
   /// by the message, so the list keeps each row's place as replies arrive.
   Widget _dated(SuperTabMessage message, Widget row) => SuperTabDayMark(
     key: ValueKey('super-thread-day-${message.id}'),
     time: message.createdAt,
-    child: row,
+    child: KeyedSubtree(
+      key: message.id == _target ? _targetKey : null,
+      child: SuperTabMessageHighlight(on: message.id == _lit, child: row),
+    ),
   );
+
+  /// The reply the thread was opened at ([SuperTabController.threadTarget]),
+  /// once [messages] hold it: brought into view and lit for two seconds, and
+  /// the list reads on from it rather than following the end.
+  void _takeTarget(List<SuperTabMessage> messages) {
+    final target = c.threadTarget;
+    if (target == null || target.root != widget.root) return;
+    final at = messages.indexWhere((m) => m.id == target.messageId);
+    if (at < 0) return;
+    c.threadTarget = null;
+    final jump = ++_jumps;
+    // After the frame: a panel just opened has no list to hold before it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || jump != _jumps) return;
+      _scroll.holdPlace();
+      _litTimer?.cancel();
+      setState(() => _target = _lit = target.messageId);
+      _litTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _lit = null);
+      });
+      _reveal(jump, at / messages.length, 0);
+    });
+  }
+
+  /// The list is lazy: jump near the target's place ([at], its share of the
+  /// thread) until its row is built, then bring it into view.
+  void _reveal(int jump, double at, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || jump != _jumps || !_scroll.hasClients) return;
+      if (_targetKey.currentContext case final row?) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        return;
+      }
+      if (attempt > 20) return;
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        position.minScrollExtent +
+            at * (position.maxScrollExtent - position.minScrollExtent),
+      );
+      _reveal(jump, at, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
 
   /// The conversation this thread is in.
   String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
@@ -135,6 +189,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
+    _litTimer?.cancel();
     widget.onScroll?.call(null);
     _scroll.dispose();
     _composer.dispose();
@@ -338,6 +393,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final messages = c.threadMessages(widget.root);
+    _takeTarget(messages);
     final root = messages.where((m) => m.id == widget.root).firstOrNull;
     final replies = messages.where((m) => m.id != widget.root).toList();
     final pending = c
@@ -576,9 +632,34 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
     onTag: _promptTag,
-    onMic: switch (widget.voiceRecorder) {
-      final recorder? => () => unawaited(
-        recorder.start(conversationId: _conversationId, root: widget.root),
+    onMic: switch (widget.voice) {
+      final voice? => () => voice.start(
+        conversationId: _conversationId,
+        root: widget.root,
+      ),
+      null => null,
+    },
+    voiceRow: switch (widget.voice) {
+      final voice? when voice.activeIn(_conversationId, widget.root) =>
+        SuperTabVoiceRow(
+          key: const ValueKey('super-thread-voice-row'),
+          take: voice,
+          discardKey: const ValueKey('super-thread-voice-discard'),
+          sendKey: const ValueKey('super-thread-voice-send'),
+        ),
+      _ => null,
+    },
+    voiceNotice: switch (widget.voice) {
+      final voice? => SuperTabVoiceNotice(
+        take: voice,
+        conversationId: _conversationId,
+        root: widget.root,
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.composerSide,
+          0,
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+        ),
       ),
       null => null,
     },

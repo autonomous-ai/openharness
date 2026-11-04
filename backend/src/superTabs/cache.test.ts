@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSwarmStamps, freeze, noteChange, readStamps, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
-import { feedRule, machinesRule, type PatchRule } from './cachePatch.js'
+import { machineFeedRule, machinesRule, type PatchRule } from './cachePatch.js'
 import { logger } from '../utils/logger.js'
 import type { MachineData, Part, PartKind } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
@@ -407,6 +407,21 @@ describe('a stale entry is patched, not loaded again (spec 2026-11-02, Phase 1)'
     expect(load).toHaveBeenCalledTimes(3)
   })
 
+  it('an entry nobody read since an earlier stamp does not drag a hot entry\'s delta back, and is still patched when read (#2783)', async () => {
+    const { stamps, delta, read, advance } = setup()
+    await read(rule(), 'main', 'cold')
+    await read(rule(), 'main', 'hot')
+    for (let i = 0; i < 3; i++) {
+      advance(20_000)
+      await stamps.bump('t1', ['main'])
+      await read(rule(), 'main', 'hot')
+    }
+    // From the hot entry's last refresh (1_040_000), not the cold one's (1_000_000), less the overlap.
+    expect(delta.mock.calls.map(c => c[1])).toEqual([970_000, 990_000, 1_010_000])
+    expect(await read(rule(), 'main', 'cold')).toEqual({ keys: ['g1', 'g2'] })
+    expect(delta.mock.calls.at(-1)![1]).toBe(970_000)
+  })
+
   it('readers of one Swarm at one stamp share one delta', async () => {
     const { stamps, delta, read } = setup()
     await read()
@@ -580,7 +595,7 @@ describe('the verify sample (spec 2026-11-02, "Checking it on prod")', () => {
     const cache = new SwarmCache(stamps, { verifyRate: 1, random: () => 0, delta: async () => ({ parts: [machine('m1', 2, { a: 2 })], head: null }) })
     let from = 100
     const load = vi.fn(async () => ({ from: from += 50, parts: [machine('m1', from > 200 ? 2 : 1, { a: from > 200 ? 2 : 1 })] }))
-    const read = async () => (await cache.at(['t1'])).get('t1', 'feed', 'all', load, feedRule)
+    const read = async () => (await cache.at(['t1'])).get('t1', 'machine-feed', 'all', load, machineFeedRule)
     await read()
     await stamps.bump('t1', ['machine'])
     from = 200
