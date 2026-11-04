@@ -87,16 +87,16 @@ String? _pill(WidgetTester tester, Key key) {
   return tester.widget<Text>(text.first).data;
 }
 
-ScrollController _chatScroll(WidgetTester tester) => tester
-    .widget<CustomScrollView>(
-      find.byWidgetPredicate(
-        (w) =>
-            w is CustomScrollView &&
-            w.key is PageStorageKey &&
-            '${(w.key as PageStorageKey).value}'.startsWith('super-messages-'),
-      ),
-    )
-    .controller!;
+/// The chat's message list.
+final _chatList = find.byWidgetPredicate(
+  (w) =>
+      w is CustomScrollView &&
+      w.key is PageStorageKey &&
+      '${(w.key as PageStorageKey).value}'.startsWith('super-messages-'),
+);
+
+ScrollController _chatScroll(WidgetTester tester) =>
+    tester.widget<CustomScrollView>(_chatList).controller!;
 
 ScrollController _threadScroll(WidgetTester tester) => tester
     .widget<ListView>(
@@ -143,6 +143,70 @@ String _rowInView(WidgetTester tester, {double margin = 200}) {
   throw StateError('no message row in view');
 }
 
+/// The chat's day lines saying [day] that are painted: neither hidden nor
+/// faded out under the pill.
+Iterable<Rect> _dayLines(WidgetTester tester, String day) sync* {
+  for (final element
+      in find.descendant(of: _chatList, matching: find.text(day)).evaluate()) {
+    var painted = true;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      if (widget is Visibility && !widget.visible ||
+          widget is Opacity && widget.opacity == 0) {
+        painted = false;
+      }
+      return painted && widget is! CustomScrollView;
+    });
+    final box = element.renderObject;
+    if (!painted || box is! RenderBox || !box.attached) continue;
+    yield box.localToGlobal(Offset.zero) & box.size;
+  }
+}
+
+/// At this place in the chat, one label at most says each day where the
+/// pill is: no day line under the pill, none repeating the pill's day.
+void _oneLabel(WidgetTester tester, List<String> days, String where) {
+  final pill = find.byKey(_chatPill);
+  if (pill.evaluate().isEmpty) return;
+  final shown = _pill(tester, _chatPill);
+  final rect = tester.getRect(pill);
+  for (final day in days) {
+    for (final line in _dayLines(tester, day)) {
+      expect(
+        line.overlaps(rect),
+        isFalse,
+        reason:
+            '$where: the "$day" day line at $line is under the pill at $rect',
+      );
+      expect(
+        day,
+        isNot(shown),
+        reason: '$where: the pill and a day line at $line both say "$day"',
+      );
+    }
+  }
+}
+
+/// The chat scrolled so that Tuesday's day line sits [offset] pixels from
+/// the list's top.
+Future<void> _tuesdayLineAt(
+  WidgetTester tester,
+  ScrollController scroll,
+  String tuesday,
+  double offset,
+) async {
+  final listTop = tester.getTopLeft(_chatList).dy;
+  for (var i = 0; i < 4; i++) {
+    final line = _dayLines(tester, tuesday).firstOrNull;
+    if (line == null) break;
+    await _scrollTo(
+      tester,
+      scroll,
+      scroll.position.pixels + line.top - listTop - offset,
+    );
+  }
+}
+
 Future<void> _open(
   WidgetTester tester,
   SuperTabController c, {
@@ -174,6 +238,20 @@ Future<double> _scrollBackTo(
     await _scrollTo(tester, scroll, scroll.position.pixels - 40);
   }
   return start - scroll.position.pixels;
+}
+
+/// Writes what [picture] shows to [name].png in [shots], when it is set.
+Future<void> _shoot(WidgetTester tester, GlobalKey picture, String name) async {
+  if (shots == null) return;
+  await tester.runAsync(() async {
+    final boundary =
+        picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage(pixelRatio: 1.5);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(shots!).create(recursive: true);
+    await File('$shots/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
 }
 
 void main() {
@@ -285,6 +363,57 @@ void main() {
     await c.flush();
   });
 
+  testWidgets('scrolling across a day line never shows two day labels '
+      'where the pill is', (tester) async {
+    final c = _twoDays().controller();
+    addTearDown(c.dispose);
+    await _open(tester, c);
+    final tuesday = _day(tester, _tuesday), monday = _day(tester, _monday);
+    final days = [monday, tuesday];
+    final scroll = _chatScroll(tester);
+
+    // Monday at the top, Tuesday's day line a little below the pill.
+    await _scrollBackTo(tester, scroll, _chatPill, monday);
+    await _tuesdayLineAt(tester, scroll, tuesday, 80);
+    expect(_pill(tester, _chatPill), monday);
+    final start = scroll.position.pixels;
+
+    // Down past it two pixels at a time: the line meets the pill and the
+    // pill takes its place, then back up.
+    for (var moved = 0.0; moved <= 140; moved += 2) {
+      await _scrollTo(tester, scroll, start + moved);
+      _oneLabel(tester, days, 'down $moved');
+    }
+    expect(_pill(tester, _chatPill), tuesday);
+    for (var moved = 140.0; moved >= 0; moved -= 2) {
+      await _scrollTo(tester, scroll, start + moved);
+      _oneLabel(tester, days, 'up $moved');
+    }
+    expect(_pill(tester, _chatPill), monday);
+    // Below the pill, Tuesday's line says its day again.
+    expect(_dayLines(tester, tuesday), isNotEmpty);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  });
+
+  testWidgets("the day line's place keeps its size while the pill takes it", (
+    tester,
+  ) async {
+    final c = _twoDays().controller();
+    addTearDown(c.dispose);
+    await _open(tester, c);
+    final tuesday = _day(tester, _tuesday), monday = _day(tester, _monday);
+    final scroll = _chatScroll(tester);
+    await _scrollBackTo(tester, scroll, _chatPill, monday);
+    await _tuesdayLineAt(tester, scroll, tuesday, 80);
+    final row = _rowInView(tester, margin: 300), before = _topOf(tester, row);
+    await _scrollTo(tester, scroll, scroll.position.pixels + 70);
+    expect(_pill(tester, _chatPill), tuesday);
+    expect(_topOf(tester, row) - before, moreOrLessEquals(-70, epsilon: .5));
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  });
+
   for (final brightness in Brightness.values) {
     testWidgets('screenshots for review (${brightness.name})', (tester) async {
       final picture = GlobalKey();
@@ -309,21 +438,30 @@ void main() {
       await tester.pumpAndSettle();
 
       // Written before the checks, so main's run writes the "before" image.
-      if (shots != null) {
-        await tester.runAsync(() async {
-          final boundary =
-              picture.currentContext!.findRenderObject()!
-                  as RenderRepaintBoundary;
-          final image = await boundary.toImage(pixelRatio: 1.5);
-          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          await Directory(shots!).create(recursive: true);
-          await File('$shots/day-pill-${brightness.name}.png')
-              .writeAsBytes(bytes!.buffer.asUint8List());
-          image.dispose();
-        });
-      }
+      await _shoot(tester, picture, 'day-pill-${brightness.name}');
       expect(_pill(tester, _chatPill), monday);
       expect(_pill(tester, _threadPill), _day(tester, _tuesday));
+
+      // Tuesday's day line right where the pill is (Huy 11-04): one label,
+      // on a fill nothing reads through.
+      final tuesday = _day(tester, _tuesday);
+      await _tuesdayLineAt(tester, scroll, tuesday, 10);
+      await tester.pumpAndSettle();
+      await _shoot(tester, picture, 'day-pill-over-line-${brightness.name}');
+      _oneLabel(tester, [monday, tuesday], brightness.name);
+      for (final key in [_chatPill, _threadPill]) {
+        final fill = tester
+            .widget<DecoratedBox>(
+              find
+                  .descendant(
+                    of: find.byKey(key),
+                    matching: find.byType(DecoratedBox),
+                  )
+                  .first,
+            )
+            .decoration;
+        expect((fill as ShapeDecoration).color!.a, 1.0);
+      }
       await tester.pumpWidget(const SizedBox());
       await c.flush();
     });
