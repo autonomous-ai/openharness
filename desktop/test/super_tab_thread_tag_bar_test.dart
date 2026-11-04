@@ -115,4 +115,90 @@ void main() {
       await settle(tester);
     });
   });
+
+  group('the chat names a thread tag at its top', () {
+    testWidgets('1 new reply mentions you · Open opens the thread at the '
+        'reply, lit; then the row and the red number go', (tester) async {
+      final server = threads(1);
+      server.append('Later news in the chat.');
+      tagIn(server, 'message-2', 'message-1');
+      final c = await show(tester, server);
+      final attention = SuperTabAttention.of(c);
+      expect(attention.mentionsIn('lead'), 1);
+      expect(
+        find.descendant(
+          of: bar(),
+          matching: find.text('1 new reply mentions you · Open'),
+        ),
+        findsOneWidget,
+      );
+      expect(panel(), findsNothing);
+
+      await tester.tap(bar());
+      await tester.pump();
+      expect(c.openedThread?.root, 'message-1');
+      await tester.pump();
+      await tester.pump();
+      expect(panel(), findsOneWidget);
+      expect(litInPanel(tester, 'Reply to topic 1, @owner please look'), true);
+      await tester.pumpAndSettle();
+      expect(bar(), findsNothing);
+      expect(attention.mentionsIn('lead'), 0);
+      await settle(tester);
+    });
+
+    testWidgets('two threads: Open goes to the oldest first, then the next', (
+      tester,
+    ) async {
+      final server = threads(2);
+      tagIn(server, 'message-4', 'message-3');
+      tagIn(server, 'message-2', 'message-1');
+      final c = await show(tester, server);
+      expect(
+        find.descendant(
+          of: bar(),
+          matching: find.text('2 new replies mention you · Open'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(bar());
+      await tester.pumpAndSettle();
+      expect(c.openedThread?.root, 'message-1');
+      expect(
+        find.descendant(
+          of: bar(),
+          matching: find.text('1 new reply mentions you · Open'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(bar());
+      await tester.pumpAndSettle();
+      expect(c.openedThread?.root, 'message-3');
+      expect(bar(), findsNothing);
+      await settle(tester);
+    });
+
+    testWidgets('a thread read on another device clears the row', (
+      tester,
+    ) async {
+      final server = threads(1);
+      tagIn(server, 'message-2', 'message-1');
+      final c = await show(tester, server);
+      expect(bar(), findsOneWidget);
+      c.markThreadRead('lead', 'message-1', 2);
+      await tester.pumpAndSettle();
+      expect(bar(), findsNothing);
+      await settle(tester);
+    });
+
+    testWidgets('a tag in the main chat adds no thread row', (tester) async {
+      final server = threads(1);
+      server.append('A note for @owner in the chat.');
+      server.messages.last['author'] = peer;
+      server.tag('message-3', messageSequence: 3);
+      await show(tester, server);
+      expect(bar(), findsNothing);
+      await settle(tester);
+    });
+  });
 }
