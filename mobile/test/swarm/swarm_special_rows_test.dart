@@ -325,10 +325,8 @@ void main() {
           'thread': 'p2',
         };
         await show(tester, backend([root]));
-        expect(
-          textOf(tester, 'p2'),
-          contains("Let's build: Activity read fix"),
-        );
+        expect(textOf(tester, 'p2'), contains('Activity read fix'));
+        expect(textOf(tester, 'p2'), isNot(contains("Let's build")));
         expect(textOf(tester, 'p2'), isNot(contains('Proposal from ')));
         expect(
           find.byKey(const ValueKey('swarm-proposal-label')),

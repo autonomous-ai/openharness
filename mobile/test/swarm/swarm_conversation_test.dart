@@ -1159,6 +1159,12 @@ void main() {
       c.keepThreads([line('m1', 4, 6)]);
       expect(c.thread('m1')?.replies, 4);
       expect(told, 1);
+      // Its tag draws from the line too, so a changed state is a change.
+      c.keepThreads([
+        {...line('m1', 4, 6), 'ask': 'shipped'},
+      ]);
+      expect(c.thread('m1')?.askTag, '✓ Shipped');
+      expect(told, 2);
     });
 
     test('a chat the person can no longer read forgets its thread lines and '

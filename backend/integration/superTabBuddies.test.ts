@@ -214,7 +214,7 @@ describe('a Buddy through the store', () => {
     const sent = await propose()
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
     expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [], author: { kind: 'person', id: peer.sub },
-      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask }, text: "Let's build: Offline sync" })
+      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask }, text: 'Offline sync' })
     const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: row.id, replyTo: row.id } })
     expect(details).toMatchObject({ author: { kind: 'agent', id: agentId }, recipientIds: [f.lead],
       text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal' })

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 import 'package:harness/super_tabs/unread_line.dart';
 
@@ -109,10 +111,7 @@ void main() {
       );
       expect(avatar.identity, 'person:requester');
       expect(
-        find.descendant(
-          of: row,
-          matching: find.text("Let's build: Offline drafts"),
-        ),
+        find.descendant(of: row, matching: find.text('Offline drafts')),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('super-proposal-label')), findsNothing);
@@ -262,6 +261,195 @@ void main() {
     expect(find.byType(SuperTabShipRow), findsOneWidget);
     expect(find.text('Shipped: Offline drafts'), findsOneWidget);
     expect(find.text('Built by'), findsOneWidget);
+  });
+
+  // Dee, 2026-11-04 (#2552): an ask's row reads as its title alone, with where
+  // it stands after the time; older rows still carry the old prefix.
+  group('an ask row', () {
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
+        testWidgets('$kind "$text" shows the title alone', (tester) async {
+          final server = _server(kind);
+          server.messages.first
+            ..['text'] = text
+            ..['reactions'] = <dynamic>[];
+          await showView(tester, server);
+          expect(
+            find.descendant(
+              of: _row('root'),
+              matching: find.text('Offline drafts'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.textContaining("Let's build"), findsNothing);
+        });
+      }
+    }
+
+    for (final (ask, tag) in [
+      ('proposal', '✋ Proposal'),
+      ('on-it', '● On it'),
+      ('shipped', '✓ Shipped'),
+    ]) {
+      testWidgets('$ask shows $tag after the time, in its muted style', (
+        tester,
+      ) async {
+        final server = _server('buddy-proposal')..threadAsks['root'] = ask;
+        await showView(tester, server);
+        final shown = find.descendant(
+          of: _row('root'),
+          matching: find.text(tag),
+        );
+        expect(shown, findsOneWidget);
+        expect(
+          tester.widget<Text>(shown).style,
+          SwarmType.time(tester.element(shown)),
+        );
+        final time = find.descendant(
+          of: _row('root'),
+          matching: find.textContaining(RegExp(r'^\d+:\d\d')),
+        );
+        expect(
+          tester.getTopLeft(time).dx,
+          lessThan(tester.getTopLeft(shown).dx),
+        );
+        expect(
+          tester.getTopLeft(find.text('dee')).dx,
+          lessThan(tester.getTopLeft(time).dx),
+        );
+      });
+    }
+
+    testWidgets('has no tag once the PM has replied with no task', (
+      tester,
+    ) async {
+      await showView(tester, _server('buddy-proposal'));
+      for (final tag in ['✋ Proposal', '● On it', '✓ Shipped', 'Task']) {
+        expect(
+          find.descendant(of: _row('root'), matching: find.textContaining(tag)),
+          findsNothing,
+        );
+      }
+    });
+
+    testWidgets('tags a person\'s own message a task was opened from', (
+      tester,
+    ) async {
+      final server = _server('task-line');
+      server.messages.first.remove('source');
+      server.threadAsks['root'] = 'on-it';
+      await showView(tester, server);
+      expect(
+        find.descendant(of: _row('root'), matching: find.text('● On it')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a message that is no ask keeps its words and has no tag', (
+      tester,
+    ) async {
+      final server = _server('task-line');
+      server.messages.add({
+        'id': 'plain',
+        'conversationId': 'lead',
+        'thread': 'plain',
+        'sequence': 3,
+        'text': "Let's build: a shed",
+        'createdAt': '2026-11-03T09:30:00Z',
+        'author': {
+          'kind': 'person',
+          'id': 'requester',
+          'name': 'dee@example.com',
+        },
+      });
+      await showView(tester, server);
+      expect(find.text("Let's build: a shed"), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _row('plain'),
+          matching: find.textContaining('On it'),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('an agent\'s engine mark stays between its name and the time', (
+      tester,
+    ) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      (server.state['agents'] as List).add({
+        'id': 'pm',
+        'name': 'Lead',
+        'displayName': 'River',
+        'machineId': 'mac',
+        'harnessId': 'pm',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+      });
+      server.messages.first['author'] = {
+        'kind': 'agent',
+        'id': 'pm',
+        'name': 'Lead',
+      };
+      await showView(tester, server);
+      double left(Finder within) => tester.getTopLeft(within).dx;
+      final name = find.descendant(
+        of: _row('root'),
+        matching: find.text('River'),
+      );
+      final mark = find.descendant(
+        of: _row('root'),
+        matching: find.byType(EngineMark),
+      );
+      final tag = find.descendant(
+        of: _row('root'),
+        matching: find.text('● On it'),
+      );
+      expect(left(name), lessThan(left(mark)));
+      expect(left(mark), lessThan(left(tag)));
+    });
+
+    testWidgets('keeps its header when the same person wrote just before', (
+      tester,
+    ) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      server.messages.insert(0, {
+        'id': 'before',
+        'conversationId': 'lead',
+        'thread': 'before',
+        'sequence': 0,
+        'text': 'A word first',
+        'createdAt': '2026-11-03T08:59:00Z',
+        'author': {
+          'kind': 'person',
+          'id': 'requester',
+          'name': 'dee@example.com',
+        },
+      });
+      await showView(tester, server);
+      expect(
+        find.descendant(of: _row('root'), matching: find.text('● On it')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: _row('root'), matching: find.text('dee')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('has no tag at the head of its own thread', (tester) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      final c = await showView(tester, server);
+      c.openThread('root');
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: _row('root', thread: true),
+          matching: find.text('● On it'),
+        ),
+        findsNothing,
+      );
+    });
   });
 
   testWidgets('plain proposal and task thread screenshot fixture', (

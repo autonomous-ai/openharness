@@ -869,7 +869,7 @@ describe('private swarm projects on the real control API', () => {
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207), and the task's "Let's build" message with its brief in its thread (#2294).
+    // After the row naming who added the Lead (#2207), and the task's message with its brief in its thread (#2294).
     expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'task-line', 'system', 'update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
@@ -1254,8 +1254,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'Change this implementation', truncated: false, interrupted: false }
     const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    // Besides the rows naming who added each agent (#2207), only the task's own "Let's build" message (#2294).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(["Let's build: Implementation"])
+    // Besides the rows naming who added each agent (#2207), only the task's own message (#2294).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Implementation'])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => !memberRow(m))).toHaveLength(1)
     expect(await store.deliveries(host, tab, worker)).toEqual([])
     // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.

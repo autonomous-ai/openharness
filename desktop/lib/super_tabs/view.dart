@@ -3374,22 +3374,30 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [SuperTabMessageRow.groupLimit] to a group. Groups are counted from the
   /// list's dividing row both ways, so a page read in above regroups none of
   /// the rows already shown.
-  static Set<String> _joined(
-    List<SuperTabMessage> messages,
-    SuperTabMessage? split,
-  ) {
+  Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
+    bool tagged(SuperTabMessage m) =>
+        c.thread(m.conversationId, m.id)?.askTag != null;
     final at = split == null
         ? -1
         : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
-    if (at <= 0) return SuperTabMessageRow.consecutiveUpdates(messages);
-    final joined = SuperTabMessageRow.consecutiveUpdates(messages.sublist(at));
+    if (at <= 0) {
+      return SuperTabMessageRow.consecutiveUpdates(messages, tagged: tagged);
+    }
+    final joined = SuperTabMessageRow.consecutiveUpdates(
+      messages.sublist(at),
+      tagged: tagged,
+    );
     // Above it, upward: each group, newest first, keeps the name on its
     // oldest row.
     var group = [at - 1];
     for (var i = at - 2; i >= -1; i--) {
       if (i >= 0 &&
           group.first - i < SuperTabMessageRow.groupLimit &&
-          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i])) {
+          SuperTabMessageRow.groupsWith(
+            messages[i + 1],
+            messages[i],
+            tagged: tagged,
+          )) {
         group.add(i);
         continue;
       }

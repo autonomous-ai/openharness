@@ -552,7 +552,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(root).toMatchObject({ conversationId: f.app.conversationId, recipients: [], replyTo: null,
       author: { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'first' },
       source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask' },
-      text: "Let's build: Sync edits made offline" })
+      text: 'Sync edits made offline' })
     expect(details).toMatchObject({ conversationId: f.app.conversationId, recipients: [f.pm], replyTo: root!.id, thread: root!.id,
       author: { kind: 'agent', id: 'buddy' },
       text: 'Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })
@@ -569,7 +569,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     const command = commandSchema.parse({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, goal, ...(title ? { title } : {}) })
     const posted = f.run(command, buddy, { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
       author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
-    expect(posted.messages[0]!.text).toBe(`Let's build: ${name}`)
+    expect(posted.messages[0]!.text).toBe(name)
   })
 
   it('refuses empty and overlong explicit names before posting', () => {
