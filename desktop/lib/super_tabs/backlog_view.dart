@@ -241,7 +241,10 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
       }
       if (cut < tasks.length) entries.add(_More(tasks.length - cut));
     }
-    int count(SuperTabBacklogGroup group) => byGroup[group]!.length;
+    // The cards count what the filters match, Mine's shipped tasks too while
+    // its empty list links to them.
+    int count(SuperTabBacklogGroup group) =>
+        matching.where((e) => e.$2 == group).length;
     final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
     final muted = DesktopChrome.metadata(color: DesktopChrome.muted);
     final synced = c.syncedAt;
