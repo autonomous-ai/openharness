@@ -1601,10 +1601,11 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  final experimentalFeatures = ExperimentalFeaturesStore(
+  late final experimentalFeatures = ExperimentalFeaturesStore(
     pollInterval: kUnderTest
         ? Duration.zero
         : ExperimentalFeaturesStore.safetyNet,
+    seen: inSight,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
@@ -13071,8 +13072,10 @@ class AppNotifier extends ChangeNotifier {
   /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
   /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
   /// picker said "Not signed in" beside a menu showing the same account with 8% left.
-  ModelsMenuController get modelsMenu =>
-      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
+  ModelsMenuController get modelsMenu => _modelsMenu ??= ModelsMenuController(
+    remote: readRemoteUsage,
+    seen: inSight,
+  );
 
   /// This machine's local models. [setup] makes it Grid's first use there too: `grid` installed,
   /// signed in with this Harness account (its token, no second browser) and the account's grid
