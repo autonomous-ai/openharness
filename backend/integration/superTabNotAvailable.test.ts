@@ -78,7 +78,7 @@ const file = (name: string, type: string, body: string) =>
 /** One call of each person route, about Swarm `tab`, its conversation `chat` and project `project`. */
 function calls(tab: string, chat: string, project: string) {
   const op = () => randomUUID()
-  const json = (method: 'GET' | 'POST', route: string, url: string, payload?: object) => ({ method, route, url, payload, headers: {} })
+  const json = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', route: string, url: string, payload?: object) => ({ method, route, url, payload, headers: {} })
   const multipart = (route: string, url: string, payload: string) =>
     ({ method: 'POST' as const, route, url, payload, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } })
   const t = `/api/super-tabs/${tab}`
@@ -88,6 +88,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
     json('GET', 'GET /api/super-tabs/:tabId/activity', `${t}/activity`),
     json('POST', 'POST /api/super-tabs/:tabId/activity/read', `${t}/activity/read`, { through: '2026-11-01T00:00:00.000Z' }),
+    json('GET', 'GET /api/super-tabs/:tabId/reminders', `${t}/reminders`),
     json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
     json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
@@ -110,6 +111,9 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/unread', `${t}/conversations/${chat}/unread`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
+    json('PUT', 'PUT /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', `${t}/conversations/${chat}/messages/${MISSING}/reminder`,
+      { at: new Date(Date.now() + 60 * 60_000).toISOString() }),
+    json('DELETE', 'DELETE /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', `${t}/conversations/${chat}/messages/${MISSING}/reminder`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
       { follow: true }),
