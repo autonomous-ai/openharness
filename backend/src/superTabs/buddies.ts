@@ -217,22 +217,33 @@ export function proposalBrief(source: Record<string, unknown> | null | undefined
  *  its spaces doubled is the same line; any other change is not. */
 const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+/gu, ' ').trim()
 
-/** The whole lines a message offers to post: all of it, all after its lead-in ("I'll post this as you: …", "Send this to the PM:
- *  …"), and each quoted line in it, quotes trimmed. Never a piece of one (security review 1 of #3024): a fragment of a shown line
- *  can change what it says, though each word was seen. */
-function wholeLines(said: string): string[] {
-  const unquoted = (text: string) => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
+const unquoted = (text: string): string => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
+const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
+
+/** The whole lines the owner's own message offers to post: all of it, all after its lead-in ("Send this to the PM: …"), and
+ *  each quoted line in it. Never a piece of one (security review 1 of #3024): a fragment can change what it says. */
+const ownerLines = (said: string): string[] => {
   const colon = said.indexOf(':')
-  const quoted = [...said.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
-  return [said, ...colon >= 0 ? [unquoted(said.slice(colon + 1))] : [], ...quoted].map(comparable).filter(Boolean)
+  return [said, ...colon >= 0 ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
 }
 
-/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or of a line
- *  their Buddy showed them just before it (shownBefore), as wholeLines reads them. Nothing else of their private chat may go out
- *  as them. */
+/** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
+const SHOWN_MARKER = /post this as you\s*:/giu
+
+/** The lines a Buddy's message showed to post: only what follows its last marker, whole or each quoted line in it (security
+ *  review 2 of #3024). What comes before the marker is the Buddy's own talk, which may quote any project. */
+const shownLines = (said: string): string[] => {
+  const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
+  if (!marker) return []
+  const after = said.slice(marker.index! + marker[0].length)
+  return [unquoted(after), ...quotedIn(after)].map(comparable).filter(Boolean)
+}
+
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or of the line
+ *  their Buddy showed them just before it (shownBefore) after its marker. Nothing else of their private chat goes out as them. */
 export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
   const wanted = comparable(words)
-  return !!wanted && [ask.text ?? '', ...ask.shown ?? []].some(said => wholeLines(said).includes(wanted))
+  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || (ask.shown ?? []).some(said => shownLines(said).includes(wanted)))
 }
 
 /** One row of a Buddy chat as the store reads it for a proposal, newest first. */
@@ -240,15 +251,21 @@ export interface BuddyChatRow { id: string; author: { kind: string; id: string }
   editedAt: Date | null; deletedAt: Date | null }
 
 /** The lines [buddyId] showed its owner just before their message [askId] said ok, from [recent] (newest first): its own plain
- *  messages in the same lane (the main chat, or the ask's thread), since the owner's previous message there. A system row, an
+ *  messages in the same lane (the main chat, or the ask's thread and its root), since the owner's previous message there. A system row, an
  *  edited or deleted one, another lane's and anyone else's never count, so the owner saw each line as it stands. */
 export function shownBefore(recent: readonly BuddyChatRow[], askId: string, buddyId: string): string[] {
   const at = recent.findIndex(row => row.id === askId)
   if (at < 0) return []
   const lane = (row: BuddyChatRow) => row.thread && row.thread !== row.id ? row.thread : null
-  const ask = recent[at]!, shown: string[] = []
+  const ask = recent[at]!, root = lane(ask), shown: string[] = []
   for (const row of recent.slice(at + 1)) {
-    if (lane(row) !== lane(ask)) continue
+    // An ok in the thread of the shown line itself, as Desktop's reply sends it (security review 2 of #3024): the thread's root
+    // is its oldest row, so nothing before it counts.
+    if (row.id === root) {
+      if (row.author.kind === 'agent' && row.author.id === buddyId && !row.source && !row.editedAt && !row.deletedAt) shown.push(row.text)
+      break
+    }
+    if (lane(row) !== root) continue
     if (row.author.kind === 'person' && row.author.id === ask.author.id && !row.source) break
     if (row.author.kind === 'agent' && row.author.id === buddyId && !row.source && !row.editedAt && !row.deletedAt) shown.push(row.text)
   }
