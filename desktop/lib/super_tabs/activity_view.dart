@@ -899,11 +899,11 @@ class _ActivityRowState extends State<_ActivityRow> {
     final text = widget.preview;
     if (text == null) return const SizedBox.shrink();
     final strong = widget.previewStrong;
+    // Unread in the foreground, read faint: muted read too close to faint to
+    // tell apart (Diego, #2887).
     final base = DesktopChrome.control(
-      color: strong
+      color: strong || widget.unread
           ? DesktopChrome.foreground
-          : widget.unread
-          ? DesktopChrome.muted
           : grid.AppPalette.textFaint,
     ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
     final lead = widget.previewLead;
