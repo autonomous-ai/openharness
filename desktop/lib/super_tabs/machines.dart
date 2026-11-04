@@ -1649,17 +1649,21 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       'allowed': allowed,
     });
     if (!allowed) {
+      void say(String line) => ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          key: const ValueKey('super-machine-own-account-refused'),
+          content: Text(line, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      );
+      // The controller sends nothing while another action is being sent or waits to be confirmed: say so rather than
+      // leave the owner thinking it is off (review of #2983).
+      if (c.saving || c.hasPendingAction) {
+        say('Another action is still being sent. Try again in a moment.');
+        return;
+      }
       final result = await send();
       if (!mounted || result != null) return;
-      final reason = c.operationError;
-      if (reason != null) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(
-            key: const ValueKey('super-machine-own-account-refused'),
-            content: Text(reason, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-        );
-      }
+      say(c.operationError ?? 'Could not switch it back. Try again.');
       return;
     }
     final name = superTabMachineName(v.name);
@@ -1671,63 +1675,72 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         child: StatefulBuilder(
           builder: (context, update) => ListenableBuilder(
             listenable: c,
-            builder: (context, _) => PopScope(
-              canPop: !busy,
-              child: AlertDialog(
-                key: const ValueKey('super-machine-own-account-confirm'),
-                title: const Text("Let teammates' work run in your account?"),
-                content: SizedBox(
-                  width: 400,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Teammates' agents will run as you on $name. They can read your files, your keychain and your "
-                        'signed-in apps. Agents already running are not moved.',
-                      ),
-                      if (attempted && !busy && c.operationError != null) ...[
-                        const SizedBox(height: 12),
+            builder: (context, _) {
+              // This change's reply never came: Retry checks it, as Remove's does.
+              final checking =
+                  c.pendingCommand?['type'] == 'machine.ownAccountWork' &&
+                  c.pendingCommand?['machineId'] == id;
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  key: const ValueKey('super-machine-own-account-confirm'),
+                  title: const Text("Let teammates' work run in your account?"),
+                  content: SizedBox(
+                    width: 400,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          c.operationError!,
-                          key: const ValueKey(
-                            'super-machine-own-account-reason',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          "Teammates' agents will run as you on $name. They can read your files, your keychain and your "
+                          'signed-in apps. Agents already running are not moved.',
                         ),
+                        if (attempted && !busy && c.operationError != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            c.operationError!,
+                            key: const ValueKey(
+                              'super-machine-own-account-reason',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      key: const ValueKey('super-machine-own-account-allow'),
+                      onPressed:
+                          busy || c.saving || (!checking && c.hasPendingAction)
+                          ? null
+                          : () async {
+                              update(() {
+                                busy = true;
+                                attempted = true;
+                              });
+                              final result = checking
+                                  ? await c.retry()
+                                  : await send();
+                              if (!context.mounted) return;
+                              if (result != null) {
+                                Navigator.pop(context);
+                              } else {
+                                update(() => busy = false);
+                              }
+                            },
+                      child: Text(checking ? 'Retry' : 'Let them run'),
+                    ),
+                  ],
                 ),
-                actions: [
-                  TextButton(
-                    autofocus: true,
-                    onPressed: busy ? null : () => Navigator.pop(context),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    key: const ValueKey('super-machine-own-account-allow'),
-                    onPressed: busy || c.saving || c.hasPendingAction
-                        ? null
-                        : () async {
-                            update(() {
-                              busy = true;
-                              attempted = true;
-                            });
-                            final result = await send();
-                            if (!context.mounted) return;
-                            if (result != null) {
-                              Navigator.pop(context);
-                            } else {
-                              update(() => busy = false);
-                            }
-                          },
-                    child: const Text('Let them run'),
-                  ),
-                ],
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),

@@ -342,13 +342,16 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(_allow), findsNothing);
       expect(c.hasPendingAction, isFalse);
-      expect(_ownAccountCommands(server).toSet(), {
-        {
+      // The lost send and its Retry are the same command, sent again under its operation id.
+      expect(_ownAccountCommands(server), isNotEmpty);
+      expect(
+        _ownAccountCommands(server),
+        everyElement({
           'type': 'machine.ownAccountWork',
           'machineId': 'studio',
           'allowed': true,
-        },
-      });
+        }),
+      );
       await _done(tester, c);
     });
 
