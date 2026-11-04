@@ -15,7 +15,7 @@ import 'support/super_tab_fixture.dart';
 final shots = Platform.environment['SUPER_TAB_REMIND_SHOTS'];
 
 /// The More menu with Mark unread and Remind me, a chat marked unread, and
-/// Activity's Reminders, as the PR shows them, in both appearances.
+/// a due reminder in Activity's Needs you, as the PR shows them, in both appearances.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -125,7 +125,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Activity').first);
       await tester.pumpAndSettle();
-      expect(find.text('Reminders'), findsOneWidget);
+      expect(
+        find.byKey(
+          const ValueKey('super-activity-row-reminder:reminder-message-3'),
+        ),
+        findsOneWidget,
+      );
       await shot('activity');
     });
   }
