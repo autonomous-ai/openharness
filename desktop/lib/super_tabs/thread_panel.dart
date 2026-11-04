@@ -20,7 +20,8 @@ import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
-import 'voice_recorder.dart';
+import 'voice_row.dart';
+import 'voice_take.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -34,7 +35,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.sessionActivity,
     this.machineName,
     this.onScroll,
-    this.voiceRecorder,
+    this.voice,
   });
 
   final SuperTabController controller;
@@ -57,8 +58,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// so a device scrolling this Swarm scrolls the thread, not the chat.
   final ValueChanged<ScrollController?>? onScroll;
 
-  /// What the reply box's mic records with; without it, no mic shows.
-  final SuperTabVoiceRecorder? voiceRecorder;
+  /// The composers' voice message (the view's one take); without it, no mic
+  /// shows. Its row takes the reply box's row while it is this thread's.
+  final SuperTabVoiceTake? voice;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -576,9 +578,28 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
     onTag: _promptTag,
-    onMic: switch (widget.voiceRecorder) {
-      final recorder? => () => unawaited(
-        recorder.start(conversationId: _conversationId, root: widget.root),
+    onMic: switch (widget.voice) {
+      final voice? => () => voice.start(
+        conversationId: _conversationId,
+        root: widget.root,
+      ),
+      null => null,
+    },
+    voiceRow: switch (widget.voice) {
+      final voice? when voice.activeIn(_conversationId, widget.root) =>
+        SuperTabVoiceRow(
+          key: const ValueKey('super-thread-voice-row'),
+          take: voice,
+          discardKey: const ValueKey('super-thread-voice-discard'),
+          sendKey: const ValueKey('super-thread-voice-send'),
+        ),
+      _ => null,
+    },
+    voiceNotice: switch (widget.voice) {
+      final voice? => SuperTabVoiceNotice(
+        take: voice,
+        conversationId: _conversationId,
+        root: widget.root,
       ),
       null => null,
     },

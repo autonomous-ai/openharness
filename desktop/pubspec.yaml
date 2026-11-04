@@ -115,6 +115,9 @@ dependencies:
   # It has no Linux or Windows implementation, so there the bubble's play
   # opens the file as a file chip does. See CLAUDE.md on what a plugin costs.
   video_player: ^2.14.0
+  # The composer's mic on macOS and the web, as the phone records (#2665):
+  # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:
