@@ -563,7 +563,9 @@ export interface CommandContext {
   teamAccountsIdle?: boolean
 }
 
-export const REACHED_NO_AGENT = 'PLACEHOLDER'
+/** What an agent's post that reached no agent tells its sender, in the result every CLI prints (Egret6's review of #2963):
+ *  since #2963 an unnamed post outside a task's assignee reaches no one, and a sender that meant someone to act would not know. */
+export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
@@ -3269,6 +3271,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
+      if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
