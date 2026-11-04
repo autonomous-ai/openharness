@@ -414,6 +414,45 @@ void main() {
       await close(tester, c);
     });
 
+    testWidgets('what is typed while it is open never reaches the composer, '
+        'and the composer has the keys again once it closes', (tester) async {
+      final c = await chat(tester);
+      final composer = find.byKey(const ValueKey('super-message-composer'));
+      EditableText field() => tester.widget<EditableText>(
+        find.descendant(of: composer, matching: find.byType(EditableText)),
+      );
+      await tester.tap(composer);
+      await tester.pumpAndSettle();
+      expect(field().focusNode.hasFocus, isTrue);
+
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      expect(field().focusNode.hasFocus, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(field().controller.text, isEmpty);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(viewer, findsNothing);
+      expect(field().focusNode.hasFocus, isTrue);
+      await close(tester, c);
+    });
+
+    testWidgets("closing the thread closes its picture's viewer", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      c.closeThread();
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
     testWidgets('Show in chat closes it', (tester) async {
       final c = await chat(tester);
       await tester.tap(inline('a2'));

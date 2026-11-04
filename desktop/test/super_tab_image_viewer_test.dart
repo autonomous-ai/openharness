@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/attachment_image.dart';
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/file_links.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -282,6 +283,92 @@ void main() {
       await tester.pumpAndSettle();
       expect(shown, 1);
       expect(closed, [1]);
+    });
+  });
+
+  group('links', () {
+    final now = DateTime.utc(2026, 11, 4, 3);
+    setUp(() => superTabFileClock = () => now);
+    tearDown(() => superTabFileClock = DateTime.now);
+
+    String signed(String id, {String sig = '1'}) =>
+        'https://$kSuperTabFilesHost/bucket/super-tabs/tab/$id/$id.png'
+        '?X-Goog-Signature=$sig';
+
+    /// [id]'s picture whose signed link ended a minute ago; [fresh] answers
+    /// the ask for another.
+    SuperTabImageItem ended(
+      String id,
+      Future<SuperTabAttachment> Function() fresh,
+    ) => SuperTabImageItem(
+      ref: SuperTabFileRef(
+        SuperTabAttachment.fromJson({
+          'id': id,
+          'name': '$id.png',
+          'mime': 'image/png',
+          'size': 120 * 1024,
+          'url': 'https://cdn.harness.autonomous.ai/$id/$id.png',
+          'link': signed(id),
+          'expiresAt': now.millisecondsSinceEpoch - 60000,
+        }),
+        conversationId: 'lead',
+        messageId: 'message-$id',
+        fresh: (_, _, _) => fresh(),
+      ),
+      sender: 'Huy',
+    );
+
+    testWidgets('a later picture whose link ended is drawn from a fresh one', (
+      tester,
+    ) async {
+      var asked = 0;
+      final drawn = <Uri>[];
+      await open(tester, [
+        _item('a1'),
+        ended('a2', () async {
+          asked++;
+          return SuperTabAttachment.fromJson({
+            'id': 'a2',
+            'name': 'a2.png',
+            'mime': 'image/png',
+            'size': 120 * 1024,
+            'url': 'https://cdn.harness.autonomous.ai/a2/a2.png',
+            'link': signed('a2', sig: 'fresh'),
+            'expiresAt': now.millisecondsSinceEpoch + 900000,
+          });
+        }),
+      ]);
+      attachmentImage = (url) {
+        drawn.add(url);
+        return MemoryImage(png);
+      };
+      // Asked for only once it is shown.
+      expect(asked, 0);
+      await tester.tap(button('next'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+      expect(asked, 1);
+      expect(picture('a2'), findsOneWidget);
+      expect(drawn, [Uri.parse(signed('a2', sig: 'fresh'))]);
+    });
+
+    testWidgets('one with no fresh link says it can’t be shown', (
+      tester,
+    ) async {
+      await open(tester, [
+        _item('a1'),
+        ended('a2', () async => throw StateError('offline')),
+      ]);
+      await tester.tap(button('next'));
+      await tester.pumpAndSettle();
+      expect(picture('a2'), findsNothing);
+      expect(find.text('This image can’t be shown here.'), findsOneWidget);
+      // Its place still reads, and the way back still works.
+      expect(find.textContaining('a2.png'), findsOneWidget);
+      await tester.tap(button('previous'));
+      await tester.pumpAndSettle();
+      expect(picture('a1'), findsOneWidget);
     });
   });
 
