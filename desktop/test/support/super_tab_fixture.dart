@@ -86,9 +86,11 @@ class SwarmPartsBackend {
           'otherProjectsWork',
           'githubApp',
           'readMarks',
+          'unreadMarks',
           'threadMarks',
           'chatSettings',
           'activityDigest',
+          'remindersDigest',
           'teamAccounts',
           'threadSessions',
           'sessionsFromChat',
@@ -179,6 +181,11 @@ class SwarmPartsBackend {
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
+    // The reader's marks whose last move was a Mark unread (backend
+    // readMarks.ts lowerReadMark), absent when none.
+    if ((state['unreadMarks'] as Map?)?[reader ?? 'owner'] case final Map marks
+        when marks.isNotEmpty)
+      'unreadMarks': Map<String, dynamic>.from(marks),
     // Their own Activity digest and chat settings (backend activity.ts,
     // chatSettings.ts): every setting on every read, which the app keeps.
     if (state['activityDigest'] != null)
@@ -679,8 +686,48 @@ class ConversationServer {
           reader,
           () => <String, dynamic>{},
         ) as Map;
-    final kept = max(marks[conversationId] as int? ?? 0, sequence);
-    return marks[conversationId] = kept;
+    final held = marks[conversationId] as int? ?? 0;
+    // A mark moved forward is no longer one Mark unread left.
+    if (sequence > held) _unreadMarksOf(reader).remove(conversationId);
+    return marks[conversationId] = max(held, sequence);
+  }
+
+  Map _unreadMarksOf(String reader) =>
+      ((state['unreadMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+            reader,
+            () => <String, dynamic>{},
+          )
+          as Map;
+
+  /// The Mark unread writes this device sent, in order: {conversationId,
+  /// sequence} with the message's own sequence.
+  final unreadPosts = <Map<String, dynamic>>[];
+
+  /// Every Mark unread write fails, as offline.
+  bool failUnread = false;
+
+  /// [reader] marked [conversationId] unread from message [sequence] on
+  /// another device, as the backend keeps it.
+  void markUnreadElsewhere(
+    String conversationId,
+    int sequence, {
+    String reader = 'owner',
+  }) => _lowerReadMark(conversationId, sequence, reader);
+
+  /// The backend's Mark unread (readMarks.ts lowerReadMark): the mark goes to
+  /// just before the message, never forward.
+  int _lowerReadMark(String conversationId, int sequence, String reader) {
+    final marks =
+        ((state['readMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+          reader,
+          () => <String, dynamic>{},
+        ) as Map;
+    final held = marks[conversationId] as int?;
+    final target = sequence - 1;
+    if (held != null && held <= target) return held;
+    marks[conversationId] = target;
+    _unreadMarksOf(reader)[conversationId] = target;
+    return target;
   }
 
   /// The thread marks this device sent, in order: {conversationId, root,
@@ -965,6 +1012,22 @@ class ConversationServer {
         : null;
     if (read != null) {
       return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
+    final unread = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/unread$').firstMatch(path)
+        : null;
+    if (unread != null) {
+      final id = Uri.decodeComponent(unread.group(1)!);
+      final sequence = body!['sequence'] as int;
+      unreadPosts.add({'conversationId': id, 'sequence': sequence});
+      if (failUnread) {
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      return {'sequence': _lowerReadMark(id, sequence, reader ?? 'owner')};
     }
     final threadRead = method == 'POST'
         ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/read$')
