@@ -15,11 +15,13 @@
 - Look, as Dee agreed:
 
   ```
-  (D)  dee  [PM]  10:05 · Task
-       Offline drafts
+  Phone:    (R)  River  [PM]  10:05 · Task
+                 Offline drafts
+  Desktop:  (R)  River  <engine mark>  10:05 AM · Task
+                 Offline drafts
   ```
 
-  The role badge stays right after the name. ` · Task` is in the time's muted style. A plain message has no tag.
+  What follows the name stays: the role badge on the phone, the engine mark on Desktop. ` · Task` is in the time's muted style. A plain message has no tag.
 - Only a row whose source kind is `task-line` or `buddy-proposal` loses a leading `Let's build: `. A person's own message that says it keeps it.
 - Source kinds and everything else on the row stay as they are. Stored rows are not rewritten.
 - Desktop tests use a memory store and a fake sign-in. No build on a phone. No Swarm code in cli/src/core.
@@ -52,7 +54,7 @@
 
 **Interfaces:** `SuperTabMessage.text` has no old prefix on the two kinds; the header's time text reads `<time> · Task`; `groupsWith` is false on either side of such a row.
 
-- [ ] Write failing tests: header shows `· Task` after the time; an old row's prefix is not shown; a person's own "Let's build: x" keeps its words and has no tag; a plain message has no tag; a PM role badge stays after the name; a second task row by the same person keeps its header. Commit; watch them fail.
+- [ ] Write failing tests: header shows `· Task` after the time; an old row's prefix is not shown; a person's own "Let's build: x" keeps its words and has no tag; a plain message has no tag; an agent's engine mark stays between its name and the tag; a second task row by the same person keeps its header. Commit; watch them fail.
 - [ ] Implement; commit; watch them pass.
 
 ## Task 3: Phone
@@ -61,7 +63,7 @@
 
 **Interfaces:** as Desktop; `swarmGroupedMessages` leaves such a row out on either side.
 
-- [ ] Write the same failing tests; commit; watch them fail.
+- [ ] Write the same failing tests, with the PM role badge in place of the engine mark; commit; watch them fail.
 - [ ] Implement; commit; watch them pass.
 
 ## Task 4: Skill text

@@ -179,7 +179,7 @@ void main() {
         c.select('offline');
         await tester.pumpAndSettle();
         expect(
-          find.text("Let's build: Hub reports hide an item from everyone"),
+          find.text('Hub reports hide an item from everyone'),
           findsOneWidget,
         );
         // Replies stay in their threads, out of the chat.
