@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 
@@ -42,14 +44,6 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
   /// The pull requests watched for their checks: open tasks' alone.
   Set<String> _watched = const {};
 
-  /// Tasks that shipped within the window and have closed since: the controller
-  /// holds few of them, so they are read when the list opens and kept here.
-  final _closed = <SuperTabConversation>[];
-  bool _closedFailed = false;
-
-  /// The read under way; one left behind by a retry or a new Swarm ends.
-  Object? _closedRead;
-
   @override
   void initState() {
     super.initState();
@@ -64,40 +58,15 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
 
   @override
   void dispose() {
-    _closedRead = null;
     widget.facts?.unwatch(_watched);
     super.dispose();
   }
 
-  Future<void> _readClosed() async {
-    final read = _closedRead = Object();
-    _closed.clear();
-    final now = widget.now();
-    final since = now.subtract(superTabBacklogShippedWindow);
-    _setClosedFailed(false);
-    final c = widget.controller;
-    for (final project in c.snapshot?.projects ?? const <SuperTabProject>[]) {
-      try {
-        await for (final page in c.readClosedSince(project.id, since)) {
-          if (!identical(read, _closedRead)) return;
-          final shipped = [
-            for (final task in page)
-              if (superTabBacklogGroupOf(task, now) != null) task,
-          ];
-          if (shipped.isNotEmpty) setState(() => _closed.addAll(shipped));
-        }
-      } catch (_) {
-        // The controller logged it; the list says so and offers to read again.
-        if (!identical(read, _closedRead)) return;
-        _setClosedFailed(true);
-      }
-    }
-  }
-
-  void _setClosedFailed(bool failed) {
-    if (failed == _closedFailed) return;
-    if (mounted) setState(() => _closedFailed = failed);
-  }
+  void _readClosed() => unawaited(
+    widget.controller.readClosedShipped(
+      widget.now().subtract(superTabBacklogShippedWindow),
+    ),
+  );
 
   /// Opens [task]'s chat, reading it first when the controller does not hold it.
   Future<void> _open(SuperTabConversation task) async {
@@ -117,23 +86,24 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     _watched = next;
   }
 
-  // Rebuilt when GitHub's answer lands, as the live cards are: Manage rebuilds
-  // only on the controller (review of #2776).
+  // Rebuilt when GitHub's answer lands, as the live cards are, and when a page
+  // of closed tasks does: Manage rebuilds only on the controller (review of
+  // #2776), which a page does not tell.
   @override
-  Widget build(BuildContext context) => switch (widget.facts) {
-    final facts? => ListenableBuilder(
-      listenable: facts,
-      builder: (context, _) => _build(context),
-    ),
-    null => _build(context),
-  };
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([
+      widget.controller.closedShippedChanged,
+      ?widget.facts,
+    ]),
+    builder: (context, _) => _build(context),
+  );
 
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = widget.controller, snapshot = c.snapshot;
     final now = widget.now();
     final placed = [
-      for (final task in superTabBacklogTasks(c, closed: _closed))
+      for (final task in superTabBacklogTasks(c, closed: c.closedShipped))
         if (superTabBacklogGroupOf(task, now) case final group?) (task, group),
     ];
     // Watched after the frame: a build changes nothing outside itself.
@@ -232,7 +202,7 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
             ],
           ),
         ),
-        if (_closedFailed)
+        if (c.closedShippedFailed)
           Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: grid.AppDesktop.groupGap,
