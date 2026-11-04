@@ -336,6 +336,28 @@ void main() {
     );
   });
 
+  // Ken, 11-04 (task #2849): what was typed into an agent's terminal (a
+  // scheduled prompt too) is no chat row; the terminal's answer still is.
+  testWidgets('a terminal\'s prompt is no chat row; its answer still is', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row('typed', 2, 'Run the hourly cleanup.', {
+          'kind': 'native',
+          'phase': 'prompt',
+          'operator': {'name': 'ken15@autonomous.ai'},
+        }),
+        row('answered', 3, 'Cleanup done.', {'kind': 'native'}),
+      ]),
+    );
+    expect(find.text('Run the hourly cleanup.'), findsNothing);
+    expect(find.textContaining('Terminal input'), findsNothing);
+    expect(inRow('answered', find.text('Cleanup done.')), findsOneWidget);
+    expect(inRow('answered', find.text('Terminal answer')), findsOneWidget);
+  });
+
   group('an ordinary message says', () {
     testWidgets('Terminal answer above a terminal\'s answer', (tester) async {
       await show(
