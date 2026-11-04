@@ -614,7 +614,10 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a read passes them (read/inbox.ts readThroughHidden).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person

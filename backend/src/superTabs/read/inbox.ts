@@ -219,6 +219,19 @@ async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, c
   return { latest, more: missing.some(c => !latest.has(c.id) && full.has(c.id)) }
 }
 
+/** Where a read of `group` through `next` leaves its mark: past the rows after it nobody reads, when they end the chat's main
+ *  stream. An app marks read only up to the newest row it was given, so a chat whose newest main row became hidden after it
+ *  was numbered (a `machine-left` line stored before #2742) would otherwise stay unread wherever unread is counted by the
+ *  chat's newest main row (lastMainSequence). Reads nothing when `next` is already there, and at most LATEST_SCAN rows of
+ *  the chat by its sequence index otherwise; with that many rows to pass, the mark stays where it was asked to go. */
+export async function readThroughHidden(db: PrismaClient, tabId: string, state: SuperTabState, group: Conversation, next: number): Promise<number> {
+  const top = group.lastMainSequence
+  if (top === undefined || next >= top) return next
+  const rows = await perRange(db, [newestIn(tabId, group.id, { $gt: next, $lte: top }, LATEST_SCAN, { ...SCAN_FIELDS, alsoInChat: 1 })])
+  if (rows.length >= LATEST_SCAN) return next
+  return (await readable(db, tabId, rows, state)).some(isMain) ? next : top
+}
+
 interface Candidate { conversationId: string; root: string; mark: number; replies: Row[]; unread: number; member: boolean; at: number; id: string }
 
 /** Threads read behind their chat's mark whose rows past their own mark are read, most recently moved mark first. */

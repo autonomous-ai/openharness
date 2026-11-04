@@ -15,7 +15,7 @@ import { activityDigest, listActivity, markActivityRead, markActivityThreadRead,
 import { clearReminder, listReminders, REMINDER_AHEAD_MS, remindersDigest, setReminder, type ReminderItem } from '../reminders.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
-import { FIELDS, readable, row as messageRow } from './inbox.js'
+import { FIELDS, readable, readThroughHidden, row as messageRow } from './inbox.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -249,14 +249,16 @@ export class SwarmReads {
     }
   }
 
-  /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
+  /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts), and
+   *  past hidden rows that end its main stream (inbox.ts readThroughHidden). Only a
    *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
    *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
    *  mark of its own gets one at the old mark (threadMarkSeeds.ts), so the inbox and Threads still count it. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
-    const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
+    // A read through the newest row the person sees also reads the hidden rows that end the chat (inbox.ts readThroughHidden).
+    const next = await readThroughHidden(this.db, tabId, state, group.data!, Math.min(sequence, group.data!.lastMessageSequence)), now = this.now()
     const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
     await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
     return { sequence: stored }
