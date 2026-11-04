@@ -51,7 +51,11 @@ ConversationServer _server({bool assigned = true}) {
   task['number'] = 2605;
   task['agentIds'] = ['shrike2'];
   if (assigned) {
-    task['assignment'] = {'id': 'w1', 'agentId': 'shrike2', 'status': 'working'};
+    task['assignment'] = {
+      'id': 'w1',
+      'agentId': 'shrike2',
+      'status': 'working',
+    };
   }
   return server;
 }
@@ -128,7 +132,11 @@ void main() {
     'hovering an agent’s avatar shows its machine, model and task, and the task opens its chat',
     (tester) async {
       final server = _server();
-      _say(server, 'Yes: its machine, engine and model, and its task.', _shrike);
+      _say(
+        server,
+        'Yes: its machine, engine and model, and its task.',
+        _shrike,
+      );
       final c = await _open(tester, server);
       final id = server.messages.last['id'] as String;
       await _hover(tester, _inRow(id, find.byType(SuperTabAvatar)));
@@ -138,7 +146,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.descendant(of: _card, matching: find.text('MacbookPro.local')),
+        find.descendant(of: _card, matching: find.text('MacbookPro')),
         findsOneWidget,
       );
       final task = find.byKey(const ValueKey('super-identity-card-task'));
