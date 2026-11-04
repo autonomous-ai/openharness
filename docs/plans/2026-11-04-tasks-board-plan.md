@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Follow the project's Engineer workflow: this plan is the draft pull request's first commit;
 > each plan task commits its failing test, watches it fail, then commits the code that passes it; one independent review
-> step on the pull request. Backend and CLI tasks (1–4) and Desktop tasks (5–10) share only the wire fields named in
+> step on the pull request. Backend and CLI tasks (1, 2, 4) and Desktop tasks (5–10) share only the wire fields named in
 > their Interfaces, so the two halves may run in parallel.
 
 **Goal:** One place per project to see its work, from proposal to shipped: a Tasks view in the project header (Board by
@@ -13,9 +13,11 @@ forgotten.
 **Architecture:** One Desktop function places each task in a column (Proposals, Next up, Working, Waiting, Shipped) with
 a Needs-you mark and a caption state. Board, List, the header badge and the project row's badge all use it. The server
 keeps a shared Next-up order as one sparse rank per task, so moving a card rewrites only that task. It sets the rank
-with one command a person or the PM sends. It keeps a project's unanswered Buddy proposals on the project, where they
-reach readers as the status card does. Both arrive through the change feed the app already reads, so cards move with
-no reload or poll.
+with one command a person or the PM sends; the rank arrives through the change feed the app already reads, so cards
+move with no reload or poll. A project's unanswered Buddy proposals come from one read that applies #2867's rule (a
+proposal with no task reply and no PM reply in its thread), however old. The app reads it again only once the project
+chat has moved, since only a message there can add or answer one (PM's ruling, 2026-11-04: no backfill, no writes to
+stored rows).
 
 **Tech Stack:** TypeScript, Zod, Vitest (backend, CLI); Flutter/Dart (Desktop).
 
@@ -81,27 +83,26 @@ day). It builds on #2867 (ask state: `✋ Proposal`) and #2872 (Backlog's Shippe
 ## Design
 
 - **Growth.** A task's rank and date live on its group and go when the group goes: project or Swarm deletion, as today.
-  Open proposals are capped at 100 per project. An entry goes when the PM replies in the proposal's thread or opens a
-  task from it. Past 100, the oldest drops with a `proposals.dropped` log line. The cap is far above today's count:
-  under 10 open per project.
+  The proposals read stores nothing. It answers at most 100, oldest first.
 - **Concurrency.** Both are written in the command's existing state transaction, so two moves serialize. A move names
   the task it goes after, never an index, so a stale view still lands where the person dropped the card.
-- **Read cost.** No new read or query. A move rewrites one group's part. A proposal change rewrites the project's part,
-  as a status card does. Renumbering a whole queue happens only when two ranks get closer than 1e-6, about 40 moves
-  into the same gap.
-- **Scale.** At 10x, 300 open tasks in a project, a move is still one write. The first warning is the size of the
-  project part with 100 proposals (about 15 KB), visible in the change feed's bytes per part.
+- **Read cost.** A move rewrites one group's part. Renumbering a whole queue happens only when two ranks get closer than
+  1e-6, about 40 moves into the same gap. The proposals read runs once when the view opens and again only after the
+  project chat moves. It finds the chat's proposal roots, then reads their threads the way the chat page does. If
+  finding the roots needs a new index, the PM decides before Ready.
+- **Scale.** At 10x, 300 open tasks in a project, a move is still one write. The first warning is the proposals read's
+  time on a project chat with 10x the messages, in the read measures.
 - **Compatibility.**
-  - An older client ignores `queueRank`, `notBefore` and `openProposals`.
+  - An older client ignores `queueRank` and `notBefore`, and never asks for proposals.
   - A new client on an older backend orders Next up by number (oldest first) and shows no Proposals. When the backend
     refuses `work.queue` with `VALIDATION_ERROR`, the card goes back and the view says "Update Harness's server to
     reorder".
 - **Migration and rollback.**
   - No migration for ranks: an unranked task sorts by its number.
-  - Proposals from before this ships get a one-time backfill per project (Task 3).
+  - Proposals need none: the read applies #2867's rule to rows as they are stored.
   - Rollback leaves the fields unread, and an older backend drops nothing it does not know.
 - **Audience.**
-  - `openProposals` reaches only readers of the project chat, by the same rule as `status` (model.ts `visibleState`).
+  - The proposals read answers only a reader of the project chat, by the check the messages read makes.
   - `work.queue` is refused unless the sender is a person who can write in the project, or that project's PM
     (`coordinatorOrPerson`).
 - **Identity.** No command takes a person from its sender. The proposal's `personId` is the one the server recorded
@@ -169,54 +170,30 @@ day). It builds on #2867 (ask state: `✋ Proposal`) and #2872 (Backlog's Shippe
   `placeAfter`.
 - [ ] Run again: PASS. Commit.
 
-## Task 2: Backend: a project's open proposals
+## Task 2: Backend: a read of a project's unanswered proposals
 
 **Files:**
 
-- Modify: `backend/src/superTabs/projects.ts` (SwarmProject `openProposals?: OpenProposal[]`)
-- Modify: `backend/src/superTabs/commands.ts`:
-  - `buddy.propose` adds an entry
-  - `conversation.create` with a proposal removes it
-  - `message.send` by the project's lead agent in a proposal's thread removes it
-- Modify: `backend/src/superTabs/model.ts` (`visibleState`: strip `openProposals` where `status` is stripped)
-- Test: `backend/src/superTabs/buddies.test.ts`, `backend/src/superTabs/commands.test.ts`
+- Modify: `backend/src/routes/superTabs.ts` and `backend/src/superTabs/read/service.ts` (`GET /super-tabs/:tabId/proposals?projectId=P`)
+- Test: beside the read's service tests
 
 **Interfaces:**
 
-- Produces: `OpenProposal = { messageId: string; title: string; personId?: string; at: number }`.
-  - `title` is `proposalTitle(command)`.
-  - The list is kept oldest first and capped at `MAX_OPEN_PROPOSALS = 100`.
-  - Desktop reads it on the project.
+- Produces:
+  - `{ proposals: [{ messageId, title, personId?, at }] }`, oldest first, at most 100
+  - `title` is the root's text, less an older root's "Let's build: "
+  - `personId` is the root's `source.personId`; `at` is its creation time in ms
+- How it reads: find the project chat's `buddy-proposal` roots, then summarize their threads through `pageThreads` and
+  `threadSummaries`. Keep those whose `ask` is `'proposal'` (#2867's `askOf`).
 - [ ] Write failing tests:
-  - a proposal lists `{messageId, title, personId, at}` on its project
-  - a PM reply in its thread removes it; a Buddy's or a person's reply does not
-  - a task opened with `proposalMessageId` removes it
-  - the 101st drops the oldest
-  - a reader who cannot read the project chat gets no `openProposals`
-- [ ] Run `npx vitest run src/superTabs/buddies.test.ts src/superTabs/commands.test.ts -t proposal`: FAIL.
-- [ ] Implement. Run: PASS. Commit.
-
-## Task 3: Backend: backfill proposals sent before this ships
-
-**Files:**
-
-- Create: `backend/src/superTabs/proposalBackfill.ts`, `backend/src/superTabs/proposalBackfill.test.ts`
-- Modify: `backend/src/worker.ts` (start it beside `startThreadBackfill`)
-
-**Interfaces:**
-
-- A project without `openProposals` has not been backfilled. The backfill does the following for each such project:
-  1. Pages its chat's messages by the existing `[tabId, conversationId, sequence, id]` index, reading only `id`,
-     `source`, `text` and `createdAt`.
-  2. Keeps the `buddy-proposal` roots that are still unanswered:
-     - no group in the Swarm (live or dormant) has `ledger.proposal.messageId` naming it
-     - no reply in its thread from the project chat's `leadId`
-  3. Writes the list (`[]` when there is none) in one state transaction. Each project is read once.
-- [ ] Write failing tests:
-  - a project with an answered and an unanswered proposal gets only the unanswered one
-  - a second run reads nothing
-  - a proposal that arrives during the run is kept
-- [ ] Run: FAIL. Implement, with the same run-once guard and batch cap as `threadBackfill.ts`. Run: PASS. Commit.
+  - an unanswered proposal is listed
+  - one the PM replied to is not
+  - one a task was opened from is not
+  - an old root that still reads "Let's build: …" is listed with its title alone
+  - a reader who cannot read the project chat is refused
+  - the cap holds
+- [ ] Run: FAIL. Implement. Run: PASS. Commit. If finding the roots needs a new index, it goes in its own commit and
+  the PM is told before Ready.
 
 ## Task 4: CLI: the PM keeps Next up in order
 
@@ -243,7 +220,8 @@ day). It builds on #2867 (ask state: `✋ Proposal`) and #2872 (Backlog's Shippe
   sidebar's groups go.
 - Modify: `desktop/lib/super_tabs/model.dart`:
   - `SuperTabConversation.queueRank`, `notBefore`
-  - `SuperTabProject.openProposals` (`SuperTabProposal`)
+  - `SuperTabProposal`; `SuperTabController.proposalsOf` and `readProposals`, which read again only once the project chat
+    has moved
 - Modify: `desktop/lib/super_tabs/backlog.dart` (make #2872's shipped test public: `superTabTaskShipped`)
 - Test: `desktop/test/super_tab_task_groups_test.dart` (rewritten for columns)
 
@@ -340,7 +318,8 @@ day). It builds on #2867 (ask state: `✋ Proposal`) and #2872 (Backlog's Shippe
   - "No tasks yet" for a project with none
   - a Needs-you card sorts first and reads "Needs you"
   - the caption reads `dee · Finch2 · PR #2867`, with no number, machine or model
-  - Proposals lists `openProposals` oldest first, as `scholes · 3m`
+  - Proposals lists the read's proposals oldest first, as `scholes · 3m`. A new one shows once the project chat moves,
+    and nothing is read while the chat stays still
   - Shipped includes an archived task from the closed read
   - List shows the same sections, with Shipped folded
   - Mine keeps the reader's asks; Search filters by title
