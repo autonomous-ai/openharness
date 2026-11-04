@@ -1362,7 +1362,7 @@ class SuperTabMessage {
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and
-  /// is unread for them as anyone else's message is. Its header says Task.
+  /// is unread for them as anyone else's message is.
   bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
 
   /// The agent a "waiting at a prompt" note is about; null for any other row.

@@ -414,8 +414,7 @@ class SwarmMessageRow extends StatelessWidget {
         trailing: at == null
             ? null
             : Text(
-                '${two(at.hour)}:${two(at.minute)}'
-                '${message.postedForAuthor ? ' · Task' : ''}',
+                '${two(at.hour)}:${two(at.minute)}',
                 style: tty.style(color: AppPalette.textFaint, size: 12.5),
               ),
       ),

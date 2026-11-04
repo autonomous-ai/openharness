@@ -2872,8 +2872,6 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
     bool plain(SuperTabMessage m) =>
         m.source['kind'] != 'ship' &&
-        // A task's header marks it as one, and what follows is not part of it.
-        !m.postedForAuthor &&
         m.route == null &&
         !m.terminalEvent &&
         m.replyTo == null &&
