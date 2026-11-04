@@ -2814,12 +2814,12 @@ export class SuperTabStore {
    *  those asked in its project), still open or answered. A light load: the quiet conversations its decisions are in are
    *  read with them (decisions.ts conversationsOf), never the Swarm's whole history, read again on every change. */
   async decisions(user: AuthUser, tabId: string, state: DecisionList, asAgentId?: string) {
-    return transaction(this.db, async tx => {
-      const { state: tab } = await this.load(tx, user, tabId)
-      const actor = await this.actor(tx, user, tab, asAgentId)
-      author(tab, actor)
-      return await listDecisions(tx, tabId, tab, actor, state)
-    })
+    // Through the read cache, as every read (task #2674): only what the Swarm's stamp says changed is read again. It loaded
+    // the whole active Swarm on every request, ~540 ms a part on prod (Ken's scan, 2026-11-04).
+    const { state: tab } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, tab, asAgentId)
+    author(tab, actor)
+    return listDecisions(this.db, tabId, tab, actor, state)
   }
 
   /**
