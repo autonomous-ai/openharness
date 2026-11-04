@@ -1577,6 +1577,34 @@ describe('message attachments', () => {
   })
 })
 
+describe('voice messages', () => {
+  const voice = { durationMs: 81_000, waveform: new Array(48).fill(7), transcribed: true }
+  const clip = { id: 'voice-1', name: 'Voice message.wav', mime: 'audio/wav', size: 2_592_044, url: 'https://cdn.example.test/super-tabs/tab/abc/Voice_message.wav', voice }
+  const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
+  const send = (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
+  it('makes the clip\'s words the message\'s text, and keeps its facts on the file', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': 'Ship the parser today.' } })
+    expect(sent.messages).toEqual([expect.objectContaining({ text: 'Ship the parser today.', attachments: [clip], recipients: [lead] })])
+  })
+  it('sends a clip with no words with an empty text', () => {
+    const f = fixture()
+    const quiet = { ...clip, voice: { ...voice, transcribed: false, failure: 'limit' as const } }
+    expect(f.run(send(['voice-1']), owner, { attachments: [quiet] }).messages[0]).toMatchObject({ text: '', attachments: [quiet] })
+  })
+  it('sends a voice message alone: no typed text, tags or other files with it', () => {
+    const f = fixture()
+    expect(() => f.run(send(['voice-1'], 'and also this'), owner, { attachments: [clip] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE', status: 400 }))
+    expect(() => f.run(send(['voice-1', 'file-1']), owner, { attachments: [clip, file] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE' }))
+  })
+  it('removes a credential spoken in it, as from typed text', () => {
+    const f = fixture()
+    const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+    const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': `the token is ${token}` } })
+    expect(sent.messages[0]!.text).toBe(`the token is ${CREDENTIAL_MARKER}`)
+  })
+})
+
  describe('finished worker decisions', () => {
   function finished() {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()

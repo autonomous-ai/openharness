@@ -166,3 +166,28 @@ describe('reading a voice file', () => {
     expect(logged.join('\n')).not.toContain('my secret plan')
   })
 })
+
+describe('sending a voice message', () => {
+  const send = (f: Awaited<ReturnType<typeof swarm>>, id: string) =>
+    f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [id] })
+
+  it('stores its words as the message\'s text and its facts on the file, never its words twice', async () => {
+    const f = await swarm()
+    const file = await f.upload(wav(81))
+    await f.store.readVoice(owner, f.tab, file.id, 'en')
+    await send(f, file.id)
+    const [message] = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead', author: { is: { kind: 'person' } } } })
+    expect(message!.text).toBe('Ship the parser today.')
+    expect(message!.attachments).toEqual([expect.objectContaining({ id: file.id, mime: 'audio/wav', voice: expect.objectContaining({ durationMs: 81_000, transcribed: true }) })])
+    expect(JSON.stringify(message!.attachments)).not.toContain('Ship the parser')
+    const [delivery] = await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: message!.id } })
+    expect(delivery!.agentId).toBe(f.lead)
+  })
+
+  it('waits for a file still being transcribed', async () => {
+    const f = await swarm()
+    const file = await f.upload(wav(2))
+    await db.superTabAttachment.update({ where: { id: file.id }, data: { voiceSince: new Date() } })
+    await expect(send(f, file.id)).rejects.toMatchObject({ code: 'VOICE_TRANSCRIBING', status: 409 })
+  })
+})
