@@ -2,8 +2,10 @@ import { publishSwarmDeliveries, subscribeSwarmDeliveries } from './bus.js'
 import { logger } from '../utils/logger.js'
 import type { DeliveriesWaiting } from '../superTabs/store.js'
 
-/** Repeated so a host keeps reading idle agents every 30 s: it goes back to each second 10 minutes after it last heard it
- *  (cli superTabs/host.ts PUSH_LEASE_MS), which covers a missed repeat and a server rolled back to one that does not push. */
+/** Repeated so a host keeps reading idle agents only when told: it goes back to each second 10 minutes after it last heard it
+ *  (cli superTabs/host.ts PUSH_LEASE_MS), which covers a missed repeat and a server rolled back to one that does not push. The
+ *  repeat goes through the machine's own channel, as the host-changes one does (swarmHostPushes.ts), so a Redis gone silent
+ *  stops it too and the host reads each second again instead of waiting on pushes that cannot come (task #2800). */
 const PUSHES_REPEAT_MS = 4 * 60_000
 
 /**
@@ -12,8 +14,9 @@ const PUSHES_REPEAT_MS = 4 * 60_000
  * the write commits), as a connection-less `super_tab_deliveries` down frame naming the Swarm and agent; the daemon hands it
  * to its Swarm host, which reads that list at once (cli gateway.ts, superTabs/host.ts).
  *
- * The frame with no payload says this server pushes: the host then reads an idle agent's list only every 30 s, the safety
- * net for a push lost on the way. A daemon from before this ignores the frame and keeps reading each second.
+ * The frame with no payload says this server pushes: the host then reads an idle worker's list only when told (a Lead's every
+ * 30 s), and this server tells it again of any delivery still queued after 10 s (superTabs/deliveryRepush.ts), the safety net
+ * for a push lost on the way (task #2800). A daemon from before this ignores the frame and keeps reading each second.
  *
  * `machineId` is the machine the socket signed in as (adapterWs.ts), never one the client names, so a socket hears only its
  * own machine's work. The frame carries nothing but the two ids; the host reads the deliveries through the checked poll.
@@ -25,7 +28,8 @@ export async function relaySwarmDeliveries(machineId: string, send: (frame: unkn
   let unsubscribe: () => void
   try {
     unsubscribe = await subscribeSwarmDeliveries(machineId, msg => {
-      const { tabId, agentId, terminal } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      const { tabId, agentId, terminal, pushes } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      if (pushes === true) return tell({})
       if (typeof tabId !== 'string' || typeof agentId !== 'string') return
       // A terminal request waiting for this machine (announceSwarmTerminal): a `__` control frame, which an older daemon drops.
       if (terminal === true) send({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId, agentId } } })
@@ -37,7 +41,11 @@ export async function relaySwarmDeliveries(machineId: string, send: (frame: unkn
     return () => {}
   }
   tell({})
-  const repeat = setInterval(() => tell({}), PUSHES_REPEAT_MS)
+  const repeat = setInterval(() => {
+    void publishSwarmDeliveries(machineId, { pushes: true }).then(heard => {
+      if (!heard) logger.warn('[swarm] delivery push repeat reached no one; hosts fall back to reading each second', { machineId })
+    })
+  }, PUSHES_REPEAT_MS)
   return () => {
     clearInterval(repeat)
     unsubscribe()
