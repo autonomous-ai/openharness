@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/voice_recorder.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
@@ -13,9 +15,16 @@ import 'support/super_tab_fixture.dart';
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_COMPOSER_ROW_SHOTS'];
 
+/// A recorder for the mic's place only: no take is recorded.
+class _Preview implements SuperTabVoiceRecorder {
+  @override
+  Future<void> start({required String conversationId, String? root}) async {}
+}
+
 /// The composer as the PR shows it (Huy and Scholes, 11-04): the reader's
-/// Buddy chat with New session on offer, and a project chat's thread with Also
-/// send, each with a draft, in both appearances.
+/// Buddy chat with New session on offer, a project chat's thread with Also
+/// send, the mic's place once recording comes (`chat-mic`), and the web at a
+/// phone's width (`web-phone`), each with a draft, in both appearances.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -59,7 +68,7 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['chat', 'thread']) {
+    for (final scene in ['chat', 'thread', 'chat-mic', 'web-phone']) {
       testWidgets('screenshot: $scene (${brightness.name})', (tester) async {
         final picture = GlobalKey();
         final thread = scene == 'thread';
@@ -68,20 +77,28 @@ void main() {
         await c.refresh();
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        await tester.binding.setSurfaceSize(const Size(1280, 720));
+        final phone = scene == 'web-phone';
+        await tester.binding.setSurfaceSize(
+          phone ? const Size(390, 844) : const Size(1280, 720),
+        );
         addTearDown(() => tester.binding.setSurfaceSize(null));
         await tester.pumpWidget(
           MaterialApp(
             theme: grid.buildAppTheme(brightness: brightness),
             builder: (context, child) =>
                 RepaintBoundary(key: picture, child: child),
-            home: Scaffold(
-              body: SuperTabView(
-                controller: c,
-                onInvite: () {},
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Mac Studio',
+            home: WorkspaceChromeScope(
+              // A phone's browser draws the compact layout below 720 px.
+              chrome: WorkspaceChrome(compactBelow: phone ? 720 : 0),
+              child: Scaffold(
+                body: SuperTabView(
+                  controller: c,
+                  onInvite: () {},
+                  onAddAgent: (_) {},
+                  onOpenTerminal: (_) {},
+                  machineName: (_) => 'Mac Studio',
+                  voiceRecorder: scene == 'chat-mic' ? _Preview() : null,
+                ),
               ),
             ),
           ),
