@@ -219,7 +219,7 @@ describe('a Buddy thread session', () => {
     const harnessId = (await f.store.read(peer, f.tab)).state.agents.find(x => x.id === agentId)!.harnessId
     const before = await f.store.messages(peer, f.tab, f.chat, {})
     await expect(f.reply(b, 'No room', { newSession: true })).rejects.toMatchObject({ code: 'MACHINE_FULL',
-      message: 'Peer Mac is already running as many agents as it allows. End a session there, or try again when one finishes.' })
+      message: 'Peer Mac is set to run at most 2 agents and runs 2. Its owner can change that in its settings, or try again when one finishes.' })
     const state = (await f.store.read(peer, f.tab)).state
     expect(state.conversations.find(c => c.id === f.chat)!.buddySessions!.map(e => e.thread)).toEqual([a])
     expect(state.machines!.find(m => m.machineId === 'peer-mac')!.maxAgents).toBe(2)

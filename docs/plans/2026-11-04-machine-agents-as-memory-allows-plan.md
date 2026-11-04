@@ -10,8 +10,8 @@ limit"). Mac 3 refused Milo's engineer at 16 of 16.
 **Architecture:** Backend only in this pull request (smallest safe change, River 11-04). `ContributedMachine.agents`
 (`memory` | `atMost`) is the explicit setting; `machine.contribute` takes it optionally. A row without it (every row
 today, and every join from today's clients) is read by `agentLimit`: a stored count equal to the old join suggestion
-(16, or one per 4 GiB of the machine's memory) or at least Desktop's old As memory allows maximum (one per 2 GiB, at
-least 4) is As memory allows; any other number is the owner's own At most N. Read time, no migration. Admission
+(16, or one per 4 GiB of the machine's measured memory) is As memory allows; any other number is the owner's own At most
+N. Desktop's old As memory allows stored the machine's maximum (one per 2 GiB), which free memory reaches first. Read time, no migration. Admission
 (`admitByRoom`) checks the owner's count or, as memory allows, the last reading's free memory against the start's memory
 requirement; the host still checks free memory and disk at launch. `availableSlots` (route, plan, Desktop) counts room by
 free memory (one per 2 GiB) when memory allows. A Team account copies its Mac's setting.
@@ -34,7 +34,7 @@ free memory (one per 2 GiB) when memory allows. A Team account copies its Mac's 
 - failure: a refused start says the machine is out of free memory, with the numbers. platforms: every host.
 
 ## Review Focus
-- An owner's own At most N stays a limit; only the old suggestion and the old maximum read as memory allows.
+- An owner's own At most N stays a limit; only the old join suggestion reads as memory allows.
 - The memory refusal uses the reading's free memory, not the count.
 
 ## Task 1: Agents setting and memory admission
