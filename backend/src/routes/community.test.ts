@@ -149,6 +149,9 @@ describe('publications and access', () => {
     expect(feed.stats[id]).toEqual({ likes: 1, comments: 2, forks: 0, liked: false })
     expect((await call('GET', 'harnesses?mine=true', 'bob')).json().data.harnesses).toEqual([])
     expect((await call('GET', 'harnesses?mine=true')).statusCode).toBe(401)
+    // An empty page reads no covers: Prisma sends an empty list as a scan of the whole collection.
+    const lists = db.communityHarness.findMany.mock.calls.flatMap(([query]: [Query]) => (query.where?.id as { in?: string[] } | undefined)?.in ?? [null])
+    expect(db.communityHarness.findMany.mock.calls.some(([query]: [Query]) => ((query.where?.id as { in?: string[] } | undefined)?.in ?? ['x']).length === 0), JSON.stringify(lists)).toBe(false)
   })
   it('keeps replies inside the same public harness and account environment', async () => {
     const id = await publish()

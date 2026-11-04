@@ -47,6 +47,57 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+// Prisma sends an empty list as `$or: []`, which no index serves: a scan of the whole collection for nothing.
+describe('a person with nothing to read', () => {
+  const on = (entries: Array<{ ns: string }>, collection: string) => entries.filter(entry => entry.ns.endsWith(`.${collection}`))
+
+  it('reads no heads or members for an owner with no Swarm', async () => {
+    const entries = await profiled(db, () => store.hostGrids(person('no-swarm')))
+    expect(on(entries, 'SwarmHead')).toEqual([])
+    expect(on(entries, 'SwarmMember')).toEqual([])
+  })
+
+  it('reads no members when none of the owner\'s Swarms has a grid', async () => {
+    const someone = person('no-grid')
+    await swarmRow(someone.sub)
+    const entries = await profiled(db, () => store.hostGrids(someone))
+    expect(on(entries, 'SwarmMember')).toEqual([])
+  })
+
+  it('reads no heads for no Swarms split into parts', async () => {
+    const heads = (store as unknown as { heads(rows: unknown[]): Promise<Map<string, unknown>> }).heads.bind(store)
+    const entries = await profiled(db, () => heads([{ id: 'old', format: 1 }]))
+    expect(on(entries, 'SwarmHead')).toEqual([])
+  })
+
+  it('reads no workspaces for a person with no invitation', async () => {
+    let answer: unknown
+    const entries = await profiled(db, async () => { answer = await store.workspaces.invitationsFor(person('no-invitation')) })
+    expect(answer).toEqual({ invitations: [] })
+    expect(on(entries, 'SwarmWorkspace')).toEqual([])
+  })
+})
+
+// The Performance Advisor's suggestion from Ken's plan (2026-11-04): by tabId alone, or by date alone, this reads every row of
+// the big Swarm or of the range, to return a few.
+describe('operation receipts by Swarm and date', () => {
+  it('reads only the Swarm\'s rows in the range, by its index', async () => {
+    const row = (tabId: string, at: Date) => ({ id: randomUUID(), tabId, actorKey: 'person:x', requestHash: 'h', revision: 0, result: {}, createdAt: at })
+    const old = new Date(NOW - 20 * 86_400_000), recent = new Date(NOW - 86_400_000), big = randomUUID()
+    await db.superTabOperation.createMany({ data: [
+      ...Array.from({ length: 300 }, () => row(big, old)), ...Array.from({ length: 300 }, () => row(randomUUID(), recent)),
+      ...Array.from({ length: 5 }, () => row(big, recent)),
+    ] })
+    const entries = await profiled(db, () => db.superTabOperation.aggregateRaw({ pipeline: [
+      { $match: { tabId: big, createdAt: { $gte: { $date: new Date(NOW - 2 * 86_400_000).toISOString() } } } }, { $project: { _id: 1 } }] }))
+    const rows = reads(entries, 'SuperTabOperation', ['tabId', 'createdAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.nreturned).toBe(5)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(5)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
+  })
+})
+
 describe('the owner\'s grid poll', () => {
   it('finds the owner\'s Swarms by the owner index, examining none of anyone else\'s', async () => {
     const mine = [await swarmRow(owner.sub), await swarmRow(owner.sub)]

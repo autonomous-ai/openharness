@@ -179,6 +179,12 @@ describe('aggregate ingestion', () => {
     expect(await queued).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED', enabled: false, revision: 1 })
     expect(receipts()).toEqual(['receipt-1'])
   })
+  // Prisma sends an empty list as `$or: []`: 4.1 s through all 5.1 M receipts, inside this transaction (prod slow log, 2026-11-04).
+  it('reads no receipts when every report of a batch is refused', async () => {
+    choices({ userId: 'a', enabled: false, revision: 1 })
+    expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
+    expect(db.productUsageReceipt.findMany).not.toHaveBeenCalled()
+  })
   it('reports that arrive while a batch commits share the next transaction, with their totals summed', async () => {
     const gate = deferred()
     db.$transaction.mockImplementationOnce(async fn => { await gate.promise; return fn(db) })
