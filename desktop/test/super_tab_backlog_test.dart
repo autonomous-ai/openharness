@@ -1257,6 +1257,8 @@ void main() {
           await tester.pumpAndSettle();
           expect(find.text('No open tasks of yours'), findsOneWidget);
           expect(row('mine-a'), findsNothing);
+          // The cards still count what Mine shipped.
+          expect(summary(tester), (working: 0, review: 0, shipped: 2));
           final link = find.byKey(const ValueKey('super-backlog-mine-shipped'));
           expect(
             find.descendant(
