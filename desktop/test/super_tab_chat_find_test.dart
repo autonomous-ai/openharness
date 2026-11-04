@@ -5,18 +5,18 @@ import 'package:harness/super_tabs/chat_find.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
-SuperTabMessage _message(int sequence, String text) => SuperTabMessage.fromJson({
-  'id': 'm$sequence',
-  'conversationId': 'g1',
-  'sequence': sequence,
-  'text': text,
-  'author': {'kind': 'person', 'id': 'tony', 'name': 'Tony'},
-});
+SuperTabMessage _message(int sequence, String text) =>
+    SuperTabMessage.fromJson({
+      'id': 'm$sequence',
+      'conversationId': 'g1',
+      'sequence': sequence,
+      'text': text,
+      'author': {'kind': 'person', 'id': 'tony', 'name': 'Tony'},
+    });
 
 /// A chat whose older pages are read one at a time, as the view reads them.
 class _Chat {
-  _Chat(this.rows, {List<List<SuperTabMessage>>? older})
-    : older = older ?? [];
+  _Chat(this.rows, {List<List<SuperTabMessage>>? older}) : older = older ?? [];
 
   final List<SuperTabMessage> rows;
   final List<List<SuperTabMessage>> older;
@@ -156,7 +156,8 @@ void main() {
     chat.find.search('found');
     final first = chat.find.older();
     final second = chat.find.older();
-    expect(chat.find.reading, 0);
+    // The page on its way is counted, as the phone counts it.
+    expect(chat.find.reading, 1);
     chat.hold!.complete();
     await Future.wait([first, second]);
     expect(chat.reads, 1);
@@ -181,6 +182,41 @@ void main() {
     expect(chat.find.reading, isNull);
   });
 
+  test('disposing it stops a read-back under way', () async {
+    final chat = _Chat(
+      [_message(10, 'a')],
+      older: [
+        for (var page = 0; page < 5; page++) [_message(page + 1, 'quiet')],
+      ],
+    )..hold = Completer();
+    chat.find.search('a');
+    final back = chat.find.older();
+    chat.find.dispose();
+    chat.hold!.complete();
+    await back;
+    expect(chat.reads, 1);
+  });
+
+  test('down stops a read-back under way', () async {
+    final chat = _Chat(
+      [_message(9, 'a'), _message(10, 'a')],
+      older: [
+        [_message(1, 'a')],
+      ],
+    );
+    chat.find.search('a');
+    await chat.find.older();
+    expect(chat.find.current, 'm9');
+    chat.hold = Completer();
+    final back = chat.find.older();
+    chat.find.newer();
+    chat.hold!.complete();
+    await back;
+    expect(chat.reads, 1);
+    expect(chat.find.current, 'm10');
+    expect(chat.find.reading, isNull);
+  });
+
   test('a blank query matches nothing and reads nothing', () async {
     final chat = _Chat(
       [_message(1, '  ')],
@@ -201,10 +237,9 @@ void main() {
     expect((chat.find.current, chat.find.number), ('m1', 2));
     chat.rows.add(_message(3, 'x again'));
     chat.find.refresh();
-    expect((chat.find.current, chat.find.number, chat.find.total), (
-      'm1',
-      3,
-      3,
-    ));
+    expect(
+      (chat.find.current, chat.find.number, chat.find.total),
+      ('m1', 3, 3),
+    );
   });
 }
