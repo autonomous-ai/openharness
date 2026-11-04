@@ -76,7 +76,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, scheduleMessageId, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, scheduleRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3558,23 +3558,27 @@ export class SuperTabStore {
       const scheduled = led ? scheduleRequest(state, target, this.now()) : null
       if (scheduled) {
         const project = projectOf(state, led!.id)
-        const previous = project.schedule?.lastSlot
-        project.schedule = { lastSlot: scheduled.slot }
+        let wakeId = project.schedule?.wakeId
         let placed: 'update' | 'digest' | 'own' | 'skipped-open' | 'nothing-due' = 'nothing-due'
         if (scheduled.draft) {
-          const open = previous !== undefined && !!await tx.superTabDelivery.findFirst({ where: { tabId, agentId,
-            messageId: scheduleMessageId(tabId, project.id, previous), status: { in: ['queued', 'claimed', 'uncertain'] } }, select: { id: true } })
+          // The message that carried the last wake, by its delivery's primary key (writeMessages: one row per message and
+          // recipient): still unread is queued, claimed or uncertain.
+          const last = wakeId ? await tx.superTabDelivery.findUnique({ where: { id: stableId(wakeId, agentId) }, select: { status: true } }) : null
+          const open = !!last && ['queued', 'claimed', 'uncertain'].includes(last.status)
           const into = open ? null : await updateOpen() ? update! : digestDraft ?? null
           if (open) placed = 'skipped-open'
           else if (into) {
             into.text = `${into.text}\n\n${scheduled.draft.text}`
             into.source = { ...into.source, schedule: scheduled.slot }
             placed = into === digestDraft ? 'digest' : 'update'
+            wakeId = into.id
           } else {
             written.push(scheduled.draft)
             placed = 'own'
+            wakeId = scheduled.draft.id
           }
         }
+        project.schedule = { lastSlot: scheduled.slot, ...wakeId ? { wakeId } : {} }
         afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed }))
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.

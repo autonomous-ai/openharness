@@ -137,7 +137,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     f.clock.now += MINUTE
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toEqual({ lastSlot: scheduleSlot(f.clock.now) })
+    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
   })
 
   it('is the coordinator\'s alone: no person sees it in the chat, and no other agent reads it', async () => {
@@ -157,7 +157,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     wantSchedule()
     await f.poll()
     expect(await schedules(f.tab)).toEqual([])
-    expect((await projectOf(f)).schedule).toEqual({ lastSlot: scheduleSlot(f.clock.now) })
+    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
   })
 
   it('sends no second wake while the first is unread, and still moves the slot', async () => {
@@ -168,7 +168,27 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     f.clock.now += SCHEDULE_SLOT_MS
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toEqual({ lastSlot: scheduleSlot(f.clock.now) })
+    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
+  })
+
+  it('sends no second wake over three slots while the first is unread', async () => {
+    const f = await swarm()
+    wantSchedule()
+    await unassigned(f)
+    await f.poll()
+    for (const _ of [1, 2]) { f.clock.now += SCHEDULE_SLOT_MS; await f.poll() }
+    expect(await schedules(f.tab)).toHaveLength(1)
+  })
+
+  it('sends no wake of its own while the update request that carried the last one is unread', async () => {
+    const f = await swarm({ fresh: true })
+    wantSchedule()
+    await unassigned(f)
+    f.clock.now += DUE
+    await f.poll()
+    f.clock.now += SCHEDULE_SLOT_MS
+    await f.poll()
+    expect((await schedules(f.tab)).map(kindOf)).toEqual(['update-request'])
   })
 
   it('goes in the update request when one is written in the same poll', async () => {
@@ -226,6 +246,6 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.execute({ type: 'tab.pause', paused: false })
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toEqual({ lastSlot: scheduleSlot(f.clock.now) })
+    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
   })
 })

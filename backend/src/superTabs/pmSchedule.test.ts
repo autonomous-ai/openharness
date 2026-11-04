@@ -63,6 +63,15 @@ describe('the built-in PM schedule', () => {
     expect(wake(swarm(group))).toEqual({ slot: SLOT, draft: null })
   })
 
+  it('does not wake it for a finished group the Swarm would not archive either: tidying off, or a step whose task is still open', () => {
+    const quiet = { lastActivityAt: new Date(T - ARCHIVE_QUIET_MS).toISOString() }
+    const off = swarm(task(1, work('done'), quiet))
+    off.tidy = false
+    expect(wake(off)).toEqual({ slot: SLOT, draft: null })
+    const step = swarm(task(1, work('working')), task(2, work('done'), { ...quiet, reviewOf: 'g1', step: 'Plan' }))
+    expect(wake(step)).toEqual({ slot: SLOT, draft: null })
+  })
+
   it('sends nothing and records nothing in a paused Swarm, or for an agent that leads nothing', () => {
     const state = swarm(task(1, null))
     expect(scheduleRequest(state, state.agents.find(a => a.id === 'eng')!, T)).toBeNull()
@@ -74,6 +83,8 @@ describe('the built-in PM schedule', () => {
     const draft = wake(swarm(task(1, null)))!.draft!
     expect(draft.text.startsWith('Built-in schedule, 10:00 (Asia/Ho_Chi_Minh). This is a scheduled request from the Swarm, not a new task.')).toBe(true)
     expect(draft.text).toContain('Skip a job your project\'s instructions schedule on their own clock.')
+    // On its own, for a coordinator whose CLI predates the built-in section.
+    expect(draft.text).toContain('Set no timer of your own')
     expect(draft).toMatchObject({ conversationId: 'lead-p1', recipients: ['lead'], source: { kind: 'schedule-request', projectId: 'p1', slot: SLOT } })
   })
 

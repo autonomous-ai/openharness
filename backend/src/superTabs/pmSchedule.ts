@@ -4,7 +4,7 @@ import { workOver } from './decisions.js'
 import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { taskLiveness } from './liveness.js'
-import { ARCHIVE_QUIET_MS } from './tidy.js'
+import { archivable } from './tidy.js'
 
 // Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
 // own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
@@ -38,17 +38,15 @@ const isLead = (state: SuperTabState, group: Conversation) => projectsOf(state).
 const inProject = (group: Conversation, projectId: string) => (group.projectId ?? 'lead') === projectId
 
 /** Whether the sweep has anything to do among the loaded groups: a task no agent is moving (none assigned, its agent lost, or
- *  it waits on a person or is stuck), or a finished group the auto-archive never takes (no pull request linked, its task's
- *  either for a step). A task an agent is working on is the stalled and lost notices' (liveness.ts). Steps belong to their
- *  task's Engineer. */
+ *  it waits on a person or is stuck), or a finished group the Swarm may archive (tidy.ts archivable: tidying on, its step's
+ *  task ended) that the auto-archive never takes, since neither it nor, for a step, its task links a pull request. A task an
+ *  agent is working on is the stalled and lost notices' (liveness.ts). Steps belong to their task's Engineer. */
 export function sweepDue(state: SuperTabState, projectId: string, now: number): boolean {
   return state.conversations.some(group => {
     if (group.kind || group.audience || group.archived || !inProject(group, projectId) || isLead(state, group)) return false
     if (workOver(state, group)) {
       const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-      const linked = [...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? []]
-      const last = group.lastActivityAt ? Date.parse(group.lastActivityAt) : undefined
-      return !linked.length && last !== undefined && now - last >= ARCHIVE_QUIET_MS
+      return archivable(state, group, now) && !group.pullRequestUrls?.length && !task?.pullRequestUrls?.length
     }
     if (group.reviewOf) return false
     if (!group.assignment) return true
@@ -63,7 +61,8 @@ export function scheduleText(project: SwarmProject, slot: number): string {
   return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
     '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
       + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
-    'Skip a job your project\'s instructions schedule on their own clock.'].join('\n')
+    // Said here too: a CLI older than the built-in section shows its PM only this message.
+    'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
 }
 
 /** The coordinator's slot when one is due, with its wake when the sweep has something to do (null draft: record the slot,
