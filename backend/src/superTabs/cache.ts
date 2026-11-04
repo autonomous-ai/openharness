@@ -74,6 +74,11 @@ export const DELTA_MAX_PARTS = 500
  *  forgotten entry made every delta of its Swarm read an hour of changes (final review, Important 2). Twice the age at which
  *  a read refreshes an entry, so one read every minute keeps it patched. */
 export const DELTA_MAX_GAP_MS = 120_000
+/** Another entry joins an entry's delta only when it was refreshed at most this long before it: entries read at the same
+ *  stamps share one delta, and Desktop's background cadence (15 s) still joins. An entry nobody read since (a first load's
+ *  dormant selections, one window's conversation) is refreshed by its own delta when it is read: joined, it moved every delta
+ *  of its Swarm back to its time, so each machine reading read ~190 whole conversations again on the bench (#2783). */
+export const DELTA_JOIN_MS = 15_000
 
 /** One delta read: the stamps it was read at, the kinds it holds, from when, and when it started. */
 interface Delta { stamp: string; kinds: ReadonlySet<PartKind>; since: number; at: number; read: Promise<SwarmDelta> }
@@ -246,7 +251,8 @@ export class SwarmCache {
    * This Swarm's changes at these stamps, read once for every entry patched from them (the spec's one delta per Swarm and
    * stamp: one read per kind was up to five reads of the same window per bump, final review Important 3): over the kinds
    * of every entry of the Swarm due for a refresh, from the earliest of their reads, less OVERLAP_MS. An entry refreshed
-   * too long ago (DELTA_MAX_GAP_MS) is left out: it loads in full when read.
+   * too long ago (DELTA_MAX_GAP_MS) is left out: it loads in full when read. So is one refreshed more than DELTA_JOIN_MS
+   * before this entry: it reads its own delta when it is read.
    *
    * The stamps can stand still while the Swarm changes (a bump lost, or owed by this process), so a delta is shared only with
    * an entry read before it started: an older one could miss a change the entry's refresh exists to find, or bring back a
@@ -260,7 +266,8 @@ export class SwarmCache {
     let earliest = entry.at
     for (const name of this.bySwarm.get(tabId) ?? []) {
       const other = this.entries.get(name)!
-      if (other === entry || !other.patch || now - other.at > DELTA_MAX_GAP_MS || now - other.fullAt >= this.deltaMaxAgeMs || !this.due(other, stamp, now)) continue
+      if (other === entry || !other.patch || now - other.at > DELTA_MAX_GAP_MS || now - other.fullAt >= this.deltaMaxAgeMs || !this.due(other, stamp, now)
+        || other.at < entry.at - DELTA_JOIN_MS) continue
       for (const kind of other.patch.kinds) union.add(kind)
       earliest = Math.min(earliest, other.at)
     }

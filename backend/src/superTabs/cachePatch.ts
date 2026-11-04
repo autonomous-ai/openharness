@@ -94,28 +94,41 @@ export const finishedStartsRule: PatchRule<Part<AgentStart>[]> = {
   apply: (held, delta) => applyByKey(held, delta.parts, 'start', p => live(p) && finished(p)),
 }
 
-/** The `feed` entry (cachedReads.ts readChanged): every part changed after `from`, as `loadChanged` reads them, tombstones,
- *  dormant groups and machines' `readAt` included. Its full reloads were 610 MB per 20 minutes on prod (2026-11-02). */
-export const feedRule: PatchRule<{ from: number; parts: Part[] }> = {
-  kinds: PART_KINDS,
-  apply(held, delta) {
-    let next: Map<string, Part> | null = null
-    const id = (part: Part) => `${part.kind}\u0000${part.key}`
-    for (const part of delta.parts) {
-      const current = (next ?? null)?.get(id(part)) ?? held.parts.find(p => p.kind === part.kind && p.key === part.key)
-      if (current && part.version <= current.version) continue
-      next ??= new Map(held.parts.map(p => [id(p), p]))
-      next.set(id(part), part)
-    }
-    return next ? { from: held.from, parts: [...next.values()] } : held
-  },
-  // The check's own load starts where its reader's cursor does: only the parts both windows cover compare (final review).
-  comparable(patched, fresh) {
-    const from = Math.max(patched.from, fresh.from)
-    const covered = (parts: Part[]) => parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > from)
-    return [covered(patched.parts), covered(fresh.parts)]
-  },
+/** A change feed entry (cachedReads.ts readChanged): every part of `kinds` changed after `from`, as `loadChanged` reads them,
+ *  tombstones, dormant groups and machines' `readAt` included. Its full reloads were 610 MB per 20 minutes on prod
+ *  (2026-11-02). A delta shared with other entries brings their kinds too: only this feed's are applied. */
+function feedRuleOf(kinds: readonly PartKind[]): PatchRule<{ from: number; parts: Part[] }> {
+  const mine = new Set(kinds)
+  return {
+    kinds,
+    apply(held, delta) {
+      let next: Map<string, Part> | null = null
+      const id = (part: Part) => `${part.kind}\u0000${part.key}`
+      for (const part of delta.parts) {
+        if (!mine.has(part.kind)) continue
+        const current = (next ?? null)?.get(id(part)) ?? held.parts.find(p => p.kind === part.kind && p.key === part.key)
+        if (current && part.version <= current.version) continue
+        next ??= new Map(held.parts.map(p => [id(p), p]))
+        next.set(id(part), part)
+      }
+      return next ? { from: held.from, parts: [...next.values()] } : held
+    },
+    // The check's own load starts where its reader's cursor does: only the parts both windows cover compare (final review).
+    comparable(patched, fresh) {
+      const from = Math.max(patched.from, fresh.from)
+      const covered = (parts: Part[]) => parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > from)
+      return [covered(patched.parts), covered(fresh.parts)]
+    },
+  }
 }
+
+/** The feed's kinds that a machine's reading never changes, held at the main stamp (#2783): under the `all` scope with the
+ *  machines, every reading made the next refresh read all seven part collections, though only a machine part moved. */
+export const FEED_MAIN_KINDS: readonly PartKind[] = PART_KINDS.filter(kind => kind !== 'machine')
+/** The `feed` entry: changed parts of every kind but machines. */
+export const feedRule = feedRuleOf(FEED_MAIN_KINDS)
+/** The `machine-feed` entry: changed machine parts, readings included, held at both stamps. */
+export const machineFeedRule = feedRuleOf(['machine'])
 
 /** A `startsOf:{agents}` entry (read/service.ts pollStarts): the live starts of these agents, an agent being its machine and
  *  harness (`stableId`). A start whose agent left the list goes, as does a tombstone. */
