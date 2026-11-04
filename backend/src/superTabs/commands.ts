@@ -2282,7 +2282,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
       const project = readProject(state, actor, command.projectId ?? agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
       const name = owner.email.split('@')[0]!
-      message(home.id, `Let's build: ${proposalTitle(command)}`, [], null,
+      message(home.id, proposalTitle(command), [], null,
         { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: command.ownerMessageId })
       const root = effects.messages.at(-1)!
       root.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }

@@ -43,7 +43,7 @@ const authorOf = (row: CatchUpRow) => (row.author ?? {}) as RowAuthor
 const kindOf = (row: CatchUpRow) => (row.source as { kind?: unknown } | null)?.kind
 /** A row of the chat itself: top-level, from before threads, or a reply also sent to the chat (threads.ts). */
 const inMainStream = (row: CatchUpRow) => !row.thread || row.thread === row.id || !!row.alsoInChat
-/** A "Let's build" root the server posted in its person's name (taskLine.ts, buddy.propose): not their own writing. */
+/** A task's root the server posted in its person's name (taskLine.ts, buddy.propose): not their own writing. */
 const POSTED_FOR_AUTHOR = new Set<unknown>(['task-line', 'buddy-proposal'])
 const own = (row: CatchUpRow, personId: string) => authorOf(row).kind === 'person' && authorOf(row).id === personId
   && !POSTED_FOR_AUTHOR.has(kindOf(row))

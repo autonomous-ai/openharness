@@ -131,7 +131,7 @@ function moved(state: SuperTabState, effects: CommandEffects, group: Conversatio
       const requester = state.people.find(p => p.id === group.requesterId)
       effects.messages.push({ id: root, conversationId: chat.id,
         author: requester ? { kind: 'person', id: requester.id, name: requester.email, membershipGeneration: requester.generation } : coordinator,
-        text: `Let's build: ${group.title}`, replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, ...fields(group) } })
+        text: group.title, replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, ...fields(group) } })
       if (group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
     }
   } else if (previous && previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
