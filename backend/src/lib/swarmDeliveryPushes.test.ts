@@ -105,15 +105,22 @@ describe('Swarm delivery pushes on a daemon socket', () => {
     expect(pushes(send)).toEqual([told({ tabId: 'tab-1', agentId: 'agent-1' })])
   })
 
-  // The host goes back to reading each second 10 minutes after it last heard this (cli superTabs/host.ts PUSH_LEASE_MS).
-  it('says again that it pushes every 4 minutes', async () => {
+  // Review of #2977 (Important 1): an idle worker's list is read only when told, so a host must learn within minutes that the
+  // channel went silent. Each minute the server renews the host's push lease through Redis (cli superTabs/host.ts
+  // PUSH_LEASE_MS, 2.5 min) with a `__` frame an older daemon drops; every 4 minutes it also says it pushes as before, which
+  // makes a host read every list once, the net an older daemon already had.
+  const lease = { t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } }
+  it('renews the lease each minute, and says it pushes every 4 minutes', async () => {
     const send = vi.fn()
     await relaySwarmDeliveries('machine-a', send)
     send.mockClear()
-    await vi.advanceTimersByTimeAsync(4 * 60_000 - 1)
+    await vi.advanceTimersByTimeAsync(60_000 - 1)
     expect(pushes(send)).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
-    expect(pushes(send)).toEqual([told({})])
+    expect(pushes(send)).toEqual([lease])
+    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    expect(pushes(send)).toEqual([lease, lease, lease, lease, told({})])
+    expect(bus.published).toHaveLength(4)
   })
 
   // Task #2800: an idle worker's list is read only when the server says so, so a repeat from a local timer would keep a host
@@ -123,9 +130,9 @@ describe('Swarm delivery pushes on a daemon socket', () => {
     const send = vi.fn()
     await relaySwarmDeliveries('machine-a', send)
     send.mockClear()
-    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    await vi.advanceTimersByTimeAsync(60_000)
     expect(bus.published).toEqual([['machine-a', { pushes: true }]])
-    expect(pushes(send)).toEqual([told({})])
+    expect(pushes(send)).toEqual([lease])
     send.mockClear()
     bus.carries = false
     await vi.advanceTimersByTimeAsync(4 * 60_000)

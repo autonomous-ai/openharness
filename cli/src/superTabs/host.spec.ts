@@ -5247,16 +5247,31 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(settled)
   })
 
-  it('goes back to reading each second once the server has not said it pushes for 10 minutes', async () => {
+  // Review of #2977 (Important 1): with Redis silent no push comes, and an idle worker is read only when told, so the lease
+  // must lapse within minutes. The server renews it each minute (backend lib/swarmDeliveryPushes.ts).
+  it('goes back to reading each second, and says so once, when the server has not renewed its lease for 2.5 minutes', async () => {
     const t = setup(), host = t.open()
     t.idle()
     t.push(announced)
     await host.tick()
-    t.wait(10 * 60_000)
+    t.wait(150_000)
     await host.tick()
     await seconds(t, host, 2)
     expect(reads(t)).toBe(4)
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('stopped saying it pushes deliveries'))).toHaveLength(1)
   })
+
+  it('keeps the lease on the server\'s minute word without reading any list', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    for (let minute = 0; minute < 10; minute++) {
+      await seconds(t, host, 60)
+      t.push({ type: '__deliveries_lease' })
+    }
+    expect(reads(t)).toBe(1)
+  }, 20_000)
 
   it('reads nothing more for a push naming an agent that does not run here', async () => {
     const t = setup(), host = t.open()
@@ -5626,9 +5641,11 @@ describe('requests per idle agent and machine per minute while the server pushes
     t.push({ type: 'super_tab_deliveries' })
     await host.tick()
     vi.mocked(t.call).mockClear()
-    // The server's 4-minute repeat that it pushes (backend lib/swarmDeliveryPushes.ts), heard at 4 and 8 minutes.
+    // The server's minute lease and its 4-minute word that it pushes (backend lib/swarmDeliveryPushes.ts). A daemon from
+    // before #2800 drops the `__` lease frame.
     for (let second = 1; second <= 600; second++) {
       t.wait(1_000)
+      if (second % 60 === 0) t.push({ type: '__deliveries_lease' } as BackendNotice)
       if (second % 240 === 0) t.push({ type: 'super_tab_deliveries' })
       await host.tick()
     }
