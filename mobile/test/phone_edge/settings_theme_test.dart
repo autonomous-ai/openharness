@@ -174,6 +174,30 @@ void main() {
       await close(tester, app);
     });
 
+    testWidgets('a screen reader changes the theme: each segment not chosen '
+        'takes a tap, the chosen one none (review of #2920)', (tester) async {
+      final (app, store, storage) = await openSettings(tester, swarm: true);
+      await reveal(tester, find.text('Theme'));
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Light')),
+        isSemantics(label: 'Light', isButton: true, isSelected: false, hasTapAction: true),
+      );
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('System')),
+        isSemantics(label: 'System', isButton: true, isSelected: false, hasTapAction: true),
+      );
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Dark')),
+        isSemantics(label: 'Dark', isButton: true, isSelected: true, hasTapAction: false),
+      );
+      tester.semantics.tap(find.semantics.byLabel('Light'));
+      await frames(tester);
+      expect(store.value.themeMode, AppThemeMode.light);
+      expect(storage.values['app_theme_mode'], 'light');
+      expect(fillOf(tester, 'Light'), AppPalette.textPrimary);
+      await close(tester, app);
+    });
+
     testWidgets("Light turns the app light at once and is kept; the terminal's "
         'colours stay Graphite', (tester) async {
       final (app, store, storage) = await openSettings(tester, swarm: true);
