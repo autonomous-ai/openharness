@@ -155,13 +155,11 @@ SystemNotifications clicks() => SystemNotifications(
   notifier: MacSystemNotifier(),
 );
 
-/// A Swarm open in a tab of [f]'s app with one of everything Activity lists
+/// One of everything Activity lists
 /// (task #2914): a due reminder, an agent waiting on the reader, a decision,
 /// an unread tag in a chat held, one answered elsewhere but unread, and one in
 /// a quiet chat the snapshot does not hold.
-Future<SuperTabActivity> openWithEverything(SuperTabLaunchFixture f) async {
-  final server = f.connection.server;
-  f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+void giveEverything(ConversationServer server) {
   server.state['agents'] = [
     {
       'id': 'kestrel',
@@ -219,6 +217,12 @@ Future<SuperTabActivity> openWithEverything(SuperTabLaunchFixture f) async {
     ..['resolvedAt'] = '2026-10-24T06:30:00Z'
     ..['resolvedBy'] = 'answered';
   server.state['mentionsWaiting'] = 2;
+}
+
+/// [f]'s app with [giveEverything] in a Swarm tab, its lists read.
+Future<SuperTabActivity> openWithEverything(SuperTabLaunchFixture f) async {
+  f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+  giveEverything(f.connection.server);
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   final activity = SuperTabActivity.of(c);
@@ -479,6 +483,69 @@ void main() {
       expect(c.noticeRequest, isNull);
       expect(find.byType(SuperTabActivityView), findsNothing);
       expect(find.text('Please confirm the release.'), findsWidgets);
+      await close(tester, view);
+    });
+
+    Future<SuperTabView> showEverything(WidgetTester tester) async {
+      final server = ConversationServer();
+      giveEverything(server);
+      final view = await showView(tester, server);
+      final c = view.controller;
+      await SuperTabMentions.of(c).load();
+      await SuperTabDecisions.of(c).load();
+      await SuperTabReminders.of(c).load();
+      c.select('lead');
+      await tester.pumpAndSettle();
+      return view;
+    }
+
+    testWidgets('a tag answered elsewhere, not read, opens at its message '
+        '(#2914)', (tester) async {
+      final view = await showEverything(tester);
+      final c = view.controller;
+      c.select('offline');
+      await tester.pumpAndSettle();
+      c.openNotice('mention', 'mention-2');
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.noticeRequest, isNull);
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(
+        SuperTabActivity.of(c).notices.map((n) => n.id),
+        isNot(contains('mention-2')),
+      );
+      await close(tester, view);
+    });
+
+    testWidgets('a due reminder opens its message, which clears it (#2914)', (
+      tester,
+    ) async {
+      final view = await showEverything(tester);
+      final c = view.controller;
+      c.select('offline');
+      await tester.pumpAndSettle();
+      c.openNotice('reminder', 'reminder-message-1');
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(
+        SuperTabActivity.of(c).notices.map((n) => n.kind),
+        isNot(contains(SuperTabNoticeKind.reminder)),
+      );
+      await close(tester, view);
+    });
+
+    testWidgets('an agent waiting opens its chat, its terminal beside it '
+        '(#2914)', (tester) async {
+      final view = await showEverything(tester);
+      final c = view.controller;
+      c.openNotice('agent', 'offline');
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'offline');
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(c.agentTerminalRequest?.agentId, 'kestrel');
+      expect(c.agentTerminalRequest?.conversationId, 'offline');
       await close(tester, view);
     });
 
@@ -1021,6 +1088,55 @@ void main() {
         ('Wren asks you', 'Ship it behind a flag?'),
         ('Wren tagged you', 'Please confirm the release.'),
       ]);
+    });
+  });
+
+  group('either place clears the other at once (#2914)', () {
+    test('Mark read in Activity on a tag answered elsewhere: the app hears, '
+        'and it leaves both', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = await openWithEverything(f);
+      var heard = 0;
+      f.app.addListener(() => heard++);
+      final answered = activity.mentions.earlier.single;
+      expect(answered.id, 'mention-2');
+      activity.markMentionsRead([answered]);
+      expect(heard, greaterThan(0));
+      expect(menuRows(f), isNot(contains(('mention', 'mention-2'))));
+      expect(activity.notices.map((n) => n.id), isNot(contains('mention-2')));
+      expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+    });
+
+    test(
+      'Mark read in Activity on a tag in a quiet chat leaves both',
+      () async {
+        final f = SuperTabLaunchFixture(local: true);
+        final activity = await openWithEverything(f);
+        final quiet = activity.mentions.waiting.firstWhere(
+          (m) => m.id == 'mention-3',
+        );
+        activity.markMentionsRead([quiet]);
+        await activity.mentions.load();
+        expect(menuRows(f), isNot(contains(('mention', 'mention-3'))));
+        expect(activity.notices.map((n) => n.id), isNot(contains('mention-3')));
+        expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+      },
+    );
+
+    test('a reminder coming due reaches the menu at once', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = await openWithEverything(f);
+      final server = f.connection.server;
+      server.append('One more look');
+      var heard = 0;
+      f.app.addListener(() => heard++);
+      server.remindElsewhere(
+        'message-${server.revision}',
+        DateTime.now().subtract(const Duration(seconds: 1)),
+      );
+      await SuperTabReminders.of(activity.controller).load();
+      expect(heard, greaterThan(0));
+      expect(menuRows(f).where((r) => r.$1 == 'reminder'), hasLength(2));
     });
   });
 }
