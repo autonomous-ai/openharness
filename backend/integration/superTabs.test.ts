@@ -2017,6 +2017,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
   })
 
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  it('closes an agent\'s delivery when it answers right below the message, which opens no thread', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'What is the status?', replyTo: null, recipientIds: [lead] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
+    const answered = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'It is done.', replyTo: null, answers: messageId,
+      recipientIds: [] } as Command, host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    const page = await store.messages(peer, tab, 'lead', {})
+    const answer = page.messages.find(m => m.id === answered.result.messageId)!
+    expect(answer).toMatchObject({ replyTo: null })
+    expect(answer.thread ?? answer.id).toBe(answer.id)
+    // The question shows as an ordinary message: no thread under it.
+    expect(page.threads.find(t => t.id === messageId)?.replies ?? 0).toBe(0)
+    // A message of another conversation is not one to answer here.
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
+      .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
+  })
+
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

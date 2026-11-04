@@ -449,7 +449,10 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Keep it short: a few sentences, under about 150 words, unless they ask for detail. '
   + 'Do not show commands, message or sequence ids, field names or error codes. '
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
-  + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): the reply line names which one this message takes.
+  + 'Answer each message once, as the reply line says. A message in the main chat is answered right below it (--answers); '
+  + 'one in a thread, inside its thread (--reply-to). Open a thread only for a back-and-forth on one topic, or to answer something far up the chat. '
+  + 'If you have already answered a message, do not post again. '
   + 'When you hand over finished work, give the result with the revision and links they need.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
@@ -2279,9 +2282,11 @@ export class SuperTabHost {
     // names it, or an Engineer answering a Reviewer reaches the PM instead (final review). A person reads the chat itself.
     const author = object(message.author)
     const to = author.kind === 'agent' && identifier(author.id) ? ` --to ${shellQuote(author.id)}` : ''
+    // A thread reply is answered in its thread, and a Buddy session's thread stays its own; any other message right below it.
+    const threaded = (identifier(message.thread) && message.thread !== message.id) || message.buddySession === true
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
-      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}${to}\n`
+      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}\n`
       + `Manage agreed work and delegation: ${command} help.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + context + native + reply + said
