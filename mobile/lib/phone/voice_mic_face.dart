@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 
 import 'floating_glass.dart';
 import 'tty.dart';
@@ -625,7 +626,8 @@ class _HeldBadge extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: AppPalette.warn,
+        // On the terminal's palette where the mic sits on a terminal's page ([TerminalLook]).
+        color: TerminalLook.read(context, () => AppPalette.warn),
         // A ring the terminal's own near-black, so the dot reads as sitting
         // ON the rim rather than as a stain on the fill — its ground, on a
         // light one.
