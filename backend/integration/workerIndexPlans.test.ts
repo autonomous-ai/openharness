@@ -264,3 +264,33 @@ describe('the pull request watch', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
   })
 })
+
+describe('the hourly unused-upload sweep', () => {
+  // Ken's prod scan of 11-04 (#2676): Performance Advisor suggested an index for it. The sweep's claim reads uploads by
+  // `usedBy` and `proposedBy` (both null), `purpose` and age; its remove step reads the uploads it took by `usedBy` alone.
+  // One index starting with `usedBy` bounds both; a used upload, the most of them, is never examined.
+  it('reads only the unused day-old uploads, and then only the ones it took, by the usedBy index', async () => {
+    const { sweepUnsentAttachments } = await import('../src/lib/attachmentSweep.js')
+    const upload = (createdAt: number, fields: Record<string, unknown> = {}) => ({ id: randomUUID(), tabId: 'tab-u', conversationId: 'c', actorKey: 'a',
+      name: 'f.png', mime: 'image/png', size: 1, objectKey: `k-${randomUUID()}`, createdAt: new Date(createdAt), ...fields })
+    await db.superTabAttachment.createMany({ data: [
+      // Sent files, a week old: a read not bounded by `usedBy` examines them all.
+      ...Array.from({ length: 20 }, () => upload(NOW - 7 * DAY, { usedBy: `message-${randomUUID()}` })),
+      upload(NOW - 7 * DAY, { proposedBy: 'proposal-1' }), upload(NOW - 60_000),
+      upload(NOW - 2 * DAY), upload(NOW - 3 * DAY),
+    ] })
+    const deleted: string[] = []
+    const store = { delete: async (key: string) => { deleted.push(key) } }
+    const entries = await profiled(db, () => sweepUnsentAttachments(db, { store } as never, new Date(NOW), { chunk: 100, chunks: 1, pauseMs: 0 }))
+    expect(deleted).toHaveLength(2)
+    const claims = reads(entries, 'SuperTabAttachment', ['usedBy', 'proposedBy', 'createdAt']).filter(e => e.op === 'query')
+    expect(claims, JSON.stringify(plan(claims))).toHaveLength(1)
+    expect(claims[0]!.nreturned).toBe(2)
+    expect(claims[0]!.docsExamined, JSON.stringify(plan(claims))).toBeLessThanOrEqual(2)
+    expect(claims[0]!.planSummary, JSON.stringify(plan(claims))).toMatch(/IXSCAN \{ usedBy: 1, proposedBy: 1, purpose: 1, createdAt: 1/)
+    const taken = reads(entries, 'SuperTabAttachment', ['usedBy'], ['proposedBy']).filter(e => e.op === 'query')
+    expect(taken, JSON.stringify(plan(taken))).toHaveLength(1)
+    expect(taken[0]!.docsExamined, JSON.stringify(plan(taken))).toBeLessThanOrEqual(2)
+    expect(taken[0]!.planSummary, JSON.stringify(plan(taken))).toMatch(/IXSCAN \{ usedBy: 1/)
+  })
+})
