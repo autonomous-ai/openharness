@@ -275,6 +275,57 @@ void main() {
     await _close(tester, c);
   });
 
+  testWidgets('a long title gets three lines on the Board, one in List', (
+    tester,
+  ) async {
+    const long =
+        'A long title that takes all three of its lines on the board, and then '
+        'goes on with more words than three lines of a column can hold, so '
+        'the rest of it is cut';
+    final server = tasksServer();
+    (server.state['conversations'] as List).add(
+      taskFixture('long', long, 17, requester: 'tony'),
+    );
+    final c = await _show(tester, server);
+    Finder title(String id, String text) =>
+        find.descendant(of: _card(id), matching: find.text(text));
+    expect(tester.widget<Text>(title('long', long)).maxLines, 3);
+    final board = tester.getSize(title('long', long)).height;
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(title('long', long)).maxLines, 1);
+    final line = tester.getSize(title('long', long)).height;
+    expect(board, moreOrLessEquals(line * 3, epsilon: 1));
+    await _close(tester, c);
+  });
+
+  testWidgets('a Board card is an inset tile, rounded 8, with no shadow', (
+    tester,
+  ) async {
+    final c = await _show(tester, tasksServer());
+    for (final id in ['tag', 'preview', 'p-old', 'sender']) {
+      final ink = tester.widget<Ink>(
+        find.descendant(of: _card(id), matching: find.byType(Ink)),
+      );
+      final decoration = ink.decoration! as BoxDecoration;
+      expect(decoration.color, grid.AppCard.inset, reason: id);
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(grid.AppCard.insetRadius),
+      );
+      expect(decoration.border, Border.all(color: grid.AppCard.insetHair));
+      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+    }
+    // List keeps its plain rows.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: _card('tag'), matching: find.byType(Ink)),
+      findsNothing,
+    );
+    await _close(tester, c);
+  });
+
   testWidgets('an empty column keeps its heading with 0', (tester) async {
     final server = tasksServer();
     (server.state['conversations'] as List).removeWhere(
