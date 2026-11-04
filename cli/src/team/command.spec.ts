@@ -938,6 +938,20 @@ describe('on Windows', () => {
     expect(text).toContain('✓ Private')
   })
 
+  // Task #2686: on Windows the sign-in and the daemon's start come after the elevated script, from the owner.
+  it('setup says the sign-in and the daemon steps around the handover, then waits for the report', async () => {
+    const handed: string[] = []
+    const steps: string[] = []
+    const f = onWindows({ handedOver: handed, progress: (step) => steps.push(step), readStatus: () => handed.length ? reported(1_000_000) : null })
+    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
+      build(`${WIN_HOME}\\AppData\\Local\\Temp\\harness-team-stage`)
+      progress?.('account'); progress?.('engines')
+      return { ok: true, stdout: '' }
+    })
+    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
+    expect(steps).toEqual(['password', 'account', 'engines', 'sign-in', 'daemon', 'report'])
+  })
+
   it('setup starts the task again up to five times, and keeps a sign-in already there unless asked again', async () => {
     let tries = 0
     const f = onWindows({ statusAfter: reported, startTeamTask: vi.fn(async () => ++tries >= 3) })

@@ -319,6 +319,7 @@ const TASK_START_TRIES = 5
 async function windowsHandOver(deps: TeamCommandDeps, layout: TeamLayout, signInAgain: boolean): Promise<{ handedOver: boolean } | { failed: string }> {
   let handedOver = false
   let noSignIn: string | null = null
+  deps.progress?.('sign-in')
   if (signInAgain || deps.readStatus(layout.statusFile)?.signIn?.state !== 'signed-in') {
     try {
       const { code } = await mintTeamHandoff(() => deps.auth(), deps.post)
@@ -330,6 +331,7 @@ async function windowsHandOver(deps: TeamCommandDeps, layout: TeamLayout, signIn
     }
   }
   // Started whether or not a code went over, as the Mac's script starts its daemon: with the sign-in it had, or none.
+  deps.progress?.('daemon')
   for (let tries = 1; ; tries++) {
     if (await deps.startTeamTask?.()) break
     if (tries >= TASK_START_TRIES) return { failed: `Task Scheduler would not start the team daemon's task ${layout.service.label}` }

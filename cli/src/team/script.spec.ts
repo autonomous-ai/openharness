@@ -642,6 +642,21 @@ describe('Linux', () => {
       expect(script).not.toMatch(/dscl|launchctl|plutil|stat -f|\/Library\/|\/Users\//)
     })
 
+    // Task #2686, after Scholes's new member waited ~7 minutes with no sign of progress (#2921 did the Mac).
+    it('says each step, as the owner, in the stage the owner\'s Harness reads, before the step runs', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain(`step() { printf '%s\\n' "$1" | as_owner /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$STAGE/progress" >/dev/null 2>&1 || true; }`)
+      const order = ['account', 'home', 'privacy', 'runtime', 'engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name}\n`))
+      for (const at of order) expect(at).toBeGreaterThan(0)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      expect(order[0]).toBeLessThan(at(script, 'useradd -m'))
+      expect(order[4]).toBeLessThan(script.indexOf(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)}`))
+      expect(order[6]).toBeLessThan(at(script, 'systemctl enable --now "$UNIT_NAME"'))
+      // The engines go through the same bounded install as a Mac's (8 minutes, one run, missing engines said).
+      expect(script).toContain(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" '@anthropic-ai/claude-code' '@openai/codex' || true`)
+      parses(script)
+    })
+
     it('makes a standard listed user with a locked password, and never a sudoer', () => {
       const script = buildLinuxSetupScript(linuxInput())
       expect(script).toContain('useradd -m -d "$TEAM_HOME" -g "$TEAM_GROUP" -s /bin/bash -c "$TEAM_NAME" "$TEAM"')
@@ -757,7 +772,7 @@ describe('Linux', () => {
       const script = buildLinuxSetupScript(linuxInput())
       const order = [
         'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', OWNER_HOME_PRIVATE,
-        'as_owner /bin/sh -c', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+        'sh "$SENTINEL"', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
         'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
         'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
         'install -o 0 -g 0 -m 0644 "$STAGE/team.service" "$UNIT"', 'systemctl daemon-reload', 'systemctl enable --now "$UNIT_NAME"',
