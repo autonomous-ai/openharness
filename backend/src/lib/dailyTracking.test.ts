@@ -5,15 +5,14 @@ const machineUpdate = vi.hoisted(() => vi.fn())
 const swarmAgentFind = vi.hoisted(() => vi.fn())
 const warn = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
-vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate }, swarmAgent: { findFirst: swarmAgentFind } } }))
+vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate }, swarmAgent: { aggregateRaw: swarmAgentFind } } }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
-import { stableId } from '../superTabs/model.js'
 import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
 beforeEach(() => {
   record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
   machineUpdate.mockReset(); machineUpdate.mockResolvedValue({})
-  swarmAgentFind.mockReset(); swarmAgentFind.mockResolvedValue(null); warn.mockReset()
+  swarmAgentFind.mockReset(); swarmAgentFind.mockResolvedValue([]); warn.mockReset()
 })
 it('forwards only the choice identity and a fixed metric, never device, agent or location', async () => {
   const now = new Date('2026-10-13T12:00:00Z')
@@ -217,11 +216,11 @@ describe('a turn is marked by who started it', () => {
     expect(mark.mock.calls).toEqual([['owner', now, { worked: true }]])
   })
 
-  it('marks a Swarm agent\'s turn as hosting, not worked, found by its machine and session', async () => {
-    swarmAgentFind.mockResolvedValue({ id: 'row' })
+  it('marks a Swarm agent\'s turn as hosting, not worked, found by its machine and current terminal', async () => {
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
     await recordTurnStarted('owner', 'mac', 'swarm-session', now)
     expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
-    expect(swarmAgentFind).toHaveBeenCalledWith({ where: { key: stableId('mac', 'swarm-session'), deleted: false }, select: { id: true } })
+    expect(swarmAgentFind.mock.calls[0]![0].pipeline[0]).toEqual({ $match: { machineId: 'mac', deleted: false, 'data.harnessId': 'swarm-session' } })
   })
 
   it('marks a Team account\'s turn as hosting without reading anything: it runs only Swarm agents', async () => {
@@ -240,7 +239,7 @@ describe('a turn is marked by who started it', () => {
   })
 
   it('counts the turn in the relay total whichever mark it gets', async () => {
-    swarmAgentFind.mockResolvedValue({ id: 'row' })
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
     await recordTurnStarted('owner', 'mac', 'swarm-session', now)
     await recordTurnStarted('owner', 'team-mac', 'any', now, true)
     expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started', 'relay_turns_started'])

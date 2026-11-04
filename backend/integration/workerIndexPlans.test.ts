@@ -49,8 +49,9 @@ describe('the hourly people rollup', () => {
 })
 
 describe('a turn on a Mac, Swarm agent or own session', () => {
-  const agentRow = (machineId: string, harnessId: string, deleted: boolean, tabId = randomUUID()) => ({ id: randomUUID(), tabId, key: stableId(machineId, harnessId),
-    version: 1, changedAt: new Date(NOW), deleted, ordinal: 1, data: {}, machineId, machineOwnerId: 'owner', contributorId: 'owner' })
+  // `first`: the terminal it started in, whose id it keeps as its own after a rebind (superTabs/commands.ts agent.rebind).
+  const agentRow = (machineId: string, harnessId: string, deleted: boolean, first = harnessId) => ({ id: randomUUID(), tabId: randomUUID(), key: stableId(machineId, first),
+    version: 1, changedAt: new Date(NOW), deleted, ordinal: 1, data: { harnessId }, machineId, machineOwnerId: 'owner', contributorId: 'owner' })
 
   it('tells a live Swarm agent from a removed one and from the same session id on another Mac', async () => {
     await db.swarmAgent.createMany({ data: [agentRow('mac-a', 'live', false), agentRow('mac-a', 'removed', true)] })
@@ -60,13 +61,20 @@ describe('a turn on a Mac, Swarm agent or own session', () => {
     expect(await turnMark('mac-a', 'own-session', false)).toEqual({ worked: true })
   })
 
-  it('reads one Swarm agent row by its key and deleted index', async () => {
-    await db.swarmAgent.createMany({ data: [agentRow('mac-p', 'one', false), ...Array.from({ length: 20 }, (_, i) => agentRow('mac-p', `other-${i}`, false))] })
+  it('follows a rebound Swarm agent to its current terminal, and leaves the one it left to the owner', async () => {
+    await db.swarmAgent.create({ data: agentRow('mac-r', 'new-terminal', false, 'first-terminal') })
+    expect(await turnMark('mac-r', 'new-terminal', false)).toEqual({ hosting: true })
+    expect(await turnMark('mac-r', 'first-terminal', false)).toEqual({ worked: true })
+  })
+
+  it('reads only the live agents of that machine, by the machine and deleted index', async () => {
+    await db.swarmAgent.createMany({ data: [agentRow('mac-p', 'a', false), agentRow('mac-p', 'one', false), agentRow('mac-p', 'gone', true),
+      ...Array.from({ length: 20 }, (_, i) => agentRow('mac-elsewhere', `other-${i}`, false))] })
     const entries = await profiled(db, () => turnMark('mac-p', 'one', false))
-    const rows = reads(entries, 'SwarmAgent', ['key', 'deleted'])
+    const rows = reads(entries, 'SwarmAgent', ['machineId', 'deleted'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ key: 1, deleted: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ machineId: 1, deleted: 1/)
   })
 
   it('reads a row from before the hosting mark as not hosting, and a marked one as hosting, in the rollup', async () => {
