@@ -43,7 +43,6 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    // A Buddy here reads its folder alone, whatever this machine is (wide mode reads the person's home: lib/buddyGuard.wide.spec.ts).
     swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }

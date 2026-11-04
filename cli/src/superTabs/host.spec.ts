@@ -1,11 +1,10 @@
-import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
-import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf, forgetBuddyReads } from '../lib/buddyGuard.js'
+import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -34,9 +33,6 @@ import { mayBeBuddy, retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { createAccountHttp } from '../gateway/accountHttp.js'
-
-// A Buddy that reads its folder alone, whatever this machine is: wide mode has its own tests (lib/buddyGuard.wide.spec.ts).
-const folderOnly = () => null
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -1814,15 +1810,9 @@ describe('Super Tab attachments in delivered input', () => {
   })
 })
 
-/** What a Buddy's guard at [guard], for its folder [folder], answers a Read of [path]: the hook as Claude Code runs it. */
-function guardReads(guard: string, folder: string, path: string): string {
-  const run = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 10_000,
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: path }, cwd: folder }) })
-  return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
-}
-
 // Tony, 10-30: his Buddy could open neither the screenshot he sent it in their Buddy chat nor the Artifact he linked there.
-// What its own person sends it there is listed for its guard (lib/buddyGuard.ts); what anybody else sends, never.
+// Task #2832: a Buddy runs in full mode on its owner's own machine, so nothing is listed for a guard; what stays is the grant
+// that its owner is here (lib/buddyGuard.ts), written at its own person's message alone, and the note of the Artifact links.
 describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   const LINK = 'https://claude.ai/artifact/abc-123'
   const person = { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'g' }
@@ -1834,7 +1824,6 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   const buddyAgent = { id: AGENT, harnessId: '', machineId: '', machineOwnerId: 'peer', projectId: 'app',
     buddyOf: { personId: 'peer', generation: 'g' } }
   const buddyChat = { id: 'chat', kind: 'buddy', projectId: 'app', title: 'Buddy', leadId: null, agentIds: [AGENT], buddyOwnerId: 'peer' }
-  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
   const key = 'buddy-session'
   const picture = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 3, url: 'https://cdn.example.test/x' }
   const listed = () => existsSync(buddyReadsOf(key).file) ? JSON.parse(readFileSync(buddyReadsOf(key).file, 'utf8')) : null
@@ -1873,13 +1862,10 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     return { t, host, shot, state, reads, delivered, refuse: (value: boolean) => { refuse = value } }
   }
 
-  it('lists the files and Artifact links it sent before the Buddy hears the message, and says the pages are material', async () => {
+  it('grants its person before the Buddy hears the message, hands it the files and Artifact links, and says the pages are material', async () => {
     const { host, shot, delivered } = buddyOn()
     await host.tick()
-    const stat = lstatSync(shot, { bigint: true })
-    const list = { version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) },
-      files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3', sha256: sha256('png'), at: expect.any(Number) }],
-      links: [{ url: LINK, at: expect.any(Number) }] }
+    const list = { version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) } }
     expect(delivered).toHaveLength(1)
     expect(delivered[0]!.list).toEqual(list)
     expect(delivered[0]!.text).toContain(`Attached files:\n- ${shot} (sent as "screen.png", 3 B)`)
@@ -1888,8 +1874,8 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   })
 
   // Spec 2026-10-31-one-buddy-per-swarm: a person's one Buddy chat has no project. Its Swarm-wide Buddy is granted as a
-  // project's Buddy is; a Buddy of one project (a project session, or the one Buddy's session in an older project chat) gets
-  // its person's files but never wide reads, which could reach another project's clone in their home.
+  // project's Buddy is; a Buddy of one project (a project session, or the one Buddy's session in an older project chat) is
+  // never granted, as its grant could reach another project's clone in their home.
   const swarmChat = { ...buddyChat, kind: 'swarm-buddy', projectId: undefined }
   const swarmBuddy = { ...buddyAgent, projectId: undefined, buddyScope: 'swarm' }
   // Scholes, 11-02. At a delivery, as only then does anything read the copies; after the access check, so a person who lost a
@@ -1994,19 +1980,18 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       expect(delivered).toHaveLength(1)
     })
   })
-  it('grants its person\'s one Buddy in their one chat, wide reads included', async () => {
-    const { host, shot, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
+  it('grants its person\'s one Buddy in their one chat', async () => {
+    const { host, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
     await host.tick()
-    expect(delivered[0]!.list).toMatchObject({ wide: { session: 'harness', account: 'peer', launch: 'launch-1' }, files: [{ path: shot }] })
+    expect(delivered[0]!.list).toMatchObject({ wide: { session: 'harness', account: 'peer', launch: 'launch-1' } })
   })
   it.each([
     ['the one Buddy\'s session in an older project chat', { ...buddyAgent, buddyNarrow: true }, buddyChat, {}],
     ['a project session of the one chat', { ...buddyAgent, buddyNarrow: true, buddySession: { thread: 'root', from: 1, projectId: 'app' } }, swarmChat, { thread: 'root' }],
-  ])('lists its person\'s files for %s, but never wide reads', async (_, agent, chat, message) => {
-    const { host, shot, delivered } = buddyOn(message, { agents: [agent], conversations: [chat] })
+  ])('never grants %s', async (_, agent, chat, message) => {
+    const { host, delivered } = buddyOn(message, { agents: [agent], conversations: [chat] })
     await host.tick()
-    expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }] })
-    expect((delivered[0]!.list as { wide?: unknown }).wide).toBe(false)
+    expect(delivered[0]!.list).toEqual({ version: 1, session: 'harness', wide: false })
   })
   it.each([
     ['a project\'s Buddy', buddyAgent],
@@ -2035,6 +2020,11 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     ['its agent id on an agent that is no Buddy', {}, { agents: [{ ...buddyAgent, buddyOf: undefined }] }, {}],
     ['an agent its read does not show', {}, { agents: [] }, {}],
     ['a chat its read does not show', {}, { conversations: [] }, {}],
+    // Security review 1 of #2345: a thread session hears its person only in its own thread.
+    ['a thread session, from a message outside its thread', { thread: 'main-root' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] }, {}],
+    // Security re-check 2 of #2345: a session whose thread cannot be read fails closed, even for a message naming the same.
+    ['a thread session whose thread id is malformed', { thread: 'not an id/..' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'not an id/..', from: 1 } }] }, {}],
+    ['a thread session with no thread at all', {}, { agents: [{ ...buddyAgent, buddySession: 'garbage' }] }, {}],
   ])('lists nothing for %s, and still delivers the message', async (_, message, read, claim) => {
     const { host, delivered } = buddyOn(message, read, claim)
     await host.tick()
@@ -2047,10 +2037,10 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   it.each([
     ['someone else\'s machine', { ...buddyAgent, machineOwnerId: 'sam' }],
     ['a machine its read names no owner of', { ...buddyAgent, machineOwnerId: undefined }],
-  ])('lists its files but no Artifact link when it runs on %s, and has it tell its person so (Lead, 10-30)', async (_, agent) => {
-    const { host, shot, delivered } = buddyOn({}, { agents: [agent] })
+  ])('grants nothing and names no Artifact link when it runs on %s, and has it tell its person so (Lead, 10-30)', async (_, agent) => {
+    const { host, delivered } = buddyOn({}, { agents: [agent] })
     await host.tick()
-    expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }], links: [] })
+    expect(delivered[0]!.list).toEqual({ version: 1, session: 'harness', wide: false })
     expect(delivered[0]!.text).not.toContain('Artifact links your owner sent here:')
     expect(delivered[0]!.text).toContain(`Your owner sent Artifact links (${LINK}), but you run on a computer that is not theirs, so you cannot `
       + 'open them here. Tell them so in one line, and ask for screenshots or the text instead.')
@@ -2058,7 +2048,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
 
   // Security review 1 of #2248: which agent a session is, this host knows from the agent it started there; the Buddy's own
   // read names no session. A session id reused for another agent, or its agent moved to another session here (a model
-  // switch), lists nothing: the Buddy is told of the file, and its guard refuses it.
+  // switch), lists nothing.
   it.each([
     ['a session this host did not start as that agent (a reused session id)', (t: ReturnType<typeof setup>) => { t.row.agent.id = 'agent' },
       { agents: [{ ...buddyAgent, id: 'agent' }], conversations: [{ ...buddyChat, agentIds: ['agent'] }] }],
@@ -2071,29 +2061,11 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect([listed(), reads]).toEqual([null, []])
   })
 
-  // Review 2 of #2248: the whole path on this machine, faking only the server. The launch writes the Buddy's guard; its
-  // person's message in its chat comes with the Swarm as the server shapes it for a Buddy; the host lists what came with
-  // it; and the guard then opens that exact file, and no other of Harness's downloads.
-  it('lets the guard its launch wrote open the file its person sent, and no other download', async () => {
-    const { host, shot, delivered } = buddyOn()
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    prepareSwarmSkill(folder, { role: 'buddy', key }, folderOnly)
-    const other = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-    writeFileSync(other, 'png')
-    const read = (path: string) => guardReads(join(folder, '.claude', 'buddy-guard.mjs'), folder, path)
-    expect(read(shot)).toBe('deny')
-    await host.tick()
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0]!.text).toContain(shot)
-    expect(read(shot)).toBe('allow')
-    expect(read(other)).toBe('deny')
-    rmSync(other)
-  })
-
-  it('lists a message\'s files alone, and names no Artifact link when it sent none', async () => {
+  it('hands it a message\'s files alone, and names no Artifact link when it sent none', async () => {
     const { host, shot, delivered } = buddyOn({ text: 'The screen:' })
     await host.tick()
-    expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }], links: [] })
+    expect(delivered[0]!.list).toMatchObject({ wide: { session: 'harness' } })
+    expect(delivered[0]!.text).toContain(shot)
     expect(delivered[0]!.text).not.toContain('Artifact links your owner sent')
   })
 
@@ -2107,14 +2079,14 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect(reads).toHaveLength(1)
   })
 
-  // Each message its person sends decides whether it reads beyond its folder (security reviews 1 and 2 of #2310): one read
-  // of the Swarm, by what changed since the last, and a list with the grant alone.
-  it('reads the Swarm once for a message with no files and no Artifact link, to grant wide mode, and lists nothing else', async () => {
+  // Each message its person sends decides whether its owner is here (security reviews 1 and 2 of #2310): one read of the
+  // Swarm, by what changed since the last, and a list with the grant alone.
+  it('reads the Swarm once for a message with no files and no Artifact link, to grant it, and lists nothing else', async () => {
     const { host, delivered, reads } = buddyOn({ text: 'Thanks! https://example.com/artifact/x', attachments: [] })
     await host.tick()
     expect(delivered).toHaveLength(1)
     expect(reads).toHaveLength(1)
-    expect(listed()).toEqual({ version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) }, files: [], links: [] })
+    expect(listed()).toEqual({ version: 1, session: 'harness', wide: { session: 'harness', account: 'peer', launch: 'launch-1', at: expect.any(Number) } })
   })
 
   it.each([
@@ -2141,7 +2113,8 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     t.wait(1_000)
     await host.tick()
     expect(delivered).toHaveLength(1)
-    expect(delivered[0]!.list).toMatchObject({ links: [{ url: LINK }] })
+    expect(delivered[0]!.list).toMatchObject({ wide: { session: 'harness' } })
+    expect(delivered[0]!.text).toContain(`Artifact links your owner sent here: ${LINK}.`)
   })
 
   it('lists nothing for a delivery dropped while its access was being read', async () => {
@@ -2161,126 +2134,21 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect(reads).toHaveLength(1)
     expect([delivered, listed()]).toEqual([[], null])
   })
-  // A person approves the commands their Buddy may run in wide mode with "run:" lines of their own
-  // (docs/specs/2026-10-30-buddy-read-access.md): recorded before the Buddy hears the message, judged by its own guard.
-  describe('its person\'s "run:" lines', () => {
-    const approvals = buddyApprovalsOf('peer:g')
-    beforeEach(() => rmSync(approvals, { force: true }))
-    const recorded = () => existsSync(approvals) ? (JSON.parse(readFileSync(approvals, 'utf8')).entries as { argv: string[] }[]).map(e => e.argv.join(' ')) : []
+  // Spec 2026-10-30-buddy-thread-sessions: a thread session hears its person only in its own thread.
+  it('grants a thread session at its person\'s message in its own thread', async () => {
+    const { host, delivered } = buddyOn({ thread: 'root-1', attachments: [] }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] })
+    await host.tick()
+    expect(delivered).toHaveLength(1)
+    expect(listed()).toMatchObject({ wide: { session: 'harness', account: 'peer', launch: 'launch-1' } })
+  })
 
-    /** The Buddy's folder, with the guard its launch writes: in wide mode, or not. */
-    function folderWith(wide: boolean, guard?: string) {
-      const folder = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-folder-'))); roots.push(folder)
-      mkdirSync(join(folder, '.claude'))
-      if (wide) writeFileSync(buddyLaunchFile(folder), 'launch-1\n')
-      writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), guard ?? buddyGuardSource(folder, buddyReadsOf(key),
-        wide ? buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: ['autonomous-ai/openharness'], launch: 'launch-1' }) : null))
-      return folder
-    }
-    function approving(message: Record<string, unknown>, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {},
-      folder = folderWith(true)) {
-      const on = buddyOn({ attachments: [], ...message }, read, claim)
-      vi.mocked(on.t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', cwd: folder, swarmSkill: { role: 'buddy', key } } as never)
-      const guard = (command: string) => JSON.parse(spawnSync(process.execPath, [join(folder, '.claude', 'buddy-guard.mjs')], { encoding: 'utf8',
-        timeout: 10_000, input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: folder }) }).stdout)
-        .hookSpecificOutput.permissionDecision
-      return { ...on, guard }
-    }
-
-    it('records them before the Buddy hears the message, and tells it which may run and which never will', async () => {
-      const { host, delivered, guard } = approving({ text: 'Go ahead:\nrun: argocd app list\nrun: git push origin main' })
-      expect(guard('argocd app list')).toBe('deny')
-      await host.tick()
-      expect(delivered).toHaveLength(1)
-      expect(recorded()).toEqual(['argocd app list'])
-      expect(delivered[0]!.list).toMatchObject({ approvals })
-      expect(delivered[0]!.text).toContain('Your owner approved running exactly: argocd app list. Each may run now, as written, and nothing else.')
-      expect(delivered[0]!.text).toContain('Your owner\'s run: lines approve nothing for: git push origin main. A Buddy never runs these, approved or not')
-      expect(guard('argocd app list')).toBe('allow')
-      expect(guard('git push origin main')).toBe('deny')
-    })
-
-    it('clears them when its person says "forget runs"', async () => {
-      const first = approving({ text: 'run: argocd app list' })
-      await first.host.tick()
-      expect(recorded()).toEqual(['argocd app list'])
-      const second = approving({ text: 'forget runs', id: 'message-2' }, {}, {}, folderWith(true))
-      await second.host.tick()
-      expect(recorded()).toEqual([])
-      expect(second.delivered[0]!.text).toContain('Your owner cleared every command they had approved.')
-    })
-
-    it.each([
-      ['project news from outside its chat', {}, {}, { buddyNews: true }],
-      ['the PM\'s private line to its person', { author: { kind: 'agent', id: 'lead-agent', name: 'PM', membershipGeneration: 'g' } }, {}, {}],
-      ['another person', { author: { ...person, id: 'sam', name: 'sam@example.com' } }, {}, {}],
-      ['its person from an earlier membership', { author: { ...person, membershipGeneration: 'before' } }, {}, {}],
-      ['another person\'s Buddy chat', {}, { conversations: [{ ...buddyChat, buddyOwnerId: 'sam' }] }, {}],
-      ['its chat once archived', {}, { conversations: [{ ...buddyChat, archived: true }] }, {}],
-      // Security review 1 of #2345: a thread session hears its person only in its own thread.
-      ['a thread session, from a message outside its thread', { thread: 'main-root' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] }, {}],
-      // Security re-check 2 of #2345: a session whose thread cannot be read fails closed, even for a message naming the same.
-      ['a thread session whose thread id is malformed', { thread: 'not an id/..' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'not an id/..', from: 1 } }] }, {}],
-      ['a thread session with no thread at all', {}, { agents: [{ ...buddyAgent, buddySession: 'garbage' }] }, {}],
-    ])('records nothing for %s, and still delivers the message', async (_, message, read, claim) => {
-      const { host, delivered, guard } = approving({ text: 'run: argocd app list', ...message }, read, claim)
-      await host.tick()
-      expect(delivered).toHaveLength(1)
-      expect(recorded()).toEqual([])
-      expect(delivered[0]!.text).not.toContain('Your owner approved')
-      expect(guard('argocd app list')).toBe('deny')
-    })
-
-    it.each([
-      ['a Buddy on someone else\'s machine', { agents: [{ ...buddyAgent, machineOwnerId: 'sam' }] }, true, 'peer'],
-      ['a guard not in wide mode', {}, false, 'peer'],
-      ['a machine signed in as another account', {}, true, 'sam'],
-    ])('records nothing for %s, and has it tell its person wider reads are off', async (_, read, wide, signedIn) => {
-      const { t, host, delivered } = approving({ text: 'run: argocd app list' }, read, {}, folderWith(wide))
-      vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: signedIn, email: `${signedIn}@example.com` })
-      await host.tick()
-      expect(recorded()).toEqual([])
-      expect(delivered[0]!.text).toContain('Your owner sent run: lines, but wider reads are off for you on this computer, so nothing was approved.')
-    })
-
-    it('records them for a thread session from its person\'s message in its own thread', async () => {
-      const { host, delivered } = approving({ text: 'run: argocd app list', thread: 'root-1' }, { agents: [{ ...buddyAgent, buddySession: { thread: 'root-1', from: 1 } }] })
-      await host.tick()
-      expect(delivered).toHaveLength(1)
-      expect(recorded()).toEqual(['argocd app list'])
-    })
-
-    // Delta reviews of #2310: a delivery tried again must not add time to an approval.
-    it('dates each approval by when its person sent the message, not when it was delivered', async () => {
-      const sent = Date.now() - 10 * 24 * 60 * 60 * 1000
-      const { host, delivered } = approving({ text: 'run: argocd app list', createdAt: new Date(sent).toISOString() })
-      await host.tick()
-      expect(delivered).toHaveLength(1)
-      expect((JSON.parse(readFileSync(approvals, 'utf8')).entries as { at: number }[])[0]!.at).toBe(sent)
-    })
-
-    it('grants this launch only: a folder whose launch left no id gets no grant, and its run: lines approve nothing', async () => {
-      const folder = folderWith(true)
-      rmSync(buddyLaunchFile(folder))
-      const { host, delivered } = approving({ text: 'run: argocd app list' }, {}, {}, folder)
-      await host.tick()
-      expect(recorded()).toEqual([])
-      expect(listed()).toMatchObject({ wide: false })
-      expect(delivered[0]!.text).toContain('wider reads are off for you on this computer')
-    })
-
-    it('delivers nothing while its guard cannot judge the lines, and records and delivers once it can', async () => {
-      const folder = folderWith(true, 'process.exit(3)\n')
-      const { t, host, delivered } = approving({ text: 'run: argocd app list' }, {}, {}, folder)
-      await host.tick()
-      expect([delivered, recorded()]).toEqual([[], []])
-      writeFileSync(join(folder, '.claude', 'buddy-guard.mjs'), buddyGuardSource(folder, buddyReadsOf(key),
-        buddyWideOf({ home: join(folder, 'home'), dataDir: env.ADAPTER_DATA_DIR, tmpDirs: [], repos: [], launch: 'launch-1' })))
-      t.wait(1_000)
-      await host.tick()
-      expect(delivered).toHaveLength(1)
-      expect(recorded()).toEqual(['argocd app list'])
-    })
+  // Delta reviews of #2310: a grant is for this launch only.
+  it('grants nothing to a folder whose launch left no id', async () => {
+    const { t, host, delivered } = buddyOn({ attachments: [] })
+    rmSync(buddyLaunchFile(String(vi.mocked(t.core.agents.byAgent).getMockImplementation()?.('harness' as never)?.cwd)))
+    await host.tick()
+    expect(delivered).toHaveLength(1)
+    expect(listed()).toEqual({ version: 1, session: 'harness', wide: false })
   })
 })
 
@@ -3661,19 +3529,13 @@ describe('project instructions from the roster', () => {
   const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
     pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
     reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
-  /** What a Buddy's guard at [guard], for its folder [folder], answers a shell [command]. */
-  const guardRuns = (guard: string, folder: string, command: string): string => {
-    const run = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 10_000,
-      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: folder }) })
-    return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
-  }
   function docFixture(names: Name[] = ['tester'], options: { stale?: Name[] } = {}) {
     const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
     const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
     const sessions: Record<string, unknown> = {}, roleFiles: Partial<Record<Name, string>> = {}, launched: Partial<Record<Name, string>> = {}
     for (const name of names) {
       const { role } = AGENTS[name], cwd = role === 'buddy' ? folder : workspace
-      const { file } = prepareSwarmSkill(cwd, { role, key: `key-${name}` }, folderOnly)
+      const { file } = prepareSwarmSkill(cwd, { role, key: `key-${name}` })
       launched[name] = readFileSync(file, 'utf8')
       // What an older CLI left: its own text and no record of which text it was.
       if (options.stale?.includes(name)) { writeFileSync(file, older(role)); rmSync(join(dirname(file), 'version.json')) }
@@ -4033,11 +3895,6 @@ describe('project instructions from the roster', () => {
     expect(toBuddy()).toHaveLength(2)
     expect(toBuddy()[1]!.command.text).toMatch(/^The project's instructions changed\. /)
     expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy'), instructionsRead('a-buddy')])
-    // It reads the file inside its folder, which its guard allows, and gains no command: instructions stays refused.
-    const guard = join(f.folder, '.claude', 'buddy-guard.mjs')
-    expect(guardReads(guard, f.folder, file)).toBe('allow')
-    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab instructions')).toBe('deny')
-    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab status')).toBe('allow')
   })
 })
 
@@ -4854,32 +4711,26 @@ describe('closing the sessions the backend ends', () => {
   })
 
   // Lead, 10-30: a Buddy removed, its person gone from the Swarm, or its chat purged with its project: the Swarm ends its
-  // session, and what its person sent it is listed no longer, rather than for the rest of the day. Its session need not run.
-  it('forgets what a Buddy\'s person sent it once the Swarm ends its session, and keeps other sessions\' lists', async () => {
+  // session, and its list goes, rather than at the end of the day. Its session need not run.
+  it('forgets a Buddy session\'s list once the Swarm ends its session, and keeps other sessions\' lists', async () => {
     const t = lifeFixture([leadRow({ lead: false })])
-    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
-    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-    writeFileSync(shot, 'png')
-    allowBuddyReads(buddyReadsOf('ended-buddy'), { session: 'harness', files: [shot], links: [] })
-    allowBuddyReads(buddyReadsOf('other-buddy'), { session: 'other', files: [shot], links: [] })
+    grantBuddyWide(buddyReadsOf('ended-buddy'), { session: 'harness', wide: false })
+    grantBuddyWide(buddyReadsOf('other-buddy'), { session: 'other', wide: false })
     await t.poll()
     expect(existsSync(buddyReadsOf('ended-buddy').file)).toBe(true)
     t.rows.splice(0, 1, ended())
     await t.poll()
     expect(existsSync(buddyReadsOf('ended-buddy').file)).toBe(false)
     expect(existsSync(buddyReadsOf('other-buddy').file)).toBe(true)
-    for (const file of [buddyReadsOf('other-buddy').file, shot]) rmSync(file)
+    rmSync(buddyReadsOf('other-buddy').file)
   })
 
   // Follow-up to #2389's security re-check 2: a lists folder that could not be read threw the read's own error into this log,
   // its path under the person's home with it. It is logged by a fixed code, once, nothing is deleted, and the end waits.
   it('logs a lists folder it cannot read by a fixed code, with no path, deletes nothing, and acknowledges the end once it can', async () => {
     const t = lifeFixture([leadRow({ lead: false })])
-    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
-    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-    writeFileSync(shot, 'png')
     const reads = buddyReadsOf('unread-folder-buddy'), lists = dirname(reads.file)
-    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
+    grantBuddyWide(reads, { session: 'harness', wide: false })
     const before = readdirSync(lists).sort()
     await t.poll()
     chmodSync(lists, 0o000)
@@ -4898,7 +4749,6 @@ describe('closing the sessions the backend ends', () => {
     await t.poll()
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))
     expect(existsSync(reads.file)).toBe(false)
-    rmSync(shot)
   })
 
   // Follow-up to #2389's security re-check 2: the host logs an end's failure by its codes alone. One that is not the cleanup's
@@ -4918,18 +4768,11 @@ describe('closing the sessions the backend ends', () => {
   })
 
   // Re-check 2 of #2248: a list the host could not delete was only logged; the end was acknowledged, the backend dropped the
-  // row, and nothing tried again, so the list kept allowing its file for the rest of the day.
-  it('acknowledges a Buddy session\'s end only once its list is deleted, and its guard allows nothing meanwhile', async () => {
+  // row, and nothing tried again, so the list kept what it granted for the rest of the day.
+  it('acknowledges a Buddy session\'s end only once its list is deleted, and its list grants nothing meanwhile', async () => {
     const t = lifeFixture([leadRow({ lead: false })])
-    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
-    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-    writeFileSync(shot, 'png')
     const reads = buddyReadsOf('removed-buddy')
-    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    const guard = join(folder, 'buddy-guard.mjs')
-    writeFileSync(guard, buddyGuardSource(folder, reads))
-    expect(guardReads(guard, folder, shot)).toBe('allow')
+    grantBuddyWide(reads, { session: 'harness', wide: true, account: 'peer', launch: 'launch-1' })
     await t.poll()
     // The folder of lists cannot be written to for a while: the list cannot be deleted.
     chmodSync(dirname(reads.file), 0o500)
@@ -4940,7 +4783,7 @@ describe('closing the sessions the backend ends', () => {
       for (let i = 0; i < 3; i++) await t.poll(60_000)
       expect(t.commands).toEqual([])
       expect(existsSync(reads.file)).toBe(true)
-      expect(guardReads(guard, folder, shot)).toBe('deny')
+      expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toEqual({ version: 1, session: 'harness' })
       // By its kind alone (follow-up to #2389's security re-check 2): the error it caught named the list's path.
       expect(t.log).toHaveBeenCalledWith('Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LIST_KEPT')
       expect(t.log.mock.calls.flat().join('\n')).not.toContain(dirname(reads.file))
@@ -4949,9 +4792,7 @@ describe('closing the sessions the backend ends', () => {
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))
     expect(t.commands[0]).toMatchObject({ command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
     expect(existsSync(reads.file)).toBe(false)
-    expect(guardReads(guard, folder, shot)).toBe('deny')
     expect(t.closeMember).toHaveBeenCalledTimes(1)
-    rmSync(shot)
   })
 
   // Follow-up to #2248 (Lead, 10-30): one list the host could not read or remove held back the end of every Buddy session on
@@ -4962,30 +4803,22 @@ describe('closing the sessions the backend ends', () => {
       command: { type: 'agent.sessionClosed', agentId, harnessId } })
     const twoBuddies = () => {
       const t = lifeFixture([leadRow({ lead: false }), leadRow({ lead: false, agent: second })])
-      mkdirSync(PASTE_DROPS_DIR, { recursive: true })
-      const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-      writeFileSync(shot, 'png')
       const healthy = buddyReadsOf(`healthy-${randomUUID()}`), broken = buddyReadsOf(`broken-${randomUUID()}`)
-      allowBuddyReads(healthy, { session: 'harness', files: [shot], links: [] })
-      allowBuddyReads(broken, { session: 'harness-2', files: [shot], links: [] })
-      const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-      const guard = join(folder, 'buddy-guard.mjs')
-      writeFileSync(guard, buddyGuardSource(folder, broken))
-      expect(guardReads(guard, folder, shot)).toBe('allow')
+      grantBuddyWide(healthy, { session: 'harness', wide: false })
+      grantBuddyWide(broken, { session: 'harness-2', wide: false })
       const end = () => t.rows.splice(0, 2, ended(), ended({ agent: second }))
       // Every file either list left in the folder of lists, by its name: a list or the mark beside it.
       const left = () => readdirSync(dirname(healthy.file)).filter(name => [healthy, broken].some(reads => name.startsWith(basename(reads.file, '.json'))))
-      return { t, shot, healthy, broken, guard, folder, end, left }
+      return { t, healthy, broken, end, left }
     }
 
-    it('acknowledges one Buddy session\'s end while the other\'s list cannot be removed, holds only that one, and its guard allows nothing', async () => {
-      const { t, shot, healthy, broken, guard, folder, end, left } = twoBuddies()
+    it('acknowledges one Buddy session\'s end while the other\'s list cannot be removed, and holds only that one', async () => {
+      const { t, healthy, broken, end, left } = twoBuddies()
       await t.poll()
       // The second Buddy's list can be neither removed, nor written over, nor read for a while: a folder stands in its place,
       // as a file the system will not let go of would (one held open, on Windows).
       rmSync(broken.file); mkdirSync(join(broken.file, 'held'), { recursive: true })
       try {
-        expect(guardReads(guard, folder, shot)).toBe('deny')
         end()
         await t.poll()
         await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness')]))
@@ -4993,38 +4826,31 @@ describe('closing the sessions the backend ends', () => {
         for (let i = 0; i < 3; i++) await t.poll(60_000)
         expect(t.commands).toEqual([closed('agent', 'harness')])
         expect(t.closeMember).toHaveBeenCalledTimes(2)
-        expect(guardReads(guard, folder, shot)).toBe('deny')
         expect(t.log).toHaveBeenCalledWith(expect.stringContaining('session harness-\'s person sent it, so its end is not acknowledged yet'))
         expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('session harness\'s person'))
       } finally { rmSync(broken.file, { recursive: true, force: true }) }
       await t.poll()
       await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness'), closed('agent-2', 'harness-2')]))
       expect(left()).toEqual([])
-      expect(guardReads(guard, folder, shot)).toBe('deny')
       expect(t.closeMember).toHaveBeenCalledTimes(2)
-      rmSync(shot)
     })
 
     // Re-check 1 of 116fa43a1: a list that could not be read was skipped, the end acknowledged, and once the list could be
     // read again it allowed its file again. Its mark says whose it is without reading it, so it goes unread.
-    it('acknowledges both ends while one list cannot be read, removing that list unread, and its guard allows nothing at any point', async () => {
-      const { t, shot, broken, guard, folder, end, left } = twoBuddies()
+    it('acknowledges both ends while one list cannot be read, removing that list unread', async () => {
+      const { t, broken, end, left } = twoBuddies()
       await t.poll()
       // The second Buddy's list cannot be read for a while; its folder can be written to.
       chmodSync(broken.file, 0o000)
       try {
-        expect(guardReads(guard, folder, shot)).toBe('deny')
         end()
         await t.poll()
         await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness'), closed('agent-2', 'harness-2')]))
         expect(left()).toEqual([])
-        expect(guardReads(guard, folder, shot)).toBe('deny')
         expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
       } finally { if (existsSync(broken.file)) chmodSync(broken.file, 0o600) }
       for (let i = 0; i < 3; i++) await t.poll(60_000)
       expect(t.commands).toHaveLength(2)
-      expect(guardReads(guard, folder, shot)).toBe('deny')
-      rmSync(shot)
     })
   })
 

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,13 +10,7 @@ import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { buddyLaunchOf, buddyReadsOf, grantBuddyWide } from './buddyGuard.js'
-import { managedNodePath } from './nodeRuntime.js'
-import { hooks as claudeHooks } from '../engines/claude/hookContract.js'
-import { hookArgv } from '../engines/kit/notifyHooks.js'
-import { notifyHookEntry } from '../engines/kit/hookSettings.js'
-import { messagesCommand } from '../engines/kit/messagesHook.js'
 
-// A Buddy that reads its folder alone, whatever this machine is: wide mode has its own tests (lib/buddyGuard.wide.spec.ts).
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
 const SWARM = { prepare: prepareSwarmSkill, github: () => null, args: () => [] }
