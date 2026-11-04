@@ -3,6 +3,7 @@ import type { PrismaClient } from '@prisma/client'
 import { PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { logger } from '../utils/logger.js'
 import { notAuthorized } from './db/indexes.js'
+import { removeChunk, startChunkSweep } from './chunkSweep.js'
 
 /**
  * Removes, a little at a time, the usage receipts written while a receipt lived 36 days (until 2026-10-29: about 4M of
@@ -86,19 +87,10 @@ export async function lastOldReceipt(db: PrismaClient, now: Date): Promise<Date 
   return newest ? dateOf(newest.expiresAt) : null
 }
 
-/** One chunk: up to [chunk] old receipts in expiresAt order, then exactly those, their range checked again. */
-async function removeChunk(db: PrismaClient, now: Date, chunk: number): Promise<number> {
-  const range = { expiresAt: { $gt: oldFloor(now),
-    $lte: date(now.getTime() + (OLD_EXPIRY_DAYS - PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS) * DAY) } }
-  const found = await db.$runCommandRaw({ find: COLLECTION, filter: range, projection: { _id: 1 }, sort: { expiresAt: 1 },
-    hint: 'product_usage_expiry', limit: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
-  const ids = found.cursor.firstBatch.map(receipt => receipt._id)
-  if (!ids.length) return 0
-  const answer = await db.$runCommandRaw({ delete: COLLECTION, deletes: [{ q: { _id: { $in: ids }, ...range }, limit: 0 }] } as never) as
-    { n?: number; writeErrors?: unknown[] }
-  if (answer.writeErrors?.length) throw new Error('The database refused some receipt removals')
-  return answer.n ?? 0
-}
+/** One chunk of old receipts in expiresAt order (lib/chunkSweep.ts). */
+const removeOldChunk = (db: PrismaClient, now: Date, chunk: number) => removeChunk(db, { collection: COLLECTION, sort: { expiresAt: 1 },
+  hint: 'product_usage_expiry', chunk, filter: { expiresAt: { $gt: oldFloor(now),
+    $lte: date(now.getTime() + (OLD_EXPIRY_DAYS - PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS) * DAY) } } })
 
 /** One pass: the rule unless [SweepOptions.withoutRule], then at most [chunks] × [chunk] receipts. Safe to repeat, and from
  *  two processes at once. */
@@ -107,7 +99,7 @@ export async function sweepOldReceipts(db: PrismaClient, now = new Date(), optio
   let removed = 0
   for (let i = 0; i < options.chunks; i++) {
     if (i) await delay(options.pauseMs)
-    const n = await removeChunk(db, now, options.chunk)
+    const n = await removeOldChunk(db, now, options.chunk)
     removed += n
     if (n < options.chunk) break
   }
@@ -119,33 +111,14 @@ export async function sweepOldReceipts(db: PrismaClient, now = new Date(), optio
 export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number;
   now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
   const { everyMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
-  let running = false, total = 0, withoutRule = options.withoutRule ?? false
-  const run = async () => {
-    if (running) return
-    running = true
-    try {
-      const pass = await sweepOldReceipts(db, now(), { ...options, withoutRule })
-      total += pass.removed
-      if (pass.removed) log.info('[usage-receipts] pass', { removed: pass.removed, removedSinceStart: total })
-      if (pass.done) {
-        stop()
-        log.info('[usage-receipts] done: no old receipts left', { removedSinceStart: total })
-      }
-    } catch (error) {
-      if (error instanceof ReceiptRuleRefused) {
-        withoutRule = true
-        log.warn('[usage-receipts] the database user may not install the receipt rule (collMod): removing the old receipts without it '
-          + '(Ken, 2026-11-04). A server from before 2026-10-29, were one rolled back, could count a retried report twice.')
-        return
-      }
-      log.warn('[usage-receipts] pass failed; retrying next pass', { error: error instanceof Error ? error.message : String(error) })
-    } finally {
-      running = false
-    }
-  }
-  const timer = setInterval(() => void run(), everyMs)
-  timer.unref()
-  const stop = () => clearInterval(timer)
-  void run()
-  return stop
+  let withoutRule = options.withoutRule ?? false
+  return startChunkSweep({ label: '[usage-receipts]', everyMs, log, doneMessage: 'done: no old receipts left',
+    pass: () => sweepOldReceipts(db, now(), { ...options, withoutRule }),
+    handle: error => {
+      if (!(error instanceof ReceiptRuleRefused)) return false
+      withoutRule = true
+      log.warn('[usage-receipts] the database user may not install the receipt rule (collMod): removing the old receipts without it '
+        + '(Ken, 2026-11-04). A server from before 2026-10-29, were one rolled back, could count a retried report twice.')
+      return true
+    } })
 }

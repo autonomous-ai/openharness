@@ -369,9 +369,8 @@ void main() {
     });
   }
 
-  testWidgets('a project stays unread until its unread workgroup is visited', (
-    tester,
-  ) async {
+  testWidgets('a project row is not held bold by an unread workgroup once '
+      'its chat is read (task #2638)', (tester) async {
     final server = ConversationServer()
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
@@ -391,11 +390,12 @@ void main() {
         .text
         .style
         ?.fontWeight;
+    // Its chat is open and read; the workgroup's news is on its card.
     expect(c.unread(c.selected!), isFalse);
-    expect(projectWeight(), grid.AppFont.semibold);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
-    expect(projectWeight(), grid.AppFont.semibold);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     // Opened as the project's Tasks view opens it (task #2569).
     await c.select('offline');
     await tester.pumpAndSettle();

@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
+import 'day_jump.dart';
 
 /// The day of the message at the top of a list, in a small pill over the
 /// list's top while the reader is scrolled into it, as Slack's (Huy 11-03).
@@ -22,9 +26,15 @@ class SuperTabStickyDay extends StatefulWidget {
     required this.child,
     this.pillKey,
     this.hidden = false,
+    this.onJump,
   });
 
   final Widget child;
+
+  /// Makes the pill a button that opens the Jump to menu (Huy 11-04): called
+  /// with a choice's start ([superTabJumpStart]), null for the very
+  /// beginning, or a picked day's midnight.
+  final ValueChanged<DateTime?>? onJump;
 
   /// The pill's key, so a chat and its thread can be told apart.
   final Key? pillKey;
@@ -153,14 +163,23 @@ class _SuperTabStickyDayState extends State<SuperTabStickyDay> {
               top: SuperTabDayPill.top,
               left: 0,
               right: 0,
-              child: IgnorePointer(
-                // The day lines in the list say it to a screen reader.
-                child: ExcludeSemantics(
-                  child: Center(
-                    child: SuperTabDayPill(key: widget.pillKey, day: day),
+              child: switch (widget.onJump) {
+                final onJump? => Center(
+                  child: _SuperTabDayJump(
+                    pillKey: widget.pillKey,
+                    day: day,
+                    onJump: onJump,
                   ),
                 ),
-              ),
+                null => IgnorePointer(
+                  // The day lines in the list say it to a screen reader.
+                  child: ExcludeSemantics(
+                    child: Center(
+                      child: SuperTabDayPill(key: widget.pillKey, day: day),
+                    ),
+                  ),
+                ),
+              },
             ),
         ],
       ),
@@ -301,11 +320,164 @@ class _SuperTabDayMarkState extends State<SuperTabDayMark> {
   }
 }
 
-/// The pill: the day as the chat's day lines say it.
-class SuperTabDayPill extends StatelessWidget {
-  const SuperTabDayPill({super.key, required this.day});
+/// The pill as a button: it opens the Jump to menu, whose last choice turns
+/// the menu into a calendar in the same place, as Slack's (Huy 11-04).
+class _SuperTabDayJump extends StatefulWidget {
+  const _SuperTabDayJump({
+    required this.day,
+    required this.onJump,
+    this.pillKey,
+  });
 
   final DateTime day;
+
+  /// The pill's key, on the button a screen reader and a test find.
+  final Key? pillKey;
+  final ValueChanged<DateTime?> onJump;
+
+  @override
+  State<_SuperTabDayJump> createState() => _SuperTabDayJumpState();
+}
+
+class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
+  final _menu = MenuController();
+  final _focus = FocusNode(debugLabel: 'Swarm day pill');
+  final _first = FocusNode(debugLabel: 'Swarm day pill first choice');
+  bool _picking = false;
+
+  /// The keys that open it, as a button's.
+  static final _opens = {
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+    LogicalKeyboardKey.space,
+  };
+
+  /// The calendar's size: Material's month header (52) over its grid of
+  /// seven rows of 42 (weekdays and up to six weeks), 7 columns of 42 with
+  /// its 8 of padding each side. Taller than a menu may be by default.
+  static const _calendar = Size(7 * 42 + 2 * 8, 52 + 7 * 42 + 8);
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    _first.dispose();
+    super.dispose();
+  }
+
+  void _jump(DateTime? at) {
+    _menu.close();
+    widget.onJump(at);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final today = DateUtils.dateOnly(DateTime.now());
+    final day = widget.day.isAfter(today) ? today : widget.day;
+    return MenuAnchor(
+      controller: _menu,
+      childFocusNode: _focus,
+      // Opened from the keyboard, the first choice is the next key's target;
+      // a click leaves none lit, with the keys on the pill, so Esc still
+      // closes it.
+      onOpen: () {
+        final keyboard = _focus.hasPrimaryFocus;
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => (keyboard ? _first : _focus).requestFocus(),
+        );
+      },
+      onClose: () {
+        if (mounted) setState(() => _picking = false);
+      },
+      consumeOutsideTap: true,
+      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
+      style: grid.AppMenu.style(
+        minWidth: 220,
+        maxHeight: _picking
+            ? _calendar.height + grid.AppMenu.panelPadding.vertical
+            : null,
+      ),
+      menuChildren: _picking
+          ? [
+              SizedBox.fromSize(
+                size: _calendar,
+                child: CalendarDatePicker(
+                  initialDate: day,
+                  firstDate: DateTime(2000),
+                  lastDate: today,
+                  onDateChanged: (picked) => _jump(DateUtils.dateOnly(picked)),
+                ),
+              ),
+            ]
+          : [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  grid.AppDesktop.controlGap + grid.AppDesktop.menuInset,
+                  grid.AppDesktop.menuInset,
+                  grid.AppDesktop.controlGap + grid.AppDesktop.menuInset,
+                  grid.AppDesktop.listRowGap,
+                ),
+                child: Text(
+                  'Jump to…',
+                  style: grid.AppType.label(
+                    color: grid.AppPalette.textSecondary,
+                  ),
+                ),
+              ),
+              for (final (index, choice) in SuperTabJumpTo.values.indexed)
+                AppMenuItem(
+                  focusNode: index == 0 ? _first : null,
+                  label: choice.label,
+                  expandLabel: true,
+                  onPressed: () =>
+                      _jump(superTabJumpStart(choice, DateTime.now())),
+                ),
+              const AppMenuDivider(),
+              AppMenuItem(
+                label: 'Jump to a specific date',
+                expandLabel: true,
+                onPressed: () => setState(() => _picking = true),
+              ),
+            ],
+      builder: (context, menu, _) => Semantics(
+        key: widget.pillKey,
+        button: true,
+        label: 'Jump to…',
+        value: MaterialLocalizations.of(context).formatMediumDate(widget.day),
+        excludeSemantics: true,
+        onTap: () => menu.isOpen ? menu.close() : menu.open(),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () => menu.isOpen ? menu.close() : menu.open(),
+            child: Focus(
+              focusNode: _focus,
+              // Enter or Space opens it, as a button.
+              onKeyEvent: (_, event) {
+                if (event is! KeyDownEvent ||
+                    !_opens.contains(event.logicalKey)) {
+                  return KeyEventResult.ignored;
+                }
+                menu.isOpen ? menu.close() : menu.open();
+                return KeyEventResult.handled;
+              },
+              child: SuperTabDayPill(day: widget.day, chevron: true),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The pill: the day as the chat's day lines say it.
+class SuperTabDayPill extends StatelessWidget {
+  const SuperTabDayPill({super.key, required this.day, this.chevron = false});
+
+  final DateTime day;
+
+  /// It opens the Jump to menu.
+  final bool chevron;
 
   /// The pill's distance from the list's top.
   static const top = grid.AppDesktop.controlGap;
@@ -336,10 +508,24 @@ class SuperTabDayPill extends StatelessWidget {
       ),
       child: Padding(
         padding: _padding,
-        child: Text(
-          MaterialLocalizations.of(context).formatMediumDate(day),
-          maxLines: 1,
-          style: DesktopChrome.metadata(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              MaterialLocalizations.of(context).formatMediumDate(day),
+              maxLines: 1,
+              style: DesktopChrome.metadata(),
+            ),
+            if (chevron) ...[
+              const SizedBox(width: grid.AppDesktop.listRowGap * 2),
+              // Smaller than the text's line, so the pill keeps its height.
+              Icon(
+                AppIcons.chevronDown,
+                size: grid.AppControl.iconSizeChip,
+                color: DesktopChrome.muted,
+              ),
+            ],
+          ],
         ),
       ),
     );

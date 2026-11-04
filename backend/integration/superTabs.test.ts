@@ -2844,7 +2844,16 @@ describe('Super Tab chat attachments', () => {
     const old = (n: number, size = 1) => db.superTabAttachment.createMany({ data: Array.from({ length: n }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24),
       tabId: tab, conversationId: 'lead', actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size, objectKey: 'x' })) })
     await old(190)
-    const answers = await Promise.all(Array.from({ length: 60 }, () => linkFor(tab, { size: 11 })))
+    // 60 at once all write the sender's one allowance row, so a few may run out of the server's 8 tries and get the 503
+    // SWARM_BUSY every client retries (superTabs/retry.ts). Retry it here as clients do: the limits must hold either way.
+    // It failed CI twice on 11-04 (#2888, #2926) when the test counted that answer as a failure.
+    const linkAsClients = async () => {
+      for (let tries = 1; ; tries++) {
+        const answer = await linkFor(tab, { size: 11 })
+        if (answer.status !== 503 || answer.code !== 'SWARM_BUSY' || tries === 5) return answer
+      }
+    }
+    const answers = await Promise.all(Array.from({ length: 60 }, linkAsClients))
     expect(answers.filter(a => a.status === 200)).toHaveLength(10)
     expect(answers.filter(a => a.status === 429).every(a => a.code === 'RATE_LIMITED')).toBe(true)
     expect(answers.filter(a => a.status !== 200 && a.status !== 429)).toEqual([])

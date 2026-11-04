@@ -90,7 +90,8 @@ void main() {
           .position;
       list.jumpTo(list.maxScrollExtent);
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-jump-unread')), findsNothing);
+      // The line is above the screen now: the bar is the way back.
+      expect(find.byKey(const ValueKey('super-jump-unread')), findsOne);
       await shot('read-on');
       // Reading to the end saves the read mark a moment later (controller.dart `_saveSoon`).
       await tester.pump(const Duration(milliseconds: 300));

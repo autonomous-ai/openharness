@@ -43,6 +43,27 @@ describe('adminRunner', () => {
     expect(existsSync(f.stage)).toBe(false)
   })
 
+  it('hands on each step the script writes in its stage while it runs, once each, and stops reading when it ends', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'team-admin-'))
+    cleanup.push(parent)
+    const stage = join(parent, 'stage')
+    const steps: string[] = []
+    // As the script does (as the owner): a step a line, the latest replacing the one before. The fake waits between
+    // steps so the reader sees each one.
+    const runner = vi.fn<GuestRunner>(async () => {
+      for (const step of ['account', 'account', 'engines', 'not a step!']) {
+        writeFileSync(join(stage, 'progress'), `${step}\n`)
+        await new Promise((resolve) => setTimeout(resolve, 40))
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    })
+    const run = adminRunner({ runner, makeStage: () => { mkdirSync(stage); return stage }, progressEveryMs: 10 })
+    expect(await run(() => ({ script: '' }), 'p', undefined, (step) => steps.push(step))).toEqual({ ok: true, stdout: '' })
+    expect(steps).toEqual(['account', 'engines'])
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(steps).toEqual(['account', 'engines'])
+  })
+
   it('tells a cancelled prompt from a script that stopped, in the script\'s own words', async () => {
     expect(await fixture({ code: 1, stderr: '0:180: execution error: User canceled. (-128)' }).run(() => ({ script: '' }), 'p'))
       .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })

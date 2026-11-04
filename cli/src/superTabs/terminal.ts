@@ -7,6 +7,7 @@
  * a usage limit. The same reads tell the machine report when each agent's screen last changed: the backend renews the
  * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
  */
+import { CommandRetries, permanentRefusal } from './retries.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { updateDismissKeys } from '../engines/codex/screen.js'
@@ -177,6 +178,7 @@ export class TerminalHost {
   private here: Array<Own & { running: boolean }> = []
   private watching: Promise<void> | null = null
   private readonly watched = new Map<string, Watched>()
+  private readonly alertRetries = new CommandRetries(() => this.now())
   /** Per running harness here, its last screen's digest and when that last changed. */
   private readonly progress = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
@@ -288,6 +290,8 @@ export class TerminalHost {
   private async watch(own: Own[]): Promise<void> {
     const keys = new Set(own.map(a => `${a.tabId}:${a.agentId}`))
     for (const key of this.watched.keys()) if (!keys.has(key)) this.watched.delete(key)
+    const agents = new Set(own.map(a => a.agentId))
+    this.alertRetries.keepIf(key => agents.has(key.split('-')[2] ?? ''))
     const harnesses = new Set(own.map(a => a.harnessId))
     for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
     for (const agent of own) {
@@ -334,12 +338,16 @@ export class TerminalHost {
     const episode = seen ? current ?? { since: now, alerted: false } : current
     if (!episode) return null
     if (seen === episode.alerted || (seen && !due(episode.since))) return seen ? episode : null
+    const key = `terminal-alert-${agent.agentId}-${alert}-${episode.since}-${seen ? 'on' : 'off'}`
+    // Each read tried a failed alert again, refused or not: 116 refusals in 32 minutes (Ken, 11-04, #2675).
+    if (!this.alertRetries.due(key)) return episode
     try {
-      await this.command(agent, `terminal-alert-${agent.agentId}-${alert}-${episode.since}-${seen ? 'on' : 'off'}`,
-        { type: 'agent.alert', agentId: agent.agentId, alert, active: seen, ...(seen ? extra : {}) })
+      await this.command(agent, key, { type: 'agent.alert', agentId: agent.agentId, alert, active: seen, ...(seen ? extra : {}) })
+      this.alertRetries.sent(key)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))
-      return episode
+      // Refused for good (its agent gone or to be shared again): the episode is settled, as no resend can land it.
+      if (!permanentRefusal(error)) { this.alertRetries.failed(key, error); return episode }
     }
     return seen ? { ...episode, alerted: true } : null
   }

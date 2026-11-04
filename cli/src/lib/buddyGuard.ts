@@ -657,13 +657,32 @@ function superTabAllowed(rest) {
   return true
 }
 
+// harness tell|reply NAME [--json] -- WORDS (#2626): its owner's words for one of their own harnesses on this Mac, only while
+// its owner is with it here (granted(): they wrote to it in their own chat, signed in on this machine, within the hour). No
+// --machine, --port or any other option: this Mac only. The machine checks the rest from its own records (messages/tell.ts
+// relayRefusal): whose harness it is, and the person's agents-tell-agents switch. Nothing comes back to read.
+const AWAY = 'You pass words to your owner\'s harnesses only while they are with you: once they write to you in your chat, on ' +
+  'this Mac signed in as them, for an hour. It was refused, and nobody will be asked. Tell your owner in one line.'
+function relayAllowed(rest) {
+  const dash = rest.indexOf('--')
+  if (dash < 1) return false
+  const before = rest.slice(0, dash), text = rest.slice(dash + 1)
+  const names = before.filter((word) => word !== '--json')
+  if (names.length !== 1 || before.length > 2 || !/^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$/.test(names[0])) return false
+  if (!text.join(' ').trim()) return false
+  if (!granted()) { reason = AWAY; return false }
+  const kind = text.map(secretIn).find(Boolean) ?? leakIn(text)
+  if (kind) { reason = SECRET(kind); return false }
+  return true
+}
+
 function bashAllowed(command) {
   if (typeof command !== 'string') return false
   const w = words(command)
   if (!w || w.length === 0) return false
   const [name, sub, verb] = w
   const rest = w.slice(1)
-  if (name === 'harness') return sub === 'super-tab' && superTabAllowed(w.slice(2))
+  if (name === 'harness') return sub === 'super-tab' ? superTabAllowed(w.slice(2)) : (sub === 'tell' || sub === 'reply') && relayAllowed(w.slice(2))
   const out = rest.filter(outward)
   if (out.length) {
     // In wide mode the plain readers take a path outside the folder as a word of its own: a file (a folder for ls, and not
@@ -1072,6 +1091,27 @@ export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide
   now = Date.now()): void {
   const wide: Grant | false = input.wide ? { session: input.session, account: input.account, launch: input.launch, at: now } : false
   writeList(reads.file, input.session, { ...heldList(reads.file, input.session), wide })
+}
+
+/** How long a grant holds after its person's last message: the guard's own GRANT_MS. */
+export const BUDDY_GRANT_MS = 60 * 60 * 1000
+
+/**
+ * Whether the Buddy session whose list is [reads], launched in [folder], holds its person's grant now: the guard's own
+ * `granted()`, for a check outside it (messages/service.ts, #2626). The host wrote it at its person's last message, theirs,
+ * in their own Buddy chat, signed in on this machine; it holds for this launch, the account signed in here now, and an
+ * hour. A list, launch file or account file that cannot be read is no grant.
+ */
+export function buddyGrantLive(reads: BuddyReads, folder: string, now = Date.now(), accountFile: string = buddyAccountFile()): boolean {
+  try {
+    const list = JSON.parse(readFileSync(reads.file, 'utf8')) as { session?: unknown; wide?: unknown }
+    const grant = list.wide as Partial<Grant> | false | undefined
+    const launch = buddyLaunchOf(folder)
+    if (!grant || typeof grant !== 'object' || typeof list.session !== 'string' || grant.session !== list.session || !launch || grant.launch !== launch) return false
+    const account = (JSON.parse(readFileSync(accountFile, 'utf8')) as { accountId?: unknown }).accountId
+    const age = now - Number(grant.at)
+    return typeof account === 'string' && account.length > 0 && grant.account === account && Number.isFinite(age) && age > -60_000 && age < BUDDY_GRANT_MS
+  } catch { return false }
 }
 
 /** Takes back the grant in [reads]'s list, whoever's session it names: at each launch (delta reviews of #2310). */

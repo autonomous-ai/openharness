@@ -256,6 +256,10 @@ export function windowsTeamCopyScript(input: { home: string; nodeName: string; c
  * Claude Code and Codex for the team account, installed by that account itself with its own copy of Harness's Node and
  * npm under its own home (`.local`): the twin of ./script.ts `TEAM_ENGINES_INSTALL`. A package that fails is said and
  * left, never failing setup.
+ *
+ * As on a Mac (task #2686, after #2921): both in one npm run first, so their downloads overlap, then each alone when that
+ * run fails; 8 minutes for the whole step, inside User Account Control's 15. npm.cmd runs through cmd with its output on
+ * NUL, and at the limit its whole process tree is stopped (`taskkill /T`), said, and setup goes on without the engines.
  */
 export function windowsTeamEnginesScript(input: { home: string; nodeName: string; packages: readonly string[] }): string {
   const home = checkWindowsPath(input.home, 'team home')
@@ -272,9 +276,30 @@ export function windowsTeamEnginesScript(input: { home: string; nodeName: string
     "if (-not (Test-Path -LiteralPath $npm)) { [Console]::Out.Write(\"harness: the team account's Node has no npm; Claude Code and Codex were not installed`n\"); exit 0 }",
     '$env:PATH = "$nodeDir;$env:SystemRoot\\System32;$env:SystemRoot"',
     'Set-Location -LiteralPath $TeamHome',
+    '$limit = 480',
+    '$deadline = (Get-Date).AddSeconds($limit)',
+    // 0 installed, 1 failed, 2 out of time (nothing more is tried).
+    'function Install([string[]]$pkgs) {',
+    '  $psi = New-Object System.Diagnostics.ProcessStartInfo',
+    '  $psi.FileName = $env:ComSpec',
+    '  $psi.Arguments = "/d /s /c `"`"$npm`" install --global --prefix `"$prefix`" --no-fund --no-audit --loglevel=error $($pkgs -join \' \') >NUL 2>&1`""',
+    '  $psi.UseShellExecute = $false',
+    '  $psi.CreateNoWindow = $true',
+    '  $psi.WorkingDirectory = $TeamHome',
+    '  $p = [Diagnostics.Process]::Start($psi)',
+    '  $left = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)',
+    '  if (-not $p.WaitForExit($left)) { & taskkill.exe /T /F /PID $p.Id *> $null; return 2 }',
+    '  if ($p.ExitCode -eq 0) { return 0 }',
+    '  return 1',
+    '}',
+    "function Out-Of-Time { [Console]::Out.Write(\"harness: Claude Code and Codex did not finish installing in $limit seconds; the Harness Team account works without them, and harness team setup installs them`n\"); exit 0 }",
+    '$got = Install $Packages',
+    'if ($got -eq 0) { foreach ($pkg in $Packages) { [Console]::Out.Write("harness: installed $pkg for the team account`n") }; exit 0 }',
+    'if ($got -eq 2) { Out-Of-Time }',
     'foreach ($pkg in $Packages) {',
-    '  & $npm install --global --prefix $prefix --no-fund --no-audit --loglevel=error $pkg *> $null',
-    '  if ($LASTEXITCODE -eq 0) { [Console]::Out.Write("harness: installed $pkg for the team account`n") }',
+    '  $got = Install @($pkg)',
+    '  if ($got -eq 2) { Out-Of-Time }',
+    '  if ($got -eq 0) { [Console]::Out.Write("harness: installed $pkg for the team account`n") }',
     '  else { [Console]::Out.Write("harness: could not install $pkg for the team account; harness team setup tries again`n") }',
     '}',
     'exit 0',
@@ -389,7 +414,8 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     // The output is appended to a file this process made in the stage folder, writable by the team account alone, so
     // nothing is written in the team account's home as the administrator.
     WINDOWS_CLEAN_LINE,
-    'function As-Team([string]$what, [string]$line, [int]$minutes) {',
+    // [lateSay]: a run that may be late without failing setup (the engines): what is said instead, and setup goes on.
+    'function As-Team([string]$what, [string]$line, [int]$minutes, [string]$lateSay = \'\') {',
     "  if (-not $script:scheduler) { $script:scheduler = New-Object -ComObject Schedule.Service; $script:scheduler.Connect() }",
     '  $out = Join-Path $script:RT "$what.out"',
     "  [IO.File]::WriteAllText($out, '')",
@@ -413,6 +439,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '    if ($late) { $registered.Stop(0) }',
     '    $status = $registered.LastTaskResult',
     '  } finally { $root.DeleteTask($name, 0) }',
+    '  if ($late -and $lateSay) { return @(-1, @($lateSay)) }',
     '  if ($late) { die "the team account\'s $what did not finish in $minutes minutes" }',
     // The Team account wrote these, and they go to the administrator\'s console (audit W7).
     '  $lines = @(Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | ForEach-Object { Clean-Line $_ } | Where-Object { $_ })',
@@ -432,6 +459,13 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     "if (-not (Test-Path -LiteralPath (Join-Path $CLI_SRC 'cli.js'))) { die \"no installed Harness CLI at $CLI_SRC\" }",
     "if (-not (Test-Path -LiteralPath (Join-Path $NODE_SRC 'node.exe'))) { die \"no Harness Node runtime at $NODE_SRC\" }",
     '',
+    // The step under way, for Desktop's waiting screen (./admin.ts reads it), as on a Mac (task #2686): a fresh file under a
+    // new name, renamed over the step file, so nothing is written through a link someone put there. Never a failure.
+    'function Step([string]$name) {',
+    "  try { $next = Join-Path $STAGE ('progress.' + [guid]::NewGuid().ToString('N')); [IO.File]::WriteAllText($next, \"$name`n\")",
+    "    Move-Item -LiteralPath $next -Destination (Join-Path $STAGE 'progress') -Force } catch { }",
+    '}',
+    "Step 'account'",
     '# 2. The account: a standard user named Harness Team, listed on the sign-in screen. Its password is random and nobody',
     '#    knows it, so nobody signs in to it. An account by this name that is not ours is left alone.',
     '$account = Get-LocalUser -Name $TEAM -ErrorAction SilentlyContinue',
@@ -474,6 +508,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     // The account runs only as Task Scheduler's tasks, whose password logon is a batch logon.
     'Set-BatchLogon $teamSid $true',
     '',
+    "Step 'home'",
     '# 3. Its profile, made by Windows with its own private ACL: the account signs in once to run nothing.',
     '$teamProfile = @(Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $teamSid })',
     'if ($teamProfile.Count -eq 0) {',
@@ -483,6 +518,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '}',
     'if ($teamProfile.Count -ne 1 -or $teamProfile[0].LocalPath -ne $TEAM_HOME) { die "Windows did not make the profile of $TEAM at $TEAM_HOME" 4 }',
     '',
+    "Step 'privacy'",
     '# 4. The owner\'s profile, private: an explicit ACE that lets Everyone, Users or Authenticated Users in is taken off,',
     '#    and said. The sentinel keeps the ACL it inherits, not a world-readable one as on a Mac: every account has',
     '#    "Bypass traverse checking", so a file that grants Everyone read opens by its full path in a folder the reader',
@@ -518,6 +554,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '  if (@($sentinelAcl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])).Count -ne 0) { die "$SENTINEL has ACEs of its own" 6 }',
     '} finally { $sentinelFile.Dispose() }',
     '',
+    "Step 'runtime'",
     '# 5. The team daemon stops while its files are replaced.',
     'if (Get-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {',
     '  Stop-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME',
@@ -535,11 +572,12 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     "$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15",
     'if ($copied[0] -ne 0) { die "the team account could not copy the Harness runtime into its home (exit $($copied[0])): $($copied[1] -join \' \')" }',
     '',
+    "Step 'engines'",
     '# 6b. Claude Code and Codex, installed by the team account itself into its own home: the owner\'s copies are inside the',
     '#     owner\'s private profile. None of the owner\'s sign-ins is copied.',
     `$enginesScript = ${hereString(windowsTeamEnginesScript({ home, nodeName, packages: TEAM_ENGINES.map((e) => e.packageName) }))}`,
     "[IO.File]::WriteAllText((Join-Path $RT 'engines.ps1'), $enginesScript)",
-    "$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 30",
+    "$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 10 'harness: Claude Code and Codex did not finish installing in 10 minutes; the Harness Team account works without them, and harness team setup installs them'",
     'foreach ($line in $installed[1]) { [Console]::Out.Write("$line`n") }',
     '',
     '# 7. What setup made (Administrators\' and SYSTEM\'s, every account may read it), and the team account\'s status folder.',
