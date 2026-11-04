@@ -111,12 +111,16 @@ class SuperTabVoiceNotice extends StatelessWidget {
     required this.conversationId,
     this.root,
     this.web = kIsWeb,
+    this.padding = EdgeInsets.zero,
   });
 
   final SuperTabVoiceTake take;
   final String conversationId;
   final String? root;
   final bool web;
+
+  /// Around the line when there is one; nothing takes room when there is not.
+  final EdgeInsets padding;
 
   @override
   Widget build(BuildContext context) {
@@ -129,7 +133,7 @@ class SuperTabVoiceNotice extends StatelessWidget {
         if (here && take.denied) {
           return Padding(
             key: const ValueKey('super-voice-refused'),
-            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            padding: padding,
             child: web
                 ? Text(superTabMicRefusedWeb, style: style)
                 : Wrap(
@@ -156,7 +160,7 @@ class SuperTabVoiceNotice extends StatelessWidget {
         if (here && notice != null) {
           return Padding(
             key: const ValueKey('super-voice-notice'),
-            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            padding: padding,
             child: Text(notice, style: style),
           );
         }

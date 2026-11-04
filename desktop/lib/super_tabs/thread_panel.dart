@@ -600,6 +600,12 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         take: voice,
         conversationId: _conversationId,
         root: widget.root,
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.composerSide,
+          0,
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+        ),
       ),
       null => null,
     },

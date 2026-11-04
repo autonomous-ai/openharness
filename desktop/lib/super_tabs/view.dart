@@ -4814,16 +4814,14 @@ class _SuperTabViewState extends State<SuperTabView>
                           ),
                         ),
                         if (_voice case final voice?)
-                          Padding(
+                          SuperTabVoiceNotice(
+                            take: voice,
+                            conversationId: chatId,
                             padding: const EdgeInsets.fromLTRB(
                               grid.AppDesktop.composerSide,
                               0,
                               grid.AppDesktop.composerSide,
                               grid.AppDesktop.controlGap,
-                            ),
-                            child: SuperTabVoiceNotice(
-                              take: voice,
-                              conversationId: chatId,
                             ),
                           ),
                       ],

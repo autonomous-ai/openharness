@@ -69,7 +69,8 @@ class SuperTabReplyBox extends StatelessWidget {
   /// A voice message under way in this thread: drawn in the row's place.
   final Widget? voiceRow;
 
-  /// The line about its voice message under the row (voice_row.dart).
+  /// The line about its voice message under the row (voice_row.dart), with
+  /// its own padding: it takes no room when it has nothing to say.
   final Widget? voiceNotice;
 
   /// Sees each key first, such as an open @ completion list's arrows and
@@ -240,16 +241,7 @@ class SuperTabReplyBox extends StatelessWidget {
                     ],
                   ),
           ),
-          if (voiceNotice case final voiceNotice?)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.composerSide,
-                0,
-                grid.AppDesktop.composerSide,
-                grid.AppDesktop.controlGap,
-              ),
-              child: voiceNotice,
-            ),
+          ?voiceNotice,
         ],
       ),
     ),
