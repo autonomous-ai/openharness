@@ -8,6 +8,7 @@
 import { API_PRESETS, servesModels } from '../lib/apiConnections.js'
 import type { TeamCommandDeps } from './command.js'
 import { teamPaths } from './layout.js'
+import { writeModelHandoff, type TeamModelHandoff } from './modelHandoff.js'
 
 export const MODEL_USAGE = [
   'Usage: harness team model set <provider> --model <model-id> [--key-stdin] [--clear]',
@@ -116,14 +117,31 @@ export function buildModelScript(input: {
 }
 
 /** `harness team model set`: the team account's own model API. */
+/** How long the owner waits for the Team daemon, which looks once a minute (./engines.ts ENGINE_RECHECK_MS). */
+const HANDOVER_WAIT_MS = 90_000
+
+/** Windows: left for the Team daemon, which writes it as itself (./modelHandoff.ts). True once it says it did. */
+async function handOverOnWindows(deps: TeamCommandDeps, statusFile: string, handoff: TeamModelHandoff, json: boolean): Promise<boolean> {
+  const startedAt = deps.now()
+  try { (deps.handModel ?? writeModelHandoff)(handoff) } catch (error) { deps.err(`✗ ${(error as Error).message}`); return false }
+  if (!json) deps.out('  Waiting for the Harness Team account to take it…')
+  while (deps.now() - startedAt < HANDOVER_WAIT_MS) {
+    const said = deps.readStatus(statusFile)?.model
+    if (said && said.at >= startedAt) {
+      if (said.state === 'applied') return true
+      deps.err(`✗ The Harness Team account could not take it: ${said.detail ?? 'no reason given'}`)
+      return false
+    }
+    await deps.sleep(2_000)
+  }
+  deps.err('✗ The Harness Team account did not take it yet, so it may not be running. It takes it when it next runs: harness team status shows its state.')
+  return false
+}
+
 export async function teamModelSet(deps: TeamCommandDeps, words: readonly string[], flags: readonly string[], json = false): Promise<number> {
   const where = deps.platform === 'darwin' ? 'this Mac' : 'this computer'
   const config = deps.readConfig()
   if (!config) { deps.err(`✗ No Harness Team account on ${where}. Run harness team setup first.`); return 1 }
-  if (deps.platform === 'win32') {
-    deps.err('✗ A model API for the team account is not on Windows yet. Sign the engines in from Harness: harness team status shows how.')
-    return 1
-  }
   const clear = flags.includes('--clear')
   let chosen: Chosen | null = null, model: string | null = null
   if (!clear) {
@@ -161,6 +179,13 @@ export async function teamModelSet(deps: TeamCommandDeps, words: readonly string
   const payload = JSON.stringify(chosen
     ? { clear: false, model, env: { ANTHROPIC_BASE_URL: claudeBase, ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_API_KEY: '' } }
     : { clear: true })
+  if (deps.platform === 'win32') {
+    if (!await handOverOnWindows(deps, config.statusFile, { connections, payload }, json)) return 1
+    if (json) { deps.out(JSON.stringify({ ok: true, provider: chosen?.provider ?? null, model: model ?? null })); return 0 }
+    for (const line of clear ? [`  ✓ The Harness Team account on ${where} has no model API again.`, '  Next: harness team status']
+      : DONE(chosen!.name, model!, where)) deps.out(line)
+    return 0
+  }
   const result = await deps.admin((stageDir) => ({
     script: buildModelScript({ platform: deps.platform, team: config.user, home: config.home, node: config.node,
       label: config.label, stage: stageDir, clear }),

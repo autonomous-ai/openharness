@@ -14,7 +14,9 @@ import { accessSync, constants } from 'node:fs'
 import { userInfo } from 'node:os'
 import { join, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
+import { env } from '../config/env.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
+import { receiveTeamModel } from './modelHandoff.js'
 import { TEAM_USER } from './layout.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
 import { teamRelayed } from './relay.js'
@@ -86,6 +88,8 @@ export interface EngineReporterDeps {
   check(config: TeamConfig): Promise<TeamEngines>
   read(path: string): TeamStatus | null
   write(path: string, update: Partial<Omit<TeamStatus, 'version'>>): void
+  /** Windows: a model API its owner left (./modelHandoff.ts), taken at each look. */
+  receive?(config: TeamConfig): void
   intervalMs?: number
 }
 
@@ -117,6 +121,7 @@ export class TeamEngineReporter {
     this.running ??= (async () => {
       const config = this.inTeamAccount()
       if (!config) return
+      this.deps.receive?.(config)
       const engines = await this.deps.check(config)
       const before = this.deps.read(config.statusFile)?.engines
       const same = before && TEAM_ENGINES.every(({ engine }) =>
@@ -137,6 +142,8 @@ export function teamEngineReporter(): TeamEngineReporter {
     check: (config) => checkTeamEngines(realEngineCheckDeps(config.home)),
     read: (path) => readTeamStatus(path),
     write: writeTeamStatus,
+    ...(process.platform === 'win32' ? { receive: (config: TeamConfig) => receiveTeamModel({ home: config.home, dataDir: env.ADAPTER_DATA_DIR, now: Date.now,
+      report: (update) => writeTeamStatus(config.statusFile, update) }) } : {}),
   })
 }
 
