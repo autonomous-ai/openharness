@@ -26,7 +26,7 @@ import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCE
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
+import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
@@ -1644,10 +1644,11 @@ export class SuperTabStore {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
-      if (command.type === 'conversation.create' && command.proposalMessageId) {
-        // By id within this tab: the proposal a new group comes from (leaderboard/record.ts recordProposal).
+      const namedProposal = command.type === 'conversation.create' ? command.proposalMessageId : command.type === 'proposal.close' ? command.messageId : undefined
+      if (namedProposal) {
+        // By id within this tab: the proposal a new group comes from (leaderboard/record.ts recordProposal), or one closed.
         const fields = { id: true, conversationId: true, author: true, source: true } as const
-        const proposal = await tx.superTabMessage.findFirst({ where: { id: command.proposalMessageId, tabId }, select: { ...fields, replyTo: true } })
+        const proposal = await tx.superTabMessage.findFirst({ where: { id: namedProposal, tabId }, select: { ...fields, replyTo: true } })
         // A reply with no source may be the proposal's details: the row it replies to is what commands.ts proposalNamed judges.
         const root = proposal?.replyTo && !proposal.source ? await tx.superTabMessage.findFirst({ where: { id: proposal.replyTo, tabId }, select: fields }) : null
         const row = (found: NonNullable<typeof root>) => ({ id: found.id, conversationId: found.conversationId, author: found.author as unknown as Author,
@@ -1969,6 +1970,7 @@ export class SuperTabStore {
           data: { usedBy: receiptId } })
         if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
       }
+      if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
         if (command.type === 'decision.ask') effects.result.decisionIds = ids

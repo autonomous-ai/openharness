@@ -258,6 +258,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
   z.object({ type: z.literal('buddy.remove'), projectId: id.optional() }).strict(),
+  // A Buddy's proposal closed by hand, with its reason: out of the open proposals, posting nothing (River 11-04, task #2926).
+  z.object({ type: z.literal('proposal.close'), projectId: id, messageId: id, reason: z.string().trim().min(1).max(200) }).strict(),
   // A person's one Buddy chat in the Swarm, opened before any Buddy is (buddies.ts openSwarmBuddyChat); with `projectId`, their
   // older chat in that project, which older apps still show (buddies.ts openBuddyChat).
   z.object({ type: z.literal('buddy.chat'), projectId: id.optional() }).strict(),
@@ -389,6 +391,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
+  'proposal.close': ['reason'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
@@ -475,7 +478,8 @@ export interface CommandContext {
   /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
    *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
   buddyNames?: import('./buddies.js').ChosenBuddyName[]
-  /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
+  /** The proposal a new group names as its origin (conversation.create proposalMessageId), or one closed (proposal.close),
+   *  loaded from this tab by the store. */
   proposal?: ProposalRow & {
     /** When the named row is a reply with no source of its own: the row it replies to (proposalNamed). */
     root?: ProposalRow }
@@ -2464,6 +2468,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
       if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,
         text: proposalSentText(project.name, command), replyTo: null, recipients: [], source: { kind: PROPOSAL_SENT_KIND, projectId: project.id }, buddyProject: project.id })
+      break
+    }
+    case 'proposal.close': {
+      // Its project's coordinator, or a person who reads the project, as for a note (note.remove): it only leaves the list.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      const { messageId } = proposalOf(state, project, proposalNamed(context.proposal))
+      effects.closedProposal = { messageId, conversationId: project.leadConversationId, reason: command.reason }
+      result.proposalId = messageId
       break
     }
     case 'buddy.remove': {
