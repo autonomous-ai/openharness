@@ -183,6 +183,22 @@ void main() {
     expect(starter.statusOf(c, games)?.failed, isFalse);
   });
 
+  // Task #2815: the empty chat's Start a Lead card picks them.
+  test('a start the card asked for uses its machine and engine', () async {
+    final f = SuperTabLaunchFixture();
+    _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
+    final c = await _swarm(f);
+    final games = _games(c);
+    final starter = PersonalLeadStarter.of(f.app);
+    expect(
+      [for (final m in starter.machinesFor(c)) m.machine.machineId],
+      ['m'],
+    );
+    await starter.start(c, games, machineId: 'm', engine: 'codex');
+    expect(_create(f)['engine'], 'codex');
+    expect(_create(f)['cwd'], '/Users/huy/games');
+  });
+
   test('a Team Swarm starts no Lead', () async {
     final f = SuperTabLaunchFixture();
     _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
