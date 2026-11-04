@@ -3669,6 +3669,9 @@ class _SuperTabViewState extends State<SuperTabView>
       threadTagged:
           thread != null &&
           SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
+      threadFresh: thread == null
+          ? 0
+          : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null

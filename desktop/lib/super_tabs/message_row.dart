@@ -88,6 +88,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.threadTagged = false,
+    this.threadFresh = 0,
     this.onOpenThread,
     this.threadTrailing,
     this.threadEnd,
@@ -116,6 +117,10 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// Whether an unread reply in [thread] tags the reader.
   final bool threadTagged;
+
+  /// How many of [thread]'s replies are new to the reader; 0 when none, or
+  /// not known.
+  final int threadFresh;
 
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
@@ -701,6 +706,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   thread: thread,
                                   unread: widget.threadUnread,
                                   tagged: widget.threadTagged,
+                                  fresh: widget.threadFresh,
                                   onOpen: open,
                                   member: widget.member,
                                   trailing: widget.threadTrailing,
@@ -934,12 +940,17 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.unread,
     required this.onOpen,
     this.tagged = false,
+    this.fresh = 0,
     this.member,
     this.trailing,
     this.end,
   });
 
   final SuperTabThread thread;
+
+  /// How many replies are new to the reader, said after the count while
+  /// [unread]; 0 says nothing.
+  final int fresh;
 
   /// Drawn after the line's link, outside it: a thread session's mark.
   final Widget? trailing;
@@ -993,13 +1004,18 @@ class SuperTabThreadLine extends StatelessWidget {
       );
     }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
+    final newWords = unread && fresh > 0 ? '$fresh new' : null;
     final last = thread.lastAt;
     final lastReply = last == null
         ? null
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
-      label: [count, if (unread) 'unread', if (tagged) '@ you'].join(', '),
+      label: [
+        count,
+        if (unread) newWords ?? 'unread',
+        if (tagged) '@ you',
+      ].join(', '),
       onTap: onOpen,
       builder: (active) => Row(
         children: [
@@ -1025,6 +1041,15 @@ class SuperTabThreadLine extends StatelessWidget {
                         ),
                   ),
                 ),
+                if (newWords != null) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Text(
+                    newWords,
+                    key: ValueKey('super-thread-new-${thread.id}'),
+                    style: DesktopChrome.metadata(color: DesktopChrome.accent)
+                        .copyWith(fontWeight: grid.AppFont.semibold),
+                  ),
+                ],
                 if (tagged) ...[
                   const SizedBox(width: grid.AppDesktop.controlGap),
                   Text(

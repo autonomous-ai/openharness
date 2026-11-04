@@ -194,6 +194,17 @@ class SuperTabAttention extends ChangeNotifier {
     );
   }
 
+  /// How many replies of [root]'s thread in [conversationId] are new to the
+  /// reader, as Activity lists it; 0 when it does not list it as new.
+  int newRepliesIn(String conversationId, String root) {
+    for (final thread in unread) {
+      if (thread.conversationId == conversationId && thread.rootId == root) {
+        return newCount(thread);
+      }
+    }
+    return 0;
+  }
+
   /// Whether [threadId] contains an unread tag of the reader.
   bool hasUnreadTagInThread(String conversationId, String threadId) {
     if (controller.accessRevoked ||
