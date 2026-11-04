@@ -125,6 +125,14 @@ describe('an adapter socket\'s writes to its machine row', () => {
     expect(writes()).toEqual([{ sessionKind: 'computer' }])
   })
 
+  it('retries a changed fact whose connect write failed on the next heartbeat, then stops', async () => {
+    m.machineUpdate.mockRejectedValueOnce(new Error('mongo slow'))
+    await connect('0.5.14')
+    await heartbeatAt(15_000)
+    await heartbeatAt(30_000)
+    expect(writes()).toEqual([{ clientVersion: '0.5.14' }, { clientVersion: '0.5.14' }])
+  })
+
   it('retries a failed stamp on the next heartbeat', async () => {
     m.machineService.resolveOrCreateForComputer.mockResolvedValue({ machine: { ...row, lastSeenAt: null }, created: false })
     m.machineUpdate.mockRejectedValueOnce(new Error('mongo slow'))
