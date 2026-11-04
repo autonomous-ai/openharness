@@ -821,6 +821,20 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
   })
 
+  it('links the proposal when the PM names its details, the reply it was delivered; a reply of its own stays refused (Scholes, 11-04)', async () => {
+    const { f, proposal, pm } = await proposed()
+    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, replyTo: proposal } })
+    const open = (proposalMessageId: string) => f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId }, owner, f.lead)
+    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    await expect(open(answer)).rejects.toMatchObject({ code: 'PROPOSAL_UNKNOWN' })
+    const created = await open(details.id)
+    const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === String(created.result.conversationId))!
+    expect(stored.requesterId).toBe(peer.sub)
+    expect(stored.cards?.line).toMatchObject({ messageId: proposal, conversationId: 'lead' })
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: stored.id } })).data).toMatchObject({ ledger: { proposal: { messageId: proposal } } })
+  })
+
   it('is told of work the PM opens from its proposal without naming anyone: the proposal\'s person is its requester (groups #294, #327)', async () => {
     const { f, agentId, proposal, heard } = await proposed()
     const created = await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
