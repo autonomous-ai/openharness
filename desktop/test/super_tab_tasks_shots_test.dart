@@ -13,6 +13,9 @@ final shots = Platform.environment['SUPER_TAB_TASKS_SHOTS'];
 
 /// A project's Tasks view as the PR shows it (Dee, task #2569): Board and
 /// List, in both appearances, with a Needs-you card and the header's count.
+/// The Board's columns are panels of inset tiles (Huy, task #2948): Proposals
+/// is empty and says so, and the task just opened from the board shows
+/// selected on coming back.
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
@@ -27,6 +30,7 @@ void main() {
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = before);
         final server = tasksServer();
+        server.proposals['lead'] = [];
         (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
           taskFixture(
             'dial',
@@ -45,8 +49,9 @@ void main() {
           ),
           taskFixture(
             'long',
-            'A long title that takes both of its two lines on the board, and '
-                'then some more words that are cut',
+            'A long title that takes all three of its lines on the board, '
+                'and then goes on with more words than three lines of a '
+                'column can hold, so the rest is cut',
             17,
             requester: 'tony',
           ),
@@ -75,6 +80,11 @@ void main() {
             ),
           ),
         );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-tasks')));
+        await tester.pumpAndSettle();
+        // Open a task from the board, then come back: it shows selected.
+        await tester.tap(find.byKey(const ValueKey('super-task-card-dial')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('super-tasks')));
         await tester.pumpAndSettle();
