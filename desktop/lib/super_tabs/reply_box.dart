@@ -36,6 +36,8 @@ class SuperTabReplyBox extends StatelessWidget {
     this.options,
     this.onTag,
     this.onMic,
+    this.voiceRow,
+    this.voiceNotice,
     this.onKey,
     this.inputFormatters = const [],
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
@@ -63,6 +65,13 @@ class SuperTabReplyBox extends StatelessWidget {
 
   /// @ Tag's press, and the mic's: no mic without one; @ Tag greyed.
   final VoidCallback? onTag, onMic;
+
+  /// A voice message under way in this thread: drawn in the row's place.
+  final Widget? voiceRow;
+
+  /// The line about its voice message under the row (voice_row.dart), with
+  /// its own padding: it takes no room when it has nothing to say.
+  final Widget? voiceNotice;
 
   /// Sees each key first, such as an open @ completion list's arrows and
   /// Enter; a non-null answer is the key's.
@@ -181,53 +190,58 @@ class SuperTabReplyBox extends StatelessWidget {
             ),
           Padding(
             padding: composerRowInsets(target: grid.AppControl.height),
-            child: Row(
-              children: [
-                FocusTraversalOrder(
-                  order: toolsOrder,
-                  child: NewHarnessAttachButton(
-                    attachments: files,
-                    enabled: writable && !busy,
-                    icon: AppIcons.plus,
+            // A voice message under way takes the row's place (#2665).
+            child: voiceRow != null
+                ? FocusTraversalOrder(order: sendOrder, child: voiceRow!)
+                : Row(
+                    children: [
+                      FocusTraversalOrder(
+                        order: toolsOrder,
+                        child: NewHarnessAttachButton(
+                          attachments: files,
+                          enabled: writable && !busy,
+                          icon: AppIcons.plus,
+                        ),
+                      ),
+                      FocusTraversalOrder(
+                        order: toolsOrder,
+                        child: SuperTabComposerTagButton(
+                          key: tagKey,
+                          onPressed: writable ? onTag : null,
+                        ),
+                      ),
+                      Expanded(child: options ?? const SizedBox.shrink()),
+                      if (onMic case final onMic?)
+                        FocusTraversalOrder(
+                          order: sendOrder,
+                          child: SuperTabComposerMic(
+                            key: micKey,
+                            onPressed: writable ? onMic : null,
+                          ),
+                        ),
+                      FocusTraversalOrder(
+                        order: sendOrder,
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([files, text]),
+                          builder: (context, _) => AppIconButton(
+                            key: sendKey,
+                            icon: AppIcons.arrowUp,
+                            tooltip: 'Send reply',
+                            color: DesktopChrome.accent,
+                            onPressed:
+                                writable &&
+                                    !busy &&
+                                    (text.text.trim().isNotEmpty ||
+                                        !files.isEmpty)
+                                ? onSend
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                FocusTraversalOrder(
-                  order: toolsOrder,
-                  child: SuperTabComposerTagButton(
-                    key: tagKey,
-                    onPressed: writable ? onTag : null,
-                  ),
-                ),
-                Expanded(child: options ?? const SizedBox.shrink()),
-                if (onMic case final onMic?)
-                  FocusTraversalOrder(
-                    order: sendOrder,
-                    child: SuperTabComposerMic(
-                      key: micKey,
-                      onPressed: writable ? onMic : null,
-                    ),
-                  ),
-                FocusTraversalOrder(
-                  order: sendOrder,
-                  child: ListenableBuilder(
-                    listenable: Listenable.merge([files, text]),
-                    builder: (context, _) => AppIconButton(
-                      key: sendKey,
-                      icon: AppIcons.arrowUp,
-                      tooltip: 'Send reply',
-                      color: DesktopChrome.accent,
-                      onPressed:
-                          writable &&
-                              !busy &&
-                              (text.text.trim().isNotEmpty || !files.isEmpty)
-                          ? onSend
-                          : null,
-                    ),
-                  ),
-                ),
-              ],
-            ),
           ),
+          ?voiceNotice,
         ],
       ),
     ),

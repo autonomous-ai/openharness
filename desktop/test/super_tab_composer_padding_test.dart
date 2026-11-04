@@ -4,14 +4,9 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/voice_recorder.dart';
 
+import 'support/fake_voice_recorder.dart';
 import 'support/super_tab_fixture.dart';
-
-class _Recorder implements SuperTabVoiceRecorder {
-  @override
-  Future<void> start({required String conversationId, String? root}) async {}
-}
 
 /// Huy, 11-04: the composer was too tight, its hint and its row of actions
 /// against the box's edge. As on the phone and in Slack, the text sits 12 below
@@ -89,7 +84,7 @@ void main() {
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Mac Studio',
-                  voiceRecorder: _Recorder(),
+                  voiceRecorder: FakeVoiceRecorder.new,
                 ),
               ),
             ),

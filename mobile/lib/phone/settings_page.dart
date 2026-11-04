@@ -52,6 +52,8 @@ import 'tty.dart';
 import 'usage_entry.dart';
 import 'voice_language.dart';
 import 'voice_language_store.dart';
+import '../swarm/swarm_session.dart' show SwarmScope;
+import 'account_profile_dialog.dart';
 
 /// The phone's Settings tab.
 ///
@@ -557,10 +559,18 @@ class _Body extends StatelessWidget {
   }
 
   void _showAccountSheet(BuildContext context, AppNotifier notifier) {
+    // The Swarms read under the sheet's own context, before it opens: a Username field each (#2655).
+    final swarms = accountProfileSwarms(SwarmScope.of(context));
     showPhoneSheet(
       context,
       title: notifier.currentUser?.email ?? 'Signed in',
       actions: [
+        // Your name, and your @username in each Swarm: the desktop's avatar menu Profile (#2917).
+        PhoneSheetAction(
+          icon: LucideIcons.user300,
+          label: 'Profile',
+          onTap: () => unawaited(showAccountProfile(context, notifier, swarms: swarms)),
+        ),
         PhoneSheetAction(
           icon: LucideIcons.logOut300,
           label: 'Sign out',

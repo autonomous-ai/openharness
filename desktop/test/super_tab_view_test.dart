@@ -637,7 +637,8 @@ void main() {
   );
 
   testWidgets(
-    'native terminals fill the middle, preserve both sidebars, and return to chat',
+    'native terminals fill the middle with their chat beside them, preserve '
+    'both sidebars, and return to chat',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -662,9 +663,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Native terminal fixture'), findsOneWidget);
-      expect(find.text('Review this result.'), findsNothing);
+      // Wide, the chat stays beside the terminal (Huy, #2792), in the right
+      // pane where a thread sits.
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-right-pane')),
+          matching: find.text('Review this result.'),
+        ),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      // The right column stays closed at rest beside the terminals too.
+      // Members stays closed at rest beside the terminals too.
       expect(find.byType(SuperTabRoster), findsNothing);
       expect(
         tester
@@ -685,6 +694,8 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();
       expect(find.text('Native terminal fixture'), findsOneWidget);
+      // Narrow, one at a time: the terminal holds the middle alone.
+      expect(find.text('Review this result.'), findsNothing);
       await tester.tap(find.byTooltip('Chat'));
       expect(closed, isTrue);
       expect(

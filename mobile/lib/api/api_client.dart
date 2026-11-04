@@ -105,6 +105,14 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  /// Saves the signed-in person's own account name (`PATCH /api/auth/me`, task #2655, the route #2917 added) and
+  /// answers the profile as [me] does. The backend checks the name and says why it refused in words; one from before
+  /// the route answers 404.
+  Future<Map<String, dynamic>?> updateMe({required String name}) async {
+    final res = await _dio.patch('/api/auth/me', data: {'name': name});
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- machines --
   Future<List<Machine>> machines() async {
     final res = await _dio.get('/api/machines');

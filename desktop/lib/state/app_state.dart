@@ -14908,13 +14908,35 @@ class AppNotifier extends ChangeNotifier {
       ),
     );
     if (revealAgentView(machineId, agentId)) return;
+    if (openSwarmAgentTerminal(machineId, agentId)) return;
+    // A Swarm tab shows only its chats' terminals: a pane added to it would
+    // be closed by its view, and the click would open nothing (#2792).
     if (activeSwarm.isUtility ||
         activeSwarm.isOrchestrator ||
+        activeSwarm.isSuperTab ||
         activeSwarm.panes.length >= maxPanes) {
       newSwarm();
     }
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
     revealAgentView(machineId, agentId);
+  }
+
+  /// A loaded Swarm's agent running on [machineId] as [harnessId]: its Swarm
+  /// comes forward and opens its terminal beside the chat it waits in (Huy,
+  /// #2792). False when no Swarm this reader has loaded holds it.
+  bool openSwarmAgentTerminal(String machineId, String harnessId) {
+    for (final controller in superTabs.loadedControllers) {
+      if (controller.accessRevoked) continue;
+      final agent = controller.snapshot?.agents
+          .where((a) => a.machineId == machineId && a.harnessId == harnessId)
+          .firstOrNull;
+      final name = superTabName(controller.tabId);
+      if (agent == null || name == null) continue;
+      openSuperTab(controller.tabId, name);
+      controller.openAgentTerminal(agent.id);
+      return true;
+    }
+    return false;
   }
 
   /// The person has gone to this agent — by clicking its row, its banner, or

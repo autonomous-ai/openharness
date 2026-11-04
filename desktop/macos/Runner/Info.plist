@@ -71,6 +71,8 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Harness records the voice messages you send in a Swarm chat.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Harness finds and connects to Autonomous robots on your local network.</string>
 	<key>NSBonjourServices</key>

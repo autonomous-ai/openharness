@@ -21,6 +21,8 @@ final _swarmRoute = RegExp(
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   '|activity|activity/read|threads|inbox|proposals'
   '|reminders'
+  // A voice message's clip, read once before it is sent (#2887; the mic, #2665).
+  '|attachments/$_id/voice'
   '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id|messages/$_id/reminder)'
