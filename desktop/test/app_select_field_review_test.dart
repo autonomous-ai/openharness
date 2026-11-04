@@ -194,6 +194,8 @@ void main() {
       _host(
         AppSelectField<String>(
           width: 280,
+          // Typeahead's path: a list past the threshold otherwise gets a search.
+          filterable: false,
           value: '0',
           options: [
             for (var i = 0; i < 10; i++)

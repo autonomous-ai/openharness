@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -255,7 +256,7 @@ void main() {
 
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(tester.widget<MenuItemButton>(option('air')).onPressed, isNull);
+      expect(tester.widget<AppMenuItem>(option('air')).onPressed, isNull);
       await tester.tap(find.text('MacBook Air').last, warnIfMissed: false);
       await tester.pumpAndSettle();
       // The tap picked nothing, so the menu is still open: close it to read the field.
@@ -282,7 +283,7 @@ void main() {
 
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(tester.widget<MenuItemButton>(option('rig')).onPressed, isNull);
+      expect(tester.widget<AppMenuItem>(option('rig')).onPressed, isNull);
       expect(
         find.descendant(
           of: option('rig'),

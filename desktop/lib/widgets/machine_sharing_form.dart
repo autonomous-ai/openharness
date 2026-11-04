@@ -927,7 +927,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         cursorColor: DesktopChrome.accent,
         decoration: InputDecoration(
           hintText: 'Email address',
-          hintStyle: muted13,
+          hintStyle: DesktopChrome.text(size: 13, color: DesktopChrome.hint),
           prefixIcon: Icon(
             AppIcons.user,
             size: AppIcons.inlineSize,

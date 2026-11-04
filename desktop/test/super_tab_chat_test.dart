@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -236,7 +237,7 @@ void main() {
       final c = await show(tester, server);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
       await tester.pumpAndSettle();
       server.append('The review is ready.');
       await c.refresh();
@@ -275,7 +276,7 @@ void main() {
     final c = await show(tester, server);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     server.append('Not yet fetched');
     c.snapshot = SuperTabSnapshot.fromJson(server.state);
@@ -662,7 +663,7 @@ void main() {
       expect(c.unread(c.selected!), isTrue);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-chat')));
       await tester.pumpAndSettle();

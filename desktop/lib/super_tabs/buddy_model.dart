@@ -169,20 +169,17 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
       ),
       child: Text(text, style: DesktopChrome.metadata()),
     );
-    return MenuAnchor(
+    return AppDropdown(
       controller: _menu,
-      consumeOutsideTap: true,
-      // Held to the style's width, so the longer lines wrap.
-      crossAxisUnconstrained: false,
-      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(minWidth: 220, maxWidth: 440, maxHeight: 520),
-      menuChildren: [
+      // Wide enough for a model and its servers; the longer lines wrap.
+      width: 320,
+      maxHeight: 520,
+      children: [
         row(
           AppMenuItem(
             icon: current == null ? AppIcons.check : null,
             label: 'Your subscription',
             note: 'Claude Code',
-            expandLabel: true,
             onPressed: () => _pick(null),
           ),
         ),
