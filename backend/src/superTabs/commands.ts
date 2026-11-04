@@ -1,4 +1,4 @@
-import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -3210,8 +3210,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // owner or the assignee by five rules, and in a day 402 of 437 agent posts reached the PM as their only recipient though
       // only 1 named it (Ken, #2963). The PM hears an agent's work through its status. An agent is never delivered its own
       // message, except its note to itself: naming only itself, its post is unnamed (final review of phase 1).
-      const addressed = command.agentOnly || actor.kind !== 'agent' ? command.recipientIds
-        : [...new Set([...command.recipientIds, ...agentsNamedIn(state, group, command.text, names)])].filter(id => id !== actor.agentId)
+      // @Name never turns a post into a refusal: an agent the sender may not name with --to is left out (mayName).
+      const poster = actor.kind === 'agent' ? agent(state, actor.agentId) : null
+      const textNamed = poster && !command.agentOnly
+        ? agentsNamedIn(state, group, command.text, names).filter(id => mayName(state, group, poster, agent(state, id))) : []
+      const addressed = command.agentOnly || !poster ? command.recipientIds
+        : [...new Set([...command.recipientIds, ...textNamed])].filter(id => id !== poster.id)
       const assigned = activeWork(group) ? group.assignment!.agentId : null
       const toAssignee = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned && assigned !== actor.agentId
         && group.agentIds.includes(assigned) ? assigned : null
@@ -3241,7 +3245,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       for (const id of recipients) {
         const target = agent(state, id)
         // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
-        if (actor.kind === 'agent' && addressed.includes(id)) requireNameable(state, group, agent(state, actor.agentId), target)
+        if (poster && addressed.includes(id)) requireNameable(state, group, poster, target)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
@@ -3270,7 +3274,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         leadWaits(unled, operationId, context.now)
       }
       // The message that makes it LOOP_NOTICE_AT in a row between two agents tells their Lead, once; delivery is never held.
-      const speaker = actor.kind === 'agent' ? agent(state, actor.agentId) : null
+      const speaker = poster
       const partner = speaker && recipients.length === 1 && recipients[0] !== speaker.id ? agent(state, recipients[0]!) : null
       const pairLead = speaker && leadOf(state, speaker)
       if (speaker && partner && pairLead && pairLead.id !== partner.id && pairLoop(context.recent, speaker.id, partner.id, context.now) + 1 === LOOP_NOTICE_AT) {
