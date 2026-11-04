@@ -1,3 +1,15 @@
+# Product
+
+Every change serves one positioning, written in [PRODUCT.md](PRODUCT.md#what-harness-is): tell the PM what you
+want, and your crew ships it; Ken's router fits every agent to a machine with the resources its job needs; every lab
+in one crew, on the team's own machines, reviewed and tested before merge.
+
+- Build only what your task asks. An idea beyond it goes to the project's PM as a proposal (outside a Swarm, to the
+  maintainers).
+- The PM owns the product. Fixes to what ships, security fixes and anything that makes the crew faster or more
+  reliable are a yes at once. New features and growing scope are a no unless they strengthen the positioning. Fewer
+  things, made with purpose.
+
 # Development and release work
 
 Read [ENGINEERING.md](ENGINEERING.md) before changing code: every change meets its standards. What Harness must

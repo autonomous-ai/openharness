@@ -60,6 +60,9 @@ void main() {
   /// Row [row] of You, tapped.
   Future<void> youTo(WidgetTester tester, String row) async {
     await openYou(tester);
+    // You scrolls: on the test's short screen its last rows sit below.
+    await tester.ensureVisible(key(row));
+    await tester.pump();
     await tester.tap(key(row));
     await frames(tester);
   }
@@ -175,6 +178,11 @@ void main() {
 
     await youTo(tester, 'swarm-you-settings');
     expect(find.byType(SettingsPage), findsOneWidget);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isTrue,
+      reason: "drawn as Swarm's pages are",
+    );
 
     await tester.binding.handlePopRoute();
     await frames(tester);
@@ -244,6 +252,11 @@ void main() {
     // The terminal's Settings (its menu, Find), as the person reaches it.
     openPhoneSettings(tester.element(find.byType(AgentHome)), app);
     await frames(tester);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isFalse,
+      reason: "the terminal's Settings keeps the phone's own look",
+    );
     await tapSwarmSwitch(tester);
     await tester.tap(find.text('Turn on Swarm'));
     await frames(tester);

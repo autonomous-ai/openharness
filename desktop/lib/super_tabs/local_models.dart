@@ -16,6 +16,7 @@ import '../widgets/key_hints.dart';
 import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_switcher.dart';
 import '../ws/ws_conn.dart';
+import 'buddies.dart' show buddyPersonName;
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
@@ -564,7 +565,7 @@ class SuperTabMachineLocalModels extends StatelessWidget {
     // A fresh reading only, as the route reads it; then each model by what it is: an API this machine's person
     // shares, or a model of theirs running for the Swarm.
     final fresh = superTabServedModels(pool, local.grid, now: now());
-    final apis = <String>[], models = <String>[];
+    final apis = <SuperTabServedModel>[], models = <SuperTabServedModel>[];
     final observed = pool?['observation'];
     for (final m
         in observed is Map && observed['localModels'] is List
@@ -576,16 +577,31 @@ class SuperTabMachineLocalModels extends StatelessWidget {
       if (!fresh.any((f) => f.model == m['model'])) continue;
       final model = m['model'] as String;
       if (m['kind'] == 'api') {
-        apis.add(
-          model.contains('/')
+        apis.add((
+          model: model,
+          name: model.contains('/')
               ? model.substring(model.lastIndexOf('/') + 1)
               : model,
-        );
+        ));
       } else {
-        models.add(m['name'] is String ? m['name'] as String : model);
+        models.add((
+          model: model,
+          name: m['name'] is String ? m['name'] as String : model,
+        ));
       }
     }
-    Widget line(String label, List<String> names) => Padding(
+    // Whoever serves a model sees whose Buddy runs on it (PRODUCT.md,
+    // Contribution: seen), from the Buddies every member's read carries.
+    String? usedBy(String model) {
+      final people = {
+        for (final a in controller.snapshot!.agents)
+          if (a.isBuddy && a.gridModel == model)
+            "${buddyPersonName(controller, a.buddyOf!)}'s Buddy",
+      };
+      return people.isEmpty ? null : 'Used by ${people.join(', ')}';
+    }
+
+    Widget line(String label, List<SuperTabServedModel> served) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -596,12 +612,21 @@ class SuperTabMachineLocalModels extends StatelessWidget {
           ),
           const SizedBox(width: 16),
           Expanded(
-            child: Text(
-              names.isEmpty ? 'None' : names.join(', '),
-              style: names.isEmpty
-                  ? DesktopChrome.control(color: DesktopChrome.muted)
-                  : DesktopChrome.control(),
-            ),
+            child: served.isEmpty
+                ? Text(
+                    'None',
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final s in served) ...[
+                        Text(s.name, style: DesktopChrome.control()),
+                        if (usedBy(s.model) case final used?)
+                          Text(used, style: DesktopChrome.metadata()),
+                      ],
+                    ],
+                  ),
           ),
         ],
       ),

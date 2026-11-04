@@ -9,6 +9,7 @@
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
 import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
+import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
@@ -21,6 +22,11 @@ export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' }
 export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as const
 /** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
+/** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
+ *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
+export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
+/** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
+const WATCH_KEPT = 2000
 const PUSH_ORIGINS_KEPT = 1000
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
@@ -134,6 +140,8 @@ export class GitHubApp {
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
+  /** The watch's last answer and its ETag, by path ([watchPullRequest]). */
+  private readonly watched = new Map<string, { etag: string; body: Record<string, unknown> | unknown[]; link: string | null }>()
 
   constructor(readonly config: GitHubAppConfig, options: GitHubAppOptions = {}) {
     this.fetch = options.fetch ?? fetch
@@ -181,13 +189,14 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown, headers: Record<string, string> = {}):
+    Promise<{ link?: string | null; etag?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
         method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend',
-          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch {
@@ -197,7 +206,7 @@ export class GitHubApp {
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
     return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
-      link: response.headers.get('link') }
+      link: response.headers.get('link'), etag: response.headers.get('etag') }
   }
 
   private misconfigured(): GitHubAppError {
@@ -466,6 +475,68 @@ export class GitHubApp {
       const body = answer.body as Record<string, unknown>
       if (answer.status !== 200 || !['open', 'closed'].includes(String(body.state))) return null
       return body.state === 'open' ? 'open' : typeof body.merged_at === 'string' ? 'merged' : 'closed'
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /**
+   * What a task's Engineer is told of its pull request [number] (superTabs/pullRequestEvents.ts): the pull request, its head's
+   * latest check runs and its check suites, its reviews and its conversation comments, read with a [PULL_WATCH_PERMISSIONS]
+   * token. Each read names the last answer's ETag, and a 304 reuses that answer. Reviews and comments come oldest first, so
+   * their last page is read too when there is more than one (review of #2750). Null when GitHub cannot say.
+   */
+  async watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<PullRequestWatch | null> {
+    const base = `/repos/${repository.owner}/${repository.name}`
+    const answerOf = async (path: string, fresh = false): Promise<{ body: Record<string, unknown> | unknown[]; link: string | null } | null> => {
+      const kept = this.watched.get(path)
+      const answer = await this.call('GET', path, `Bearer ${token}`, undefined, kept && !fresh ? { 'If-None-Match': kept.etag } : {})
+      if (answer.status === 304 && kept) return kept
+      if (answer.status !== 200) return null
+      this.watched.delete(path)
+      if (answer.etag) {
+        if (this.watched.size >= WATCH_KEPT) this.watched.delete(this.watched.keys().next().value!)
+        this.watched.set(path, { etag: answer.etag, body: answer.body, link: answer.link ?? null })
+      }
+      return { body: answer.body, link: answer.link ?? null }
+    }
+    const read = async (path: string) => (await answerOf(path))?.body ?? null
+    // A full first page is read afresh: a new last page changes its Link, not its body.
+    const pages = async (path: string): Promise<unknown[] | null> => {
+      const first = await answerOf(path, (this.watched.get(path)?.body as unknown[] | undefined)?.length === 100)
+      if (!first || !Array.isArray(first.body)) return null
+      const last = /<([^>]+)>;\s*rel="last"/.exec(first.link ?? '')?.[1]
+      const lastPath = last?.startsWith(this.apiUrl) ? last.slice(this.apiUrl.length) : null
+      if (!lastPath) return first.body
+      const tail = await read(lastPath)
+      return Array.isArray(tail) ? [...first.body, ...tail] : null
+    }
+    const text = (value: unknown) => typeof value === 'string' ? value : ''
+    const login = (value: unknown) => text((value as { login?: unknown } | null)?.login)
+    const at = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null
+    try {
+      const pull = await read(`${base}/pulls/${number}`) as Record<string, unknown> | null
+      const head = text((pull?.head as { sha?: unknown } | undefined)?.sha)
+      if (!pull || (pull.state !== 'open' && pull.state !== 'closed') || !/^[0-9a-f]{7,64}$/.test(head)) return null
+      const [runs, suites, reviews, comments] = await Promise.all([read(`${base}/commits/${head}/check-runs?per_page=100`),
+        read(`${base}/commits/${head}/check-suites?per_page=100`), pages(`${base}/pulls/${number}/reviews?per_page=100`),
+        pages(`${base}/issues/${number}/comments?per_page=100`)])
+      if (!runs || !suites || !Array.isArray(reviews) || !Array.isArray(comments)) return null
+      const list = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, unknown>> : []
+      return {
+        url: text(pull.html_url) || `https://github.com/${repository.owner}/${repository.name}/pull/${number}`, number,
+        state: pull.state, draft: pull.draft === true, head, base: text((pull.base as { ref?: unknown } | undefined)?.ref) || 'main',
+        mergeable: typeof pull.mergeable === 'boolean' ? pull.mergeable : null,
+        checkRuns: list((runs as Record<string, unknown>).check_runs).map(run => ({ name: text(run.name), status: text(run.status),
+          conclusion: typeof run.conclusion === 'string' ? run.conclusion : null, completedAt: at(run.completed_at) })),
+        checkSuites: list((suites as Record<string, unknown>).check_suites).map(suite => ({ status: text(suite.status),
+          runs: typeof suite.latest_check_runs_count === 'number' ? suite.latest_check_runs_count : 0 })),
+        reviews: list(reviews).filter(review => typeof review.id === 'number').map(review => ({ id: review.id as number, login: login(review.user),
+          association: text(review.author_association) || 'NONE', state: text(review.state), body: text(review.body), url: text(review.html_url) })),
+        comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
+          login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
+      }
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error

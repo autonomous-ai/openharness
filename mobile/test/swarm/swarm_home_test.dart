@@ -640,21 +640,24 @@ void main() {
       expect(find.byType(SwarmActivityPage), findsOneWidget);
     });
 
-    testWidgets('back within five minutes and using the app on: the time stays, '
-        'as only time in the background is time away', (tester) async {
-      var now = _halfHourIn();
-      await pump(tester, backend(), now: () => now);
-      await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
+    testWidgets(
+      'back within five minutes and using the app on: the time stays, '
+      'as only time in the background is time away',
+      (tester) async {
+        var now = _halfHourIn();
+        await pump(tester, backend(), now: () => now);
+        await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
+        expect(inside('swarm-away', find.text('4m')), findsOneWidget);
 
-      now = now.add(const Duration(minutes: 2));
-      await tester.pump(const Duration(minutes: 2));
-      expect(
-        inside('swarm-away', find.text('4m')),
-        findsOneWidget,
-        reason: 'two minutes in the foreground are no time away',
-      );
-    });
+        now = now.add(const Duration(minutes: 2));
+        await tester.pump(const Duration(minutes: 2));
+        expect(
+          inside('swarm-away', find.text('4m')),
+          findsOneWidget,
+          reason: 'two minutes in the foreground are no time away',
+        );
+      },
+    );
 
     testWidgets('opened four minutes after the app was last left, and used '
         'on: four minutes', (tester) async {
@@ -684,7 +687,13 @@ void main() {
               .subtract(const Duration(minutes: 20))
               .millisecondsSinceEpoch,
         });
-      await pump(tester, backend(), now: () => now, store: store, settle: false);
+      await pump(
+        tester,
+        backend(),
+        now: () => now,
+        store: store,
+        settle: false,
+      );
       expect(key('swarm-away'), findsNothing);
 
       store.release.complete();
@@ -2837,7 +2846,11 @@ void main() {
       expect(find.text('Buddies'), findsNothing);
       expect(find.text('Projects'), findsOneWidget);
       expect(find.textContaining('Reading'), findsNothing);
-      expect(key('swarm-away'), findsOneWidget, reason: 'its figures skeletons');
+      expect(
+        key('swarm-away'),
+        findsOneWidget,
+        reason: 'its figures skeletons',
+      );
 
       listed.complete();
       await tester.pumpAndSettle();

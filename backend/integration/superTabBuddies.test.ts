@@ -213,9 +213,14 @@ describe('a Buddy through the store', () => {
       priority: 'normal' }, peer, agentId)
     const sent = await propose()
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
-    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], source: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: ask },
-      text: 'Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Offline sync\nScope: Desktop only\nPriority: normal' })
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id, agentId: f.lead } })).toBe(1)
+    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [], author: { kind: 'person', id: peer.sub },
+      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask }, text: "Let's build: Offline sync" })
+    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: row.id, replyTo: row.id } })
+    expect(details).toMatchObject({ author: { kind: 'agent', id: agentId }, recipientIds: [f.lead],
+      text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal' })
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: details.id, agentId: f.lead } })).toBe(1)
+    const page = await f.store.messages(owner, f.tab, 'lead', {})
+    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: row.id, replies: 1 })]))
     await expect(propose()).rejects.toThrow('already sent')
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
@@ -412,10 +417,10 @@ describe('a Buddy through the store', () => {
     await expect(propose([plan, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
     const sent = await propose([plan, shot, log])
     const id = String(sent.result.messageId)
-    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === id)
+    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.replyTo === id)
     expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith('https://cdn.example.test/super-tabs/')])).toEqual([
       ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
-    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
+    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === id)?.attachments).toHaveLength(3)
     // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
     // And from the signed link each read adds (fileLinks.ts), as apps that know links open it.
     expect(read!.attachments!.map(a => f.files.open(a.link!)?.length)).toEqual(read!.attachments!.map(a => a.size))
@@ -438,8 +443,8 @@ describe('a Buddy through the store', () => {
     const [first, second] = [await ask(), await ask()]
     const raced = await Promise.allSettled([propose([again], first), propose([again], second)])
     expect(raced.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: first } } } })
-      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: second } } } })).toBe(1)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: first } } } })
+      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: second } } } })).toBe(1)
     const elsewhere = await upload('other.txt', 'text/plain', Buffer.from('project chat'), 'lead', false)
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'FYI', replyTo: null, recipientIds: [], attachmentIds: [elsewhere] }, peer)
     await expect(propose([elsewhere])).rejects.toThrow('Upload this file again')
@@ -900,7 +905,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     await buddy(f)
     expect((await read()).deliveries).toEqual([])
     // Ordinary deliveries still show: the proposal's to the PM, its listed recipient.
-    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === proposal)!
+    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === proposal)!
     expect(sent.deliveries.map(d => d.agentId)).toEqual([f.lead])
   })
 
@@ -1056,6 +1061,21 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     await f.execute({ type: 'machine.cleaned', machineId: 'peer-laptop', removalId: cleanup.cleanup.removalId }, peer)
     expect((await rosterRows(f.store, peer, 'peer-laptop')).filter(r => r.tabId === f.tab && 'cleanup' in r)).toEqual([])
     await leaks('cleaned')
+  })
+
+  // Task #2441: a host report the server refused failed nothing; its person waited out the 3 minutes and never read why.
+  it('fails at once when its host\'s report is refused, and its person reads why, no one else', async () => {
+    const f = await swarm()
+    const added = await add(f, 'peer-laptop')
+    const startId = String(added.result.startId)
+    const pool = (await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)!
+    await f.execute({ type: 'agent.startDispatch', startId }, peer, undefined, 'peer-laptop')
+    const reason = 'This start does not belong to this machine contribution.'
+    await f.store.observeMachine(peer, f.tab, 'peer-laptop', { generation: pool.machine.generation, resources: { cpuPercent: 10, memoryTotalBytes: 16e9,
+      memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], refusedStarts: [{ startId, reason }] })
+    expect((await f.store.start(peer, f.tab, startId)).error).toBe(`Peer Laptop refused it: ${reason}`)
+    expect(JSON.stringify(await f.store.read(owner, f.tab))).not.toContain('peer-laptop')
   })
 
   it('never reaches another reader when its Buddy never launched', async () => {

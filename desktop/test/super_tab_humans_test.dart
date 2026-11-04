@@ -708,4 +708,73 @@ void main() {
       await close(tester, controller);
     },
   );
+
+  group('Brought: the machines a person brought (contributor view, #2444)', () {
+    Map<String, dynamic> details(ConversationServer server, String id) =>
+        ((server.leaderboard!['people'] as List).cast<Map>().firstWhere(
+                  (p) => p['personId'] == id,
+                )['details']
+                as Map)
+            .cast<String, dynamic>();
+
+    testWidgets(
+      'shows each machine: what shipped on it, its hours for others and each subscription\'s week',
+      (tester) async {
+        final server = humansSwarm();
+        final resets = DateTime.now()
+            .add(const Duration(days: 3, hours: 2))
+            .millisecondsSinceEpoch;
+        details(server, 'owner')['brought'] = [
+          {
+            'machineId': 'studio',
+            'machineName': 'Mac Studio',
+            'shipped': 5,
+            'busyHours': 31,
+            'subscriptions': [
+              {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
+              {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+            ],
+          },
+          {
+            'machineId': 'mbp',
+            'machineName': 'MacBook Pro',
+            'shipped': 0,
+            'busyHours': 0,
+            'subscriptions': <Map<String, dynamic>>[],
+          },
+        ];
+        final controller = await show(tester, server);
+        await tester.tap(person('owner'));
+        await tester.pumpAndSettle();
+        final dialog = find.byType(SuperTabDetailDialog);
+        Finder inDialog(String text) =>
+            find.descendant(of: dialog, matching: find.text(text));
+        expect(inDialog('Brought'), findsOneWidget);
+        expect(inDialog('Mac Studio'), findsOneWidget);
+        expect(inDialog('5 shipped · 31 h for others'), findsOneWidget);
+        expect(inDialog('Claude'), findsOneWidget);
+        expect(inDialog('38% used · resets in 3d'), findsOneWidget);
+        expect(inDialog('Codex'), findsOneWidget);
+        expect(inDialog('not read yet'), findsOneWidget);
+        expect(inDialog('MacBook Pro'), findsOneWidget);
+        expect(inDialog('0 shipped · 0 h for others'), findsOneWidget);
+        // Brought replaces Lent: the same machines, told more.
+        expect(inDialog('Lent'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await close(tester, controller);
+      },
+    );
+
+    testWidgets('says so when the person brought nothing', (tester) async {
+      final server = humansSwarm();
+      details(server, 'peer')['brought'] = <Map<String, dynamic>>[];
+      final controller = await show(tester, server);
+      await tester.tap(person('peer'));
+      await tester.pumpAndSettle();
+      expect(find.text('Brought'), findsOneWidget);
+      expect(find.text('No machines brought yet'), findsOneWidget);
+      expect(find.text('Lent'), findsNothing);
+      await close(tester, controller);
+    });
+  });
 }

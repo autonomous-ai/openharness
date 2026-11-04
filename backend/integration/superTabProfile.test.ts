@@ -156,6 +156,41 @@ describe('usernames', () => {
   })
 })
 
+describe('display names', () => {
+  const members = async (tab: string, user = owner) =>
+    (await read(tab, user)).body.data.members as Array<{ key: string; data: { name?: string } }>
+
+  it('reach members through first loads and changes after a reload, and nobody outside the Swarm', async () => {
+    const tab = await swarm()
+    const first = await read(tab, peer)
+    await run(tab, { type: 'member.name', name: '  Minh   Nguyen ' })
+    const changes = await read(tab, peer, `changes?cursor=${first.body.data.cursor}`)
+    expect(changes.body.data.members.find((m: { key: string }) => m.key === owner.sub).data.name).toBe('Minh Nguyen')
+    // A fresh read loads the member's part from the database: the name was stored with it.
+    expect((await members(tab, peer)).find(m => m.key === owner.sub)!.data.name).toBe('Minh Nguyen')
+    expect((await store.read(owner, tab)).state.people.find(p => p.id === owner.sub)!.name).toBe('Minh Nguyen')
+    const stranger = await read(tab, outsider)
+    expect(stranger.status).not.toBe(200)
+    expect(stranger.text).not.toContain('Minh Nguyen')
+  })
+
+  it('gives a name to one of two people choosing it at once', async () => {
+    const tab = await swarm()
+    const results = await Promise.allSettled([run(tab, { type: 'member.name', name: 'Captain' }),
+      run(tab, { type: 'member.name', name: 'captain' }, peer)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({ code: 'NAME_TAKEN' })
+    expect((await members(tab)).filter(m => m.data.name?.toLowerCase() === 'captain')).toHaveLength(1)
+  })
+
+  it('gives one of a name and a username that read alike, chosen at once', async () => {
+    const tab = await swarm()
+    const results = await Promise.allSettled([run(tab, { type: 'member.name', name: 'Skipper' }),
+      run(tab, { type: 'member.username', username: 'skipper' }, peer)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+  })
+})
+
 describe('avatar uploads', () => {
   it('stores a png, jpg or webp of at most 1 MB as the image its bytes are', async () => {
     const tab = await swarm()
@@ -455,8 +490,8 @@ describe('reactions', () => {
 
 describe('the ship moment', () => {
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  // The task's own line says it shipped, in place of the Shipped line (taskLine.ts; Quiet Swarm, Dee, 11-02).
-  it('edits the task\'s one line in the project chat to shipped when its merge is recorded, once on a retry, waking nobody', async () => {
+  // The task's own thread says it merged, in place of the Shipped line (taskLine.ts; plain chat, Dee, 11-03).
+  it('replies Merged in the task\'s thread when its merge is recorded, once on a retry, waking nobody', async () => {
     const tab = await swarm()
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
     const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
@@ -481,7 +516,9 @@ describe('the ship moment', () => {
     expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
     const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ text: 'Avatars · shipped', recipientIds: [], source: { taskId: group, state: 'shipped', builderId: builder } })
-    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: lines[0]!.id } })).toBe(0)
+    expect(lines[0]).toMatchObject({ text: "Let's build: Avatars", recipientIds: [], source: { taskId: group } })
+    const merges = rows.filter(m => m.thread === lines[0]!.id && m.text.startsWith('Merged'))
+    expect(merges).toEqual([expect.objectContaining({ text: 'Merged: PR #7. Ships in the next release.', recipientIds: [] })])
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [lines[0]!.id, merges[0]!.id] } } })).toBe(0)
   })
 })

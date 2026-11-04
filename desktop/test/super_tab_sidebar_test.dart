@@ -206,6 +206,11 @@ void main() {
         // A second click shows its workgroups (no chevrons: Quiet Swarm).
         await tester.tap(project);
         await tester.pumpAndSettle();
+        // A workgroup with no work is in The rest, which starts folded (#2309).
+        await tester.tap(
+          find.byKey(const ValueKey('super-task-group-lead-rest')),
+        );
+        await tester.pumpAndSettle();
         final work = find.byKey(const ValueKey('super-group-offline'));
         expect(work, findsOneWidget);
         final textX = tester
@@ -217,6 +222,8 @@ void main() {
           sample,
           // A workgroup's number is grey, with no #: it is no channel.
           inRow('super-group-offline', find.text('12  Offline editing')),
+          // Its group's heading lines up with it.
+          inRow('super-task-group-lead-rest', find.text('The rest')),
         ]) {
           expect(tester.getTopLeft(label).dx, textX, reason: '$label');
         }
@@ -316,7 +323,8 @@ void main() {
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.text('No workgroups yet'),
       find.byKey(const ValueKey('super-group-lead')),
-      find.byKey(const ValueKey('super-group-offline')),
+      // Its one workgroup has no work: The rest, folded (#2309).
+      find.byKey(const ValueKey('super-task-group-lead-rest')),
       find.text('Buddies'),
       find.byKey(const ValueKey('super-buddy-lead')),
       find.byKey(const ValueKey('super-buddy-empty')),
@@ -740,7 +748,7 @@ void main() {
     );
 
     test(
-      'lists only fresh readings, once each, and none while the add-on is off',
+      'lists only fresh readings, once per machine, and none while the add-on is off',
       () {
         final now = DateTime.fromMillisecondsSinceEpoch(1000000);
         SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
@@ -775,6 +783,7 @@ void main() {
             grid: swarmGrid,
             model: 'm',
             name: 'm',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'local',
           ),
@@ -782,6 +791,7 @@ void main() {
             grid: 'team',
             model: 'n',
             name: 'n',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'shared',
           ),

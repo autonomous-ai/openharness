@@ -7,7 +7,7 @@ the audience in [who we're building for](docs/ideal-users.md).
 It describes the product we are heading for, not the product as it is today. How code meets its targets is in
 [ENGINEERING.md](ENGINEERING.md).
 
-**Milestone: December 31, 2026.** Every target below is due then.
+**Milestone: December 31, 2026.** Every target below is due then, unless it names an earlier date.
 
 ## What Harness is
 
@@ -22,6 +22,15 @@ agents from every lab on them, with work verified before it ships.**
   lab's new feature works in Harness the day it ships.
 - **People bring the capacity; the Product Manager decides what it builds.** Everyone in a Swarm can bring a machine
   or a subscription, and it joins one pool used before anyone waits.
+
+**Positioning** (Dee, 2026-11-03). A new feature or more scope strengthens one of these, or it is not built; fixes to
+what ships, security and anything that makes the crew faster are a yes at once:
+
+- **Tell the PM what you want, and your crew ships it.**
+- **Ken's router fits every agent to a machine with the resources its job needs**: the CPU, memory, disk, tools,
+  devices and quota, so dozens of agents run at once through CI, end-to-end tests and VMs without choking. Tokens are
+  the least of the bottlenecks.
+- **Every lab in one crew, on the team's own machines, reviewed and tested before merge.**
 
 ## Who it is for
 
@@ -93,7 +102,7 @@ If a lab or GitHub ships real cross-vendor capacity and verification, this posit
 | Bet | The state we want by December 31 | How we know |
 | --- | --- | --- |
 | Customer zero runs on Swarm | openharness and Autonomous's Swarms do all their work through Harness, and their walls are gone | Verified tasks shipped rise while people's attention per task falls |
-| An outside company | A company outside Autonomous owns a Swarm and ships work every week, set up without our hands on their machines | At least one such Swarm |
+| An outside company | Three named design partners onboarded by December 1 (each owns an outside Swarm, as defined under Product targets, that has shipped a verified task); one ships work every week, set up without our hands on their machines | Three onboarded by December 1; at least one shipping weekly |
 | Contribution | Bringing a machine or a subscription into a Swarm is easy, safe, seen and used, and people keep doing it | The contribution targets below |
 | Verification is the moat | Problems are caught before merge, not after | Fixes after merge stay under target |
 | One pool of capacity | No work waits for capacity while any machine or subscription in the Swarm has some left | Work waiting for capacity, cost per shipped task |
@@ -122,6 +131,10 @@ test, where the task had one), and no revert or fix of it lands within 7 days. I
 | Measure | Target by December 31, 2026 | Why |
 | --- | --- | --- |
 | Shipped tasks reverted or fixed within 7 days | ≤ 5% | Speed must not cost quality |
+| From a request becoming a task to its change merged, in working hours | Median ≤ 2 h | Waiting, not building, is what makes work slow |
+| Verified tasks shipped per person-hour of attention | Rising every month, published weekly from our own Swarm | The bet in one number |
+| User-facing changes that a Tester passed, at the merged head, where they run | ≥ 95% | Verification is the moat only if it runs |
+| Work on capacity that dropped (a machine offline, an account that stopped answering) moved and running again | ≤ 5 min, nothing pushed lost | Contributed capacity comes and goes |
 | People's decisions per shipped task | ≤ 0.5 | Most tasks should need no one |
 | Time a question waits for a person, in working hours | Median ≤ 15 min | Why the phone and the device exist |
 | Cost per shipped task | Lower each month | Work must cost less than it is worth |
@@ -134,7 +147,10 @@ test, where the task had one), and no revert or fix of it lands within 7 days. I
 | Contributed capacity idle while work waits | 0 | Contributing is used |
 
 A Swarm is active in a week when it ships at least one verified task; a one-person Swarm counts. A contributor in a
-week is a person whose machine or subscription ran work in that Swarm that week.
+week is a person whose machine or subscription ran work in that Swarm that week. A person-hour of attention is an hour
+a person spends in Harness reading, answering or approving, recorded from their activity in the apps (to be recorded;
+until then the measure is not met). A user-facing change touches screens, CLI commands, install and release, sign-in,
+connections between machines or devices; ENGINEERING.md §10 says where each runs.
 
 ## Tech targets
 

@@ -13,6 +13,9 @@ export const TIMED_OUT_SUFFIX = ' did not start it within 3 minutes'
 /** liveness.ts writes these after a machine named the start as preparing: past its limit, or with its reports stopped. */
 export const STILL_PREPARING_SUFFIX = ' was still preparing it after 15 minutes'
 export const STOPPED_REPORTING_SUFFIX = ' stopped reporting while preparing it'
+/** liveness.ts failRefusedStarts writes `<machine name> refused it: <the server's refusal>`, which members read as a machine
+ *  failure (publicReason); whoever made it, its coordinator and its machine's owner read the refusal (task #2441). */
+export const REFUSED_INFIX = ' refused it: '
 /** liveness.ts writes this after a machine named a coordinator's start that it never took (leadStart.ts), with the name its
  *  project calls it. */
 export const leadPickupSuffix = (name: string) => ` did not start this ${name}. Harness there may need an update.`

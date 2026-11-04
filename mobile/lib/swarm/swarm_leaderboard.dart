@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -60,7 +61,8 @@ List<SwarmProjectHuman> swarmProjectHumans(
     for (final person in swarmProjectPeople(snapshot, project))
       (
         person: person,
-        name: scores[person.id]?.displayName ?? person.username,
+        // The name they set for this Swarm wins over their account's.
+        name: person.name ?? scores[person.id]?.displayName ?? person.username,
         score: scores[person.id],
         own: person.id == viewer,
       ),
@@ -551,7 +553,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     SuperTabPerson? personOf(String id) =>
         people.where((p) => p.id == id).firstOrNull;
     String nameOf(SwarmScore score) => switch (personOf(score.personId)) {
-      final person? => score.displayName ?? person.username,
+      final person? => person.name ?? score.displayName ?? person.username,
       null => 'Former member',
     };
     final week = _shownLabel(reader, current);
@@ -731,10 +733,12 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
 }
 
 /// [score]'s week in a sheet, as the desktop shows it when a name is clicked:
-/// from the leaderboard and from a project's Team. [opened] is told the
-/// sheet's route before it is pushed, not when it first draws, so a screen
-/// that loses what the sheet shows between the tap and the next frame can
-/// still close it.
+/// from the leaderboard and from a project's Team. Its points, then what they
+/// shipped, unblocked and lent item by item ([_PersonDetails]); from a server
+/// without details, their numbers line by line. [opened] is told the sheet's
+/// route before it is pushed, not when it first draws, so a screen that loses
+/// what the sheet shows between the tap and the next frame can still close
+/// it.
 Future<void> showSwarmPersonWeek(
   BuildContext context, {
   required SwarmScore score,
@@ -744,19 +748,30 @@ Future<void> showSwarmPersonWeek(
 }) {
   final route = swarmSheetRoute<void>(
     context,
-    builder: (context) => _Sheet(
-      key: const ValueKey('swarm-leaderboard-sheet'),
-      title: name,
-      leading: SwarmAvatar(
-        id: score.personId,
-        name: name,
-        picture: person?.avatar,
+    // Never over the status bar: a long week scrolls inside it.
+    builder: (context) => ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * .82,
       ),
-      closeKey: 'swarm-leaderboard-sheet-close',
-      children: [
-        for (final (label, value) in swarmPersonWeek(score))
-          _WeekLine(label: label, value: value),
-      ],
+      child: _Sheet(
+        key: const ValueKey('swarm-leaderboard-sheet'),
+        title: name,
+        leading: SwarmAvatar(
+          id: score.personId,
+          name: name,
+          picture: person?.avatar,
+        ),
+        closeKey: 'swarm-leaderboard-sheet-close',
+        children: [
+          if (score.details case final details?)
+            Flexible(
+              child: _PersonDetails(score: score, details: details),
+            )
+          else
+            for (final (label, value) in swarmPersonWeek(score))
+              _WeekLine(label: label, value: value),
+        ],
+      ),
     ),
   );
   opened?.call(route);
@@ -1366,5 +1381,234 @@ class _WeekLine extends StatelessWidget {
     final width = painter.width;
     painter.dispose();
     return width;
+  }
+}
+
+/// What a person's numbers are made of, as the desktop's person card shows
+/// them: their points with the time before, then Shipped, Unblocked and Lent,
+/// each with its count, its newest five and the rest behind Show all, and
+/// saying so when empty. It scrolls inside its sheet.
+class _PersonDetails extends StatefulWidget {
+  const _PersonDetails({required this.score, required this.details});
+
+  final SwarmScore score;
+  final SwarmPersonDetails details;
+
+  @override
+  State<_PersonDetails> createState() => _PersonDetailsState();
+}
+
+class _PersonDetailsState extends State<_PersonDetails> {
+  /// The newest a list shows before Show all.
+  static const _shown = 5;
+
+  /// The lists whose Show all was tapped.
+  final _expanded = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final details = widget.details;
+    return SingleChildScrollView(
+      key: const ValueKey('swarm-leaderboard-details'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            swarmPersonPoints(widget.score),
+            key: const ValueKey('swarm-leaderboard-details-points'),
+            style: AppType.caption(color: AppPalette.textSecondary),
+          ),
+          _section('shipped', 'Shipped', 'No pull requests merged yet', [
+            for (final shipped in details.shipped)
+              _DetailItem(title: shipped.title, link: shipped.link),
+          ]),
+          _section('unblocked', 'Unblocked', 'No questions answered yet', [
+            for (final unblocked in details.unblocked)
+              _DetailItem(
+                title: unblocked.title,
+                trailing: swarmWaited(unblocked.waitedMinutes),
+              ),
+          ]),
+          // What each machine the person brought did (contributor view,
+          // #2444), as the desktop's card; a server before it says Lent.
+          if (widget.score.brought case final brought?)
+            _section('brought', 'Brought', 'No machines brought yet', [
+              for (final machine in brought)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DetailItem(
+                      title: machine.machineName,
+                      trailing: swarmBroughtSummary(machine),
+                    ),
+                    for (final (engine, week) in swarmBroughtSubscriptions(
+                      machine,
+                      clock.now(),
+                    ))
+                      _DetailItem(title: engine, trailing: week, under: true),
+                  ],
+                ),
+            ])
+          else
+            _section('lent', 'Lent', 'No machines lent yet', [
+              for (final lent in details.lent)
+                _DetailItem(
+                  title: lent.machineName,
+                  trailing: swarmBusy(lent.busyHours),
+                ),
+            ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _section(String id, String title, String empty, List<Widget> items) {
+    final all = _expanded.contains(id) || items.length <= _shown;
+    final quiet = AppType.body(color: AppPalette.textSecondary);
+    return Padding(
+      key: ValueKey('swarm-leaderboard-details-$id'),
+      padding: const EdgeInsets.only(top: AppSpace.l),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MergeSemantics(
+            child: Semantics(
+              header: true,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    title,
+                    style: AppType.label(color: AppPalette.textPrimary),
+                  ),
+                  if (items.isNotEmpty) ...[
+                    const SizedBox(width: AppSpace.s),
+                    Text(
+                      '${items.length}',
+                      style: AppType.caption(
+                        color: AppPalette.textSecondary,
+                        fontFeatures: _figures,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.s),
+              child: Text(empty, style: quiet),
+            )
+          else ...[
+            ...all ? items : items.take(_shown),
+            if (!all)
+              _DetailItem(
+                key: ValueKey('swarm-leaderboard-details-$id-all'),
+                title: 'Show all ${items.length}',
+                onTap: () => setState(() => _expanded.add(id)),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One item behind a person's numbers, a thumb tall: its title on up to two
+/// lines and what it measured at its right. A pull request with a web
+/// [link] opens it, and reads as a link; [onTap] makes it a button. [under]
+/// sets it in under the item before, quieter and only as tall as its words:
+/// a brought machine's subscriptions.
+class _DetailItem extends StatelessWidget {
+  const _DetailItem({
+    super.key,
+    required this.title,
+    this.trailing,
+    this.link,
+    this.onTap,
+    this.under = false,
+  });
+
+  final String title;
+  final String? trailing;
+  final Uri? link;
+  final VoidCallback? onTap;
+  final bool under;
+
+  @override
+  Widget build(BuildContext context) {
+    final link = this.link, trailing = this.trailing;
+    final onTap = link == null
+        ? this.onTap
+        : () => unawaited(launchUrl(link, mode: LaunchMode.inAppBrowserView));
+    final row = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: under ? 0 : minTouchTarget),
+      // A title on two lines keeps the room one on one line has.
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: under ? AppSpace.l : 0,
+          top: AppSpace.xs,
+          bottom: AppSpace.xs,
+        ),
+        child: LayoutBuilder(
+          builder: (context, line) => Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.body(
+                    color: under
+                        ? AppPalette.textSecondary
+                        : onTap == null
+                        ? AppPalette.textPrimary
+                        : AppPalette.swarmAccent,
+                  ),
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: AppSpace.m),
+                // A long measure ("5 shipped · 31 h for others" in large
+                // text on a small phone) wraps rather than push the title
+                // off the line.
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: line.maxWidth * .6),
+                  child: Text(
+                    trailing,
+                    textAlign: TextAlign.end,
+                    style: AppType.caption(
+                      color: AppPalette.textSecondary,
+                      fontFeatures: _figures,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    if (onTap == null) return MergeSemantics(child: row);
+    void tap() {
+      HapticFeedback.selectionClick();
+      onTap();
+    }
+
+    return Semantics(
+      link: link != null,
+      button: link == null,
+      label: title,
+      onTap: tap,
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppControl.radius),
+        onTap: tap,
+        child: row,
+      ),
+    );
   }
 }
