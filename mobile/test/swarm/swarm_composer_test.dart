@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -19,8 +20,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// The composer card (Tony, 11-01): the X that clears the text, the @ Tag
-/// chip, and the card's layout on the chat and in a thread — with the
+/// The composer card (Tony, 11-01): the X that clears the text, the @
+/// button, and the card's layout on the chat and in a thread — with the
 /// keyboard up, on a 320pt phone, with files and a reply.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
@@ -171,8 +172,9 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  /// Chat g1 on screen; with [shell], under an outer Scaffold as the phone's
-  /// shell puts every page (it takes the keyboard's inset out for its body).
+  /// Chat g1 on screen; with [shell], in a navigator under an outer Scaffold
+  /// as the phone's shell puts every page, a thread pushed over it too (it
+  /// takes the keyboard's inset out for its body).
   late ValueNotifier<String?> account;
 
   /// The microphone and the transcriber of the last [pump] with a voice.
@@ -213,7 +215,14 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: shell ? const Scaffold(body: page) : page,
+        home: shell
+            ? Scaffold(
+                body: Navigator(
+                  onGenerateRoute: (_) =>
+                      MaterialPageRoute<void>(builder: (_) => page),
+                ),
+              )
+            : page,
       ),
     );
     await tester.pumpAndSettle();
@@ -377,7 +386,7 @@ void main() {
     });
   });
 
-  group('@ Tag on the chat', () {
+  group('@ on the chat', () {
     testWidgets('on an empty box: an @ that opens the picker, focus in the '
         'field; a second tap takes it back and closes it', (tester) async {
       await pump(tester, backend([message('m1', 1)]));
@@ -486,6 +495,53 @@ void main() {
       expect(key('swarm-mention-picker'), findsNothing);
     });
 
+    testWidgets('the sign alone, no word (Tony, 11-03): a round 36pt face '
+        'in a 44pt target, as + is', (tester) async {
+      await pump(tester, backend([message('m1', 1)]));
+
+      expect(find.text('Tag'), findsNothing);
+      // Still a button a screen reader can press, as the chip was; + and
+      // Send too.
+      for (final (button, label) in [
+        ('swarm-tag', 'Tag a member or agent'),
+        ('swarm-attach', 'Attach files'),
+      ]) {
+        expect(
+          tester.getSemantics(key(button)),
+          matchesSemantics(
+            label: label,
+            isButton: true,
+            hasEnabledState: true,
+            isEnabled: true,
+            hasTapAction: true,
+          ),
+          reason: button,
+        );
+      }
+      await type(tester, 'hi');
+      expect(
+        tester.getSemantics(key('swarm-send')),
+        matchesSemantics(
+          label: 'Send',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ),
+      );
+      expect(tester.getSize(key('swarm-tag')), const Size(44, 44));
+      final tag = tester.widget<SwarmRoundButton>(key('swarm-tag'));
+      final attach = tester.widget<SwarmRoundButton>(
+        find.descendant(
+          of: key('swarm-attach'),
+          matching: find.byType(SwarmRoundButton),
+        ),
+      );
+      expect(tag.face, 36);
+      expect(tag.face, attach.face);
+      expect(tag.fill, attach.fill);
+    });
+
     testWidgets('no chip when nobody can be tagged', (tester) async {
       await pump(tester, backend([message('m1', 1)], agentIds: const []));
 
@@ -514,7 +570,7 @@ void main() {
 
   group('card layout', () {
     testWidgets('one line is a 98pt composer: an 86pt card, text over '
-        '+, Tag, the mic and Send, all 44pt targets with 36pt faces', (
+        '+, @, the mic and Send, all 44pt targets with 36pt faces', (
       tester,
     ) async {
       phone(tester);
@@ -522,15 +578,14 @@ void main() {
 
       expect(tester.getSize(key('swarm-composer-card')).height, 86);
       expect(tester.getSize(key('swarm-field')).height, 36);
-      for (final button in ['swarm-attach', 'swarm-send']) {
+      for (final button in ['swarm-attach', 'swarm-tag', 'swarm-send']) {
         expect(tester.getSize(key(button)), const Size(44, 44));
       }
-      expect(tester.getSize(key('swarm-tag')).height, 44);
       final card = tester.getRect(key('swarm-composer-card'));
       final send = tester.getRect(key('swarm-send'));
       final attach = tester.getRect(key('swarm-attach'));
       final tag = tester.getRect(key('swarm-tag'));
-      // The toolbar: + then Tag at the left, Send at the right, 4 from the foot.
+      // The toolbar: + then @ at the left, Send at the right, 4 from the foot.
       expect(attach.left - card.left, 1 + 6);
       expect(tag.left, attach.right);
       expect(card.right - send.right, 1 + 6);
@@ -595,8 +650,9 @@ void main() {
       message('m2', 2, text: 'Looks good.', thread: 'm1', replyTo: 'm1'),
     ], threads: true);
 
-    testWidgets('the same card: + at the left, then Also send, the mic and '
-        'Send; no Tag', (tester) async {
+    testWidgets('the same card: + at the left, then Tag, the mic and Send; '
+        'Reply options folded under the card, Also send in it, its label '
+        'whole', (tester) async {
       phone(tester);
       await openThread(tester, threaded());
 
@@ -607,12 +663,92 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(key('swarm-tag'), findsNothing);
+      expect(
+        find.descendant(
+          of: key('swarm-thread-box'),
+          matching: key('swarm-tag'),
+        ),
+        findsOneWidget,
+      );
       final attach = tester.getRect(key('swarm-thread-attach'));
-      final also = tester.getRect(key('swarm-thread-also-send'));
+      final tag = tester.getRect(key('swarm-tag'));
       final send = tester.getRect(key('swarm-thread-send'));
-      expect(attach.right, lessThanOrEqualTo(also.left));
-      expect(also.right, lessThanOrEqualTo(send.left));
+      final card = tester.getRect(key('swarm-composer-card'));
+      expect(tag.left, attach.right);
+      expect(tester.getSize(key('swarm-tag')).height, 44);
+      expect(tag.right, lessThanOrEqualTo(send.left));
+      // Folded: one line under the card, a thumb's target.
+      expect(key('swarm-thread-also-send'), findsNothing);
+      final options = tester.getRect(key('swarm-thread-options'));
+      expect(options.top, card.bottom);
+      expect(options.height, greaterThanOrEqualTo(44));
+      expect(
+        tester.widget<Text>(key('swarm-thread-options-label')).data,
+        'Reply options',
+      );
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      final also = tester.getRect(key('swarm-thread-also-send'));
+      // Its own line: under Reply options, not squeezed between Tag and Send.
+      expect(also.top, tester.getRect(key('swarm-thread-options')).bottom);
+      expect(also.height, greaterThanOrEqualTo(44), reason: 'a thumb target');
+      final label = tester.renderObject<RenderParagraph>(
+        key('swarm-thread-also-send-label'),
+      );
+      expect(label.didExceedMaxLines, isFalse);
+      expect(
+        tester.getSize(key('swarm-thread-also-send-label')).height,
+        lessThan(30),
+        reason: 'one line on a 393pt phone',
+      );
+      expect(
+        (label.text as TextSpan).toPlainText(),
+        startsWith('Also send to the'),
+      );
+    });
+
+    /// A thread long enough to scroll with the keyboard up.
+    FakeSwarm long() => backend([
+      message('m1', 1, author: 'agent-lead', thread: 'm1'),
+      for (var i = 2; i <= 24; i++)
+        message('m$i', i, text: 'Reply $i.', thread: 'm1', replyTo: 'm1'),
+    ], threads: true);
+
+    testWidgets('a finger scrolling the thread puts the keyboard away; the '
+        'draft stays', (tester) async {
+      phone(tester, keyboard: 336);
+      await openThread(tester, long());
+      await type(tester, 'half a thought', 'swarm-thread-field');
+      expect(focused(tester, 'swarm-thread-field'), isTrue);
+
+      // Whichever end it opened at, one of the two moves it.
+      await tester.drag(key('swarm-thread-messages'), const Offset(0, 200));
+      await tester.drag(key('swarm-thread-messages'), const Offset(0, -200));
+      await tester.pump();
+
+      expect(focused(tester, 'swarm-thread-field'), isFalse);
+      expect(field(tester, 'swarm-thread-field').text, 'half a thought');
+    });
+
+    testWidgets('the list moving by itself leaves the keyboard up', (
+      tester,
+    ) async {
+      phone(tester, keyboard: 336);
+      await openThread(tester, long());
+      await type(tester, 'half a thought', 'swarm-thread-field');
+
+      final list = tester.state<ScrollableState>(
+        find.descendant(
+          of: key('swarm-thread-messages'),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      list.position.jumpTo(0);
+      await tester.pump();
+      list.position.jumpTo(list.position.maxScrollExtent);
+      await tester.pump();
+
+      expect(focused(tester, 'swarm-thread-field'), isTrue);
     });
 
     testWidgets('its X clears the text only: the files stay, Send stays on '
@@ -636,14 +772,213 @@ void main() {
       expect(sendable(tester, 'swarm-thread-send'), isTrue);
     });
 
-    testWidgets('a 320pt phone: the toolbar fits a long Also send label', (
+    testWidgets('Tag opens the chat\'s picker over the box, focus in the '
+        'field; a pick fills the name in and the reply goes to them', (
       tester,
     ) async {
+      final fake = threaded();
+      await openThread(tester, fake);
+
+      await tester.tap(key('swarm-tag'));
+      await tester.pump();
+      expect(field(tester, 'swarm-thread-field').text, '@');
+      expect(focused(tester, 'swarm-thread-field'), isTrue);
+      expect(
+        find.descendant(
+          of: key('swarm-thread-box'),
+          matching: key('swarm-mention-picker'),
+        ),
+        findsOneWidget,
+      );
+      // The chat's agents, with the chat's look.
+      expect(key('swarm-pick-agent-lead'), findsOneWidget);
+      expect(key('swarm-pick-agent-builder'), findsOneWidget);
+
+      await tester.tap(key('swarm-pick-agent-builder'));
+      await tester.pump();
+      expect(field(tester, 'swarm-thread-field').text, '@Nova ');
+      expect(key('swarm-mention-picker'), findsNothing);
+
+      await type(tester, '@Nova can you look', 'swarm-thread-field');
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+      final sent = fake.commands.single;
+      expect(sent['replyTo'], 'm1');
+      expect(sent['text'], '@Nova can you look');
+      expect(sent['recipientIds'], ['agent-builder']);
+      expect(sent.containsKey('mentions'), isFalse);
+    });
+
+    testWidgets('typing an @ narrows the same picker; a person picked is '
+        'tagged', (tester) async {
+      final fake = backend(
+        [
+          message('m1', 1, author: 'agent-lead', thread: 'm1'),
+          message('m2', 2, text: 'Looks good.', thread: 'm1', replyTo: 'm1'),
+        ],
+        threads: true,
+        members: [
+          person(me),
+          person('dee', role: 'collaborator'),
+        ],
+      );
+      await openThread(tester, fake);
+
+      await type(tester, 'thanks @de', 'swarm-thread-field');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-agent-lead'), findsNothing);
+      await tester.tap(key('swarm-pick-person-dee'));
+      await tester.pump();
+      expect(field(tester, 'swarm-thread-field').text, 'thanks @dee ');
+
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['mentions'], ['dee']);
+      expect(fake.commands.single['recipientIds'], isEmpty);
+    });
+
+    for (final shell in [false, true]) {
+      testWidgets('with the keyboard up and the picker open, the card and '
+          'Reply options under it sit on the keyboard and the picker over '
+          'the card, the inset taken '
+          'once${shell ? ' under the phone shell\'s Scaffold' : ''}', (
+        tester,
+      ) async {
+        phone(tester, keyboard: 336);
+        await pump(tester, threaded(), shell: shell, upload: uploaded);
+        await tester.tap(key('swarm-thread-line-m1'));
+        await tester.pumpAndSettle();
+        await type(tester, '@', 'swarm-thread-field');
+
+        expect(tester.takeException(), isNull);
+        final card = tester.getRect(
+          find.descendant(
+            of: key('swarm-thread-box'),
+            matching: key('swarm-composer-card'),
+          ),
+        );
+        final picker = tester.getRect(key('swarm-mention-picker'));
+        final options = tester.getRect(key('swarm-thread-options'));
+        expect(options.bottom, 852 - 336 - 6);
+        expect(card.bottom, options.top);
+        expect(card.height, 86);
+        expect(picker.bottom, lessThanOrEqualTo(card.top));
+        expect(
+          picker.top,
+          greaterThanOrEqualTo(
+            tester.getRect(key('swarm-thread-header')).bottom,
+          ),
+        );
+      });
+    }
+
+    testWidgets('a 320pt phone with the keyboard up: the picker gives up room '
+        'and scrolls, the card and Reply options stay whole on the keyboard', (
+      tester,
+    ) async {
+      phone(tester, width: 320, height: 568, keyboard: 253);
+      await openThread(tester, threaded());
+      await type(tester, '@', 'swarm-thread-field');
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final card = tester.getRect(
+        find.descendant(
+          of: key('swarm-thread-box'),
+          matching: key('swarm-composer-card'),
+        ),
+      );
+      final picker = tester.getRect(key('swarm-mention-picker'));
+      final options = tester.getRect(key('swarm-thread-options'));
+      expect(options.bottom, 568 - 253 - 6);
+      expect(card.bottom, options.top);
+      expect(card.height, 86);
+      expect(picker.bottom, lessThanOrEqualTo(card.top));
+      expect(
+        picker.top,
+        greaterThanOrEqualTo(tester.getRect(key('swarm-thread-header')).bottom),
+      );
+      // Short of room for both agents' 52pt rows, its border and margin: it
+      // still shows one whole row, and scrolls to the second.
+      expect(picker.height, lessThan(2 * 52 + 2 + 8));
+      expect(picker.height, greaterThanOrEqualTo(52 + 2));
+      await tester.dragUntilVisible(
+        key('swarm-pick-agent-builder'),
+        key('swarm-mention-picker'),
+        const Offset(0, -40),
+      );
+      await tester.ensureVisible(key('swarm-pick-agent-builder'));
+      await tester.pumpAndSettle();
+      final row = tester.getRect(key('swarm-pick-agent-builder'));
+      expect(row.top, greaterThanOrEqualTo(picker.top));
+      expect(row.bottom, lessThanOrEqualTo(picker.bottom));
+      await tester.tap(key('swarm-pick-agent-builder'));
+      await tester.pump();
+      expect(field(tester, 'swarm-thread-field').text, '@Nova ');
+    });
+
+    for (final shell in [false, true]) {
+      testWidgets('with the keyboard up, Reply options opened: the card, its '
+          'line and Also send stack on the keyboard, the field keeps the '
+          'keyboard, the inset taken '
+          'once${shell ? ' under the phone shell\'s Scaffold' : ''}', (
+        tester,
+      ) async {
+        phone(tester, keyboard: 336);
+        await pump(tester, threaded(), shell: shell, upload: uploaded);
+        await tester.tap(key('swarm-thread-line-m1'));
+        await tester.pumpAndSettle();
+        await type(tester, 'half a thought', 'swarm-thread-field');
+        final folded = tester.getRect(
+          find.descendant(
+            of: key('swarm-thread-box'),
+            matching: key('swarm-composer-card'),
+          ),
+        );
+
+        await tester.tap(key('swarm-thread-options'));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(focused(tester, 'swarm-thread-field'), isTrue);
+        final card = tester.getRect(
+          find.descendant(
+            of: key('swarm-thread-box'),
+            matching: key('swarm-composer-card'),
+          ),
+        );
+        final options = tester.getRect(key('swarm-thread-options'));
+        final also = tester.getRect(key('swarm-thread-also-send'));
+        expect(also.bottom, 852 - 336 - 6);
+        expect(options.bottom, also.top);
+        expect(card.bottom, options.top);
+        // Opening it lifts the card by Also send's line, no more.
+        expect(card.top, folded.top - also.height);
+        expect(card.height, folded.height);
+
+        await tester.tap(key('swarm-thread-options'));
+        await tester.pumpAndSettle();
+        expect(
+          tester.getRect(
+            find.descendant(
+              of: key('swarm-thread-box'),
+              matching: key('swarm-composer-card'),
+            ),
+          ),
+          folded,
+        );
+      });
+    }
+
+    testWidgets('a 320pt phone with large text: the toolbar fits a long '
+        'Also send label, and Reply options opened scrolls in what is left '
+        'rather than overflow', (tester) async {
       phone(tester, width: 320, height: 568, keyboard: 253);
       tester.platformDispatcher.textScaleFactorTestValue = 1.3;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       await openThread(tester, threaded());
       await type(tester, 'one more', 'swarm-thread-field');
+      await tester.tap(key('swarm-thread-options'));
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
@@ -652,6 +987,73 @@ void main() {
         tester.getRect(key('swarm-thread-send')).right,
         lessThan(card.right),
       );
+      // Large text wraps the label rather than cutting it short.
+      expect(
+        tester
+            .renderObject<RenderParagraph>(key('swarm-thread-also-send-label'))
+            .didExceedMaxLines,
+        isFalse,
+      );
+      expect(
+        tester.getRect(key('swarm-thread-also-send')).right,
+        lessThanOrEqualTo(card.right),
+      );
+      // The box takes all of the room under the header, no more.
+      expect(
+        tester.getRect(key('swarm-thread-box')).bottom,
+        lessThanOrEqualTo(568 - 253),
+      );
+      await tester.tap(key('swarm-thread-also-send'));
+      await tester.pump();
+      expect(
+        tester
+            .widget<Semantics>(key('swarm-thread-also-send'))
+            .properties
+            .checked,
+        isTrue,
+      );
+    });
+
+    testWidgets('Reply options opened steps aside while the @ picker is up, '
+        'its line saying what is on, and is back after the pick', (
+      tester,
+    ) async {
+      phone(tester, keyboard: 336);
+      final fake = threaded();
+      await openThread(tester, fake);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      await tester.tap(key('swarm-thread-also-send'));
+      await tester.pump();
+
+      await type(tester, '@', 'swarm-thread-field');
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(key('swarm-mention-picker'), findsOneWidget);
+      expect(key('swarm-thread-also-send'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-thread-options-label')).data,
+        'Reply options · Also send to the chat',
+      );
+      // Its line waits for the pick.
+      await tester.tap(key('swarm-thread-options'), warnIfMissed: false);
+      await tester.pump();
+      expect(key('swarm-thread-also-send'), findsNothing);
+
+      await tester.tap(key('swarm-pick-agent-builder'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-mention-picker'), findsNothing);
+      expect(
+        tester
+            .widget<Semantics>(key('swarm-thread-also-send'))
+            .properties
+            .checked,
+        isTrue,
+      );
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['alsoSend'], isTrue);
+      expect(fake.commands.single['recipientIds'], ['agent-builder']);
     });
   });
 

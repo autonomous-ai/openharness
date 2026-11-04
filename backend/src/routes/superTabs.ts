@@ -99,6 +99,8 @@ const activityReadBody = z.object({ through: z.string().datetime() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const noQuery = z.object({}).strict()
+// The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
+const proposalsQuery = z.object({ projectId: id }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -405,8 +407,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { bodyLimit: READINGS_BODY_LIMIT, preHandler: [validateParams(hostParams), validateBody(readingsBody)] },
     (req, reply) => respond(reply, async () => ({ results: (await store.observeMachines(req.user!, req.params.machineId, req.body.readings))
       .map(({ tabId, error }) => error === undefined ? { tabId, ok: true as const } : { tabId, error: readingError(tabId, error) }) })))
+  // Retire no earlier than Dec 4, 2026 and 30 days after the first v2 Desktop, phone and CLI releases.
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
+  app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal/v2', { preHandler: validateParams(machineParams) },
+    (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId, 'v2')))
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
@@ -507,6 +512,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
     })
+  // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
+    { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
+    (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
   // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {

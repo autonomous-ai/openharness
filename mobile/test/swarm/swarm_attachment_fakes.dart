@@ -80,13 +80,20 @@ class _Folder implements FileSystem {
 }
 
 /// A store over [root] and [storage], as the app's is over its temporary
-/// folder and the network.
-SwarmAttachmentStore storeIn(io.Directory root, FileService storage) =>
-    SwarmAttachmentStore(
-      root: () async => root,
-      fileService: storage,
-      files: (folder) => _Folder(folder),
-    );
+/// folder and the network. [reaching], when given, runs each time the store
+/// asks for [root], as the app's asks the platform for its folder.
+SwarmAttachmentStore storeIn(
+  io.Directory root,
+  FileService storage, {
+  Future<void> Function()? reaching,
+}) => SwarmAttachmentStore(
+  root: () async {
+    await reaching?.call();
+    return root;
+  },
+  fileService: storage,
+  files: (folder) => _Folder(folder),
+);
 
 /// The files kept under [root], by their path below it.
 List<String> keptUnder(io.Directory root) {

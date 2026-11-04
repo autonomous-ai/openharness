@@ -50,6 +50,10 @@ class SuperTabPerson {
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
       chosenUsername = row['username'] as String?,
+      name = switch (row['name']) {
+        final String name when name.trim().isNotEmpty => name,
+        _ => null,
+      },
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -61,7 +65,8 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
-      chosenUsername = person.chosenUsername;
+      chosenUsername = person.chosenUsername,
+      name = person.name;
   final String id, email, role;
 
   /// How the Swarm shows and tags them, as the server sends it, worked out in
@@ -71,6 +76,15 @@ class SuperTabPerson {
 
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
+
+  /// The name they set for the Swarm to show ("Minh Nguyen",
+  /// backend/src/superTabs/personNames.ts); null until they set one, and
+  /// from an older server.
+  final String? name;
+
+  /// How the Swarm shows them: the name they set, else their username. A tag
+  /// still types [username].
+  String get shownName => name ?? username;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
@@ -163,6 +177,15 @@ class SuperTabAgent {
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
+      gridModel = row['gridModel'] as String?,
+      modelRequest = switch (row['modelRequest']) {
+        {'id': final String id} && final Map request => (
+          id: id,
+          gridModel: request['gridModel'] as String?,
+          name: request['name'] as String?,
+        ),
+        _ => null,
+      },
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
@@ -185,6 +208,15 @@ class SuperTabAgent {
   /// A Product Manager's switch to another engine or account that is asked for
   /// and not yet done (backend `switchRequest`); null otherwise.
   final Map<String, dynamic>? switchRequest;
+
+  /// The model on the Swarm's grid it runs on; null on its own subscription
+  /// (backend Agent.gridModel).
+  final String? gridModel;
+
+  /// A person's switch of their Buddy's model that is asked for and not yet
+  /// done (backend buddyModel.ts `modelRequest`); null otherwise. A null
+  /// [gridModel] there is the way back to their subscription.
+  final ({String id, String? gridModel, String? name})? modelRequest;
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account.
@@ -352,8 +384,11 @@ class SuperTabConversation {
               (row['shippedAt'] as num).toInt(),
             )
           : null,
+      queueRank = (row['queueRank'] as num?)?.toDouble(),
+      notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
@@ -429,6 +464,11 @@ class SuperTabConversation {
   /// conversation's first message since.
   final int? lastMainSequence;
 
+  /// Its newest main-stream message from a person, not a system row (backend
+  /// parts/commit.ts): what makes its sidebar row bold (#2427). 0 before a
+  /// person's first message since that backend.
+  final int lastPersonSequence;
+
   /// Counts reaction changes here (backend reactions.ts), as its messages
   /// pages also say: a move asks for the page shown again. Absent, as before
   /// the first reaction, it is 0, the pages' own value then.
@@ -438,9 +478,19 @@ class SuperTabConversation {
   /// task, and from a server that does not say.
   final String? requesterId;
 
-  /// When it shipped (its first Done); null until it has, and from a server
+  /// Its first Done, or its merge once one is recorded: not proof that it merged
+  /// (a pull request card's `merged` is); null until then, and from a server
   /// that does not say.
   final DateTime? shippedAt;
+
+  /// Its place in its project's shared Next up, set by a person or the PM
+  /// (backend taskQueue.ts); null until someone moves it, when its number
+  /// places it (task_groups.dart).
+  final double? queueRank;
+
+  /// The day before which its work may not start, a promise the PM keeps
+  /// ("remove the preview route after Dec 4"); null when there is none.
+  final DateTime? notBefore;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -469,6 +519,11 @@ class SuperTabProject {
         for (final member in row['members'] as List? ?? const [])
           superTabMap(member)['id'] as String,
       ],
+      memberGenerations = {
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String:
+              superTabMap(member)['generation'] as String?,
+      },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
@@ -491,6 +546,10 @@ class SuperTabProject {
   bool get hasInstructions => coordinatorName != null;
   final bool isPrivate;
   final List<String> memberIds;
+
+  /// Each member's generation when they were added (null when the backend sent none): a member whose person now has
+  /// another generation left the Swarm and came back, and is no longer in the project.
+  final Map<String, String?> memberGenerations;
   final int updateMinutes;
 
   /// What the coordinator last said of the project's progress, shown in the
@@ -557,6 +616,15 @@ class SuperTabSnapshot {
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
+      _starts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {'id': final String id})
+            id: (
+              harnessId: start['harnessId'] as String?,
+              error: start['error'] as String?,
+            ),
+      }),
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -657,6 +725,12 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// Each agent start's outcome so far, by its id: the harness it made, or
+  /// why it failed (backend AgentStart); null for a start this read does not
+  /// hold.
+  ({String? harnessId, String? error})? startOf(String id) => _starts[id];
+  final Map<String, ({String? harnessId, String? error})> _starts;
 
   /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
   /// kept on this device leaves them out).
@@ -798,6 +872,10 @@ class SuperTabSnapshot {
     return '${agentName(agentId)} is the ${coordinatorNameOf(project.id)} of project ${project.name}. Delete the project first.';
   }
 
+  /// The person [personId] by the name the Swarm shows: their username; null for someone not in it.
+  String? usernameOf(String personId) =>
+      people.where((p) => p.id == personId).firstOrNull?.username;
+
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
@@ -875,7 +953,7 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+      : people.where((p) => p.id == message.authorId).firstOrNull?.shownName ??
             superTabPersonName(message.authorName);
 }
 
@@ -905,35 +983,40 @@ class SuperTabLocalModels {
   final String? error;
 }
 
-/// One model the Swarm's agents can run on now, as a machine's fresh reading says: on the Swarm's grid (`local`, a
-/// member's engine; `api`, an API a member shares), usable from any machine; or shared with the machine's owner and
-/// offered by them (`shared`), usable on that machine alone.
+/// One model a machine of the Swarm serves, as its reading says: on the Swarm's grid (`local`, a member's engine;
+/// `api`, an API a member shares), usable from any machine; or shared with the machine's owner and offered by them
+/// (`shared`), usable on that machine alone.
 typedef SuperTabLocalModelRow = ({
   String grid,
   String model,
   String name,
+  String machineId,
   String machine,
   String kind,
 });
 
-/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`).
+/// Every model the Swarm's machines serve now, once per machine, from their fresh readings (backend
+/// `MACHINE_FRESH_MS`); with [freshFor] null, from readings of any age. A Buddy-only machine is not one of the Swarm's
+/// (backend machines.ts `swarmMachines`).
 List<SuperTabLocalModelRow> superTabLocalModelRows(
   SuperTabSnapshot? snapshot, {
   required DateTime now,
-  Duration freshFor = const Duration(seconds: 45),
+  Duration? freshFor = const Duration(seconds: 45),
 }) {
   final local = snapshot?.localModels;
   if (local == null || !local.enabled) return const [];
   final rows = <SuperTabLocalModelRow>[];
   for (final pool in snapshot!.machines) {
     final observation = pool['observation'];
-    if (observation is! Map) continue;
+    if (pool['buddyOnly'] == true || observation is! Map) continue;
     final at = observation['receivedAt'];
     if (at is! num ||
-        now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
-            freshFor) {
+        (freshFor != null &&
+            now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+                freshFor)) {
       continue;
     }
+    final machineId = pool['machineId'] as String? ?? '';
     for (final m
         in observation['localModels'] is List
             ? observation['localModels'] as List
@@ -946,11 +1029,16 @@ List<SuperTabLocalModelRow> superTabLocalModelRows(
         continue;
       }
       final grid = m['grid'] as String, model = m['model'] as String;
-      if (rows.any((r) => r.grid == grid && r.model == model)) continue;
+      if (rows.any(
+        (r) => r.machineId == machineId && r.grid == grid && r.model == model,
+      )) {
+        continue;
+      }
       rows.add((
         grid: grid,
         model: model,
         name: m['name'] is String ? m['name'] as String : model,
+        machineId: machineId,
         machine: pool['name'] as String? ?? 'A machine',
         kind: m['kind'] is String
             ? m['kind'] as String
@@ -1214,7 +1302,8 @@ class SuperTabDelivery {
 class SuperTabThread {
   /// A thread with no reply yet: a session's, started from the main chat.
   SuperTabThread.empty(this.id)
-    : replies = 0,
+    : ask = null,
+      replies = 0,
       lastSequence = 0,
       lastAt = null,
       authors = const [],
@@ -1222,6 +1311,7 @@ class SuperTabThread {
 
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      ask = row['ask'] as String?,
       replies = (row['replies'] as num).toInt(),
       lastSequence = (row['lastSequence'] as num).toInt(),
       lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
@@ -1232,8 +1322,20 @@ class SuperTabThread {
         (row['people'] as List? ?? const []).whereType<String>(),
       );
   final String id;
+
+  /// Where the ask at its root stands (backend threads.ts).
+  final String? ask;
   final int replies, lastSequence;
   final DateTime? lastAt;
+
+  /// What its root's row says after the time; null for a message that is no
+  /// ask, and for a state this app does not know.
+  String? get askTag => switch (ask) {
+    'proposal' => '✋ Proposal',
+    'on-it' => '● On it',
+    'shipped' => '✓ Shipped',
+    _ => null,
+  };
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
@@ -1243,11 +1345,28 @@ class SuperTabThread {
   final List<String> people;
 }
 
+/// The source kinds of a task's root in the project chat.
+const _taskRootKinds = {'task-line', 'buddy-proposal'};
+
+/// What a task's root posted before #2867 reads ahead of its title. Stored rows
+/// keep it, so this stays for as long as rows from before 2026-11-04 are kept.
+const _oldTaskRootPrefix = "Let's build: ";
+
+String _messageText(Map<String, dynamic> row) {
+  final text = _text(row, 'text');
+  return _taskRootKinds.contains(
+            superTabMap(row['source'] ?? const {})['kind'],
+          ) &&
+          text.startsWith(_oldTaskRootPrefix)
+      ? text.substring(_oldTaskRootPrefix.length)
+      : text;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
-      text = _text(row, 'text'),
+      text = _messageText(row),
       replyTo = row['replyTo'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
@@ -1322,10 +1441,10 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// The person a Buddy's proposal speaks for, from the tag the server writes
-  /// on it; null for every other message, whatever its text says.
-  String? get proposalOwnerId =>
-      source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
+  /// A task's root the server posted in its person's name (plain chat, #2294):
+  /// theirs to read, not their own writing, so it reads nothing before it and
+  /// is unread for them as anyone else's message is.
+  bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
 
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>
@@ -1344,6 +1463,13 @@ class SuperTabMessage {
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>
       source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
+
+  /// The project chat's line when linked work is Done (ship_row.dart).
+  bool get shipLine => source['kind'] == 'ship';
+
+  /// A line the chat draws as its own row, with no sender's header (view.dart):
+  /// a message after it has no header to join (Diego, #2547).
+  bool get drawsOwnRow => shipLine || terminalEvent || route != null;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

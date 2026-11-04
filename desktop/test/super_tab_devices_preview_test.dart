@@ -168,7 +168,8 @@ void main() {
           await persisted.load();
           expect(persisted.rootOf('m', 'native-0'), _finderRoot);
         }
-        await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+        // Back to the task, as its Tasks view opens it.
+        await c.select('offline');
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isFalse);
         expectPreview();

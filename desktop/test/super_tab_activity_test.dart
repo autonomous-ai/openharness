@@ -12,11 +12,17 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
-    show close, fromLead, inRow, openHere, projectServer, unreadThread;
+    show
+        close,
+        fromLead,
+        inRow,
+        openHere,
+        projectServer,
+        rowText,
+        unreadThread;
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -333,8 +339,8 @@ void main() {
   });
 
   group('next unread chat follows the sidebar\'s order', () {
-    test('projects A to Z, each chat then its newest workgroups first, then '
-        'Buddy chats', () async {
+    test('projects\' chats A to Z; their tasks are in the Tasks view, not '
+        'here', () async {
       final server = projectServer();
       (server.state['projects'] as List).add(
         projectFixture('alpha', 'alpha', 'alpha-chat'),
@@ -350,12 +356,7 @@ void main() {
           'number': 20,
         });
       final c = await open(server);
-      expect(superTabSidebarOrder(c), [
-        'alpha-chat',
-        'lead',
-        'newer',
-        'offline',
-      ]);
+      expect(superTabSidebarOrder(c), ['alpha-chat', 'lead']);
     });
   });
 
@@ -551,33 +552,24 @@ void main() {
       testWidgets('Activity takes Notifications\' place; a muted chat is '
           'greyed with its mark and no number ($brightness)', (tester) async {
         final server = projectServer();
-        fromLead(server, 'News', conversationId: 'offline');
-        server.tag('message-1', conversationId: 'offline');
+        fromLead(server, 'News');
+        server.tag('message-1');
         final c = await openHere(server);
         await SuperTabAttention.of(c).mentions.load();
-        c.toggleProject('lead');
-        await c.setNotify('offline', SuperTabNotify.muted);
+        await c.setNotify('lead', SuperTabNotify.muted);
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
         expect(inRow('super-activity', find.text('Activity')), findsOneWidget);
         expect(inRow('super-activity', find.text('1')), findsOneWidget);
+        expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
-          find.byKey(const ValueKey('super-muted-offline')),
-          findsOneWidget,
-        );
-        expect(
-          inRow('super-group-offline', find.byType(SuperTabCountBadge)),
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
           findsNothing,
         );
-        // The workgroup's name, drawn in the row's style.
-        final name = tester.widget<SuperTabWorkgroupName>(
-          find.descendant(
-            of: find.byKey(const ValueKey('super-group-offline')),
-            matching: find.byType(SuperTabWorkgroupName),
-          ),
-        );
-        expect(name.style.color, DesktopChrome.muted);
-        expect(name.style.fontWeight, isNot(grid.AppFont.semibold));
+        // The project's name, drawn in the row's style: never bold, though
+        // its chat has news.
+        final name = rowText(tester, 'super-group-lead', 'web-project');
+        expect(name.style?.fontWeight, isNot(grid.AppFont.semibold));
         await close(tester, c);
       });
     }
@@ -585,30 +577,33 @@ void main() {
     testWidgets('the unread filter lists only unread chats and the open one, '
         'and hides muted ones', (tester) async {
       final server = projectServer();
-      (server.state['conversations'] as List)
-        ..add({
-          ...conversationFixture('quiet', 'Quiet'),
-          'projectId': 'lead',
-          'number': 13,
-        })
-        ..add({
-          ...conversationFixture('hushed', 'Hushed'),
-          'projectId': 'lead',
-          'number': 14,
+      // Projects of their own: the sidebar lists project chats, not tasks.
+      for (final id in ['quiet', 'hushed', 'news']) {
+        (server.state['projects'] as List).add(
+          projectFixture(id, '$id-project', id),
+        );
+        (server.state['conversations'] as List).add({
+          ...conversationFixture(id, id),
+          'projectId': id,
         });
-      fromLead(server, 'Read');
-      server.markReadElsewhere('lead', server.revision);
-      fromLead(server, 'News', conversationId: 'offline');
+      }
+      fromLead(server, 'Read', conversationId: 'quiet');
+      server.markReadElsewhere('quiet', server.revision);
+      fromLead(server, 'News', conversationId: 'news');
       fromLead(server, 'Hushed news', conversationId: 'hushed');
       final c = await openHere(server);
-      c.toggleProject('lead');
       await c.setNotify('hushed', SuperTabNotify.muted);
       await pumpSidebar(tester, c);
       expect(find.byKey(const ValueKey('super-group-quiet')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('super-unread-only')));
       await tester.pumpAndSettle();
       expect(c.unreadOnly, isTrue);
-      expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-news')), findsOneWidget);
+      // The open chat stays listed.
+      expect(
+        find.byKey(ValueKey('super-group-${c.selectedId}')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('super-group-quiet')), findsNothing);
       expect(find.byKey(const ValueKey('super-group-hushed')), findsNothing);
       await close(tester, c);

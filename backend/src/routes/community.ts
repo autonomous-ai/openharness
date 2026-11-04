@@ -201,7 +201,7 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     const [stats, covered] = await Promise.all([
       feedStats(ids, autonomousEnv, req.user?.sub),
       // Which have a cover, without reading one: a page of them is megabytes of base64.
-      prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }),
+      page.length ? prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }) : [],
     ])
     const withCover = new Set(covered.map(row => row.id))
     sendSuccess(reply, { harnesses: page.map(row => withCoverPath({ ...row, cover: withCover.has(row.id) ? 'set' : null })), ...(order ? { order } : {}), stats, signedIn: !!req.user, nextCursor, following: [...followed] })

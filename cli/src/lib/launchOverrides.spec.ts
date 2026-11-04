@@ -9,7 +9,8 @@ import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSetti
 import { loadEngine } from '../engines/inProcess.js'
 import { buildLaunchOverrides, prepareLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
-import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
+import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from './gridLaunch.js'
+import { CLAUDE_ALLOW_WEB_TOOLS_ARG, CLAUDE_DISALLOW_WEB_TOOLS_ARG } from './gridWebMcp.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
@@ -442,6 +443,35 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
       { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-buddy-')), swarmSkill: { role: 'buddy', key: 'harness-claude-buddy' } }, 'a', () => true)
     expect(buddy.ok).toBe(true)
     expect(JSON.stringify(buddy)).not.toContain('lamp-mcp')
+  })
+
+  // The grid's web MCP is a server too: a Buddy moved onto a grid model drops it, and keeps everything that makes it a
+  // Buddy (docs/plans/2026-11-03-buddy-model-switch-design.md, "The Buddy's guard on a grid").
+  it('a Buddy moved onto a grid gets no web MCP and keeps its Buddy launch (#2354)', async () => {
+    const withMcp: GridLaunchOverride = { ...GRID, mcpUrl: 'https://api-grid.example/v1/grid/web-mcp/' }
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-buddy-'))
+    const buddy = { startedBy: null, cwd, swarmSkill: { role: 'buddy' as const, key: 'harness-claude-buddy' } }
+    const buddyTmp = { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' }
+    vi.mocked(buddyTmpEnv).mockReturnValueOnce(buddyTmp).mockReturnValueOnce(buddyTmp)
+    const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', buddy, 'a', () => true)
+    const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...buddy, gridLaunch: withMcp }, 'a', () => true)
+    if (!own.ok || !grid.ok) throw new Error('Fixture launch failed')
+    expect(grid.overrides.extraArgs).not.toContain('--mcp-config')
+    expect(grid.overrides.extraArgs).not.toContain(CLAUDE_ALLOW_WEB_TOOLS_ARG)
+    expect(grid.overrides.env).not.toHaveProperty(GRID_KEY_VAR)
+    expect(JSON.stringify(grid.overrides)).not.toContain(withMcp.mcpUrl)
+    // Claude Code's own web tools stay off, as on any grid.
+    expect(grid.overrides.extraArgs).toContain(CLAUDE_DISALLOW_WEB_TOOLS_ARG)
+    // What it gets on its own login, it gets on the grid: its folder for temporary files and its Buddy instructions.
+    expect(grid.overrides.env).toMatchObject(buddyTmp)
+    expect(own.overrides.env).toMatchObject(buddyTmp)
+    const told = (args: string[]) => args[args.indexOf('--append-system-prompt') + 1]
+    expect(told(own.overrides.extraArgs)).toContain('swarm-buddy')
+    expect(told(grid.overrides.extraArgs)).toContain(told(own.overrides.extraArgs))
+    // A session that is not a Buddy keeps the grid's web tools.
+    const agent = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd, swarmSkill: { role: 'agent', key: 'harness-claude-plain' }, gridLaunch: withMcp }, 'a', () => true)
+    expect(agent.ok && agent.overrides.extraArgs).toEqual(expect.arrayContaining(['--mcp-config', CLAUDE_ALLOW_WEB_TOOLS_ARG]))
   })
 })
 

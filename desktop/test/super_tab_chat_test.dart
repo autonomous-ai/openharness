@@ -395,7 +395,9 @@ void main() {
     expect(projectWeight(), grid.AppFont.semibold);
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    expect(projectWeight(), grid.AppFont.semibold);
+    // Opened as the project's Tasks view opens it (task #2569).
+    await c.select('offline');
     await tester.pumpAndSettle();
     expect(find.text('An unread workgroup update'), findsOneWidget);
     expect(c.unread(c.selected!), isFalse);
@@ -900,13 +902,12 @@ void main() {
         SuperTabMessageRow.consecutiveUpdates(
           server.messages.map(SuperTabMessage.fromJson).toList(),
         ),
-        {'message-2', 'message-3'},
+        // Like Slack, a run of any length (Huy, 2026-11-03, #2419).
+        {'message-2', 'message-3', 'message-4'},
       );
+      // A question joins too.
       server.messages[1]['text'] = 'Should edits survive sign-out?';
-      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
-      expect(SuperTabMessageRow.groupsWith(message(2), message(1)), isFalse);
-      server.messages[1]['text'] = '保留修改？';
-      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
+      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isTrue);
       server.messages[1]['text'] = 'Second update';
       server.messages[1]['author'] = {
         'kind': 'agent',

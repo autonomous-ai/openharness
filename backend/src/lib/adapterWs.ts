@@ -567,7 +567,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {
-          void recordTurnStarted(userId, machineId, agentId, now)
+          void recordTurnStarted(userId, machineId, agentId, now, team)
             .catch((err) => logger.warn('turn tracking failed', { machineId, agentId, error: String(err) }))
         }
       }

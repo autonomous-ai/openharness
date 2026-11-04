@@ -13,6 +13,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { TokensByModel } from '../src/superTabs/costs/tokens.js'
 import { poolRows } from './hostRows.test-support.js'
+import { profiledReads } from './profiledReads.test-support.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 
@@ -228,5 +229,62 @@ describe('route decision reads', () => {
       }
       expect((await get(`/api/super-tabs/${f.tab}/costs?days=7`)).totals).toMatchObject({ attempts: 1, shipped: 1 })
     } finally { await app.close() }
+  })
+})
+
+describe('costs and a project\'s GitHub access, read through the read cache (task #2596)', () => {
+  /** The part collections' reads MongoDB served while `run` ran, as superTabCache.test.ts counts them. */
+  const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
+
+  it('reads no part at a stamp that did not move, and answers what a read straight from Mongo answers', async () => {
+    const f = await swarm()
+    await f.beat(opus(1000, 100))
+    await f.finish(await f.assign(await f.route()), opus(7000, 1200))
+    const direct = new SuperTabStore(db, () => f.clock.now, null, { readCache: null })
+    for (const [name, read] of [['costs', (store: SuperTabStore) => store.costSummary(owner, f.tab, 7)],
+      ['github', (store: SuperTabStore) => store.projectRepository(owner, f.tab, 'lead')]] as const) {
+      await read(f.store)
+      const again = await partReads(() => read(f.store))
+      expect(again.reads, name).toBe(0)
+      expect(again.value, name).toEqual(await read(direct))
+    }
+    expect((await f.store.costSummary(owner, f.tab, 7)).totals).toMatchObject({ attempts: 1, shipped: 1 })
+  })
+})
+
+describe('a route decision as stored (task #2488)', () => {
+  // As production's routes were on 2026-11-03: every engine on every machine, 13 candidates with labels of ~540 characters and
+  // 47 exclusions of 5 reasons, ~20 KB a row. Only the pick's label and each reason once are kept; readers get the record whole.
+  it('keeps the pick\'s label and each exclusion reason once, reads back every candidate and exclusion, and still links its start', async () => {
+    const f = await swarm()
+    const long = (text: string, size: number) => `${text} ${'·'.repeat(Math.max(0, size - text.length - 1))}`
+    const fit = { status: 'fits', coverage: 1.5, effectiveCost: 3, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'k'.repeat(64) }
+    const candidates = [
+      { id: 'c0', kind: 'member', agentId: f.worker, machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
+        title: 'Worker · Claude opus high · Worker Mac', label: long('Worker · strength 3, cost 3 · fits: weekly 4% of 69%', 540), fit },
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `c${i + 1}`, kind: 'new', machineId: 'test-host', engine: 'claude', model: `model-${i}`, effort: 'high',
+        quality: 2, cost: 2, title: `New agent · Claude model-${i} high · Worker Mac`, label: long(`New agent · strength 2, cost 2 · candidate ${i}`, 540), fit })),
+    ]
+    const reasons = Array.from({ length: 5 }, (_, i) => long(`Reason ${i}: Machine is offline or unreachable, or its engine is suspended.`, 100))
+    const excluded = Array.from({ length: 47 }, (_, i) => ({ title: long(`New agent · Codex default default · machine-${i}`, 80), reason: reasons[i % 5]! }))
+    const decision = { assessment: { difficulty: 'medium', risk: 'low', why: 'Parser work.', size: 'medium', kind: 'parser' },
+      candidates, excluded, floor: 1, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: 'First by strength.' }
+    const id = String((await f.execute({ type: 'route.record', conversationId: f.group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const [sizes] = (await db.$runCommandRaw({ aggregate: 'SuperTabRouteDecision', pipeline: [{ $match: { _id: id } },
+      { $project: { stored: { $bsonSize: '$record' }, sent: { $bsonSize: { $literal: decision } } } }], cursor: {} }) as
+      { cursor: { firstBatch: Array<{ stored: number; sent: number }> } }).cursor.firstBatch
+    expect(sizes!.sent).toBeGreaterThan(19_000)
+    expect(sizes!.stored, JSON.stringify(sizes)).toBeLessThan(sizes!.sent * 0.6)
+    for (const read of [await f.store.routeDecision(owner, f.tab, id), await f.store.routeDecision(host, f.tab, id, f.lead)]) {
+      const record = read.record as unknown as typeof decision
+      expect(record.candidates.map(c => c.id)).toEqual(candidates.map(c => c.id))
+      expect(record.candidates.map(c => c.label)).toEqual([candidates[0]!.label, ...Array(12).fill(undefined)])
+      expect(record.candidates.map(({ label: _label, ...c }) => c)).toEqual(candidates.map(({ label: _label, ...c }) => c))
+      expect(record.excluded).toHaveLength(47)
+      expect(new Set(record.excluded.map(e => JSON.stringify(e)))).toEqual(new Set(excluded.map(e => JSON.stringify(e))))
+      expect(read).not.toHaveProperty('record.unavailable')
+    }
+    await f.assign(id)
+    expect(await f.decision(id)).toMatchObject({ final: { kind: 'member', agentId: f.worker }, override: null })
   })
 })

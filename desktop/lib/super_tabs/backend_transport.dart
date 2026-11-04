@@ -19,13 +19,13 @@ final _swarmRoute = RegExp(
   '|/list|/invitations|/deleted'
   '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
-  '|activity|activity/read|threads|inbox'
+  '|activity|activity/read|threads|inbox|proposals'
   '|conversations/$_id/(?:messages|catch-up|read|notifications'
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id)'
   '|projects/$_id/(?:github|github/approve'
   '|instructions(?:/revisions(?:/[0-9]+)?)?)'
-  '|route-decisions/$_id|machines/$_id/removal)'
+  '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
 

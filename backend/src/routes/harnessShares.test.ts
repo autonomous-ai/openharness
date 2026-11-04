@@ -265,6 +265,21 @@ describe('account-bound harness invitations', () => {
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
   })
 
+  // Prisma sends an empty list as `$or: []`, a scan of all machines (prod slow log, 2026-11-04): most people have no share.
+  it('reads no machines or owners for a person with no share', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })
+    expect(response.json().data.machines).toEqual([])
+    expect(mocks.prisma.machine.findMany).not.toHaveBeenCalled()
+    expect(mocks.prisma.user.findMany).not.toHaveBeenCalled()
+  })
+
+  it('reads no owners when none of the shared machines is usable', async () => {
+    mocks.prisma.harnessShare.findMany.mockResolvedValue([{ id: 's', ...input(), engine: null, ownerId: 'owner', expiresAt: new Date(input().expiresAt) }])
+    mocks.prisma.machine.findMany.mockResolvedValue([])
+    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+    expect(mocks.prisma.user.findMany).not.toHaveBeenCalled()
+  })
+
   it('asks the Swarms about an ordinary share too: a confidential session refuses it (final review, Critical 1)', async () => {
     mocks.auth.mockResolvedValue(ken)
     const share = { id: 'share', ...input(), superTabId: null, ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }

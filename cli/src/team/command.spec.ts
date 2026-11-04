@@ -91,7 +91,7 @@ describe('harness team', () => {
   it('prints its help, and refuses an unknown verb', async () => {
     const f = fake()
     expect(await teamCommand([], f.deps)).toBe(0)
-    expect(f.out[0]).toContain('Usage: harness team <setup | status | remove | on | off>')
+    expect(f.out[0]).toContain('Usage: harness team <setup | status | model | logs | sign-in | remove | on | off>')
     expect(await teamCommand(['frobnicate'], f.deps)).toBe(2)
   })
 })
@@ -1008,3 +1008,34 @@ describe('parseLaunchctlPrint', () => {
     expect(parseLaunchctlPrint(113, 'Could not find service')).toEqual({ loaded: false, pid: null, state: null })
   })
 })
+
+describe('harness team logs and sign-in', () => {
+  const config = { version: 1, user: 'harnessteam', realName: 'Harness Team', home: '/Users/harnessteam', owner: 'owner',
+    ownerHome: '/Users/owner', sentinel: '/Users/owner/.harness-team-privacy', port: 18493, label: 'ai.autonomous.harness.team',
+    plist: '/Library/LaunchDaemons/ai.autonomous.harness.team.plist', statusFile: '/Library/Application Support/Harness/Team/status.json',
+    node: '/Users/harnessteam/.harness/runtime/node/bin/node', cli: '/Users/harnessteam/.harness/cli/cli.js', env: {},
+    createdAt: '2026-10-27T10:37:42.635Z' }
+
+  it('reads the team log through the one administrator prompt, and says when there is no account', async () => {
+    const f = fake({ readConfig: () => config as never, adminResult: { ok: true, stdout: '2026-11-03 14:23:01 [agent] create pane open\n' } })
+    expect(await teamCommand(['logs'], f.deps)).toBe(0)
+    expect(f.built[0]!.script).toContain("tail -n 40 '/Users/harnessteam/.harness/cli/data/harness.log'")
+    expect(f.out.join('\n')).toContain('create pane open')
+    const none = fake()
+    expect(await teamCommand(['logs'], none.deps)).toBe(1)
+    expect(none.err.join('\n')).toContain('No Harness Team account')
+  })
+
+  it('refuses the sign-in where it cannot run, naming what to do instead', async () => {
+    const windows = fake({ platform: 'win32', readConfig: () => config as never })
+    expect(await teamCommand(['sign-in', 'claude'], windows.deps)).toBe(1)
+    expect(windows.err.join('\n')).toContain('On Windows, sign in from Harness')
+    const noTerminal = fake({ readConfig: () => config as never, interactive: false })
+    expect(await teamCommand(['sign-in', 'codex'], noTerminal.deps)).toBe(1)
+    expect(noTerminal.err.join('\n')).toContain('Run it in a terminal')
+    const wrong = fake({ readConfig: () => config as never, interactive: true })
+    expect(await teamCommand(['sign-in', 'vim'], wrong.deps)).toBe(1)
+    expect(wrong.err.join('\n')).toContain('Name claude or codex')
+  })
+})
+

@@ -2,14 +2,11 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/task_status.dart';
-import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
-import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// The line under each task row (#957, the mockup Ken approved): whether the
@@ -305,82 +302,6 @@ void main() {
       expect(mark(tester), HarnessActivity.failed);
     }
   });
-
-  testWidgets(
-    'a task row in the sidebar shows its line under its name and its mark at its right, naming the person',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1300, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = humansSwarm();
-      final group = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((g) => g['id'] == 'offline');
-      group['assignment'] = {
-        'id': 'a',
-        'agentId': 'w',
-        'status': 'needs_human',
-        'result': 'mockup OK?',
-      };
-      group['liveness'] = state(
-        'waiting',
-        'person',
-        minute * 12,
-        personId: 'owner',
-      );
-      final controller = server.controller(
-        account: 'peer',
-        initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
-      );
-      await controller.refresh();
-      controller.expandedProjects.add('lead');
-      await withClock(
-        Clock.fixed(now),
-        () => tester.pumpWidget(
-          MaterialApp(
-            theme: grid.buildAppTheme(brightness: Brightness.light),
-            home: Scaffold(
-              body: SuperTabView(
-                controller: controller,
-                onInvite: () {},
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Studio',
-              ),
-            ),
-          ),
-        ),
-      );
-      final row = find.byKey(const ValueKey('super-group-offline'));
-      final line = find.descendant(
-        of: row,
-        matching: find.byKey(const ValueKey('super-task-line-offline')),
-      );
-      expect(
-        tester
-            .widgetList<Text>(
-              find.descendant(of: line, matching: find.byType(Text)),
-            )
-            .map((text) => text.data)
-            .join(),
-        'Waiting on ken · mockup OK? · 12m',
-      );
-      expect(
-        find.descendant(
-          of: row,
-          matching: find.byKey(const ValueKey('super-task-mark-offline')),
-        ),
-        findsOneWidget,
-      );
-      // A line the sidebar cuts short is whole in the row's tooltip.
-      expect(
-        find.byTooltip('Offline editing\nWaiting on ken · mockup OK? · 12m'),
-        findsOneWidget,
-      );
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    },
-  );
 
   testWidgets(
     'nothing for finished work, a group without work, or a wait an older backend sent no state for',

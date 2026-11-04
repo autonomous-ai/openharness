@@ -22,9 +22,12 @@ import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
+import 'swarm_invites_sheet.dart' show SwarmInvitesSheet;
 import 'swarm_leaderboard.dart';
 import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_project_details.dart';
+import 'swarm_project_settings.dart';
 import 'swarm_project_status.dart';
 import 'swarm_project_tabs.dart';
 import 'swarm_project_tasks.dart';
@@ -371,6 +374,9 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// the project is gone ([_closeSheet]).
   ModalRoute<void>? _sheet;
 
+  /// Project settings…'s rows while they are up: they go as [_sheet] does.
+  Route<void>? _settings;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -502,11 +508,92 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
+  /// The project's details, from a tap on its name ([SwarmProjectDetailsSheet]),
+  /// as the menu's sheets open: what it hands back opens once it is gone.
+  void _openDetails(
+    SwarmSession session,
+    SwarmReader reader,
+    SuperTabSnapshot snapshot,
+    SuperTabProject project,
+  ) {
+    if (_sheet != null || !mounted) return;
+    bool allowed() =>
+        !reader.accessRevoked &&
+        reader.snapshot?.projectById(project.id) != null &&
+        swarmCanWrite(reader);
+    final chatId = project.leadConversationId;
+    final route = swarmSheetRoute<VoidCallback>(
+      context,
+      builder: (_) => SwarmProjectDetailsSheet(
+        reader: reader,
+        projectId: project.id,
+        terminal: (shell, computers) => allowed()
+            ? swarmTerminalAction(
+                agent: () => swarmProjectPm(reader.snapshot, project.id),
+                allowed: allowed,
+                shell: shell,
+                computers: computers,
+              )
+            : null,
+        onStatus: _openStatusSheet,
+        onWork: _openWork,
+        onTeam: _openTeamSheet,
+        onLeaderboard: _openLeaderboardSheet,
+        onNotifications: snapshot.conversation(chatId) == null
+            ? null
+            : () => unawaited(showSwarmNotifySheet(context, reader, chatId)),
+        onInvite: () => _openSheet(
+          (_) => SwarmInvitesSheet(session: session, reader: reader),
+        ),
+      ),
+    );
+    setState(() => _sheet = route);
+    unawaited(
+      Navigator.of(context).push(route).then((action) {
+        if (!mounted) return;
+        if (_sheet == route) setState(() => _sheet = null);
+        action?.call();
+      }),
+    );
+  }
+
+  void _openSharingSheet(SwarmReader reader) => _openSheet(
+    (_) => SwarmProjectSharingSheet(
+      reader: reader,
+      projectId: widget.projectId,
+    ),
+  );
+
+  /// Project settings…'s Project details ([SwarmProjectInfoSheet]): not the
+  /// sheet a tap on its name opens ([_openDetails]).
+  void _openInfoSheet(SwarmReader reader) => _openSheet(
+    (_) => SwarmProjectInfoSheet(reader: reader, projectId: widget.projectId),
+  );
+
+  Future<void> _openSettings(SwarmReader reader) async {
+    Route<void>? shown;
+    await showSwarmProjectSettings(
+      context,
+      reader,
+      widget.projectId,
+      onShown: (route) => _settings = shown = route,
+      onDetails: () => _openInfoSheet(reader),
+    );
+    if (_settings == shown) _settings = null;
+  }
+
   /// Closes the sheet open, if any, and a dialog or sheet over it, with what
   /// it shows (Approve's question): once this frame is done, as a page that
   /// lost its project, or is going away, may not change the navigator while
   /// it does.
   void _closeSheet() {
+    final settings = _settings;
+    _settings = null;
+    if (settings != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (settings.isActive) settings.navigator?.removeRoute(settings);
+      });
+    }
     final sheet = _sheet;
     _sheet = null;
     if (sheet == null) return;
@@ -541,6 +628,11 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     return SwarmTopBar(
       leading: back,
       title: _homeC ? '#${project.name}' : project.name,
+      // Swarm Home C: the name opens the project's details, as Slack's does.
+      onTitle: _homeC
+          ? () => _openDetails(session, reader, snapshot, project)
+          : null,
+      titleLabel: _homeC ? '#${project.name}, project details' : null,
       line: KeyedSubtree(
         key: const ValueKey('swarm-project-team-line'),
         child: _homeC
@@ -577,6 +669,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               onLeaderboard: _openLeaderboardSheet,
               onWork: _openWork,
               onTeam: _openTeamSheet,
+              onSharing: swarmManagesProject(reader, project.id)
+                  ? () => _openSharingSheet(reader)
+                  : null,
+              onSettings: () => unawaited(_openSettings(reader)),
               onNotifications:
                   snapshot.conversation(project.leadConversationId) == null
                   ? null
@@ -805,8 +901,10 @@ SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
 /// someone who may write (Tony, 11-01: the PM's terminal on this phone, by
 /// the Buddy row's rule and words, [swarmTerminalAction]), its Status
 /// ([SwarmProjectStatusSheet]; the chat shows no box of it), its Leaderboard,
-/// its Team and its project chat's Notifications ([showSwarmNotifySheet]),
-/// while that chat is read. It goes with the header: losing the project
+/// its Team, its Sharing for its owner who may write, its project chat's
+/// Notifications ([showSwarmNotifySheet]), while that chat is read, and its
+/// Project settings… ([showSwarmProjectSettings]), as the desktop's project
+/// menu has them. It goes with the header: losing the project
 /// closes it. Open terminal follows the Swarm and the phone's computers
 /// while open, and at the tap reads the PM of [projectId] again.
 class _ProjectMenu extends StatelessWidget {
@@ -817,13 +915,15 @@ class _ProjectMenu extends StatelessWidget {
     required this.onLeaderboard,
     required this.onWork,
     required this.onTeam,
+    required this.onSettings,
+    this.onSharing,
     this.onNotifications,
   });
 
   final SwarmReader reader;
   final String projectId;
-  final VoidCallback onStatus, onLeaderboard, onWork, onTeam;
-  final VoidCallback? onNotifications;
+  final VoidCallback onStatus, onLeaderboard, onWork, onTeam, onSettings;
+  final VoidCallback? onSharing, onNotifications;
 
   @override
   Widget build(BuildContext context) {
@@ -872,11 +972,11 @@ class _ProjectMenu extends StatelessWidget {
     return MenuTheme(
       data: MenuThemeData(
         submenuIcon: MenuTheme.of(context).submenuIcon,
-        // Home C sits near the top of the phone. Six rows at their 48-point
+        // Home C sits near the top of the phone. Eight rows at their 48-point
         // layout height, panel padding, and a small edge fit without scrolling.
         style: AppMenu.style(
           maxHeight:
-              6 * (minTouchTarget + AppSpace.xs) +
+              8 * (minTouchTarget + AppSpace.xs) +
               AppMenu.panelPadding.vertical +
               AppSpace.xs,
         ),
@@ -895,8 +995,11 @@ class _ProjectMenu extends StatelessWidget {
           row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
           row('swarm-project-menu-work', 'Work', onWork),
           row('swarm-project-menu-team', 'Team', onTeam),
+          if (onSharing case final onTap?)
+            row('swarm-project-menu-sharing', 'Sharing', onTap),
           if (onNotifications case final onTap?)
             row('swarm-project-menu-notifications', 'Notifications', onTap),
+          row('swarm-project-menu-settings', 'Project settings…', onSettings),
         ],
         builder: (context, menu, _) => SwarmIconButton(
           key: const ValueKey('swarm-project-menu'),

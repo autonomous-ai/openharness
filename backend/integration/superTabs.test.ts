@@ -12,7 +12,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
+import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
+import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { logger } from '../src/utils/logger.js'
@@ -20,7 +21,7 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
-import { stableId, type SuperTabState } from '../src/superTabs/model.js'
+import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
@@ -31,6 +32,7 @@ import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
+import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -245,6 +247,17 @@ describe('durable group pull request links', () => {
     const group = (await store.read(owner, tab)).state.conversations.find(c => c.id === groupId)!
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
+
+  it('records a link under the project\'s repository and corrects the record it held before', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Links')).id
+    await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/project', repositoryUrl: null } })
+    // Without a repository to judge by, a link is kept as written.
+    await run(tab, message('Opened https://github.com/other/project/pull/50'))
+    expect(await links(tab, 'lead')).toEqual(['https://github.com/other/project/pull/50'])
+    await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://github.com/example/project' })
+    await run(tab, message(`Again ${pr(50)}, and elsewhere https://github.com/example/other/pull/51`))
+    expect(await links(tab, 'lead')).toEqual([pr(50)])
+  })
 
   it('keeps one link beyond the latest 100 messages', async () => {
     const { tab } = await fixture()
@@ -835,6 +848,7 @@ describe('private swarm projects on the real control API', () => {
   // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
   // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
   it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+    wantDefaultDigest()
     // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
@@ -855,8 +869,8 @@ describe('private swarm projects on the real control API', () => {
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207).
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'update-request'])
+    // After the row naming who added the Lead (#2207), and the task's message with its brief in its thread (#2294).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'task-line', 'system', 'update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
     expect((await updates()).map(d => d.id)).toEqual([...ids])
@@ -1240,8 +1254,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'Change this implementation', truncated: false, interrupted: false }
     const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    // Besides the rows naming who added each agent (#2207).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m))).toHaveLength(0)
+    // Besides the rows naming who added each agent (#2207), only the task's own message (#2294).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Implementation'])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => !memberRow(m))).toHaveLength(1)
     expect(await store.deliveries(host, tab, worker)).toEqual([])
     // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.
@@ -1343,6 +1357,20 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toEqual([expect.stringMatching(/^owner added [^.]+\.$/), 'Please start.'])
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
+  })
+
+  // Task #2427 (Huy, 11-03): the sidebar bolds a task only for a person's message, so each read conversation carries its newest
+  // main message from a person, and an agent's message leaves it.
+  it('reads each conversation\'s newest main message from a person, which an agent\'s message leaves', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('A person writes.'))
+    const chat = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const written = await chat()
+    expect(written.lastPersonSequence).toBe(written.lastMainSequence)
+    await run(tab, message('An agent answers.'), host, lead)
+    const answered = await chat()
+    expect(answered.lastMainSequence).toBeGreaterThan(written.lastMainSequence!)
+    expect(answered.lastPersonSequence).toBe(written.lastMainSequence)
   })
 
   it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
@@ -2086,6 +2114,53 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(history.json().data.messages.find((m: { text: string; source?: unknown }) => !memberRow(m)).text).toBe('A shared conversation.')
   })
 
+  // Tony, 2026-11-03 (#2458): New Harness from a project chat records the person's first message beside the row naming who
+  // added the harness. Both took the operation id, so the join answered 500 and the harness never joined.
+  it('joins a harness started from the project chat with a first message, through the HTTP API', async () => {
+    const { tab } = await fixture()
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    const operationId = randomUUID()
+    const join = () => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
+        name: 'Kai', configuration: config, lead: false, initialMessage: 'Hi New PM Personal' } } })
+    const joined = await join()
+    expect(joined.statusCode, joined.body).toBe(200)
+    const agentId = joined.json().data.result.agentId as string
+    expect((await storedState(tab)).agents.map(a => a.id)).toContain(agentId)
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
+      Array<{ id: string; text: string; source?: unknown }>
+    const first = rows.find(m => m.text === 'Hi New PM Personal'), added = rows.find(m => / added "Kai" to the project\./.test(m.text))
+    // The person's message is the one the receipt names; the row naming who added the harness has its own id.
+    expect(first?.id).toBe(joined.json().data.result.messageId)
+    expect(added?.id).toBeDefined()
+    expect(added?.id).not.toBe(first?.id)
+    // The same request again answers the same and writes nothing twice.
+    const again = await join()
+    expect(again.statusCode).toBe(200)
+    expect(again.json().data.result.agentId).toBe(agentId)
+    const after = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
+    expect(after.filter(m => m.text === 'Hi New PM Personal')).toHaveLength(1)
+  })
+
+  it('joins a Product Manager with a first message and a launch-refused note, through the HTTP API', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Personal')).id
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    const operationId = randomUUID()
+    const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm',
+        name: 'Lead', configuration: config, lead: true, initialMessage: 'Hi New PM Personal',
+        launchRefused: { model: 'opus', effort: 'xhigh' } } } })
+    expect(joined.statusCode, joined.body).toBe(200)
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
+      Array<{ id: string; text: string }>
+    const first = rows.find(m => m.text === 'Hi New PM Personal')
+    expect(first?.id).toBe(joined.json().data.result.messageId)
+    const refused = rows.find(m => m.text.includes('could not launch it with them'))
+    expect(refused?.id).toBeDefined()
+    expect(refused?.id).not.toBe(first?.id)
+    expect((await storedState(tab)).conversations.find(c => c.id === 'lead')?.leadId).toBe(joined.json().data.result.agentId)
+  })
+
   it('rechecks the machine share at delivery even while the contributor remains in the tab', async () => {
     const { tab } = await fixture()
     await invite(tab)
@@ -2572,6 +2647,8 @@ describe('Super Tab chat attachments', () => {
   const signed = (path: string) => new RegExp(`^https://storage\\.memory\\.test/${path}\\?expires=\\d+&signature=[0-9a-f]{64}$`)
   /** A file as two reads hand it: the same object, each with a link of its own read. */
   const sameFile = (file: Uploaded) => ({ ...file, link: expect.stringMatching(signed(objectKey(file.url).replaceAll('.', '\\.'))), expiresAt: expect.any(Number) })
+  /** A file as a message keeps it: a read signs a fresh link for it (fileLinks.ts), so the upload answer's link is not part of it. */
+  const keptFile = ({ link: _link, expiresAt: _expiresAt, ...file }: Uploaded) => file
 
   it('keeps a credential out of a file\'s name, which the chat shows like the message', async () => {
     const { tab } = await fixture()
@@ -2994,6 +3071,210 @@ describe('Super Tab chat attachments', () => {
     const before = files.objects.size
     expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
     expect(files.objects.size).toBe(before)
+  })
+
+  // Diego, 10-30: uploads nobody sends within a day are removed, row and stored file, so the bucket stops growing.
+  describe('unsent files expire after a day', () => {
+    const HOUR = 3_600_000
+    const pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const bucket = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures, avatarPrefix: 'super-tabs' }
+    // Two a chunk, so a run takes several chunks.
+    const sweep = (database: PrismaClient = db) => sweepUnsentAttachments(database, bucket, new Date(), { chunk: 2, chunks: 5, pauseMs: 0 })
+    const aged = (id: string, hours: number) => db.superTabAttachment.update({ where: { id }, data: { createdAt: new Date(Date.now() - hours * HOUR) } })
+    const row = (id: string) => db.superTabAttachment.findUnique({ where: { id } })
+    const stored = (url: string) => files.objects.has(objectKey(url))
+    const picture = async (tab: string) => {
+      const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24)])
+      const { avatar } = await new SuperTabStore(db, Date.now, bucket).uploadAvatar(owner, tab, { body: Readable.from([bytes]) })
+      return { id: avatar.id, key: (await row(avatar.id))!.objectKey }
+    }
+    const useAvatar = (tab: string, id: string) => new SuperTabStore(db, Date.now, bucket).execute(owner, tab,
+      { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id } } })
+
+    it('removes a file nobody sent within a day, row and object, and keeps a sent one and a young one', async () => {
+      const { tab } = await fixture()
+      const [old, older, sent, young] = [(await file(tab, 'old.txt')).attachment, (await file(tab, 'older.txt')).attachment,
+        (await file(tab, 'sent.txt')).attachment, (await file(tab, 'young.txt')).attachment]
+      const messageId = String((await send(tab, [sent.id])).result.messageId)
+      const [unusedPicture, usedPicture] = [await picture(tab), await picture(tab)]
+      await useAvatar(tab, usedPicture.id)
+      for (const [id, hours] of [[old.id, 25], [older.id, 48], [sent.id, 25], [young.id, 1], [unusedPicture.id, 25], [usedPicture.id, 25]] as const) await aged(id, hours)
+
+      await sweep()
+      expect([await row(old.id), await row(older.id), stored(old.url), stored(older.url)]).toEqual([null, null, false, false])
+      expect(await row(sent.id)).toMatchObject({ usedBy: messageId })
+      expect(await row(young.id)).toMatchObject({ usedBy: null })
+      expect([stored(sent.url), stored(young.url)]).toEqual([true, true])
+      // The sent message still links its file.
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(sent)])
+      // Pictures alike: one never used is removed from the avatar store, the one in use stays.
+      expect([await row(unusedPicture.id), pictures.objects.has(unusedPicture.key)]).toEqual([null, false])
+      expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
+      // A young file is still sent as usual.
+      expect((await send(tab, [young.id])).result.messageId).toBeTruthy()
+    })
+
+    it('leaves an upload still on its link, or being removed by its own sweep, to the pending-upload sweep, however old', async () => {
+      const { tab } = await fixture()
+      const [pending, removing] = [(await linkFor(tab, { size: 5 })).upload, (await linkFor(tab, { size: 5 })).upload]
+      for (const link of [pending, removing]) expect(await files.receive(link.url, link.headers, Buffer.alloc(5))).toBe(200)
+      await db.superTabAttachment.update({ where: { id: removing.id }, data: { purpose: REMOVING_UPLOAD_PURPOSE } })
+      for (const id of [pending.id, removing.id]) await aged(id, 25)
+      const keys = [(await row(pending.id))!.objectKey, (await row(removing.id))!.objectKey]
+
+      expect(await sweep()).toEqual({ removed: 0, failed: 0 })
+      expect([(await row(pending.id))?.usedBy, (await row(removing.id))?.usedBy]).toEqual([null, null])
+      expect(keys.map(key => files.objects.has(key))).toEqual([true, true])
+      // Its own sweep takes them, file and row (lib/pendingUploadSweep.ts).
+      expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 2, failed: 0 })
+      expect(keys.map(key => files.objects.has(key))).toEqual([false, false])
+    })
+
+    it('keeps a file whose object could not be deleted for the next run, and nothing can use it meanwhile', async () => {
+      const { tab } = await fixture()
+      const [stuck, other] = [(await file(tab, 'stuck.txt')).attachment, (await file(tab, 'other.txt')).attachment]
+      const stuckPicture = await picture(tab)
+      for (const id of [stuck.id, other.id, stuckPicture.id]) await aged(id, 25)
+      const failing = new Set([objectKey(stuck.url), stuckPicture.key])
+      const unavailable = async function (this: MemoryAttachmentStore, key: string) {
+        if (failing.has(key)) throw new Error('bucket unavailable')
+        this.objects.delete(key)
+      }
+      const chat = vi.spyOn(files, 'delete').mockImplementation(unavailable)
+      const avatars = vi.spyOn(pictures, 'delete').mockImplementation(unavailable)
+      try {
+        await sweep()
+      } finally {
+        chat.mockRestore()
+        avatars.mockRestore()
+      }
+      expect([await row(other.id), stored(other.url)]).toEqual([null, false])
+      expect([(await row(stuck.id))?.id, stored(stuck.url), (await row(stuckPicture.id))?.id, pictures.objects.has(stuckPicture.key)])
+        .toEqual([stuck.id, true, stuckPicture.id, true])
+      await expect(send(tab, [stuck.id])).rejects.toMatchObject({ code: 'ATTACHMENT_EXPIRED', status: 410 })
+      // Nobody else learns it existed: another member, or its owner from another Swarm, is refused as for an id that never was.
+      await invite(tab)
+      const never = await send(tab, ['0'.repeat(24)], peer).catch((error: unknown) => error as { code: string; message: string; status: number })
+      expect(never.code).toBe('ATTACHMENT_UNAVAILABLE')
+      const unknown = { code: never.code, message: never.message, status: never.status }
+      await expect(send(tab, [stuck.id], peer)).rejects.toMatchObject(unknown)
+      await expect(send((await fixture()).tab, [stuck.id])).rejects.toMatchObject(unknown)
+      await expect(useAvatar(tab, stuckPicture.id)).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+
+      await sweep()
+      expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
+    })
+
+    it('logs a failed delete by its code alone, never the stored file\'s address, name or link key', async () => {
+      const { tab } = await fixture()
+      const [offline, refused, odd] = [(await file(tab, 'offline-secret-plan.txt')).attachment, (await file(tab, 'refused-secret-plan.txt')).attachment,
+        (await file(tab, 'odd-secret-plan.txt')).attachment]
+      for (const id of [offline.id, refused.id, odd.id]) await aged(id, 25)
+      const keys = [offline, refused, odd].map(upload => objectKey(upload.url))
+      // As @google-cloud/storage fails: a network error's text is "request to <the object's address> failed" with a
+      // system code, a refused call's text names the object with an HTTP status code; some errors carry neither.
+      const address = (key: string) => `https://storage.googleapis.com/storage/v1/b/attachments/o/${encodeURIComponent(key)}`
+      const errors = new Map<string, Error>([
+        [keys[0], Object.assign(new Error(`request to ${address(keys[0])} failed, reason: socket hang up`), { code: 'ECONNRESET' })],
+        [keys[1], Object.assign(new Error(`Permission denied on attachments/${keys[1]}`), { code: 403 })],
+        [keys[2], new Error(`Could not reach ${address(keys[2])}`)],
+      ])
+      const chat = vi.spyOn(files, 'delete').mockImplementation(async (key: string) => { throw errors.get(key) ?? new Error('unexpected key') })
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) }
+      try {
+        expect(await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0, log })).toEqual({ removed: 0, failed: 3 })
+      } finally {
+        chat.mockRestore()
+      }
+      const text = JSON.stringify(said)
+      // Each key is <prefix>/<Swarm>/<link key>/<file name>; the link key alone opens the file on the CDN.
+      const linkKeys = keys.map(key => key.split('/').at(-2)!)
+      expect(linkKeys.every(linkKey => /^[0-9a-f]{32}$/.test(linkKey))).toBe(true)
+      for (const secret of [...keys, ...linkKeys, 'secret-plan', 'storage.googleapis.com', 'socket hang up', 'Permission denied']) expect(text).not.toContain(secret)
+      const line = '[attachment-sweep] could not remove a stored file; its row stays for the next run'
+      expect(said).toEqual(expect.arrayContaining([[line, { attachmentId: offline.id, code: 'ECONNRESET' }], [line, { attachmentId: refused.id, code: '403' }],
+        [line, { attachmentId: odd.id, code: 'unknown' }]]))
+      await sweep()
+      expect([await row(offline.id), await row(refused.id), await row(odd.id)]).toEqual([null, null, null])
+    })
+
+    it('runs a pass as the worker starts it, then hourly, and says once that it is on and what it removed', async () => {
+      const { tab } = await fixture()
+      const stale = (await file(tab, 'stale.txt')).attachment
+      await aged(stale.id, 25)
+      const said: unknown[] = []
+      const stop = startAttachmentSweepFrom(db, () => bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
+      try {
+        await vi.waitFor(async () => expect(await row(stale.id)).toBeNull())
+        expect(stored(stale.url)).toBe(false)
+        await vi.waitFor(() => expect(said).toContainEqual(['[attachment-sweep] pass', { removed: 1, failed: 0 }]))
+        expect(said.filter(line => (line as unknown[])[0] === '[attachment-sweep] on')).toEqual([['[attachment-sweep] on', { everyMinutes: 60 }]])
+      } finally {
+        stop()
+      }
+    })
+
+    it('says once when the worker has no bucket, and a settings error turns off only the sweep', async () => {
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(['info', ...line]), warn: (...line: unknown[]) => said.push(['warn', ...line]) }
+      const settings = { NODE_ENV: 'production', SUPER_TAB_ATTACHMENTS_BUCKET: '', SUPER_TAB_ATTACHMENTS_CREDENTIALS: '', SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs',
+        SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test', SUPER_TAB_AVATARS_BUCKET: '' }
+      startAttachmentSweepFrom(db, () => attachmentsFromEnv(settings), { log })()
+      expect(said).toEqual([['info', '[attachment-sweep] off: no attachments bucket is set (SUPER_TAB_ATTACHMENTS_BUCKET)']])
+      said.length = 0
+      // Settings the API would refuse too: the worker's other jobs still start, and the log says why the sweep did not.
+      const broken = { ...settings, SUPER_TAB_ATTACHMENTS_BUCKET: 'attachments', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'http://cdn.example.test' }
+      expect(() => attachmentsFromEnv(broken)).toThrow()
+      let stop: (() => void) | undefined
+      expect(() => { stop = startAttachmentSweepFrom(db, () => attachmentsFromEnv(broken), { log }) }).not.toThrow()
+      stop!()
+      expect(said).toEqual([['warn', '[attachment-sweep] off: the attachment settings are invalid',
+        { error: 'SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.' }]])
+    })
+
+    it('lets a send racing the sweep either take the file or be refused, never post a message linking a removed file', async () => {
+      const { tab } = await fixture()
+      // The sweep runs inside the send's transaction, after it read the file and just before it takes it. The send's
+      // write then conflicts, and its retry finds the file gone.
+      const late = (await file(tab, 'late.txt')).attachment
+      await aged(late.id, 25)
+      let attempts = 0
+      const racing = new SuperTabStore(new Proxy(db, { get(target, key, receiver) {
+        if (key !== '$transaction') return Reflect.get(target, key, receiver)
+        return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) => target.$transaction(tx => body(new Proxy(tx, { get(client, name, clientReceiver) {
+          const model = Reflect.get(client, name, clientReceiver)
+          if (name !== 'superTabAttachment') return model
+          return new Proxy(model, { get(delegate, method, delegateReceiver) {
+            const original = Reflect.get(delegate, method, delegateReceiver)
+            if (method !== 'updateMany') return original
+            return async (...args: unknown[]) => { if (!attempts++) await sweep(); return original.apply(delegate, args) }
+          } })
+        } }) as PrismaClient), options as never)
+      } }), Date.now, bucket)
+      await expect(racing.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'late',
+        replyTo: null, recipientIds: [], attachmentIds: [late.id] } })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+      expect(attempts).toBe(1)
+      expect([await row(late.id), stored(late.url)]).toEqual([null, false])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.attachments?.some(a => a.id === late.id))).toEqual([])
+
+      // The send commits after the sweep picked the file, before the sweep's claim: the claim checks again and leaves it.
+      const onTime = (await file(tab, 'on-time.txt')).attachment
+      await aged(onTime.id, 25)
+      let messageId = ''
+      const sentBeforeClaim = new Proxy(db, { get(target, key, receiver) {
+        const original = Reflect.get(target, key, receiver)
+        if (key !== '$runCommandRaw') return original
+        return async (command: Record<string, unknown>) => {
+          if ('update' in command && !messageId) messageId = String((await send(tab, [onTime.id])).result.messageId)
+          return original.call(target, command)
+        }
+      } })
+      await sweep(sentBeforeClaim)
+      expect(messageId).not.toBe('')
+      expect([(await row(onTime.id))?.usedBy, stored(onTime.url)]).toEqual([messageId, true])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(onTime)])
+    })
   })
 })
 
@@ -3668,7 +3949,12 @@ describe('machine removal', () => {
     const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
     const shown = await preview(host)
     expect(shown.statusCode, shown.body).toBe(200)
-    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], soleSourceProjects: [] })
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }],
+      soleSourceProjects: [] })
+    const current = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(current.statusCode, current.body).toBe(200)
+    expect(current.json().data).toEqual({ previewVersion: 2, blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 0 })
     expect((await preview(owner)).statusCode).toBe(403)
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
 
@@ -3684,6 +3970,49 @@ describe('machine removal', () => {
     expect(ack.statusCode, ack.body).toBe(200)
     expect(await cleanups(tab)).toEqual([])
     expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('the removal route counts an unreadable project and still refuses to remove its PM', async () => {
+    const tab = await contributed()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret Project', visibility: 'private', brief: '' })).result.projectId)
+    const taskConversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Secret Task', brief: '', checks: [] })).result.conversationId)
+    const state = await storedState(tab)
+    const project = state.projects!.find(item => item.id === projectId)!
+    const leadChat = state.conversations.find(item => item.id === project.leadConversationId)!
+    const taskChat = state.conversations.find(item => item.id === taskConversationId)!
+    const hostGeneration = state.people.find(person => person.id === host.sub)!.generation
+    const pmId = randomUUID(), workerId = randomUUID()
+    const makeAgent = (id: string, name: string): Agent => ({ id, projectId, machineId: 'test-host', harnessId: randomUUID(),
+      machineOwnerId: host.sub, contributorId: host.sub, membershipGeneration: hostGeneration, hostGrant: null, name,
+      configuration: config, configurationVersion: randomUUID() })
+    const pm = makeAgent(pmId, 'Secret PM'), worker = makeAgent(workerId, 'Secret Builder')
+    leadChat.leadId = pmId
+    leadChat.agentIds.push(pmId)
+    taskChat.agentIds.push(workerId)
+    project.repository = { machineId: 'test-host', cwd: '/secret/repository', repositoryUrl: null }
+    state.agents.push(pm, worker)
+    await saveState(tab, state)
+    await run(tab, { type: 'work.assign', conversationId: taskConversationId, agentId: workerId })
+
+    const legacy = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(legacy.statusCode, legacy.body).toBe(426)
+    expect(legacy.json().error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to remove this machine.' })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(legacy.body).not.toContain(unreadable)
+    }
+
+    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(shown.statusCode, shown.body).toBe(200)
+    expect(shown.json().data).toEqual({
+      previewVersion: 2, blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." }, agents: [], hiddenAgentCount: 2,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 1,
+    })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(JSON.stringify(shown.json().data)).not.toContain(unreadable)
+    }
+    await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).rejects.toMatchObject({
+      code: 'LEAD_PROTECTED', message: "A Product Manager of a project you can't see prevents this action.",
+    })
   })
 
   it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
@@ -3849,10 +4178,18 @@ describe('Lead mentions', () => {
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 
+  it('lists a person’s tag under the name they set, when they set one', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'member.name', name: 'The Boss' })
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
+      mentions: [peer.sub] })).result.messageId as string
+    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
+  })
+
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
     const { tab, group } = await tagged()
     await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Elsewhere.', replyTo: null, recipientIds: [] }, peer)
+    // A post elsewhere to the Lead who tagged them answers it too (superTabTagsClear.test.ts): not one here.
     expect(await list(tab, peer, 'waiting')).toHaveLength(1)
     await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
     expect(await list(tab, peer, 'waiting')).toEqual([])
@@ -4688,14 +5025,12 @@ describe('Swarm sweeps', () => {
       const previous = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion ?? null
       await run(tab, { type: 'agent.configuration', previousVersion: previous, configuration: { ...config, effort } }, host, agentId)
     }
-    const before = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     await run(tab, { type: 'agent.remove', agentId })
-    // Past the tombstone's 7 days: its record stays, compacted, and holds the version; nothing purges it.
+    const tombstone = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    expect(tombstone.deleted).toBe(true)
+    // Past the tombstone's 7 days it goes (agentTombstones.ts); the Swarm's agent floor keeps its version.
     await sweepSwarms(db, Date.now() + 8 * day)
-    const kept = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
-    expect(kept.deleted).toBe(true)
-    expect(kept.data).toEqual({})
-    expect(kept.version).toBeGreaterThan(before.version)
+    expect(await db.swarmAgent.findFirst({ where: { tabId: tab, key: agentId } })).toBeNull()
     await ensurePartExpiry(db)
     for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine']) {
       const indexes = await db.$runCommandRaw({ listIndexes: collection }) as { cursor: { firstBatch: Array<{ expireAfterSeconds?: number }> } }
@@ -4704,7 +5039,8 @@ describe('Swarm sweeps', () => {
     await add()
     const back = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     expect(back.deleted).toBe(false)
-    expect(back.version).toBeGreaterThan(kept.version)
+    // Above the tombstone a Desktop open all along last saw.
+    expect(back.version).toBeGreaterThan(tombstone.version)
     const history = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId }, orderBy: { revision: 'asc' } })
     expect(history.at(-1)!.configuration).toMatchObject({ effort: 'high' })
   })

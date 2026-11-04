@@ -7,7 +7,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
 import { retryTransient } from './retry.js'
@@ -141,11 +141,12 @@ export async function deriveLight(db: Db, view: CacheView, tabId: string, opts: 
   const awake = active.groups.map(projectLightGroup)
   const held = new Set(awake.map(g => g.key))
   const named = lightKeys(active.head, active.starts, { ...opts, groupIds }).filter(id => !held.has(id))
+  // Its agents' quiet conversations light, as the host rows read them: whole, one Lead's were 3.6 MB a read on prod (B4, #2597).
   const [byId, ...dormant] = await Promise.all([readLightGroups(db, view, tabId, named),
-    ...agentIds.map(id => view.get(tabId, `dormant:agent:${id}`, 'main',
-      () => store.loadGroups(db, tabId, 'agents', { agentIds: { $in: [id] }, dormant: true }), dormantAgentRule(id)))])
+    ...agentIds.map(id => view.get(tabId, `light-dormant:agent:${id}`, 'main',
+      () => store.loadLightGroups(db, tabId, 'agents', { agentIds: { $in: [id] }, dormant: true }), lightDormantAgentRule(id)))])
   const candidates = new Map(awake.map(g => [g.key, g]))
-  for (const g of [...byId, ...dormant.flat().map(projectLightGroup)]) if (!candidates.has(g.key)) candidates.set(g.key, g)
+  for (const g of [...byId, ...dormant.flat()]) if (!candidates.has(g.key)) candidates.set(g.key, g)
   // A machine's host state also lists every conversation of a project it has a start in (read/host.ts hostParts).
   const projectIds = machineId ? [...new Set(groupIds.flatMap(id => { const g = candidates.get(id); return g ? [g.data!.projectId ?? 'lead'] : [] }))]
     : opts.projectIds ?? []

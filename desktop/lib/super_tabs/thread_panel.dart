@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddy_sessions.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
+import 'day_pill.dart';
 import 'reply_box.dart';
 import 'controller.dart';
 import 'message_row.dart' show SuperTabMessageRow;
@@ -31,6 +32,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.outgoing,
     this.sessionActivity,
     this.machineName,
+    this.onScroll,
   });
 
   final SuperTabController controller;
@@ -48,6 +50,10 @@ class SuperTabThreadPanel extends StatefulWidget {
 
   /// A machine's name, said beside an agent `@` offers.
   final String Function(String machineId)? machineName;
+
+  /// Given the thread's list while the panel lives (null once it is gone),
+  /// so a device scrolling this Swarm scrolls the thread, not the chat.
+  final ValueChanged<ScrollController?>? onScroll;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -83,6 +89,14 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   SuperTabController get c => widget.controller;
 
+  /// [row] with its message's time, for the day pill over the list. Keyed
+  /// by the message, so the list keeps each row's place as replies arrive.
+  Widget _dated(SuperTabMessage message, Widget row) => SuperTabDayMark(
+    key: ValueKey('super-thread-day-${message.id}'),
+    time: message.createdAt,
+    child: row,
+  );
+
   /// The conversation this thread is in.
   String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
 
@@ -91,6 +105,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     super.initState();
     _focus.requestFocus();
     _scroll.addListener(_measureAfterFrame);
+    widget.onScroll?.call(_scroll);
   }
 
   @override
@@ -115,6 +130,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
+    widget.onScroll?.call(null);
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -379,74 +395,87 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
             Expanded(
               child: Stack(
                 children: [
-                  // As in the chat, a message's text can be selected and copied.
-                  SelectionArea(
-                    child: LaidOutListView(
-                      controller: _scroll,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: grid.AppDesktop.controlGap,
-                      ),
-                      children: [
-                        if (root != null) widget.row(root, false),
-                        if (count > 0)
-                          Padding(
-                            key: const ValueKey('super-thread-divider'),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: grid.AppDesktop.groupGap,
-                              vertical: grid.AppDesktop.controlGap,
+                  SuperTabStickyDay(
+                    pillKey: const ValueKey('super-thread-day-pill'),
+                    // As in the chat, a message's text can be selected and
+                    // copied.
+                    child: SelectionArea(
+                      child: LaidOutListView(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: grid.AppDesktop.controlGap,
+                        ),
+                        children: [
+                          if (root != null)
+                            _dated(root, widget.row(root, false)),
+                          if (count > 0)
+                            Padding(
+                              key: const ValueKey('super-thread-divider'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: grid.AppDesktop.groupGap,
+                                vertical: grid.AppDesktop.controlGap,
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    count == 1 ? '1 reply' : '$count replies',
+                                    style: DesktopChrome.metadata(),
+                                  ),
+                                  const SizedBox(
+                                    width: grid.AppDesktop.controlGap,
+                                  ),
+                                  Expanded(
+                                    child: Divider(
+                                      height: 1,
+                                      thickness: 1,
+                                      color: DesktopChrome.rim,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            child: Row(
-                              children: [
-                                Text(
-                                  count == 1 ? '1 reply' : '$count replies',
-                                  style: DesktopChrome.metadata(),
+                          if (c.hasEarlierReplies(widget.root))
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: grid.AppDesktop.controlGap,
                                 ),
-                                const SizedBox(
-                                  width: grid.AppDesktop.controlGap,
-                                ),
-                                Expanded(
-                                  child: Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: DesktopChrome.rim,
+                                child: TextButton(
+                                  key: const ValueKey('super-thread-earlier'),
+                                  onPressed: c.readingEarlierReplies
+                                      ? null
+                                      : () {
+                                          // They read on from where they are.
+                                          _scroll.holdPlace();
+                                          unawaited(
+                                            c.loadThread(earlier: true),
+                                          );
+                                        },
+                                  child: Text(
+                                    c.readingEarlierReplies
+                                        ? 'Loading earlier replies…'
+                                        : 'Show earlier replies',
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
-                        if (c.hasEarlierReplies(widget.root))
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: grid.AppDesktop.controlGap,
-                              ),
-                              child: TextButton(
-                                key: const ValueKey('super-thread-earlier'),
-                                onPressed: c.readingEarlierReplies
-                                    ? null
-                                    : () {
-                                        // They read on from where they are.
-                                        _scroll.holdPlace();
-                                        unawaited(c.loadThread(earlier: true));
-                                      },
-                                child: Text(
-                                  c.readingEarlierReplies
-                                      ? 'Loading earlier replies…'
-                                      : 'Show earlier replies',
-                                ),
                               ),
                             ),
-                          ),
-                        for (final (index, reply) in replies.indexed)
-                          widget.row(
-                            reply,
-                            index > 0 &&
-                                replies[index - 1].authorId == reply.authorId &&
-                                replies[index - 1].fromAgent == reply.fromAgent,
-                          ),
-                        for (final sent in pending) widget.outgoing(sent),
-                      ],
+                          for (final (index, reply) in replies.indexed)
+                            _dated(
+                              reply,
+                              widget.row(
+                                reply,
+                                index > 0 &&
+                                    SuperTabMessageRow.groupsWith(
+                                      reply,
+                                      replies[index - 1],
+                                      inThread: true,
+                                    ),
+                              ),
+                            ),
+                          for (final sent in pending) widget.outgoing(sent),
+                        ],
+                      ),
                     ),
                   ),
                   if (_away)

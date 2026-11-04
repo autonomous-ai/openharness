@@ -18,3 +18,12 @@ it('reads only the live window of marks and writes totals with $set, never $inc'
   })
   expect(JSON.stringify(db.productUsageTotal.upsert.mock.calls)).not.toContain('"x"')
 })
+
+it('reads the hosting mark and writes its total', async () => {
+  db.productUsageActivity.findMany.mockResolvedValue([
+    { subject: 'x', dayUtc: new Date('2026-10-12'), surfaces: [], worked: false, hosting: true, signupDay: new Date('2026-09-01'), staff: false },
+  ])
+  await rollupPeople(new Date('2026-10-14T05:00:00Z'))
+  expect(db.productUsageActivity.findMany.mock.calls[0][0].select).toMatchObject({ hosting: true })
+  expect(db.productUsageTotal.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: { dayUtc: new Date('2026-10-12'), metric: 'people_hosting', value: 1 } }))
+})

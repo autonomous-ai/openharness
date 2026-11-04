@@ -17,13 +17,14 @@ import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
+import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
 import { resetInboxReads } from '../src/superTabs/read/inbox.js'
 import { MAX_READ_THREADS, resetThreadsReads, TAGGED_THREADS, THREADS_READS, THREADS_WINDOW_MS } from '../src/superTabs/read/followedThreads.js'
 import type { Author, Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { stableId } from '../src/superTabs/model.js'
 import { THREAD_MARK_CAP, writeThreadFollow, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
@@ -115,11 +116,13 @@ const personAuthor = (u: AuthUser): Author => ({ kind: 'person', id: u.sub, name
 /** Rows stored as the store stores them: numbered after the chat's newest, the chat's counters moved as numberMessages moves
  *  them for rows people read (as superTabInbox.test.ts). */
 async function insert(tabId: string, conversationId: string, rows: Array<{ id?: string; text: string; author: Author; thread?: string | null;
-  source?: Record<string, unknown>; recipientIds?: string[]; mentions?: string[] }>) {
+  source?: Record<string, unknown>; recipientIds?: string[]; mentions?: string[]; buddySession?: boolean; buddyProject?: string }>) {
   const ids: string[] = []
   await swarmTransaction(db, async tx => {
     const current = (await parts.loadActive(tx, tabId, { groupIds: [conversationId] })).groups.find(g => g.key === conversationId)!
     const data = structuredClone(current.data!) as Conversation
+    const messages: Array<{ id: string; tabId: string; conversationId: string; sequence: number; author: never; text: string;
+      thread: string | null; recipientIds: string[]; mentions: string[]; source?: never; buddySession?: boolean; buddyProject?: string; createdAt: Date }> = []
     for (const row of rows) {
       const sequence = (data.messageSeq ?? 0) + 1
       const id = row.id ?? `m-${randomUUID()}`
@@ -130,9 +133,12 @@ async function insert(tabId: string, conversationId: string, rows: Array<{ id?: 
         data.lastActivityAt = new Date().toISOString()
         if (!row.thread || row.thread === id) data.lastMainSequence = sequence
       }
-      await tx.superTabMessage.create({ data: { id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
+      messages.push({ id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
         thread: row.thread === undefined ? id : row.thread, recipientIds: row.recipientIds ?? [], mentions: row.mentions ?? [],
-        ...(row.source ? { source: row.source as never } : {}), createdAt: new Date() } })
+        ...(row.source ? { source: row.source as never } : {}), ...(row.buddySession ? { buddySession: true } : {}), ...(row.buddyProject ? { buddyProject: row.buddyProject } : {}), createdAt: new Date() })
+    }
+    for (let offset = 0; offset < messages.length; offset += 500) {
+      await tx.superTabMessage.createMany({ data: messages.slice(offset, offset + 500) })
     }
     await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: conversationId, seen: current.version, data }, Date.now())
   })
@@ -409,6 +415,46 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(JSON.stringify(body.data)).not.toMatch(/Hidden|hidden-agent/)
   })
 
+  it('gives the same answer from the thread summaries as from the thread rows, a long thread\'s whole count included', async () => {
+    const s = await followScene()
+    // What a person never reads, as a reply and as a thread's newest row; a Lead's copy of a notice stays the Lead's.
+    await insert(s.tabId, s.web, [{ text: 'Hidden reply', author: agentAuthor('hidden-agent'), thread: s.followed, source: { kind: 'note', recipientsOnly: true },
+      recipientIds: [s.worker] }])
+    // A thread the person replied in long ago, then 150 replies of the worker's, read to its end.
+    const [long] = await insert(s.tabId, s.web, [{ text: 'Long', author: personAuthor(owner) }])
+    await insert(s.tabId, s.web, [{ text: 'Peer reply', author: personAuthor(peer), thread: long! },
+      ...Array.from({ length: 150 }, (_, i) => ({ text: `Worker ${i}`, author: agentAuthor(s.worker), thread: long! }))])
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    await markThread(s.tabId, s.web, long!, await newestIn(s.tabId, s.web), peer)
+    // An unread reply past the person's thread mark, in a thread they are tagged in: more, not a read thread.
+    await insert(s.tabId, s.web, [{ text: 'Past the mark', author: agentAuthor(s.worker), thread: s.tagged }])
+    const rows = (await threads(s.tabId, peer)).body.data
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    expect((await threads(s.tabId, peer)).body.data).toEqual(rows)
+    expect(roots(rows.read)).toEqual(['Long', 'Followed', 'Read'])
+    expect(roots(rows.unread)).toEqual(['Tagged', 'Unread'])
+    expect(rows.read[0]).toMatchObject({ rootId: long, replies: 151, lastReplier: { id: s.worker } })
+    expect(rows.read[1]).toMatchObject({ rootId: s.followed, replies: 1, lastReplier: { id: s.worker } })
+    expect(JSON.stringify(rows)).not.toMatch(/Hidden|hidden-agent/)
+  })
+
+  it('counts no reply of a project the person cannot read in their Swarm Buddy chat\'s thread, before and after its summaries', async () => {
+    let chat = ''
+    const s = await scene(f => f.edit(state => { chat = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.sub)!).id }))
+    const [root] = await insert(s.tabId, chat, [{ text: 'Buddy root', author: personAuthor(peer) }])
+    // The Secret project is its owner's alone: a session's reply of it stays in the chat, read by no one there now.
+    await insert(s.tabId, chat, [{ text: 'Buddy reply', author: agentAuthor('peer-buddy'), thread: root! },
+      { text: 'Secret session reply', author: agentAuthor('peer-session'), thread: root!, buddySession: true, buddyProject: s.secret }])
+    await markRead(s.tabId, chat, await newestIn(s.tabId, chat), peer)
+    await markThread(s.tabId, chat, root!, await newestIn(s.tabId, chat), peer)
+    const before = (await threads(s.tabId, peer)).body.data
+    expect(before.read).toMatchObject([{ rootId: root, replies: 1, lastReplier: { id: 'peer-buddy' } }])
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    expect((await threads(s.tabId, peer)).body.data).toEqual(before)
+  })
+
   it(`answers the ${MAX_READ_THREADS} read threads with the newest replies and says there are more`, async () => {
     const s = await scene()
     const many = await insert(s.tabId, s.web, Array.from({ length: MAX_READ_THREADS + 5 }, (_, i) => ({ text: `Root ${i}`, author: personAuthor(peer) })))
@@ -453,7 +499,8 @@ describe('a person\'s followed threads (GET /threads)', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('reads by index only and examines a bounded number of messages, whatever a thread\'s length', async () => {
+  /** Web: 70 roots of peer's, read to their ends in their threads; the first 10 hold 300 replies each, the rest one. */
+  async function longScene() {
     const s = await scene()
     const long = await insert(s.tabId, s.web, Array.from({ length: 70 }, (_, i) => ({ text: `Long root ${i}`, author: personAuthor(peer) })))
     for (let batch = 0; batch < 3; batch++) {
@@ -464,16 +511,26 @@ describe('a person\'s followed threads (GET /threads)', () => {
     // Read to their ends; the long threads' marks moved last, so they are among the candidates.
     const top = await newestIn(s.tabId, s.web)
     for (const root of long.toReversed()) await writeThreadMark(db, { tabId: s.tabId, personId: peer.sub, conversationId: s.web, threadId: root, sequence: top, now: Date.now() })
-    await threads(s.tabId, peer)
+    return { ...s, long }
+  }
+  /** One threads read under the profiler, after a warm read: its reply, and the operations each collection served. */
+  async function profiledThreads(tabId: string) {
+    await threads(tabId, peer)
     await db.$runCommandRaw({ profile: 0 })
     await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
     await db.$runCommandRaw({ create: 'system.profile', capped: true, size: 16 * 1024 * 1024 })
     await db.$runCommandRaw({ profile: 2, slowms: 0 })
     let reply: Awaited<ReturnType<typeof threads>>
-    try { reply = await threads(s.tabId, peer) } finally { await db.$runCommandRaw({ profile: 0 }) }
+    try { reply = await threads(tabId, peer) } finally { await db.$runCommandRaw({ profile: 0 }) }
     expect(reply.status).toBe(200)
     const rows = (await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [{ $match: { ns: { $not: { $regex: 'system\\.' } } } }, ...PROFILE_STAGES],
       cursor: {} }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }).cursor.firstBatch.map(profileEntry)
+    return { reply, rows }
+  }
+
+  it('reads by index only and examines a bounded number of messages, whatever a thread\'s length', async () => {
+    const s = await longScene()
+    const { reply, rows } = await profiledThreads(s.tabId)
     const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage'))
     expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
     for (const r of messages) expect(r.planSummary, JSON.stringify(r)).toMatch(/^IXSCAN/)
@@ -485,6 +542,23 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(reply.body.data.more).toBe(true)
     // A long thread's count stops at what the scan read.
     expect(reply.body.data.read.every((t: any) => t.replies <= 100)).toBe(true)
+  }, 120_000)
+
+  it('reads the candidates\' thread summaries, never their messages, once the Swarm\'s summaries are backfilled', async () => {
+    const s = await longScene()
+    await backfillThreads(db, Date.now())
+    const { reply, rows } = await profiledThreads(s.tabId)
+    const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+    expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+    // No message read by the thread index: the 70 roots by id, and the inbox's reads, which find nothing unread.
+    expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
+    expect(messages.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(70)
+    // The 60 candidates' summaries in one read by id, one small row each.
+    expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+    expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+    expect(summaries.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(60)
+    expect(reply.body.data.read).toHaveLength(MAX_READ_THREADS)
+    expect(reply.body.data.more).toBe(true)
   }, 120_000)
 })
 

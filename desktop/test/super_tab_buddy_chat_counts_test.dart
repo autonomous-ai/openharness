@@ -500,7 +500,7 @@ void main() {
           ),
           findsNothing,
         );
-        c.toggleProject('lead');
+        await c.select('lead');
         await tester.pumpAndSettle();
         expect(
           find.descendant(of: projectRow, matching: find.text('#')),
@@ -516,31 +516,6 @@ void main() {
         await close(tester, c);
       },
     );
-
-    testWidgets('shows a workgroup by its number in grey, with no #', (
-      tester,
-    ) async {
-      final server = riverSwarm();
-      (server.state['conversations'] as List).last['number'] = 196;
-      final c = await show(tester, server);
-      c.toggleProject('lead');
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('super-group-offline'));
-      final name = find.descendant(
-        of: row,
-        matching: find.text('196  Offline editing'),
-      );
-      expect(name, findsOne);
-      expect(
-        find.descendant(of: row, matching: find.textContaining('#')),
-        findsNothing,
-      );
-      final number =
-          (tester.widget<Text>(name).textSpan! as TextSpan).children!.first;
-      expect(number.toPlainText(), '196  ');
-      expect(number.style?.color, DesktopChrome.muted);
-      await close(tester, c);
-    });
 
     testWidgets(
       'the shortcut leaves Notifications for the chat, first opened or already selected',
@@ -565,7 +540,7 @@ void main() {
     );
 
     testWidgets(
-      'the header names a workgroup as the sidebar does: its number in grey, no #',
+      'the header names a workgroup by its number in grey, no #',
       (tester) async {
         final server = riverSwarm();
         (server.state['conversations'] as List).last['number'] = 196;
@@ -574,13 +549,12 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('#196 Offline editing'), findsNothing);
-        final names = find.text('196  Offline editing');
-        // The header's and the sidebar row's.
-        expect(names, findsNWidgets(2));
-        for (final name in tester.widgetList<Text>(names)) {
-          final number = (name.textSpan! as TextSpan).children!.first;
-          expect(number.style?.color, DesktopChrome.muted);
-        }
+        // The header's alone: the sidebar lists no tasks (task #2569).
+        final name = tester.widget<Text>(find.text('196  Offline editing'));
+        expect(
+          (name.textSpan! as TextSpan).children!.first.style?.color,
+          DesktopChrome.muted,
+        );
         await close(tester, c);
       },
     );
@@ -947,12 +921,10 @@ void main() {
         image.dispose();
       });
 
-      c.expandedProjects.clear();
       if (c.projectsGroupOpen) c.toggleProjectsGroup();
       await tester.pumpAndSettle();
       await shot('collapsed');
       c.toggleProjectsGroup();
-      c.toggleProject('lead');
       await tester.pumpAndSettle();
       await shot('expanded');
       await tester.pumpWidget(const SizedBox());

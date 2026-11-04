@@ -8,6 +8,7 @@ import { utcDayKey } from '../types/analytics.js'
 import { releaseBucket } from '../types/productHealthContract.js'
 import { markActivity, recordRelayUsage, type RelayUsageMetric } from './productUsage.js'
 import { prisma } from './prisma.js'
+import { logger } from '../utils/logger.js'
 
 export interface PresenceTouchOpts { isNewConnection: boolean; countryCode?: string }
 
@@ -31,9 +32,23 @@ export async function touchMachineOnlineDay(userId: string, machineId: string, n
     opts.isNewConnection ? recordRelayUsage(userId, now, 'relay_machine_connections') : undefined,
   ])
 }
-export async function recordTurnStarted(userId: string, _machineId: string, _agentId: string, now: Date): Promise<void> {
-  void markActivity(userId, now, { worked: true }).catch(() => {})
-  await recordRelayUsage(userId, now, 'relay_turns_started')
+/** Which daily mark a turn sets: `worked` is only the person's own sessions' turns; a Swarm agent's turn on their Mac is
+ *  `hosting` (Dee, 2026-11-04). A Swarm agent is found by its machine and current terminal, not its id: a rebound one keeps
+ *  the id of its first terminal (superTabs/commands.ts agent.rebind). A removed one, or a terminal one left, is only the
+ *  owner's session now. A Team account runs only Swarm agents, so its turns read nothing. */
+export async function turnMark(machineId: string, agentId: string, team: boolean): Promise<{ worked: true } | { hosting: true }> {
+  if (team) return { hosting: true }
+  // A plain $match: Prisma has no filter inside `data`. Reads only this machine's live agents ([machineId, deleted]).
+  const rows = await prisma.swarmAgent.aggregateRaw({ pipeline: [{ $match: { machineId, deleted: false, 'data.harnessId': agentId } }, { $limit: 1 }, { $project: { _id: 1 } }] }) as unknown as unknown[]
+  return rows.length ? { hosting: true } : { worked: true }
+}
+export async function recordTurnStarted(userId: string, machineId: string, agentId: string, now: Date, team = false): Promise<void> {
+  // Started together: a failed read costs this turn's mark, never its total. Neither mark when it cannot tell whose turn it is.
+  await Promise.all([
+    turnMark(machineId, agentId, team).then(mark => markActivity(userId, now, mark))
+      .catch(err => logger.warn('turn mark skipped: could not read whose turn it is; this turn counts in no person\'s day', { error: String(err) })),
+    recordRelayUsage(userId, now, 'relay_turns_started'),
+  ])
 }
 
 /** Last SUCCESSFUL presence write for one open socket — `dayKey` null until the first one lands. */

@@ -100,6 +100,13 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
   return row?.finishedAt ? { ...fields, finishedAt: row.finishedAt } : fields
 }
 
+/** Where an agent added with no tombstone starts above: the highest version of its Swarm's purged agent tombstones
+ *  (agentTombstones.ts), 0 before any. A client that saw a purged tombstone's version takes the agent again (D6). */
+async function agentFloor(tx: Transaction, tabId: string): Promise<number> {
+  const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') }, select: { agentFloor: true } })
+  return head?.agentFloor ?? 0
+}
+
 /**
  * Writes one part inside the command's transaction, guarded by the version it was read at (design section 3.2). The
  * guard checks the committed version at write time, so it holds whatever the transaction's read concern: a part another
@@ -123,7 +130,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
-    const version = write.first ?? 1
+    const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await agentFloor(tx, tabId) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
       data: json(write.data), ...fields } })
     return version

@@ -13,6 +13,7 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
+import { HeldParts } from '../src/superTabs/parts/held.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
@@ -182,6 +183,23 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectIndexed(reads)
     // Its working worker's private chats are read through that worker's conversations: here only its running one.
     expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
+  })
+
+  it('a machine\'s next report reads its conversations\' columns through the same indexes, and whole only those that changed (B3)', async () => {
+    const held = new HeldParts()
+    const observed = () => db.$transaction(tx => parts.loadObserved(tx, s.tabId, s.machineId, held))
+    const groups = (await observed()).groups.map(g => g.key)
+    const quiet = await profiled(observed)
+    expectIndexed(quiet)
+    // No more examined than a whole read examines, and no conversation read whole: nothing changed.
+    expect(quiet.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(quiet)).toBeLessThanOrEqual(groups.length + 1)
+    expect(where(quiet, ['key']).filter(r => !mentions(r.shape, 'dormant'))).toEqual([])
+    await db.swarmGroup.update({ where: { id: `${s.tabId}:${s.web}` }, data: { version: { increment: 1 }, changedAt: new Date() } })
+    const changed = await profiled(observed)
+    expectIndexed(changed)
+    // The changed one alone, by key.
+    const whole = changed.filter(r => r.bytes > 0 && mentions(r.shape, 'key') && !mentions(r.shape, 'dormant'))
+    expect(whole.map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { tabId: 1, key: 1 }'], 1]])
   })
 
   it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {

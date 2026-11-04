@@ -179,6 +179,12 @@ describe('aggregate ingestion', () => {
     expect(await queued).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED', enabled: false, revision: 1 })
     expect(receipts()).toEqual(['receipt-1'])
   })
+  // Prisma sends an empty list as `$or: []`: 4.1 s through all 5.1 M receipts, inside this transaction (prod slow log, 2026-11-04).
+  it('reads no receipts when every report of a batch is refused', async () => {
+    choices({ userId: 'a', enabled: false, revision: 1 })
+    expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
+    expect(db.productUsageReceipt.findMany).not.toHaveBeenCalled()
+  })
   it('reports that arrive while a batch commits share the next transaction, with their totals summed', async () => {
     const gate = deferred()
     db.$transaction.mockImplementationOnce(async fn => { await gate.promise; return fn(db) })
@@ -634,6 +640,25 @@ describe('activity marks', () => {
     for (let i = 0; i < 3; i++) await markActivity('a', at, { worked: true }, KEY)
     expect(db.productUsageActivity.upsert).toHaveBeenCalledTimes(3)
     expect(db.productUsageActivity.upsert.mock.calls[2][0].update).toEqual({ worked: true })
+  })
+
+  it('writes a hosting mark on the same row, apart from worked, leaving worked unset', async () => {
+    await markActivity('a', at, { hosting: true }, KEY)
+    const call = db.productUsageActivity.upsert.mock.calls[0][0]
+    expect(call.update).toEqual({ hosting: true })
+    expect(call.create).toMatchObject({ hosting: true, worked: false, surfaces: [] })
+  })
+
+  it('writes both marks for a person with both kinds of turn in a day, each once', async () => {
+    for (let i = 0; i < 2; i++) await markActivity('a', at, { hosting: true }, KEY)
+    for (let i = 0; i < 2; i++) await markActivity('a', at, { worked: true }, KEY)
+    expect(db.productUsageActivity.upsert.mock.calls.map(c => c[0].update)).toEqual([{ hosting: true }, { worked: true }])
+  })
+
+  it('writes no hosting mark while sharing is off', async () => {
+    db.productUsagePreference.findUnique.mockResolvedValue({ enabled: false, revision: 3 })
+    await markActivity('a', at, { hosting: true }, KEY)
+    expect(db.productUsageActivity.upsert).not.toHaveBeenCalled()
   })
 
   it('starts a new day at UTC midnight', async () => {

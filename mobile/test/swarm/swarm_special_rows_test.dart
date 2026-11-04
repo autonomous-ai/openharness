@@ -4,7 +4,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_thread_page.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../voice_fakes.dart';
@@ -290,7 +289,8 @@ void main() {
   });
 
   group('a proposal', () {
-    // A message from threads on roots its own thread.
+    // A Buddy's proposal from before plain chat (#2294): its whole text, from
+    // the Buddy, rooting its own thread.
     Map<String, dynamic> proposal() => {
       ...row(
         'p1',
@@ -302,37 +302,38 @@ void main() {
       'thread': 'p1',
     };
 
-    testWidgets('is one line, named by its goal, with no author', (
+    testWidgets('reads whole as an ordinary message from its author', (
       tester,
     ) async {
       await show(tester, backend([proposal()]));
-      expect(textOf(tester, 'p1'), contains(': Activity read fix'));
-      expect(textOf(tester, 'p1'), contains('Proposal from '));
-      expect(textOf(tester, 'p1'), isNot(contains('Changes: more words')));
-      expect(inRow('p1', find.text('Buddy')), findsNothing);
+      expect(textOf(tester, 'p1'), contains('Changes: more words'));
+      expect(textOf(tester, 'p1'), isNot(contains('Proposal from ')));
+      expect(inRow('p1', find.text('Buddy')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-proposal-label')), findsNothing);
     });
 
-    testWidgets('opens its thread, where it reads whole and says for whom', (
-      tester,
-    ) async {
-      final fake = backend([proposal()]);
-      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
-          (_) => {
-            'messages': [proposal()],
-            'threads': <Object>[],
-            'next': null,
-          };
-      await show(tester, fake);
-      await tester.tap(find.byKey(const ValueKey('swarm-message-p1')));
-      await tester.pumpAndSettle();
-      expect(find.byType(SwarmThreadPage), findsOneWidget);
-      expect(find.textContaining('on '), findsWidgets);
-      expect(
-        find.byKey(const ValueKey('swarm-proposal-label')),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Changes: more words'), findsOneWidget);
-    });
+    testWidgets(
+      'a plain root names no proposal and opens its thread as any message does',
+      (tester) async {
+        final root = {
+          ...row('p2', 2, "Let's build: Activity read fix", {
+            'kind': 'buddy-proposal',
+            'personId': me,
+            'buddyId': 'buddy-1',
+          }),
+          'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+          'thread': 'p2',
+        };
+        await show(tester, backend([root]));
+        expect(textOf(tester, 'p2'), contains('Activity read fix'));
+        expect(textOf(tester, 'p2'), isNot(contains("Let's build")));
+        expect(textOf(tester, 'p2'), isNot(contains('Proposal from ')));
+        expect(
+          find.byKey(const ValueKey('swarm-proposal-label')),
+          findsNothing,
+        );
+      },
+    );
   });
 
   group('an ordinary message says', () {

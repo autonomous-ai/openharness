@@ -5,7 +5,7 @@ import { readBy } from './parts/indexed.js'
 import type { SuperTabState } from './model.js'
 import { attemptChanges, endRun, startRun, type RouteRun } from './costs/attempts.js'
 import type { TokensByModel } from './costs/tokens.js'
-import { finalMatches, type RouteDecision, type RouteDecisionEffect, type RouteFinal, type RouteOverride, type RouteRecord } from './routeRecord.js'
+import { finalMatches, readRecord, storedRecord, type RouteDecision, type RouteDecisionEffect, type RouteFinal, type RouteOverride, type RouteRecord } from './routeRecord.js'
 
 type Tx = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -14,7 +14,7 @@ const open: Prisma.SuperTabRouteDecisionWhereInput = { OR: [{ outcome: null }, {
 export const RETENTION_MS = 90 * 24 * 60 * 60_000
 
 export const decisionOf = (row: SuperTabRouteDecision): RouteDecision => ({
-  id: row.id, conversationId: row.conversationId, record: row.record as unknown as RouteRecord,
+  id: row.id, conversationId: row.conversationId, record: readRecord(row.record as unknown as RouteRecord),
   final: (row.final ?? null) as unknown as RouteFinal | null, override: (row.override ?? null) as unknown as RouteOverride | null,
   assignmentId: row.assignmentId, outcome: row.outcome, run: (row.run ?? null) as unknown as RouteRun | null,
 })
@@ -73,7 +73,7 @@ export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDec
       if (unusedIds.length) await tx.superTabRouteDecision.updateMany({ where: { tabId, conversationId: effect.conversationId,
         id: { in: unusedIds }, ...open }, data: { outcome: 'superseded', outcomeAt: new Date(now) } })
       await tx.superTabRouteDecision.create({ data: { id: effect.id, tabId, conversationId: effect.conversationId,
-        record: json(effect.record), createdAt: new Date(now) } })
+        record: json(storedRecord(effect.record)), createdAt: new Date(now) } })
       await tx.superTabRouteDecision.deleteMany({ where: { tabId, createdAt: { lt: new Date(now - RETENTION_MS) } } })
     } else if (effect.op === 'override') {
       await tx.superTabRouteDecision.update({ where: { id: effect.id }, data: { override: json(effect.override) } })

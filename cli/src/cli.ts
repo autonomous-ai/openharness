@@ -185,6 +185,8 @@ Machine:
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
+  harness swarm [list|status|machines|agents|starts]
+                               the Swarm as you read it: people, machines, agents, starts
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -3108,6 +3110,27 @@ switch (cmd) {
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
+  case 'swarm':
+    import('./swarm/command.js')
+      .then(({ swarmCommand }) => swarmCommand(rest, {
+        out: (line) => console.log(line),
+        err: (line) => console.error(line),
+        auth: controlPlaneAuth,
+        get: (path, headers) => requestJson('GET', path, undefined, headers),
+      }, flags.includes('--json')))
+      .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'team':
+    // `team ps`: the harnesses of the account's Harness Team machine, which plain `ps` hides (they belong to another
+    // account on this computer): the same read, with --machine already named (headless run, 2026-11-03).
+    if (rest[0] === 'ps') {
+      usableMachines().then(async (machines) => {
+        const team = machines.find((machine) => machine.label.endsWith('· Team'))
+        if (!team) { console.error('No Harness Team account on this account yet: harness team setup makes one.'); return 1 }
+        return psCommand(['--machine', team.label, '--all', ...rest.slice(1)], { machines: async () => machines })
+      }).then((code) => { process.exitCode = code }).catch(onError)
+      break
+    }
   case 'team':
     // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
     // new one; `launch` prints its status block and exits, so it is always the last step.
