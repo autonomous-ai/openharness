@@ -41,6 +41,7 @@
     "integration/superTabLiveness.test.ts": 105300,
     "integration/superTabMachineNames.test.ts": 1500,
     "integration/superTabMachineRemovals.test.ts": 900,
+    "integration/superTabMachineLiveness.test.ts": 3000,
     "integration/superTabMachineReports.test.ts": 20300,
     "integration/superTabDigestHour.test.ts": 1500,
     "integration/superTabMessagePages.test.ts": 1500,

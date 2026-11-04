@@ -159,6 +159,11 @@ export interface FirstLoad extends ReadMeta {
 export type Changes = ChangesReload | ChangesDelta
 /** Drop the store and do a first load: bad or old cursor, another epoch, or older than tombstones are kept. */
 export interface ChangesReload { reload: true }
+/** A machine's own reading, as one line, for a client that asked (`machines=light`): when it last reported, from which it works out
+ *  online or offline as it does from a part. The rest of the reading is read on demand (MachineReadings). */
+export interface MachineReading { key: string; version: number; receivedAt: number }
+/** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
+export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
   reload: false
   head: LivePart<HeadView> | null
@@ -166,6 +171,8 @@ export interface ChangesDelta extends ReadMeta {
   agents: PartChange<AgentView>[]
   groups: GroupChange[]
   machines: PartChange<MachineView>[]
+  /** Only for a client that asked: machines whose reading alone moved, which `machines` then leaves out. */
+  machineReadings?: MachineReading[]
   starts: PartChange<StartView>[]
   progress: PartChange<ProgressView>[]
   derived: Derived

@@ -23,7 +23,8 @@ export interface HeadColumns { groupCounter: number; visibilityEpoch: number; se
 export type PartWrite =
   /** `first`: a new key's version, the Swarm's sequence base + 1 (design section 2.1). */
   | { op: 'insert'; kind: PartKind; key: string; data: unknown; ordinal: number; first?: number; head?: HeadColumns; host?: HostColumns }
-  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns; host?: HostColumns }
+  /** `content`: a machine's own reading that changed more than its volatile fields (commit.ts machineContentChanged). */
+  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns; host?: HostColumns; content?: true }
   | { op: 'remove'; kind: PartKind; key: string; seen: number; data: unknown; host?: HostColumns }
   | { op: 'touch'; kind: PartKind; key: string; seen: number }
 
@@ -137,7 +138,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
   }
   const data = write.op === 'touch' ? {}
     : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
-    : { ...reading ? { readAt: new Date(stamp) } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
+    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
       ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)

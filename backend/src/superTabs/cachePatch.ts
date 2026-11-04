@@ -25,10 +25,10 @@ export interface PatchRule<T> {
   comparable?(patched: T, fresh: T): [unknown, unknown]
 }
 
-/** A changed part as a load would have given it: a change read adds `readAt`, which no load carries. */
+/** A changed part as a load would have given it: a change read adds `readAt` and `contentAt`, which no load carries. */
 function asLoaded<T>(changed: Part): Part<T> {
-  if (changed.readAt === undefined) return changed as Part<T>
-  const { readAt: _readAt, ...loaded } = changed
+  if (changed.readAt === undefined && changed.contentAt === undefined) return changed as Part<T>
+  const { readAt: _readAt, contentAt: _contentAt, ...loaded } = changed
   return loaded as Part<T>
 }
 
