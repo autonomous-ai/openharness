@@ -72,8 +72,8 @@ export function writtenNameOf(state: SuperTabState, id: string): string | undefi
 /** A message's author as an agent reads it: a person by their username and the name they show, never by the email their
  *  stored row names them with, which agents copied into commands and pull requests until a machine's privacy hook stopped
  *  their sessions (task #2954, Ken 11-04). Someone who left reads as "a person". People's apps keep the stored row, which
- *  they match to a person (Desktop superTabPersonName). [names] is `swarmUsernames(state)`, worked out once per read. */
-export function authorForAgent<T extends Pick<Author, 'kind' | 'id'>>(state: SuperTabState, author: T, names: ReadonlyMap<string, string>): T {
+ *  they match to a person (Desktop superTabPersonName). [names] is `lazyUsernames(state)`, made once per read. */
+export function authorForAgent<T extends Pick<Author, 'kind' | 'id'>>(state: SuperTabState, author: T, names: Usernames): T {
   if (author.kind !== 'person') return author
   const name = names.get(author.id) ?? 'a person'
   return { ...author, name, displayName: agentReadName(state.people.find(p => p.id === author.id)?.name) ?? name }
@@ -92,7 +92,7 @@ const personAuthor = (value: unknown): value is Author => !!value && typeof valu
 export const namesPerson = (row: Row): boolean => personAuthor(row.author) || personAuthor((row.source as { operator?: unknown } | null)?.operator)
 /** A stored row as an agent reads it (authorForAgent): its author and, for input someone typed into an agent's terminal, its
  *  operator by name. */
-export function rowForAgent<T extends Row>(state: SuperTabState, names: ReadonlyMap<string, string>, row: T): T {
+export function rowForAgent<T extends Row>(state: SuperTabState, names: Usernames, row: T): T {
   const source = row.source as { kind?: unknown; operator?: unknown } | null | undefined
   const operator = source?.operator
   return {
@@ -100,4 +100,14 @@ export function rowForAgent<T extends Row>(state: SuperTabState, names: Readonly
     ...personAuthor(row.author) ? { author: authorForAgent(state, row.author, names) } : {},
     ...source && personAuthor(operator) ? { source: { ...source, operator: authorForAgent(state, operator, names) } } : {},
   }
+}
+
+/** Usernames by person id, as `swarmUsernames` gives them. */
+export type Usernames = Pick<ReadonlyMap<string, string>, 'get'>
+/** `swarmUsernames(state)`, worked out only for a person with no stored username: a stored one is final (usernames.ts), and
+ *  working out every default names every agent too, about 0.25 ms for today's 40 people and 40 agents and 7.5 ms at ten
+ *  times that, on each claim and page an agent reads (task #2954). */
+export function lazyUsernames(state: SuperTabState): Usernames {
+  let all: Map<string, string> | undefined
+  return { get: id => state.people.find(p => p.id === id)?.username ?? (all ??= swarmUsernames(state)).get(id) }
 }

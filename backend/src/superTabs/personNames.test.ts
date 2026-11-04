@@ -4,7 +4,7 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { authorForAgent, MAX_NAME_LENGTH, namesPerson, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, MAX_NAME_LENGTH, namesPerson, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
@@ -198,6 +198,14 @@ describe('a person author as an agent reads it', () => {
     f.setName(relay.email)
     expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state)))
       .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'wkpnjjhbnm', membershipGeneration: 'g' })
+  })
+
+  it('reads every username as swarmUsernames gives it, working them out only for one not stored', () => {
+    const f = fixture()
+    f.run({ type: 'member.username', username: 'minh' }, relay)
+    const lazy = lazyUsernames(f.state), all = swarmUsernames(f.state)
+    for (const p of f.state.people) expect(lazy.get(p.id), p.id).toBe(all.get(p.id))
+    expect(lazy.get('gone')).toBeUndefined()
   })
 
   it('names someone who left as a person, and leaves an agent author as it is', () => {

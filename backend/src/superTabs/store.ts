@@ -1,8 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
-import { authorForAgent, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
-import { swarmUsernames } from './usernames.js'
+import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -2997,7 +2996,7 @@ export class SuperTabStore {
     const summaries = counted.length ? threadSummaries(state, group, counted) : []
     // An agent reads people by name, never email (task #2954): the usernames are worked out only for a read that has a person.
     const names = actor.kind === 'agent' && (page.some(namesPerson) || summaries.some(t => t.authors.some(a => a.kind === 'person')))
-      ? swarmUsernames(state) : null
+      ? lazyUsernames(state) : null
     const named = names ? summaries.map(t => ({ ...t, authors: t.authors.map(a => authorForAgent(state, a, names)) })) : summaries
     const threads = buddy ? named.map(t => ({ ...t, authors: t.authors.map(authorForBuddy) })) : named
     // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115), and
@@ -3049,7 +3048,7 @@ export class SuperTabStore {
       take: 50, select: { id: true, sequence: true, text: true, author: true, createdAt: true, thread: true, alsoInChat: true, buddySession: true, source: true, recipientIds: true, buddyProject: true } })
     const main = rows.filter(r => !r.buddySession && (!r.thread || r.thread === r.id || r.alsoInChat) && rowRead(r))
     // A Buddy is an agent: it reads people by name, never email (task #2954).
-    const names = main.some(namesPerson) ? swarmUsernames(state) : new Map<string, string>()
+    const names = lazyUsernames(state)
     return sessionContext(main.map(r => ({ ...r, author: authorForAgent(state, r.author as unknown as Author, names) as ContextRow['author'] })))
   }
 
@@ -4072,7 +4071,7 @@ export class SuperTabStore {
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
       // An agent reads people by name, never email (task #2954).
-      const named = row && namesPerson(row) ? rowForAgent(state, swarmUsernames(state), row) : row
+      const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row
       const shown = named && isBuddy(target) ? rowForBuddy(named) : named
       // A voice message reaches an agent as its words, marked as one (voiceMessages.ts); people hear the clip.
       const message = shown && { ...shown, text: agentText(shown.text, shown.attachments) }
