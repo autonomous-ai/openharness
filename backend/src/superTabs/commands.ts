@@ -471,6 +471,8 @@ export interface CommandContext {
   /** The files `message.send` or `buddy.propose` names, each checked by the store: uploaded by this actor to this conversation and
    *  unused, or for a proposal, sent there by its Buddy's owner (store.ts proposable). */
   attachments?: Attachment[]
+  /** The words of each voice message's file among [attachments], by its id, read by the store (store.ts readVoice). */
+  voiceWords?: Record<string, string>
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
   /** The message `message.react` names, read by the store (reactions.ts). */
@@ -2984,6 +2986,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
+      const voice = attachments.find(a => a.voice)
+      if (voice && (attachments.length > 1 || command.text || command.mentions?.length)) {
+        fail('VOICE_ALONE', 'Send a voice message on its own, without text, tags or other files.', 400)
+      }
       // The text is where tags live, as people tag in chat: each name it says tags that person, if they may read here. A tag
       // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
       // shows the same words. Only from the command, so a retry writes the same text.
@@ -2992,7 +2999,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
       const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
-      const text = withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
+      const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)

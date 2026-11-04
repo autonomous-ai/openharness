@@ -8,7 +8,7 @@ import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage }
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
 import { wavDurationMs } from '../lib/wav.js'
-import { MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
+import { MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import { githubRepository } from '../github/repository.js'
@@ -1626,7 +1626,7 @@ export class SuperTabStore {
       // stays with that message, and a proposal may carry one its Buddy's owner sent in their chat.
       let claimed: string[] = [], proposed: string[] = []
       if (command.type === 'message.send' && command.attachmentIds?.length) {
-        context.attachments = await this.sendable(tx, tabId, actor, command)
+        ({ attachments: context.attachments, voiceWords: context.voiceWords } = await this.sendable(tx, tabId, actor, command))
         claimed = context.attachments.map(a => a.id)
       }
       if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
@@ -2299,19 +2299,23 @@ export class SuperTabStore {
     return { state, actor }
   }
 
-  private async sendable(tx: Transaction, tabId: string, actor: Actor, command: SendCommand): Promise<Attachment[]> {
+  private async sendable(tx: Transaction, tabId: string, actor: Actor, command: SendCommand): Promise<{ attachments: Attachment[]; voiceWords: Record<string, string> }> {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
     const ids = [...new Set(command.attachmentIds)]
     const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
-    return ids.map(id => {
+    const voiceWords: Record<string, string> = {}
+    return { voiceWords, attachments: ids.map(id => {
       const row = rows.find(r => r.id === id)
       if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
       if (row.usedBy === EXPIRED_UPLOAD) fail('ATTACHMENT_EXPIRED', 'This file was not sent within a day and was removed. Attach it again.', 410)
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
-      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
-    })
+      const voice = voiceFacts(row.voice)
+      if (!voice && row.voiceSince) fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
+      if (voice) voiceWords[row.id] = voiceTranscript(row.voice)
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {} }
+    }) }
   }
 
   /**
