@@ -214,6 +214,8 @@ export type QueryStatsOptions = {
   top?: { bytes: number; count: number; ms: number }
   log?: (message: string, context: Record<string, unknown>) => void
   warn?: (message: string, context: Record<string, unknown>) => void
+  /** Every route's totals of the window, before the line's top-40 cut: the counters and the last hour (lib/metrics.ts). */
+  onWindow?: (routes: ReadonlyMap<string, { n: number; ms: number; docs: number; bytes: number }>) => void
 }
 
 export type QueryStats = {
@@ -225,7 +227,7 @@ export type QueryStats = {
 const OTHER = 'other'
 
 export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs = 200, slowPerWindow = 20, maxKeys = 1000, sampleEvery = 8, byteBudget = BYTE_BUDGET,
-  top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c) }: QueryStatsOptions = {}): QueryStats {
+  top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c), onWindow }: QueryStatsOptions = {}): QueryStats {
   let entries = new Map<string, Entry>()
   let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, bytesCapped = 0, started = performance.now()
 
@@ -282,6 +284,8 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
       if (!total) routes.set(r.route, total = { n: 0, ms: 0, docs: 0, bytes: 0, ops: {} })
       total.n += r.n; total.ms += r.ms; total.docs += r.docs; total.bytes += r.bytes; total.ops[r.op] = (total.ops[r.op] ?? 0) + r.n
     }
+    // A failure here must cost the counters, not the line, nor the timer (an exception there would end the process).
+    try { onWindow?.(routes) } catch (error) { warn('query stats window failed', { error: error instanceof Error ? error.message : String(error) }) }
     const byRoute = Object.fromEntries([...routes].sort((a, b) => b[1].ms - a[1].ms).slice(0, 40).map(([route, t]) =>
       [route, { ...t, ops: Object.fromEntries(Object.entries(t.ops).sort((a, b) => b[1] - a[1]).slice(0, 12)) }]))
     log('db by shape', { pod, windowMs: Math.round(performance.now() - started), queries: sum(r => r.n), ms: sum(r => r.ms), docs: sum(r => r.docs),

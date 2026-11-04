@@ -20,6 +20,7 @@ import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { metrics, metricsAddress, registerRequestMetrics, startMetricsServer } from './lib/metrics.js'
+import { startLastHour } from './lib/lastHour.js'
 import { WORKER_INDEX } from './lib/instance.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
@@ -152,13 +153,16 @@ async function start(): Promise<void> {
   // Every request is named by its route pattern before any hook reads the database, so its queries count for it.
   registerWorkContext(app)
   // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
-  selfProfileFromEnv(app)
+  selfProfileFromEnv(app, process.env, { onWindow: busy => metrics.busyWindow(busy) })
   // Always on, every minute: process CPU by thread (main, Prisma engine, libuv pool, V8 workers), GC pauses and reply JSON.
   // Before any route is added, so every route's object replies are timed (lib/cpuStats.ts).
   const cpuStats = startCpuStats()
   registerReplyJsonTiming(app, cpuStats)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
-  const stopQueryStats = startQueryStats()
+  const stopQueryStats = startQueryStats({ onWindow: routes => metrics.dbWindow(routes) })
+  // Always on, every minute: `last hour`, the sums of the last 60 minutes the production scan reads from a log tail
+  // (lib/lastHour.ts, task #2957).
+  const stopLastHour = startLastHour(metrics.hour)
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
   const stopRetryStats = startRetryStats()
   // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
@@ -264,6 +268,7 @@ async function start(): Promise<void> {
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
       // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
+      stopLastHour()
       stopRetryStats()
       stopDeliveryCalls()
       stopCacheStats()
