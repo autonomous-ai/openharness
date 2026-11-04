@@ -29,7 +29,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
@@ -206,15 +206,17 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { conversationId: first, messageId: second })
   }
   else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
-    let replyTo: string | null = null
+    let replyTo: string | null = null, answers: string | null = null
     const attach: string[] = [], mentions: string[] = [], to: string[] = []
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
-      if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
-      // The agents it reaches, any agent of this project; with none, an agent's post reaches the PM (project instructions).
+      if (flag === '--reply-to' && identifier(value) && replyTo === null && answers === null) replyTo = value
+      // The answer right below a message, in the main flow (task #2929); a reply to it goes in its thread.
+      else if (flag === '--answers' && identifier(value) && answers === null && replyTo === null) answers = value
+      // The agents it reaches, any agent of this project; the server adds @Name, a reply's author and a task's assignee (#2963).
       else if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
-      // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).
+      // A person's id, username or display name (an email from older callers), as written; the service maps it (task #2954).
       else if (flag === '--mention' && value?.trim()) mentions.push(value.trim())
       else throw usageError()
     }
@@ -223,7 +225,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     // A screenshot or a log may go without words.
     if (!text.trim() && !attach.length) throw usageError()
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
-      command: { type: 'message.send', conversationId: first, text, replyTo, recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
+      command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
     && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
     // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.

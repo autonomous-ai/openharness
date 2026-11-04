@@ -28,14 +28,21 @@ bool get _onWindows => defaultTargetPlatform == TargetPlatform.windows;
 /// dialog read the same state, so a pairing shows up in the list the moment the CLI confirms it.
 /// The CLI keeps the trust and the connection; nothing here holds a code longer than one request.
 class WifiRobotsController extends ChangeNotifier {
-  WifiRobotsController({AutonomousDeviceCli? cli, this.onLocalNetworkBlocked})
-    : _injected = cli,
-      // Tests may inject a fake; without one under test nothing may reach a real CLI.
-      _inert = kUnderTest && cli == null;
+  WifiRobotsController({
+    AutonomousDeviceCli? cli,
+    this.onLocalNetworkBlocked,
+    Duration? refreshEvery,
+  }) : _injected = cli,
+       // Tests may inject a fake; without one under test nothing may reach a real CLI.
+       _inert = kUnderTest && cli == null,
+       // Under test no background clock runs unless the test asks for one (with its fake).
+       _every =
+           refreshEvery ?? (kUnderTest ? null : const Duration(seconds: 60));
 
   final AutonomousDeviceCli? _injected;
   late final AutonomousDeviceCli _cli = _injected ?? AutonomousDeviceCli();
   final bool _inert;
+  final Duration? _every;
 
   /// Discovery found the local network refused: the app restarts a daemon it did not launch so it
   /// gets the app's permission (AppNotifier.localNetworkBlocked).
@@ -43,6 +50,22 @@ class WifiRobotsController extends ChangeNotifier {
 
   Timer? _timer;
   bool _started = false, _refreshing = false, _disposed = false;
+  bool _seen = true;
+
+  /// Whether the robots can be seen, set by the screen that lists them (its `VisibleTick`).
+  /// While they cannot, the CLI is not asked; when they can again, once at once, then every
+  /// minute.
+  bool get seen => _seen;
+  set seen(bool seen) {
+    if (seen == _seen) return;
+    _seen = seen;
+    _timer?.cancel();
+    _timer = null;
+    if (seen && _started && _every != null && !unsupported && !busy) {
+      unawaited(refresh());
+    }
+  }
+
   int _generation = 0;
 
   bool loading = true;
@@ -84,10 +107,9 @@ class WifiRobotsController extends ChangeNotifier {
 
   void _scheduleRefresh() {
     _timer?.cancel();
-    // Tests may inject a fake for the initial fetch and user actions, but must
-    // never start a background clock or invoke a real CLI.
-    if (_disposed || kUnderTest || unsupported || busy) return;
-    _timer = Timer(const Duration(seconds: 60), () => unawaited(refresh()));
+    final every = _every;
+    if (_disposed || every == null || !_seen || unsupported || busy) return;
+    _timer = Timer(every, () => unawaited(refresh()));
   }
 
   String _message(Object error) => error is AutonomousDeviceCliException

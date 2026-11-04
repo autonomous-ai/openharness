@@ -261,7 +261,7 @@ bool ui_supertab(const ht_supertab_t *in);
 // `chat_id`: the chat the text is the last message of, "" from a daemon without swarmChat. Dropped for another chat.
 void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none);
 void ui_supertab_focus(const char *tab, const char *lead);
-// The Lead's new message in its Lead conversation or Chat with PM (`supertab.notice`): that Lead's one inbox entry, read at
+// A tag in the Lead's project, or an older daemon's Lead message (`supertab.notice`): that Lead's one inbox entry, read at
 // once when its chat is on the face. `thread`: the root of the thread it replies in, "" for the main stream; such a notice
 // is read at once only when the face shows that thread. True when the caller should beep.
 bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at);

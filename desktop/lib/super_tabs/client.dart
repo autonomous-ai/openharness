@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../core/models.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
@@ -158,11 +159,39 @@ class SuperTabClient {
   }
 
   /// False while the page or window is hidden: every Swarm tab is away.
+  ///
+  /// Hidden while the server pushes, nothing is read on a clock: a told change is still read at
+  /// once (tags and notices), the safety nets wait (task #2953). Shown again, each open Swarm
+  /// reads once ([SuperTabController.away]) and so does the list, if its safety net came due or
+  /// the server's word came meanwhile.
   set pageVisible(bool visible) {
     if (_pageVisible == visible) return;
     _pageVisible = visible;
     _applyAway();
+    if (!visible) return;
+    final last = _lastDiscovery;
+    if (_toldWhileHidden ||
+        (_pushing &&
+            last != null &&
+            clock.now().difference(last) >= kSwarmDiscoverySafetyNet)) {
+      _toldWhileHidden = false;
+      _discoverWhenAllowed();
+    }
   }
+
+  /// The server's word that it pushes came while the page was hidden: what it asks for is read
+  /// on return.
+  bool _toldWhileHidden = false;
+
+  /// When the server's word that it pushes was last heard.
+  DateTime? _lastPushWord;
+
+  /// How far from [kSwarmPushRepeat] a repeat may land: a hidden window's socket is read late
+  /// (App Nap), and a reconnect inside this window waits, at worst, for the return.
+  static const _pushBeatSlack = Duration(seconds: 30);
+
+  /// Hidden while the server pushes: the reads on a clock rest.
+  bool get _restsHidden => !_pageVisible && _pushing;
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
@@ -269,7 +298,9 @@ class SuperTabClient {
         _tagCounts.remove(entry.key);
         _tagDigests.remove(entry.key);
       }
-      entry.value.away = away;
+      entry.value
+        ..pageHidden = !_pageVisible
+        ..away = away;
     }
   }
 
@@ -326,6 +357,24 @@ class SuperTabClient {
     if (_account == null) return;
     final tabId = payload['tabId'], parts = payload['parts'];
     if (tabId == null && parts == null) {
+      // Hidden, the word repeated every 4 minutes renews the lease and reads nothing until the
+      // page shows; once the lease had lapsed the away poll was reading all along. A word off that
+      // beat is a socket that reconnected, the same payload (review of #3035): a push may have been
+      // lost meanwhile, so Desktop reads once, as shown, for the menu bar and notices. The web
+      // reads nothing while away anyway ([SuperTabReading.pausesAway]).
+      final now = clock.now(), last = _lastPushWord;
+      _lastPushWord = now;
+      final onBeat =
+          last != null &&
+          (now.difference(last) - kSwarmPushRepeat).abs() <= _pushBeatSlack;
+      if (_restsHidden && (onBeat || _reading.pausesAway)) {
+        _pushUntil = clock.now().add(kSwarmPushLease);
+        for (final controller in _loaded.values) {
+          controller.pushUntil = _pushUntil;
+        }
+        _toldWhileHidden = true;
+        return;
+      }
       _pushUntil = clock.now().add(kSwarmPushLease);
       // Said on every connect (review of #2121): a daemon that reconnected
       // was not told what changed meanwhile, so each open Swarm and the list
@@ -412,6 +461,78 @@ class SuperTabClient {
       if (error != null) errors.add(error);
     }
     return errors;
+  }
+
+  /// Names already sent by [syncChosenNames]: Swarm, agent and name, so each is
+  /// sent once per run, a refused one included.
+  final _chosenNamesSent = <String>{};
+
+  /// What each Swarm's agents and their names were when [agentNamesChanged]
+  /// last looked.
+  final _agentNamesSeen = <String, String>{};
+
+  /// Whether Swarm [tabId]'s agents or the names it shows for them changed
+  /// since this last said so: a message or a task moving in it is not a change,
+  /// so the sync of chosen names does not run for it (review of #3021).
+  bool agentNamesChanged(String tabId) {
+    final snapshot = _loaded[tabId]?.snapshot;
+    if (snapshot == null) return false;
+    final now = [
+      for (final agent in snapshot.agents)
+        '${agent.id}:${snapshot.agentName(agent.id)}',
+    ].join('|');
+    if (_agentNamesSeen[tabId] == now) return false;
+    _agentNamesSeen[tabId] = now;
+    return true;
+  }
+
+  /// A name as the Swarm keeps it: one space between words, trimmed.
+  static String _spaced(String name) =>
+      name.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Sends the names people chose for their agents to the Swarms that show
+  /// something else (task #2920): an agent renamed before the rename reached
+  /// the Swarm shows its new name with no second rename. [native] reads the
+  /// harness an agent runs as on this person's own machines, null for one this
+  /// app cannot see or may not rename.
+  ///
+  /// Only a name the daemon says a person chose, never the creation name or an
+  /// engine's session title; a daemon that does not say sends nothing. Only for
+  /// an agent this person may rename (its contributor or its machine's owner,
+  /// as the Swarm decides), and never a Buddy, whose name its own settings set.
+  /// [tabId] narrows it to one Swarm, [machineId] and [harnessId] to one
+  /// harness: only what changed is looked at. Returns how many were sent.
+  Future<int> syncChosenNames(
+    Agent? Function(String machineId, String harnessId) native, {
+    String? tabId,
+    String? machineId,
+    String? harnessId,
+  }) async {
+    var sent = 0;
+    for (final MapEntry(key: swarm, value: controller)
+        in _loaded.entries.toList()) {
+      if (tabId != null && swarm != tabId) continue;
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents.toList()) {
+        if (machineId != null && agent.machineId != machineId) continue;
+        if (harnessId != null && agent.harnessId != harnessId) continue;
+        final person = controller.accountId;
+        if (agent.isBuddy ||
+            (agent.contributorId != person && agent.machineOwnerId != person)) {
+          continue;
+        }
+        final local = native(agent.machineId, agent.harnessId);
+        if (local == null || local.nameChosen != true) continue;
+        final name = _spaced(local.name);
+        if (name.isEmpty || name == _spaced(snapshot.agentName(agent.id))) {
+          continue;
+        }
+        if (!_chosenNamesSent.add('$swarm|${agent.id}|$name')) continue;
+        if (await controller.renameAgent(agent.id, name) == null) sent++;
+      }
+    }
+    return sent;
   }
 
   /// The coordinator's name in the project the machine's harness coordinates.
@@ -511,7 +632,7 @@ class SuperTabClient {
         discoveryInterval > Duration.zero) {
       unawaited(refreshTabs());
       _discoveryTimer = Timer.periodic(discoveryInterval, (_) {
-        if (_discoveryDue) unawaited(refreshTabs());
+        if (_discoveryDue && !_restsHidden) unawaited(refreshTabs());
       });
     }
   }
@@ -819,6 +940,7 @@ class SuperTabClient {
             reading: _reading,
             stillListed: onTabs == null ? null : () => _stillListed(id),
           )
+          ..pageHidden = !_pageVisible
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;
     if (_keptFiles.remove(id) case final kept?) controller.adoptFiles(kept);

@@ -1399,14 +1399,11 @@ class SuperTabThread {
   final int replies, lastSequence;
   final DateTime? lastAt;
 
-  /// What its root's row says after the time; null for a message that is no
-  /// ask, and for a state this app does not know.
-  String? get askTag => switch (ask) {
-    'proposal' => '✋ Proposal',
-    'on-it' => '● On it',
-    'shipped' => '✓ Shipped',
-    _ => null,
-  };
+  /// What its root's row says after the time: a Buddy's proposal nobody has
+  /// answered yet; null for any other message. A task's state is no tag: its
+  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
+  /// so an older server's On it and Shipped draw nothing.
+  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.

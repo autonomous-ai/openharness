@@ -915,6 +915,31 @@ void main() {
       );
     });
 
+    // Task #2953: a hidden window asks GitHub nothing for the backlog's rows, as live cards do
+    // (VisibleTick); back on screen it watches them again.
+    testWidgets('a hidden window lets the rows\' pull requests go, and watches '
+        'them again on return', (tester) async {
+      var reads = 0;
+      final facts = SuperTabPullRequestFacts((_) async {
+        reads++;
+        return const {'account': 'ada', 'rows': []};
+      });
+      addTearDown(facts.dispose);
+      await show(tester, swarm(), facts: facts);
+      expect(facts.watching, isNotEmpty);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      expect(facts.watching, isEmpty, reason: 'nothing watched while hidden');
+      final before = reads;
+      await tester.pump(SuperTabPullRequestFacts.every * 3);
+      expect(reads, before, reason: 'no read while hidden');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(facts.watching, isNotEmpty);
+    });
+
     testWidgets('clicking a row opens its chat', (tester) async {
       await show(tester, swarm());
       await tester.tap(row('review'));

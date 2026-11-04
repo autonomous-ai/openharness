@@ -871,19 +871,20 @@ Agents talk to each other directly, not through the product manager
 - A post that names agents reaches exactly them: no copy goes to the product
   manager. On 2026-10-30 such copies were 198 of the 486 messages it received in
   a day.
-- A post that names no one goes to its default addressee: an agent's to the
-  project's coordinator (the product manager unless the project names it
-  otherwise), the coordinator's to the task's assigned agent, a person's as
-  before. It is never lost: the post is written, and the coordinator gets it as a
-  notice (see [Notices to the coordinator](#notices-to-the-coordinator)). On
-  2026-10-29 a monitoring agent's "the backend worker is down" alarm named no
-  one and reached nobody for 4 h 50 min.
+- An agent also names an agent of the conversation by `@Name` in its text: its
+  display name or name, when exactly one agent there goes by it and no person's
+  username is the same. A reply reaches the agent who wrote the message it
+  answers.
+- An agent's post that names no one reaches, in a task or step, that
+  conversation's current assignee (unless the poster is the assignee), and
+  anywhere else no agent (task #2963). It is written and stays readable in its
+  conversation; the people it tags are told. The coordinator is delivered an
+  agent's post only when it is named, and hears the work through status (done,
+  needs a human, stuck, lost, stalled). Until 2026-11-04 an unnamed post went to
+  the coordinator: in a day 402 of 437 agent posts reached the product manager
+  as their only recipient, and only 1 named it.
 - A person's message is unchanged: it reaches the agent it addresses, or the
   coordinator when it addresses none.
-- The coordinator's unnamed posts to its assigned agent keep their bounce limit
-  (`leadWorkerBounced`): once the two have exchanged 6 messages in a row, with
-  no person or other agent between, its next unnamed post reaches nobody until
-  it names the agent.
 - Agents of another project, Buddies, Buddy chats, private chats, the project
   chat keep their own members; naming an agent there
   is refused with `INVALID_RECIPIENT`. Only the coordinator or a person adds an
@@ -902,9 +903,10 @@ Design:
 - Read cost: the loop count reads the conversation's 20 newest messages, the
   read a message already made for 6.
 - Scale: delivery rows per message equal the agents named, at most 16.
-- Compatibility: an older CLI names no one, so its posts keep their old
-  addressee and reach the coordinator as before; a newer CLI on an older
-  backend is refused only when it names an agent outside the conversation.
+- Compatibility: the server picks the recipients, so an older CLI's unnamed
+  post follows the same rule; its delivered prompt already names the author it
+  replies to. A newer CLI on an older backend is refused only when it names an
+  agent outside the conversation.
 - Migration and rollback: none; a rollback restores the copies.
 - Audience: the server checks the recipient belongs to the same project and the
   conversation is not a Buddy chat, the project chat or
@@ -912,7 +914,8 @@ Design:
   needs no role.
 - Identity: messages stay the agent's own.
 - Failure: a refused recipient is an `INVALID_RECIPIENT` error to the sender; a
-  post that names no one is delivered as a notice, not dropped.
+  post that names no one is written to its conversation, where people and its
+  agents read it.
 - Platforms: server-side; the same everywhere.
 
 ## Notices to the coordinator
@@ -1281,8 +1284,8 @@ advice) ships in the same order, and its parts need each other:
 - Then Desktop and the web app, then the phone. A newer client on an older
   backend finds no `coordinatorName`: it shows no Instructions and sends no
   `roleName`, and everything else works as before.
-- An older CLI on a newer backend names no one, so its posts reach the
-  coordinator as before, and its `rule.set` lands in the Routing section of the
+- An older CLI on a newer backend names no one, so its unnamed posts follow the
+  server's rule (task #2963), and its `rule.set` lands in the Routing section of the
   instructions. An older Desktop's role, skill-set and policy saves are accepted
   and ignored (see [Routing](#routing)).
 - A machine on an older CLI that is sent an agent by a newer one installs the

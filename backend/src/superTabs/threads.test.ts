@@ -64,18 +64,15 @@ describe('thread summaries', () => {
       expect(ask(root, details, reply('p', 'p-2', 2, agent('pm'), { agentOnly: true }))).toBe('proposal')
     })
 
-    it('follows the task\'s newest mark, on any root', () => {
-      const own = reply('p', 'p', 0, person(owner.userId))
-      expect(ask(root, details, reply('p', 'p-2', 2, agent('pm'), { ask: 'on-it' }))).toBe('on-it')
-      expect(ask(own, reply('p', 'p-1', 1, agent('pm'), { ask: 'on-it' }))).toBe('on-it')
+    // Anh Dee, 11-04 ('bot messages'): no On it / Shipped on a row; the task's agent reacts 👀 and ✅ on it instead (taskLine.ts).
+    it('says nothing once a task took the ask, whatever its marks say, an older app included', () => {
+      const own = reply('p', 'p', 0, person(owner.userId)), coordinatorless = agent('former-pm')
+      expect(ask(root, details, reply('p', 'p-2', 2, coordinatorless, { ask: 'on-it' }))).toBeUndefined()
+      expect(ask(own, reply('p', 'p-1', 1, agent('pm'), { ask: 'on-it' }))).toBeUndefined()
       expect(ask(own, reply('p', 'p-1', 1, agent('pm'), { ask: 'on-it' }), reply('p', 'p-2', 2, agent('pm'), { ask: 'shipped' }),
-        reply('p', 'p-3', 3, person(peer.userId)))).toBe('shipped')
-    })
-
-    it('is no state once the task closed, and back on it when the task resumes', () => {
-      const closed = reply('p', 'p-2', 2, agent('pm'), { ask: 'closed' })
-      expect(ask(root, details, closed)).toBeUndefined()
-      expect(ask(root, details, closed, reply('p', 'p-3', 3, agent('pm'), { ask: 'on-it' }))).toBe('on-it')
+        reply('p', 'p-3', 3, person(peer.userId)))).toBeUndefined()
+      expect(ask(root, details, reply('p', 'p-2', 2, coordinatorless, { ask: 'closed' }), reply('p', 'p-3', 3, coordinatorless, { ask: 'on-it' })))
+        .toBeUndefined()
     })
 
     it('leaves a plain thread with none', () => {

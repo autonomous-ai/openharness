@@ -1837,7 +1837,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       setState(() => _showNotifications = _showManage = _showTasks = false);
       // Choosing a conversation leaves the Manage pane: its Devices page left

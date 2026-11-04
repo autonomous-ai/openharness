@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
-import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
+import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
-import { buddyChatId, swarmBuddyChatId } from './buddies.js'
+import { buddyChatId, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
@@ -561,46 +561,151 @@ describe('what a Buddy may do', () => {
 
 describe('a Buddy\'s proposal to the PM', () => {
   const buddy = agentActor('buddy')
-  const proposal = { goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' as const }
-  /** setup()'s Buddy with Buddies on, and the message its owner asked with, as the store reads it. */
+  const proposal = { text: 'Sync edits made offline', goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' as const }
+  /** setup()'s Buddy with Buddies on, and the message its owner asked with, as the store reads it: by default the owner's own
+   *  words are the proposal's text. */
   function asked(author: { kind: 'person' | 'agent'; id: string; generation?: string } = { kind: 'person', id: 'peer' }, extra: Record<string, unknown> = {}) {
     const f = setup()
-    const ask = { conversationId: f.chat, source: false, createdAt: 900,
+    const ask = { conversationId: f.chat, source: false, createdAt: 900, text: proposal.text,
       author: { kind: author.kind, id: author.id, name: author.id, membershipGeneration: author.generation ?? 'first' }, ...extra }
     const propose = (ownerMessageId = 'ask', context: Record<string, unknown> = { proposalAsk: { id: ownerMessageId, ...ask } }) =>
       f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, ...proposal }, buddy, context)
-    return { f, propose }
+    return { f, propose, ask }
   }
+  /** The owner's ok and the line their Buddy showed them before it, as the store reads them (store.ts buddy.propose). */
+  const okayed = (f: ReturnType<typeof setup>, shown: string[], text = 'ok, post it') => ({ proposalAsk: { id: 'ask', conversationId: f.chat, source: false,
+    createdAt: 900, text, shown, author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
 
-  it('posts an ordinary root as its owner and delivers the full first reply from the Buddy', () => {
-    const { f, propose } = asked()
-    const [root, details] = propose().messages
-    expect(root).toMatchObject({ conversationId: f.app.conversationId, recipients: [], replyTo: null,
-      author: { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'first' },
-      source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask' },
-      text: 'Sync edits made offline' })
-    expect(details).toMatchObject({ conversationId: f.app.conversationId, recipients: [f.pm], replyTo: root!.id, thread: root!.id,
-      author: { kind: 'agent', id: 'buddy' },
-      text: 'Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })
-  })
-
-  it.each([
-    ['  Offline drafts  ', 'Requested by Dee. Save drafts. Keep them.', 'Offline drafts'],
-    [undefined, 'Requested by Dee. Save drafts. Keep them.', 'Save drafts'],
-    [undefined, 'Requested by dee@autonomous.ai through Harness. Hub reports hide an item from everyone.', 'Hub reports hide an item from everyone'],
-    [undefined, 'Save drafts! Keep them.', 'Save drafts!'],
-    [undefined, 'A'.repeat(100), 'A'.repeat(80)],
-  ])('uses a bounded short name for the root (%s)', (title, goal, name) => {
+  it('posts the owner\'s okayed words in full as the owner, delivered to the PM, with no Buddy reply (anh Dee, task #2926)', () => {
     const { f } = asked()
-    const command = commandSchema.parse({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, goal, ...(title ? { title } : {}) })
-    const posted = f.run(command, buddy, { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
-      author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
-    expect(posted.messages[0]!.text).toBe(name)
+    const line = 'Jumping a chat back a week (Jump to, Last week) freezes the app and then lags for a minute on Huy\'s Mac, every time'
+    expect(line.length).toBeGreaterThan(80)
+    const posted = f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: line }, buddy,
+      okayed(f, [`I'll post this as you: "${line}" OK?`])).messages
+    const home = posted.filter(m => m.conversationId === f.app.conversationId)
+    expect(home).toHaveLength(1)
+    expect(home[0]).toMatchObject({ recipients: [f.pm], replyTo: null, text: line,
+      author: { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'first' },
+      source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask',
+        goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' } })
+    expect(posted.some(m => m.author.kind === 'agent' && m.conversationId === f.app.conversationId)).toBe(false)
   })
 
-  it('refuses empty and overlong explicit names before posting', () => {
-    for (const title of [' ', 'A'.repeat(81)]) expect(commandSchema.safeParse({ type: 'buddy.propose', conversationId: 'chat',
-      ownerMessageId: 'ask', ...proposal, title }).success).toBe(false)
+  it('takes words up to a chat message\'s length, never cut at 80', () => {
+    const long = 'A'.repeat(32_000)
+    const parsed = commandSchema.parse({ type: 'buddy.propose', conversationId: 'chat', ownerMessageId: 'ask', ...proposal, text: `  ${long}  ` })
+    expect(parsed).toMatchObject({ text: long })
+    for (const text of [' ', 'A'.repeat(32_001)]) expect(commandSchema.safeParse({ type: 'buddy.propose', conversationId: 'chat',
+      ownerMessageId: 'ask', ...proposal, text }).success).toBe(false)
+  })
+
+  it('posts only the owner\'s own words or the line its Buddy showed them before their ok, nothing else of the chat', () => {
+    const send = (text: string, shown: string[], ask = 'ok, post it') => {
+      const { f } = asked()
+      return f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy, okayed(f, shown, ask)).messages[0]!.text
+    }
+    // The owner's own words, inside their ask, and the shown line with its spacing as the chat shows it.
+    expect(send('Offline drafts please', [], 'Send this to the PM: Offline drafts please')).toBe('Offline drafts please')
+    expect(send('Send this to the PM: Offline drafts please', [], 'Send this to the PM: Offline drafts please')).toBe('Send this to the PM: Offline drafts please')
+    { const { f } = asked()
+      expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: 'Offline drafts' }, buddy,
+        okayed(f, [], 'Send this to the PM: Offline drafts please'))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' })) }
+    expect(send('Keep drafts\noffline', ['I\'ll post this as you: “Keep drafts offline”'])).toBe('Keep drafts\noffline')
+    expect(send('Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I’ll post this as you: Fix the jump-to freeze'])).toBe('Fix the jump-to freeze')
+    // Words the owner never saw: not in their ask, not in a line shown before it.
+    // A shown line or the ask whole, never a piece cut from it (security review 1 of #3024): every word seen, not that line.
+    const both = 'I\'ll post this as you: “Fix the login. Don\'t delete the old accounts table.” OK?'
+    expect(send('Fix the login. Don\'t delete the old accounts table.', [both])).toBe('Fix the login. Don\'t delete the old accounts table.')
+    for (const [text, shown] of [['Also ship the phone app', ['I\'ll post this as you: “Keep drafts offline”']], ['Keep drafts offline', []],
+      ['Keep drafts offline!', ['I\'ll post this as you: “Keep drafts offline”']], ['delete the old accounts table', [both]], ['Fix', [both]],
+      ['Keep drafts', ['I\'ll post this as you: “Keep drafts offline”']],
+      // A shown line counts only after its marker (security review 2 of #3024): what comes before is the Buddy's talk.
+      ['In Secret, Ken said the client is leaving.', ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze']],
+      ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze']],
+      ['the client is leaving', ['Ken said “the client is leaving”. I\'ll post this as you: “Fix the jump-to freeze”']],
+      ['Fix the jump-to freeze', ['Fix the jump-to freeze?']]] as const) {
+      const { f } = asked()
+      expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy, okayed(f, [...shown])))
+        .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' }))
+      expect(group(f, f.chat).proposals).toBeUndefined()
+    }
+  })
+
+  it('refuses an older Buddy\'s proposal with no words of its owner, saying how to send one', () => {
+    const { f, ask } = asked()
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', goal: proposal.goal, scope: proposal.scope,
+      priority: 'high', title: 'Offline drafts' }, buddy, { proposalAsk: { id: 'ask', ...ask } }))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_TEXT', message: expect.stringContaining('I\'ll post this as you') }))
+  })
+
+  it('gives a task opened from it the proposal\'s goal, scope and priority as its brief, unless the PM writes one', () => {
+    const { f, propose } = asked()
+    const root = propose().messages[0]!
+    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+    const open = (brief: string) => {
+      const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [], proposalMessageId: root.id },
+        agentActor(f.pm), context).result.conversationId
+      return group(f, id as string)
+    }
+    expect(open('').brief).toBe('Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high')
+    expect(open('Desktop keeps drafts offline.').brief).toBe('Desktop keeps drafts offline.')
+  })
+
+  it('counts as shown only the Buddy\'s own lines in the ask\'s lane, since its owner\'s previous message', () => {
+    const me = { kind: 'agent' as const, id: 'buddy' }, owner = { kind: 'person' as const, id: 'peer' }
+    const row = (id: string, author: { kind: 'person' | 'agent'; id: string }, text: string, extra: Record<string, unknown> = {}) =>
+      ({ id, author, text, source: null, thread: null, editedAt: null, deletedAt: null, ...extra })
+    // Newest first, as the store reads the chat.
+    const recent = [
+      row('after', me, 'Shown after the ok'),
+      row('ask', owner, 'ok'),
+      row('pm', { kind: 'agent', id: 'pm' }, 'A PM line'),
+      row('notice', me, 'A system row', { source: { kind: 'pm-line' } }),
+      row('thread', me, 'In a session thread', { thread: 'root' }),
+      row('edited', me, 'Changed since', { editedAt: new Date(1) }),
+      row('deleted', me, 'Gone', { deletedAt: new Date(1) }),
+      row('shown', me, 'I\'ll post this as you: “Keep drafts offline”'),
+      row('earlier', owner, 'Change it to drafts'),
+      row('before', me, 'I\'ll post this as you: “Old line”'),
+    ]
+    expect(shownBefore(recent, 'ask', 'buddy')).toEqual(['I\'ll post this as you: “Keep drafts offline”'])
+    expect(shownBefore(recent, 'missing', 'buddy')).toEqual([])
+    // In a thread: the Buddy's lines in that thread alone; the thread's root is the main chat's.
+    const threaded = [row('ask', owner, 'ok', { thread: 'root' }), row('main', me, 'Main chat line'), row('in', me, 'Thread line', { thread: 'root' }),
+      row('root', owner, 'Start', { thread: 'root' })]
+    expect(shownBefore(threaded, 'ask', 'buddy')).toEqual(['Thread line'])
+    // The ok replying in the thread of the shown line itself (as Desktop's reply does): that line is the thread's root.
+    const onShown = [row('ask', owner, 'ok', { thread: 'shown' }), row('other', me, 'Main chat line'), row('shown', me, 'I\'ll post this as you: “Keep drafts offline”')]
+    expect(shownBefore(onShown, 'ask', 'buddy')).toEqual(['I\'ll post this as you: “Keep drafts offline”'])
+    expect(shownBefore([row('ask', owner, 'ok', { thread: 'root' }), row('root', owner, 'Start')], 'ask', 'buddy')).toEqual([])
+  })
+
+  // Security review 2 of #3024: the Buddy writes the goal and scope, and picks the words, so the PM's delivery is fenced by the
+  // Buddy's account, not its owner's, as its details reply was (audit M3).
+  it('is the Buddy\'s words for the mark of another account, and unknown without its Buddy', () => {
+    expect(wordsOf({ kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy' })).toEqual({ agentId: 'buddy' })
+    expect(wordsOf({ kind: 'buddy-proposal', personId: 'peer' })).toBe('unknown')
+  })
+
+  // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
+  it('is closed with a reason by its project\'s PM or a person in the project, posting nothing, and by nobody else', () => {
+    const { f, propose } = asked()
+    const root = propose().messages[0]!
+    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+    const close = (actor: Actor, messageId = root.id, loaded: Partial<CommandContext> = context) =>
+      f.run({ type: 'proposal.close', projectId: f.app.projectId, messageId, reason: '  Built in #2901 ' }, actor, loaded)
+    const closed = close(agentActor(f.pm))
+    expect(closed.closedProposal).toEqual({ messageId: root.id, conversationId: f.app.conversationId, reason: 'Built in #2901' })
+    expect(closed.messages).toEqual([])
+    expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
+    const webPm = group(f, f.web.conversationId).leadId!
+    for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()
+    f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'private', memberIds: [] })
+    expect(() => close(peer)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(() => close(agentActor(f.pm), 'talk', { proposal: { id: 'talk', conversationId: f.app.conversationId, author: root.author, source: null } }))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
+    expect(() => close(agentActor(f.pm), 'missing', {})).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
+    for (const reason of ['', 'x'.repeat(201)]) expect(commandSchema.safeParse({ type: 'proposal.close', projectId: 'p', messageId: 'm', reason }).success).toBe(false)
   })
 
   it('is one per ask: the same message never asks twice', () => {
@@ -623,14 +728,14 @@ describe('a Buddy\'s proposal to the PM', () => {
   it('names only its owner\'s newest message in the chat, or one from the last hour (privacy review of #1992)', () => {
     const { f } = asked()
     const send = (newestOwnerMessageId: string, createdAt: number) => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal }, buddy,
-      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt, newestOwnerMessageId,
+      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt, newestOwnerMessageId, text: proposal.text,
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
     expect(() => send('later', 900)).toThrow('your owner\'s newest message')
-    expect(send('ask', 900).messages).toHaveLength(2)
+    expect(send('ask', 900).messages).toHaveLength(1)
     const { f: g } = asked()
     expect(g.run({ type: 'buddy.propose', conversationId: g.chat, ownerMessageId: 'ask', ...proposal }, buddy,
-      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: g.chat, source: false, createdAt: 2 * 3_600_000 - 59 * 60_000, newestOwnerMessageId: 'later',
-        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(2)
+      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: g.chat, source: false, createdAt: 2 * 3_600_000 - 59 * 60_000, newestOwnerMessageId: 'later', text: proposal.text,
+        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(1)
   })
 
   it('carries the files the store found it may send, on the proposal message in the project chat', () => {
@@ -638,16 +743,16 @@ describe('a Buddy\'s proposal to the PM', () => {
     const files = [{ id: 'plan', name: 'plan.md', mime: 'text/markdown', size: 120, url: 'https://cdn.example.test/t/k1/plan.md' },
       { id: 'shot', name: 'shot.png', mime: 'image/png', size: 2048, url: 'https://cdn.example.test/t/k2/shot.png' }]
     const posted = f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['plan', 'shot', 'plan'] }, buddy,
-      { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
+      { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900, text: proposal.text,
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }, attachments: files }).messages
-    expect(posted[0]).not.toHaveProperty('attachments')
-    expect(posted[1]).toMatchObject({ conversationId: f.app.conversationId, attachments: files, replyTo: posted[0]!.id, thread: posted[0]!.id })
+    expect(posted[0]).toMatchObject({ conversationId: f.app.conversationId, attachments: files, replyTo: null })
+    expect(posted).toHaveLength(1)
     expect(propose('ask2').messages[0]).not.toHaveProperty('attachments')
   })
 
   it('refuses a file the store did not find it may send, and more than five', () => {
     const { f } = asked()
-    const context = { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
+    const context = { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900, text: proposal.text,
       author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } } }
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['elsewhere'] }, buddy, context))
       .toThrow('Upload this file again')
@@ -702,10 +807,10 @@ describe('a Swarm-wide Buddy', () => {
 
   it('proposes only to a project it names, for its person\'s ask', () => {
     const { f, chat, self } = started()
-    const ask = { id: 'ask', conversationId: chat, source: false, createdAt: 900, author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }
-    expect(() => f.run({ type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', goal: 'Sync edits made offline', scope: 'Desktop drafts only',
+    const ask = { id: 'ask', conversationId: chat, source: false, createdAt: 900, text: 'Sync edits made offline', author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }
+    expect(() => f.run({ type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', text: 'Sync edits made offline', goal: 'Sync edits made offline', scope: 'Desktop drafts only',
       priority: 'high' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'BUDDY_PROPOSE_PROJECT' }))
-    const named = { type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', projectId: f.web.projectId, goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' } as const
+    const named = { type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', projectId: f.web.projectId, text: 'Sync edits made offline', goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' } as const
     expect(() => f.run({ ...named, projectId: 'made-up' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => f.run(named, self, { proposalAsk: { ...ask, session: true } } as never)).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNASKED' }))
     const rows = f.run(named, self, { proposalAsk: ask } as never).messages
@@ -964,7 +1069,8 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
     const secretPm = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-pm', machineId: 'machine', name: 'Secret PM',
       configuration, lead: true }).result.agentId as string
-    expect(() => f.run(tell(), agentActor(secretPm))).toThrow('cannot read this project')
+    // By username, never email (task #2954).
+    expect(() => f.run(tell(), agentActor(secretPm))).toThrow(/^peer cannot read this project\.$/)
     const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
     const told = f.run(tell(), agentActor(webPm))
     expect(told.messages.map(m => m.conversationId)).toEqual([peerSwarmChat, buddyChatId(f.web.projectId, { id: 'peer', generation: 'first' })])

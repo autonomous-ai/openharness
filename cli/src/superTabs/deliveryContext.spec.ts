@@ -3,7 +3,7 @@ import { placeLine, threadLine, workLine } from './deliveryContext.js'
 
 const state = {
   projects: [{ id: 'app', name: 'App', leadConversationId: 'lead-app' }],
-  people: [{ id: 'ken', email: 'ken@example.com' }],
+  people: [{ id: 'ken', email: 'ken@example.com', username: 'ken15' }] as Array<Record<string, unknown>>,
   agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }, { id: 'buddy', name: 'Ken\'s Buddy', buddyOf: { personId: 'ken' } }],
   conversations: [
     { id: 'lead-app', projectId: 'app', title: 'App', leadId: 'pm', agentIds: ['pm'], archived: false, assignment: null },
@@ -22,8 +22,11 @@ describe('placeLine', () => {
   it('names the project chat', () => {
     expect(placeLine(state, 'lead-app')).toBe('In the project chat of App (conversation lead-app).')
   })
+  // By the name the Swarm shows them, never their email (task #2954).
   it('names a Buddy chat by its person', () => {
-    expect(placeLine(state, 'chat')).toBe('In ken@example.com\'s Buddy chat (conversation chat).')
+    expect(placeLine(state, 'chat')).toBe('In ken15\'s Buddy chat (conversation chat).')
+    const named = { ...state, people: state.people.map(p => ({ ...p, name: 'Ken' })) }
+    expect(placeLine(named, 'chat')).toBe('In Ken\'s Buddy chat (conversation chat).')
   })
   it('gives the id alone when it does not know the conversation', () => {
     expect(placeLine(state, 'gone')).toBe('In conversation gone.')

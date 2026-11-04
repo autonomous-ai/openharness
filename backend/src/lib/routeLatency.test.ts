@@ -105,3 +105,17 @@ it('leaves empty and bytes out of a route that has none', () => {
   l.flush()
   expect(routes()['GET /a']).toEqual({ n: 1, p50: 1, p95: 1, max: 1 })
 })
+
+it('hands each response to the metrics from the same hook, by pattern and status, so a request is timed once (review of #1880)', async () => {
+  const seen: Array<[string, string, number, number]> = []
+  const app = Fastify()
+  registerRouteLatency(app, { pod: 'p', log: () => {}, observe: (method, route, status, seconds) => { seen.push([method, route, status, seconds]) } })
+  app.get('/api/things/:id', async () => ({ ok: true }))
+  await app.ready()
+  await app.inject({ method: 'GET', url: '/api/things/6a730145e13f6277cdf98c1a?token=secret-value' })
+  await app.inject({ method: 'GET', url: '/wp-admin/6a730145e13f6277cdf98c1a' })
+  await app.close()
+  expect(seen.map(([method, route, status]) => [method, route, status])).toEqual([['GET', '/api/things/:id', 200], ['GET', 'unrouted', 404]])
+  for (const [, , , seconds] of seen) expect(seconds).toBeGreaterThanOrEqual(0)
+  expect(JSON.stringify(seen)).not.toContain('6a730145e13f6277cdf98c1a')
+})

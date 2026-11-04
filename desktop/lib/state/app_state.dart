@@ -1075,12 +1075,14 @@ class AppNotifier extends ChangeNotifier {
   /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
   void appLifecycleChanged(AppLifecycleState? state) {
     if (_disposed) return;
-    final wasForeground = foreground.value;
+    final wasForeground = foreground.value, wasInSight = inSight.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
     inSight.value =
         state == null ||
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
+    if (wasInSight && !inSight.value) _pauseBackgroundRereads();
+    if (!wasInSight && inSight.value) _resumeBackgroundRereads();
     // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
     // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
     _announceVisibleAgents();
@@ -1600,10 +1602,11 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  final experimentalFeatures = ExperimentalFeaturesStore(
+  late final experimentalFeatures = ExperimentalFeaturesStore(
     pollInterval: kUnderTest
         ? Duration.zero
         : ExperimentalFeaturesStore.safetyNet,
+    seen: inSight,
   );
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
@@ -1893,7 +1896,7 @@ class AppNotifier extends ChangeNotifier {
   /// views; Settings ▸ Account's Clear now clears it with them.
   final browserCopies = BrowserCopies();
 
-  late final superTabs = SuperTabClient(
+  late final SuperTabClient superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     viewStorage: swarmViewStore(beside: localStore),
     upload:
@@ -1992,6 +1995,11 @@ class AppNotifier extends ChangeNotifier {
           _workspaceCleanup != null ||
           controller.accountId != currentUser?.id) {
         return;
+      }
+      // Only when this Swarm's agents or their names changed: a message in it
+      // is not a reason to look (review of #3021).
+      if (superTabs.agentNamesChanged(controller.tabId)) {
+        _syncChosenNames(tabId: controller.tabId);
       }
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
@@ -10503,6 +10511,7 @@ class AppNotifier extends ChangeNotifier {
   void _stopMachineRecovery() {
     _machineRecoveryTimer?.cancel();
     _machineRecoveryTimer = null;
+    _recoveryParked = null;
     _machineRecoveryAttempts = 0;
   }
 
@@ -10519,6 +10528,12 @@ class AppNotifier extends ChangeNotifier {
     }
     _machineRecoveryTimer = Timer(Duration(seconds: delay), () {
       _machineRecoveryTimer = null;
+      // Out of sight a failing list is not asked again and again: it is asked once on return.
+      if (!inSight.value) {
+        _recoveryParked = revision;
+        _machineRecoveryAttempts = 0;
+        return;
+      }
       if (_authWorkCurrent(revision) && status == AppStatus.authenticated) {
         unawaited(
           _retryMachines(automatic: true).whenComplete(() {
@@ -10848,7 +10863,13 @@ class AppNotifier extends ChangeNotifier {
         _startAgentSyncTimer(machine.machine.machineId);
       }
     }
-    // The list is pushed (`machines_changed`); this only catches a missed push.
+    _armMachineListSafetyNet();
+  }
+
+  /// The machine list's safety net, every [machineListSafetyNetInterval] while the window is in
+  /// sight ([inSight]). The list is pushed (`machines_changed`); this only catches a missed push.
+  void _armMachineListSafetyNet() {
+    if (_disposed || isGuest || !inSight.value) return;
     _sharingDiscoveryTimer ??= Timer.periodic(machineListSafetyNetInterval, (
       timer,
     ) {
@@ -10860,25 +10881,86 @@ class AppNotifier extends ChangeNotifier {
         }
         return;
       }
-      // The desk is pushed too, and a missed desk push is caught here as well:
-      // one small GET, and an unchanged revision applies nothing.
-      if (!_disposed &&
-          status == AppStatus.authenticated &&
-          _desk.enabled &&
-          _desk.pending.isEmpty) {
-        unawaited(_deskFetch());
-      }
-      // Agent Messages' first answer, when the read beside the desk failed
-      // (a backend away at sign-in) and no backend-online flip followed.
-      if (!_disposed &&
-          status == AppStatus.authenticated &&
-          _desk.enabled &&
-          !agentMessages.loaded) {
-        unawaited(agentMessages.refresh());
-      }
-      unawaited(_rereadMachinesInBackground(pushed: false));
+      _machineListSafetyNetTick();
     });
   }
+
+  void _machineListSafetyNetTick() {
+    // The desk is pushed too, and a missed desk push is caught here as well:
+    // one small GET, and an unchanged revision applies nothing.
+    if (!_disposed &&
+        status == AppStatus.authenticated &&
+        _desk.enabled &&
+        _desk.pending.isEmpty) {
+      unawaited(_deskFetch());
+    }
+    // Agent Messages' first answer, when the read beside the desk failed
+    // (a backend away at sign-in) and no backend-online flip followed.
+    if (!_disposed &&
+        status == AppStatus.authenticated &&
+        _desk.enabled &&
+        !agentMessages.loaded) {
+      unawaited(agentMessages.refresh());
+    }
+    unawaited(_rereadMachinesInBackground(pushed: false));
+  }
+
+  /// When the window last went out of sight ([inSight] false); null while it is in sight.
+  DateTime? _unseenSince;
+
+  /// The window went out of sight: minimised, behind other windows, closed to the menu bar, or a
+  /// browser tab in the background. Its background re-reads stop (Phase 3 of the WebSocket
+  /// roadmap, task #2953): nobody sees what they would bring, and every open window kept asking
+  /// every machine for its agents each minute and the backend for the machine list every five.
+  /// Pushes still land; [_resumeBackgroundRereads] catches up on what came due meanwhile.
+  void _pauseBackgroundRereads() {
+    _unseenSince = clock.now();
+    for (final timer in [
+      ..._agentSyncTimers.values,
+      ..._heldSyncTimers.values,
+    ]) {
+      timer.cancel();
+    }
+    _agentSyncTimers.clear();
+    _heldSyncTimers.clear();
+    _sharingDiscoveryTimer?.cancel();
+    _sharingDiscoveryTimer = null;
+  }
+
+  /// Back in sight: each re-read that came due while away reads once, now, and every timer runs
+  /// again from here. A glance away shorter than an interval reads nothing.
+  void _resumeBackgroundRereads() {
+    final since = _unseenSince;
+    _unseenSince = null;
+    if (_disposed || isGuest || status != AppStatus.authenticated) return;
+    final away = since == null ? Duration.zero : clock.now().difference(since);
+    for (final machine in machineStates.values.toList()) {
+      if (machine.connectionStatus != ConnectionStatus.connected) continue;
+      _startAgentSyncTimer(machine.machine.machineId);
+      if (away >= agentSyncInterval) {
+        unawaited(_syncAgentsIfChanged(machine));
+      } else {
+        _watchHeldLaunches(machine);
+      }
+    }
+    _armMachineListSafetyNet();
+    if (away >= machineListSafetyNetInterval) _machineListSafetyNetTick();
+    final parked = _recoveryParked;
+    _recoveryParked = null;
+    if (parked != null) _scheduleMachineRecovery(parked);
+    for (final machineId in _offlinePollsParked.toList()) {
+      _offlinePollsParked.remove(machineId);
+      final machine = machineStates[machineId];
+      if (machine != null) _startOfflineRetry(machine);
+    }
+  }
+
+  /// The machine list's recovery, waiting for the window to be in sight again: the auth revision
+  /// it was for ([_scheduleMachineRecovery]).
+  int? _recoveryParked;
+
+  /// Remote machines whose offline poll waits for the window to be in sight again.
+  final Set<String> _offlinePollsParked = {};
 
   /// The inventory has answered, and answered for now: loaded, not loading,
   /// not stale, no error. What the account HAS, independent of what is open.
@@ -11053,6 +11135,14 @@ class AppNotifier extends ChangeNotifier {
         )];
     late final Timer timer;
     timer = Timer(delay, () async {
+      // Out of sight, the machine is asked about again only once the window is back.
+      if (!inSight.value) {
+        if (identical(_offlineRetryTimers[machineId], timer)) {
+          _offlineRetryTimers.remove(machineId);
+          _offlinePollsParked.add(machineId);
+        }
+        return;
+      }
       await _pollOfflineMachine(machineId);
       if (_disposed || !identical(_offlineRetryTimers[machineId], timer)) {
         return;
@@ -11064,6 +11154,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopOfflineRetry(String machineId) {
     _offlineRetryTimers.remove(machineId)?.cancel();
+    _offlinePollsParked.remove(machineId);
   }
 
   /// Dials [machineId] now instead of at the link retry's next tick. Native
@@ -11220,6 +11311,7 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _offlineRetryTimers.clear();
+    _offlinePollsParked.clear();
     for (final timer in _slowReloadTimers.values) {
       timer.cancel();
     }
@@ -11233,6 +11325,8 @@ class AppNotifier extends ChangeNotifier {
     // A guest asks nothing on a timer: an unattended computer on the sign-in
     // page must go idle. Sign-in starts it ([_startBackgroundRereads]).
     if (isGuest) return;
+    // Out of sight it arms nothing; coming back does ([_resumeBackgroundRereads]).
+    if (!inSight.value) return;
     if (_agentSyncTimers.containsKey(machineId)) return;
     _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
       final machine = machineStates[machineId];
@@ -11281,6 +11375,9 @@ class AppNotifier extends ChangeNotifier {
       _heldSyncRounds.remove(machineId);
       return;
     }
+    // Out of sight the daemon's own push still says when it starts; the re-read waits for the
+    // window to come back ([_resumeBackgroundRereads]).
+    if (!inSight.value) return;
     if (_heldSyncTimers.containsKey(machineId)) return;
     final round = _heldSyncRounds[machineId] ?? 0;
     _heldSyncTimers[machineId] = Timer(
@@ -11396,6 +11493,7 @@ class AppNotifier extends ChangeNotifier {
           prev.lastActivityAt != agent.lastActivityAt ||
           prev.createdAt != agent.createdAt ||
           prev.closeSupported != agent.closeSupported ||
+          prev.nameChosen != agent.nameChosen ||
           prev.closePlanState != agent.closePlanState ||
           prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
@@ -12985,8 +13083,10 @@ class AppNotifier extends ChangeNotifier {
   /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
   /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
   /// picker said "Not signed in" beside a menu showing the same account with 8% left.
-  ModelsMenuController get modelsMenu =>
-      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
+  ModelsMenuController get modelsMenu => _modelsMenu ??= ModelsMenuController(
+    remote: readRemoteUsage,
+    seen: inSight,
+  );
 
   /// This machine's local models. [setup] makes it Grid's first use there too: `grid` installed,
   /// signed in with this Harness account (its token, no second browser) and the account's grid
@@ -14066,6 +14166,9 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    for (final agent in agents) {
+      _syncChosenName(machine, agent, previous[agent.id]);
+    }
     _watchHeldLaunches(machine);
     for (final agent in agents) {
       _reconcileAgentActivity(machine, agent, previous[agent.id]);
@@ -14165,6 +14268,7 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    _syncChosenName(machine, agent, previous);
     _reconcileAgentActivity(machine, agent, previous);
     if (previous?.name != agent.name) _recordAgentName(machine, agent);
     _syncAgentName(machine, agent);
@@ -14215,6 +14319,55 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  bool _syncingChosenNames = false, _chosenNamesAgain = false;
+
+  /// An agent that arrives flagged as having a chosen name, or whose chosen
+  /// name changed: the only machine-side news worth a look (task #2920).
+  void _syncChosenName(MachineState machine, Agent agent, Agent? previous) {
+    if (agent.nameChosen != true) return;
+    if (previous?.nameChosen == true && previous?.name == agent.name) return;
+    _syncChosenNames(machineId: machine.machine.machineId, harnessId: agent.id);
+  }
+
+  /// Sends the names people chose for their agents, as the daemon says, to the
+  /// Swarms that show something else (task #2920): an agent renamed before
+  /// the rename reached the Swarm shows its name with no second rename. Runs
+  /// for one Swarm when its agents change, and for one harness when it arrives
+  /// flagged; each name goes once. Only this person's own machines: a harness
+  /// shared to watch is view-only.
+  void _syncChosenNames({String? tabId, String? machineId, String? harnessId}) {
+    if (_disposed) return;
+    if (_syncingChosenNames) {
+      // Something changed while names were going out: look everywhere again after.
+      _chosenNamesAgain = true;
+      return;
+    }
+    _syncingChosenNames = true;
+    unawaited(
+      superTabs
+          .syncChosenNames(
+            (machineId, harnessId) {
+              final machine = machineStates[machineId];
+              if (machine == null || machine.machine.isShared) return null;
+              return machine.agents
+                  .where((agent) => agent.id == harnessId)
+                  .firstOrNull;
+            },
+            tabId: tabId,
+            machineId: machineId,
+            harnessId: harnessId,
+          )
+          .then((_) {}, onError: (Object _) {})
+          .whenComplete(() {
+            _syncingChosenNames = false;
+            if (_chosenNamesAgain) {
+              _chosenNamesAgain = false;
+              _syncChosenNames();
+            }
+          }),
+    );
   }
 
   bool _renameAgent(MachineState machine, String agentId, String name) {

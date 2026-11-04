@@ -1175,7 +1175,7 @@ describe('decisions asked of one person (v2)', () => {
     const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
-    const notAsked = `Not asked ${peer.email}: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
+    const notAsked = `Not asked peer: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
     expect(needs.body.data.result.notAsked).toBe(notAsked)
     const after = await assignment()
     expect(after).toMatchObject({ status: 'needs_human', result: 'Ship how?' })
@@ -1188,7 +1188,7 @@ describe('decisions asked of one person (v2)', () => {
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
-      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked ${peer.email}.`)
+      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked peer.`)
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
   })
 
@@ -1310,7 +1310,10 @@ describe('the summary only when it changed (derivedEtag)', () => {
 
 describe('routes given only a store', () => {
   it('read from that store\'s database, not the app-wide client', async () => {
-    const s = await scene()
+    // On a machine of its own: the full host read loads every Swarm of the machine, and 'host' holds one for each test before this.
+    const machineId = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
     const plain = Fastify()
     plain.setErrorHandler(errorHandler)
     plain.addHook('onRequest', async request => { request.user = owner })
@@ -1318,7 +1321,10 @@ describe('routes given only a store', () => {
     await plain.ready()
     try {
       expect((await plain.inject({ method: 'GET', url: `/api/super-tabs/${s.tabId}/parts` })).statusCode).toBe(200)
-      expect((await plain.inject({ method: 'GET', url: '/api/super-tabs/hosts/host/changes?full=1' })).statusCode).toBe(200)
+      const hosts = await plain.inject({ method: 'GET', url: `/api/super-tabs/hosts/${machineId}/changes?full=1` })
+      expect(hosts.statusCode).toBe(200)
+      // Only this test's own Swarm: a machine shared with every earlier test's Swarm made this read take 4 s here and 10 s on CI.
+      expect(hosts.json().data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
     } finally { await plain.close() }
   }, 10_000)
 })
@@ -1329,7 +1335,22 @@ describe('what a read costs the database (group 3b)', () => {
     const out = ((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut
     return typeof out === 'number' ? out : Number((out as { $numberLong?: string; $numberInt?: string }).$numberLong ?? (out as { $numberInt?: string }).$numberInt)
   }
+  /** Waits until nothing else is reading or writing: what MongoDB sends in a tenth of a second (the first read's own answer
+   *  and whatever else lands meanwhile) is the same four times running. Earlier tests' background work (a command's notices
+   *  and wakes, a read a timed-out test left going) would otherwise land in the next test's count. */
+  const quiet = async () => {
+    let last = -1, steady = 0
+    for (let tries = 0; tries < 300 && steady < 4; tries++) {
+      const before = await sent()
+      await new Promise(done => setTimeout(done, 100))
+      const sentSince = await sent() - before
+      steady = sentSince === last ? steady + 1 : 0
+      last = sentSince
+    }
+    if (steady < 4) throw new Error('The database never went quiet: something keeps reading or writing.')
+  }
   async function databaseBytes(call: () => Promise<unknown>): Promise<number> {
+    await quiet()
     const before = await sent(), own = await sent() - before
     const start = await sent()
     await call()
@@ -1344,6 +1365,14 @@ describe('what a read costs the database (group 3b)', () => {
   const bulky = (s: ReturnType<typeof swarm>) => {
     for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
   }
+
+  it('counts none of the reads an earlier test left running', async () => {
+    const s = await scene(f => bulky(f))
+    // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
+    await leftover
+  })
 
   it('a Desktop change read with nothing changed loads a few tens of KB, not the Swarm', async () => {
     const s = await scene(f => bulky(f))

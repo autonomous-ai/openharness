@@ -59,7 +59,6 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            needsHuman: (_) => 0,
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
