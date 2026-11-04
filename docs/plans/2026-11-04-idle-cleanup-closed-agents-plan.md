@@ -64,11 +64,11 @@ it stayed listed until 14:10.
 **Interfaces:** `sessionStopped(state, target, now): boolean` — the agent's machine's last reading is fresh
 (`MACHINE_FRESH_MS`), lists its harness stopped and not running, with the same reservation proof `closedAgents` uses.
 
-- [ ] Test: an agent whose fresh reading lists it stopped is refused with `AGENT_CLOSED` and nothing changes (no
+- [x] Test: an agent whose fresh reading lists it stopped is refused with `AGENT_CLOSED` and nothing changes (no
   assignment, no member added); one on a stale reading, one listed running, and a renewed reservation without proof are
   assigned as before. Watch it fail.
-- [ ] Code: `sessionStopped` and the check in `work.assign` before any change. Watch it pass.
-- [ ] Test: a closed agent the assign was refused for leaves the roster on the next report with no lost line (existing
+- [x] Code: `sessionStopped` and the check in `work.assign` before any change. Watch it pass.
+- [x] Test: a closed agent the assign was refused for leaves the roster on the next report with no lost line (existing
   removal, now reachable). Run `closedAgents.test.ts` and the `work.assign` tests.
 
 ## Task 2: CLI retention keeps harnesses that hold an assignment
@@ -79,10 +79,22 @@ it stayed listed until 14:10.
 **Interfaces:** `retainContributions(dataDir, machineId, rows, now, assignments = [])`; the file's optional
 `assigned: Record<harnessId, firstReceivedAtMs>`; `ASSIGNED_GRACE_MS = 60_000`.
 
-- [ ] Test (retention): a harness whose roster row is inactive (only archived groups) but which holds an assignment row
+- [x] Test (retention): a harness whose roster row is inactive (only archived groups) but which holds an assignment row
   is retained; after the row is gone it stays retained until a minute after it was first received, then is released;
   an unchanged assignment set does not rewrite the file. Watch it fail.
-- [ ] Test (cleanup): an assignment arriving inside the close window (between the look's read and the close) keeps the
+- [x] Test (cleanup): an assignment arriving inside the close window (between the look's read and the close) keeps the
   agent; a long-idle agent with no task is still closed. Watch the first fail.
-- [ ] Code: record and read `assigned`; the host's poll passes `assignments`. Watch them pass.
-- [ ] Run `retention.spec.ts`, `agentCleanup.spec.ts`, `host.spec.ts`, and `npm run test:core` (services gate).
+- [x] Code: record and read `assigned`; the host's poll passes `assignments`. Watch them pass.
+- [x] Run `retention.spec.ts`, `agentCleanup.spec.ts`, `host.spec.ts`, and `npm run test:core` (services gate).
+
+## Task 3: The route says why a closed member is left out
+
+Asked by the PM in the task's thread (11-04): the PM's tools and the route skip a closed agent, not just fail on assign.
+The route already left out a member its machine's fresh reading does not list running; its reason now says what to do
+when the machine proved the session stopped.
+
+**Files:** `cli/src/superTabs/routeCommand.ts` (`memberRefusals`), `cli/src/superTabs/routeCommand.spec.ts`.
+
+- [x] Test: a contributed member listed stopped is excluded with "Its session was closed. Start a new agent." Watch it
+  fail (it said "Its terminal is not running.").
+- [x] Code: `memberRefusals` takes whether the reading lists it stopped. Watch it pass.
