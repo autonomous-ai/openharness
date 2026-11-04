@@ -563,6 +563,8 @@ export interface CommandContext {
   teamAccountsIdle?: boolean
 }
 
+export const REACHED_NO_AGENT = 'PLACEHOLDER'
+
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
 export const LOOP_NOTICE_AT = 20

@@ -5,7 +5,7 @@
  * in the task's thread). The PM hears the rest through status.
  */
 import { describe, expect, it } from 'vitest'
-import type { Command } from './commands.js'
+import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
@@ -53,6 +53,21 @@ describe('an agent post that names no one', () => {
     // The Engineer has a task in the project, so it posts there without joining.
     const rows = post(f.dev, 'lead', 'Ken, the fix is out.')
     expect(to(rows)).toEqual([[]])
+  })
+})
+
+// Egret6's review: a post that reaches no agent says so to the agent that sent it, in the command's result every CLI prints.
+describe('an agent post that reaches no agent', () => {
+  const sent = (f: ReturnType<typeof stepsFixture>, by: string | null, on: string, recipientIds: string[] = [], agentOnly = false) =>
+    f.run({ type: 'message.send', conversationId: on, text: 'PR #12 is ready.', replyTo: null, recipientIds, ...agentOnly ? { agentOnly } : {} } as Command,
+      by ? f.as(by) : owner).result
+  it('tells its sender, and a post that reached someone or a person\'s says nothing', () => {
+    const f = stepsFixture()
+    expect(sent(f, f.dev, f.task).reachedNoAgent).toBe(REACHED_NO_AGENT)
+    expect(sent(f, f.dev, f.task, [f.lead])).not.toHaveProperty('reachedNoAgent')
+    expect(sent(f, f.lead, f.task)).not.toHaveProperty('reachedNoAgent')
+    expect(sent(f, f.dev, f.task, [f.dev], true)).not.toHaveProperty('reachedNoAgent')
+    expect(sent(f, null, f.task, [])).not.toHaveProperty('reachedNoAgent')
   })
 })
 
