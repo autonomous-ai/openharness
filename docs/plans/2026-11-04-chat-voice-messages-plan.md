@@ -37,14 +37,14 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 ## Design
 
 - **Growth:** the voice fields live on the `SuperTabAttachment` row and on the message's `attachments` JSON. They are deleted with their row: an unsent file's row by the unsent-file sweep after 24 h, a sent message's copy with its message. One clip is at most 10:05 (19.3 MB) and its waveform at most 48 numbers.
-- **Concurrency:** one attachment row. The first call claims it with a conditional write (`voice` not set yet, then set to `{ state: 'transcribing', since }`). A second call made while the first runs gets `VOICE_TRANSCRIBING`, 409, and the phone retries it after a second, at most 30 times. A claim older than 2 minutes counts as lost, and the next call takes it over. The quota reservation is keyed by `voice:<attachmentId>`, so a retake is never charged twice.
+- **Concurrency:** one attachment row. The first call claims it with a conditional write on a `voiceSince` date (`voice` not set, and `voiceSince` not set or stale). A second call made while the first runs gets `VOICE_TRANSCRIBING`, 409, and the phone retries it after a second, at most 30 times. A claim older than 2 minutes counts as lost, and the next call takes it over. The quota reservation is keyed by `voice:<attachmentId>`, so a retake is never charged twice.
 - **Read cost:** the transcription request reads the file's own bytes once, at most 19.3 MB, held within the existing process-wide voice memory budget (`reserveVoice`). `message.send` reads the `voice` field alongside the attachment fields it already loads. Message pages get one more small field per voice attachment.
 - **Scale:** at 10× (hundreds of voice messages a day), Deepgram calls and bucket reads grow linearly. The voice memory budget refuses work beyond what the process can hold, with `VOICE_BUSY`. The first warning is the `super-tab voice` log line's `ms` and `outcome` counts.
 - **Compatibility:** old Desktop and CLI releases ignore `voice`. They show the words as the message text plus a `Voice message.wav` file chip, and agents of an old CLI get the words with the file. New clients against an old server (the backend ships first, so only briefly): the voice route answers 404, and the phone keeps the take, sends nothing and says "Voice messages need a newer server". Messages without `voice` render as today.
-- **Migration + rollback:** one new optional `Json` field, `voice`, on `SuperTabAttachment`. MongoDB needs no migration. After a rollback the old server keeps the field and ignores it, and sent messages keep their text and file.
+- **Migration + rollback:** two new optional fields on `SuperTabAttachment`: `voice` (Json) and `voiceSince` (DateTime). MongoDB needs no migration. After a rollback the old server keeps the field and ignores it, and sent messages keep their text and file.
 - **Audience:** the voice route allows only the actor that uploaded the file, while that actor may still post in its conversation, and only for an unused file with no `purpose`. A sent message's words are read through the same message reads as its text, under the existing guards. Buddies get the row through `rowForBuddy` as today.
 - **Identity:** transcription is charged to the uploading person's own daily voice quota (`voiceQuotaService.reserveForUser`). Only people send voice messages: an agent caller (`asAgentId`) is refused.
-- **Failure:** every failure is named, and the message still sends. Over the daily voice limit: `transcribed: false` with `failure: 'limit'`, the phone says "Today's voice limit is used; sent without words", and agents read "not transcribed". Deepgram down: `failure: 'failed'`, retried on the next call. Not WAV, or over 10:05: refused with 415 or 413. A log line carries the outcome, the size and the length, never the words.
+- **Failure:** every failure is named, and the message still sends. Over the daily voice limit: `transcribed: false` with `failure: 'limit'`, the phone says "Today's voice limit is used; sent without words", and agents read "not transcribed". Deepgram down: `failure: 'failed'`, final like the limit (once per file), and the message sends without words. Not WAV, or over 10:05: refused with 415 or 413. A log line carries the outcome, the size and the length, never the words.
 - **Platforms:** recording on iOS and Android. Playback on iOS, Android, macOS and web with `video_player`. On Linux and Windows, `video_player` has no implementation, so the bubble's play button opens the file in the system's player, as a file chip does today.
 
 ## Review Focus
@@ -75,7 +75,7 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 ### Task 2: Transcribe a voice file once (backend)
 
 **Files:**
-- Modify: `backend/prisma/schema.prisma` (`SuperTabAttachment.voice Json?`, documented)
+- Modify: `backend/prisma/schema.prisma` (`SuperTabAttachment.voice Json?` and `voiceSince DateTime?`, documented)
 - Modify: `backend/src/superTabs/store.ts` (`readVoice`, beside `completeUpload`)
 - Modify: `backend/src/routes/superTabs.ts` (`POST /api/super-tabs/:tabId/attachments/:attachmentId/voice`, empty body)
 - Test: `backend/src/superTabs/voiceMessages.store.test.ts` (memory store, mocked `transcribeWavWithDeepgram` and `voiceQuotaService`)
@@ -92,11 +92,11 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
   - A non-WAV file gives `UNSUPPORTED_AUDIO`, 415.
   - A clip over 10:05 gives `VOICE_TOO_LONG`, 413.
   - Quota exceeded gives `transcribed: false, failure: 'limit'` and no Deepgram call.
-  - A Deepgram error gives `failure: 'failed'`, the quota released and the next call retried.
+  - A Deepgram error gives `failure: 'failed'`, with the quota released, and a later call answers the same.
   - `asAgentId` is refused.
   - No log line contains the transcript (spy on the logger).
 - [ ] Step 2: run them and expect FAIL.
-- [ ] Step 3: implement. Read the bytes with `direct.head(objectKey, size)` under `reserveVoice`, reserve the quota under the id `voice:<id>`, call `transcribeWavWithDeepgram(bytes, 'audio/wav', 'en')`, redact the words with `redactCredentials`, and store `{ durationMs, waveform, transcribed, failure?, transcript }`. Language: `en` for now, and the phone passes its picked voice language as `?lang=` (`pickWavLang`).
+- [ ] Step 3: implement. Read the bytes with `direct.head(objectKey, size)` under `reserveVoice`. Reserve the quota under the id `voice:<id>` and call `transcribeWavWithDeepgram(bytes, 'audio/wav', lang)`, both through an injected `SuperTabStoreHooks.voice`, so tests fake them; the production store wires the real ones in `routes/superTabs.ts`. Then store `{ durationMs, waveform, transcribed, failure?, transcript }`. Language: the phone passes its picked voice language as `?lang=` (`pickWavLang`), and it is `en` when none is given.
 - [ ] Step 4: run them and expect PASS. Commit.
 
 ### Task 3: A voice file sends as a voice message (backend)
