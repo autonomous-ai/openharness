@@ -47,6 +47,24 @@ class SuperTabNeed {
   final String? agentId;
 }
 
+/// Whether [mention] is unread for [controller]'s reader: what
+/// [SuperTabActivity.mentionUnread] says, for a reader with no Activity.
+bool superTabMentionUnread(
+  SuperTabController controller,
+  SuperTabMention mention,
+) {
+  if (mention.resolvedBy case 'read' || 'done') return false;
+  final sequence = mention.messageSequence;
+  if (sequence == null ||
+      controller.snapshot?.conversation(mention.conversationId) == null) {
+    return mention.resolvedBy == null;
+  }
+  return sequence >
+      (mention.threadId == null
+          ? controller.readMark(mention.conversationId)
+          : controller.threadReadMark(mention.threadId!));
+}
+
 /// What one notice of [SuperTabActivity.notices] is: a reminder that is due,
 /// an agent waiting on the reader, a decision asked of them, or a tag of them
 /// they have not read.
@@ -212,18 +230,8 @@ class SuperTabActivity extends ChangeNotifier {
   /// server that does not say where it is counts until resolved, and so does
   /// one in a chat the snapshot does not hold (archived, quiet): no read mark
   /// or Mark read can reach it here, so a resolved one would never clear.
-  bool mentionUnread(SuperTabMention mention) {
-    if (mention.resolvedBy case 'read' || 'done') return false;
-    final sequence = mention.messageSequence;
-    if (sequence == null ||
-        controller.snapshot?.conversation(mention.conversationId) == null) {
-      return mention.resolvedBy == null;
-    }
-    return sequence >
-        (mention.threadId == null
-            ? controller.readMark(mention.conversationId)
-            : controller.threadReadMark(mention.threadId!));
-  }
+  bool mentionUnread(SuperTabMention mention) =>
+      superTabMentionUnread(controller, mention);
 
   /// Marks [tags] read: the ones that still wait are marked done on the
   /// server; the ones it resolved without the reader reading them move the

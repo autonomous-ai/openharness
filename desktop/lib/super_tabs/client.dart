@@ -863,8 +863,23 @@ class SuperTabClient {
           told(id, reminder);
     }
     if (onNotices case final changed?) {
-      SuperTabMentions.of(controller).addListener(changed);
+      // What Activity lists is what the menu bar's Swarm section draws
+      // (task #2914): it hears every list that moves it.
+      final mentions = SuperTabMentions.of(controller)..addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);
+      SuperTabReminders.of(controller).addListener(changed);
+      // A read mark moved here reads a tag with no list or count moving:
+      // told only when the unread number moves, not on every change.
+      var unread = 0;
+      controller.addListener(() {
+        final now = [
+          ...mentions.waiting,
+          ...mentions.earlier,
+        ].where((m) => superTabMentionUnread(controller, m)).length;
+        if (now == unread) return;
+        unread = now;
+        changed();
+      });
     }
     _tagCounts.remove(id);
     _tagDigests.remove(id);
