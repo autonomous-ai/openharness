@@ -72,8 +72,9 @@ describe('database query timing', () => {
 })
 
 describe('metrics listener', () => {
-  it('is off unless a port is set, and gives each pm2 worker its own port on loopback by default', () => {
-    expect(metricsAddress({}, 0)).toBeUndefined()
+  it('is always on, with no switch: each pm2 worker gets its own port, on loopback by default', () => {
+    expect(metricsAddress({}, 0)).toEqual({ port: 9464, host: '127.0.0.1' })
+    expect(metricsAddress({}, 3)).toEqual({ port: 9467, host: '127.0.0.1' })
     expect(metricsAddress({ portBase: 9464 }, 0)).toEqual({ port: 9464, host: '127.0.0.1' })
     expect(metricsAddress({ portBase: 9464 }, 3)).toEqual({ port: 9467, host: '127.0.0.1' })
     expect(metricsAddress({ portBase: 9464, host: '0.0.0.0' }, 0)).toEqual({ port: 9464, host: '0.0.0.0' })
