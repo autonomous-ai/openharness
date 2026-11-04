@@ -15,8 +15,9 @@
  * A team session (lib/teamSession.ts), a Mac's team account, connects only as its own computer's machine
  * and only while that row is a team machine. Its socket hears only the device-key pushes, never the
  * account's grid name, raises no pairing notice on the person's apps, and may take only its own key off
- * the device key log. Every connect records which kind of sign-in serves the machine (`sessionKind`).
+ * the device key log. A connect records which kind of sign-in serves the machine (`sessionKind`) when that changed.
  */
+import type { Machine } from '@prisma/client'
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
@@ -32,7 +33,7 @@ import { PROCESS_ID } from './registry.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
 import { trackSocket } from './wsAttribution.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
-import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type PresenceWriteState } from './dailyTracking.js'
+import { machineConnectChanges, presenceStateFromRow, presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type MachineConnectChanges, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
 import { recordCreatedAgent, recordDeletedAgent } from './agentTracker.js'
 import type { Frame, UpBusMsg } from './tunnel.js'
@@ -96,8 +97,8 @@ const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 
 // How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
 // heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
-// Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. Connect and close always
-// write regardless.
+// Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. The floor starts from the row's own
+// stamp, so a connect stamps only when that is due too (#2676); close always writes.
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
 
 // Daily presence of the PERSON (`user_daily_presence`): the daemon reports its own loopback clients —
@@ -208,14 +209,17 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
       machine = (await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId, 'computer')).machine
       // Before it attaches: a former team machine now served by a normal sign-in must not be read as a team machine. Any
       // other row is stamped by the connect's own update below; until then it is not a team machine either.
-      if (machine.sessionKind === 'team') await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
+      if (machine.sessionKind === 'team') {
+        await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
+        machine = { ...machine, sessionKind: 'computer' }
+      }
     }
     const machineId = machine.machineId
     if (!machineBillingAllowsDataPlane(machine)) { denyPayment(); return }
     // Single-computer claim BEFORE upgrade/attach, so a rejected second computer never supersedes the first.
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
-    const name = machine.name, owner = machine.userId
-    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, owner, name, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
+    const row = machine
+    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, row, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -230,7 +234,12 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   })
 }
 
-async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string, team = false): Promise<void> {
+/** The machine row as the upgrade read it: a connect writes only the facts that differ from it, and stamps only when its
+ *  `lastSeenAt` is due. */
+type AttachedMachine = Pick<Machine, 'machineId' | 'userId' | 'name' | 'hostname' | 'clientVersion' | 'computerId' | 'countryCode' | 'sessionKind' | 'lastSeenAt'>
+
+async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string, team = false): Promise<void> {
+  const { machineId, userId, name: currentName } = machine
   // A different computer was already rejected at the upgrade (denyBusy), so this only closes our OWN
   // stale local socket on a same-computer reconnect landing on this worker.
   owners.get(machineId)?.close(4000, 'superseded')
@@ -294,23 +303,15 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // (see the upgrade handler): that key is a self-consistent liveness token nothing joins against, and
   // re-keying it would 409 every already-connected adapter until its old claim aged out.
   const boundComputer = computerId ? normalizeComputerId(computerId) : null
-  if (label || seededName || clientVersion || boundComputer || countryCode) {
-    void prisma.machine.update({
-      where: { machineId },
-      data: {
-        ...(label ? { hostname: label.slice(0, 120) } : {}),
-        ...(seededName ? { name: seededName } : {}),
-        // Same overwrite-every-connect rule as `hostname`; absent (old client) leaves the last value.
-        ...(clientVersion ? { clientVersion } : {}),
-        ...(boundComputer ? { computerId: boundComputer } : {}),
-        // Same rule again; absent (not behind Cloudflare) leaves the last value.
-        ...(countryCode ? { countryCode } : {}),
-        // Which kind of sign-in serves the machine now (lib/teamSession.ts). A team row was checked, and a former team
-        // row flipped, before the socket attached; this stamps every other row.
-        sessionKind: team ? 'team' : 'computer',
-      },
-    }).catch(() => { /* best effort */ })
-  }
+  // Each overwrite-every-connect fact (`hostname`, `clientVersion`, `computerId`, `countryCode`: absent from an old client
+  // or off Cloudflare leaves the last value), the seeded name, and which kind of sign-in serves the machine now
+  // (lib/teamSession.ts; a team row was checked, and a former team row flipped, before the socket attached). Only the ones
+  // that differ from the row are written, in the connect's one update with its stamp (touchMachinePresence below): a
+  // reconnect used to rewrite them all and stamp separately, two updates of one row at once (#2676).
+  const connectChanges = machineConnectChanges(machine, {
+    hostname: label?.slice(0, 120), name: seededName ?? undefined, clientVersion, computerId: boundComputer ?? undefined, countryCode,
+    sessionKind: team ? 'team' : 'computer',
+  })
   // Tell the adapter its machine's display name (it mirrors it locally for `harness status`); null when
   // unnamed so a stale mirror clears. Renames while connected arrive the same way (machine_meta).
   // The account's private harness grid, carried on the frame the adapter already gets on connect.
@@ -328,14 +329,25 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // skip while a write is still in flight: `onHeartbeat` fires from two 15s sources (node role
   // interval + app ping), and before the connect write lands `presenceWriteDue` would say "due" —
   // without this a slow Mongo gets a second concurrent upsert precisely when it is already slow.
-  const lastMachinePresence: PresenceWriteState = { dayKey: null, wroteAt: 0 }
+  // The floor starts from the row's own stamp, not from this socket: a reconnect a minute after the last stamp neither
+  // stamps on connect nor on its first heartbeat (#2676). Close always stamps: it is the exact "offline since".
+  const lastMachinePresence: PresenceWriteState = presenceStateFromRow(machine.lastSeenAt)
   let machinePresenceInFlight = false
-  const touchMachinePresence = (kind: 'connect' | 'heartbeat' | 'close'): void => {
+  // The connect's changed facts until a write carries them: a failed connect write is retried by the next heartbeat.
+  let pendingChanges: MachineConnectChanges = {}
+  const touchMachinePresence = (kind: 'connect' | 'heartbeat' | 'close', changes?: MachineConnectChanges): void => {
     const now = new Date()
-    if (kind === 'heartbeat' && (machinePresenceInFlight || !presenceWriteDue(lastMachinePresence, now, MACHINE_PRESENCE_WRITE_MS))) return
+    if (changes) pendingChanges = changes
+    const carried = pendingChanges
+    const due = presenceWriteDue(lastMachinePresence, now, MACHINE_PRESENCE_WRITE_MS)
+    if (kind === 'heartbeat' && (machinePresenceInFlight || (!due && !Object.keys(carried).length))) return
+    const stamp = kind === 'close' || due
     machinePresenceInFlight = true
-    touchMachineOnlineDay(userId, machineId, now, { isNewConnection: kind === 'connect', countryCode })
-      .then(() => { lastMachinePresence.dayKey = utcDayKey(now); lastMachinePresence.wroteAt = now.getTime() })
+    touchMachineOnlineDay(userId, machineId, now, { isNewConnection: kind === 'connect', countryCode, changes: carried, stamp })
+      .then(() => {
+        if (pendingChanges === carried) pendingChanges = {}
+        if (stamp) { lastMachinePresence.dayKey = utcDayKey(now); lastMachinePresence.wroteAt = now.getTime() }
+      })
       .catch((err) => logger.warn('machine presence tracking failed', { machineId, kind, error: String(err) }))
       .finally(() => { machinePresenceInFlight = false })
   }
@@ -403,7 +415,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
       touchMachinePresence('heartbeat') // throttled inside — see MACHINE_PRESENCE_WRITE_MS
     },
   })
-  touchMachinePresence('connect')
+  touchMachinePresence('connect', connectChanges)
   const terminalDownUnsub = await subscribeTerminalDown(machineId, (packet) => {
     // Terminal input toward the adapter is 'must': dropping keystrokes is not recoverable client-side.
     guardedSend(ws, packet, 'must', { machineId, kind: 'adapter' })
@@ -567,7 +579,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {
-          void recordTurnStarted(userId, machineId, agentId, now)
+          void recordTurnStarted(userId, machineId, agentId, now, team)
             .catch((err) => logger.warn('turn tracking failed', { machineId, agentId, error: String(err) }))
         }
       }

@@ -18,6 +18,7 @@ Map<String, dynamic> _taskLine(int sequence, String state, String title) => {
   'conversationId': 'lead',
   'sequence': sequence,
   'text': '$title · $state',
+  'thread': 'line-$sequence',
   'createdAt': '2026-11-02T09:00:00Z',
   'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
   'source': {
@@ -39,15 +40,16 @@ Map<String, dynamic> _said(int sequence, String text) => {
 
 void main() {
   group('project rows', () {
-    testWidgets('a project waiting on a person shows no question mark; its '
-        'task still does', (tester) async {
+    testWidgets('a project waiting on a person shows no question mark, open '
+        'or not', (tester) async {
       final server = swarm();
       wait(server);
       await showView(tester, server);
       expect(find.text('?'), findsNothing);
       await tester.tap(find.text('web-project').first);
       await tester.pumpAndSettle();
-      expect(find.text('?'), findsOneWidget);
+      // Its task is in the Tasks view, not listed under it (task #2569).
+      expect(find.text('?'), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
     });
 
@@ -67,7 +69,7 @@ void main() {
       );
     });
 
-    testWidgets('a private project with mentions keeps its number and lock on '
+    testWidgets('a private project keeps its leading lock and mention number '
         'one line, and its row its height', (tester) async {
       final server = swarm()..followedThreads = null;
       (server.state['projects'] as List).first['visibility'] = 'private';
@@ -76,11 +78,13 @@ void main() {
       final number = tester.getCenter(_key('super-mentions-lead'));
       final lock = tester.getCenter(find.byIcon(AppIcons.lock).first);
       expect((number.dy - lock.dy).abs(), lessThan(2));
-      expect(lock.dx, greaterThan(number.dx));
+      expect(lock.dx, lessThan(number.dx));
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('Activity and Buddy sit as far apart as project rows', (
+    // Project rows are 4 px taller than the rest since Huy's ask (11-03,
+    // #2427); Activity and Buddy keep Slack's pitch.
+    testWidgets('Activity and Buddy sit 4 px closer than project rows', (
       tester,
     ) async {
       final server = swarm();
@@ -98,7 +102,7 @@ void main() {
           y(find.text('web-project').first);
       expect(
         y(_key('super-swarm-buddy')) - y(_key('super-activity')),
-        rows.abs(),
+        rows.abs() - 4,
       );
     });
   });
@@ -151,8 +155,11 @@ void main() {
         });
       await showView(tester, server);
       final text = tester.getTopLeft(find.text('A plain message.')).dx;
-      expect(tester.getTopLeft(find.text('Windows credential fix')).dx, text);
-      expect(tester.getTopLeft(find.textContaining('Proposal from')).dx, text);
+      expect(
+        tester.getTopLeft(find.text('Windows credential fix · working')).dx,
+        text,
+      );
+      expect(tester.getTopLeft(find.text('Goal: Activity read fix')).dx, text);
     });
   });
 
@@ -207,18 +214,18 @@ void main() {
     });
   });
 
-  group("a task's pane", () {
+  group("a task message's thread pane", () {
     Future<void> open(WidgetTester tester) async {
       final server = swarm();
       server.messages.add(_taskLine(1, 'working', 'Windows credential fix'));
-      await showView(tester, server);
-      await tester.tap(find.text('Windows credential fix').first);
+      final c = await showView(tester, server);
+      c.openThread('line-1');
       await tester.pumpAndSettle();
     }
 
     testWidgets("its header's rule meets the chat's", (tester) async {
       await open(tester);
-      final panel = find.byKey(const ValueKey('super-task-panel-close'));
+      final panel = find.byKey(const ValueKey('super-thread-close'));
       final rule = find.descendant(
         of: find.ancestor(of: panel, matching: find.byType(Column)).first,
         matching: find.byType(Divider),
@@ -230,8 +237,8 @@ void main() {
       tester,
     ) async {
       await open(tester);
-      final box = _key('super-task-reply-surface');
-      final close = tester.getTopRight(_key('super-task-panel-close')).dx;
+      final box = _key('super-thread-composer-surface');
+      final close = tester.getTopRight(_key('super-thread-close')).dx;
       expect(tester.getTopRight(box).dx, lessThan(close));
       expect(900 - tester.getBottomLeft(box).dy, greaterThanOrEqualTo(16));
     });

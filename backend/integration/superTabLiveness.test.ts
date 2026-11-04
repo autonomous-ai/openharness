@@ -1070,7 +1070,7 @@ describe('an agent whose task was lost', () => {
 describe('a start that never runs', () => {
   /** The Lead starts "Builder" on Worker Mac for a second task, and Worker Mac launches it. A task: no agent but its coordinator
    *  starts into the project chat (#2207). */
-  const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
+  const launch = async (f: Awaited<ReturnType<typeof swarm>>, dispatch = true) => {
     const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
       checks: [{ description: 'Read', independent: false }] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
@@ -1083,7 +1083,7 @@ describe('a start that never runs', () => {
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     // The start's own machine dispatches and confirms it.
     const onMachine = (command: Command) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command }, undefined, 'test-host')
-    await onMachine({ type: 'agent.startDispatch', startId })
+    if (dispatch) await onMachine({ type: 'agent.startDispatch', startId })
     return { group, startId, onMachine }
   }
 
@@ -1134,6 +1134,46 @@ describe('a start that never runs', () => {
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac was still preparing it after 15 minutes')
     expect((await ownerState()).starts!.find(s => s.id === startId)!.error).toBe('Its machine was still preparing it after 15 minutes.')
     expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
+  })
+
+  // Task #2441: the server refused this machine's own report for the start (its daemon log said why, nobody else did), and the
+  // start waited out the 3 minutes. Its machine now says so in its reading, and the start fails at once, with the reason.
+  const REFUSAL = 'This start does not belong to this machine contribution.'
+  it('fails a start its own machine reports refused, at once, with the refusal\'s reason', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId, onMachine } = await launch(f)
+    await f.observe('test-host', [f.harness.worker], { refusedStarts: [{ startId, reason: REFUSAL }] })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe(`Worker Mac refused it: ${REFUSAL}`)
+    const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
+    expect(told).toMatchObject({ conversationId: group })
+    expect(told.text).toMatch(/^Could not start Builder on fixture-model: its machine could not prepare or launch it\./)
+    await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
+      .rejects.toMatchObject({ code: 'START_FAILED' })
+  })
+
+  it('fails an undispatched start its machine reports refused', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId } = await launch(f, false)
+    await f.observe('test-host', [f.harness.worker], { refusedStarts: [{ startId, reason: REFUSAL }] })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe(`Worker Mac refused it: ${REFUSAL}`)
+  })
+
+  it('is not failed by another machine\'s report, never rewrites a decided start, and no reader reads the refusals', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId, onMachine } = await launch(f)
+    const refused = { refusedStarts: [{ startId, reason: REFUSAL }] }
+    await f.observe('lead-host', [f.harness.lead], refused)
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBeNull()
+    const harnessId = randomUUID()
+    await onMachine({ type: 'agent.started', startId, harnessId, configuration: config })
+    await f.observe('test-host', [f.harness.worker, harnessId], refused)
+    expect(await f.timed.start(host, f.tab, startId, f.lead)).toMatchObject({ error: null, harnessId })
+    for (const reader of [owner, host]) {
+      for (const machine of (await f.timed.read(reader, f.tab)).state.machines ?? []) expect(machine.observation ?? {}).not.toHaveProperty('refusedStarts')
+    }
   })
 
   // The time checks run on the Lead's poll and on any other machine's report (store.ts).
@@ -1749,8 +1789,9 @@ describe('the push for a new delivery', () => {
     // The Lead's alone, so it reads their order (people do not read them).
     const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
-    expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
-    expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
+    // In conversation order; each loss's Stuck reply in its task's thread is written between them (task #2693).
+    expect(page[1]!.sequence).toBeGreaterThan(page[0]!.sequence)
+    expect(page[2]!.sequence).toBeGreaterThan(page[1]!.sequence)
     expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
 
     // Make the tie explicit, and store the rows later sequence first so insertion order cannot stand in for it, then read again.

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
+import { stableId } from '../src/superTabs/model.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Roadmap Phase 3.7: the worker's hourly people rollup and minute billing sync read through an index that bounds them. A
@@ -9,6 +10,7 @@ import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let rollupPeople: typeof import('../src/services/ProductUsagePeopleRollupService.js')['rollupPeople']
+let turnMark: typeof import('../src/lib/dailyTracking.js')['turnMark']
 let billing: typeof import('../src/services/MachineBillingWorkerService.js')['machineBillingWorkerService']
 const DAY = 86_400_000
 const NOW = Date.parse('2026-10-29T08:00:00Z')
@@ -20,6 +22,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = uri
   rollupPeople = (await import('../src/services/ProductUsagePeopleRollupService.js')).rollupPeople
   billing = (await import('../src/services/MachineBillingWorkerService.js')).machineBillingWorkerService
+  turnMark = (await import('../src/lib/dailyTracking.js')).turnMark
 })
 afterAll(async () => {
   await (await import('../src/lib/prisma.js')).prisma.$disconnect()
@@ -42,6 +45,51 @@ describe('the hourly people rollup', () => {
     expect(rows[0]!.nreturned).toBe(3)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ dayUtc: 1/)
+  })
+})
+
+describe('a turn on a Mac, Swarm agent or own session', () => {
+  // `first`: the terminal it started in, whose id it keeps as its own after a rebind (superTabs/commands.ts agent.rebind).
+  const agentRow = (machineId: string, harnessId: string, deleted: boolean, first = harnessId) => ({ id: randomUUID(), tabId: randomUUID(), key: stableId(machineId, first),
+    version: 1, changedAt: new Date(NOW), deleted, ordinal: 1, data: { harnessId }, machineId, machineOwnerId: 'owner', contributorId: 'owner' })
+
+  it('tells a live Swarm agent from a removed one and from the same session id on another Mac', async () => {
+    await db.swarmAgent.createMany({ data: [agentRow('mac-a', 'live', false), agentRow('mac-a', 'removed', true)] })
+    expect(await turnMark('mac-a', 'live', false)).toEqual({ hosting: true })
+    expect(await turnMark('mac-a', 'removed', false)).toEqual({ worked: true })
+    expect(await turnMark('mac-b', 'live', false)).toEqual({ worked: true })
+    expect(await turnMark('mac-a', 'own-session', false)).toEqual({ worked: true })
+  })
+
+  it('follows a rebound Swarm agent to its current terminal, and leaves the one it left to the owner', async () => {
+    await db.swarmAgent.create({ data: agentRow('mac-r', 'new-terminal', false, 'first-terminal') })
+    expect(await turnMark('mac-r', 'new-terminal', false)).toEqual({ hosting: true })
+    expect(await turnMark('mac-r', 'first-terminal', false)).toEqual({ worked: true })
+  })
+
+  it('reads only the live agents of that machine, by the machine and deleted index', async () => {
+    await db.swarmAgent.createMany({ data: [agentRow('mac-p', 'a', false), agentRow('mac-p', 'one', false), agentRow('mac-p', 'gone', true),
+      ...Array.from({ length: 20 }, (_, i) => agentRow('mac-elsewhere', `other-${i}`, false))] })
+    const entries = await profiled(db, () => turnMark('mac-p', 'one', false))
+    const rows = reads(entries, 'SwarmAgent', ['machineId', 'deleted'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ machineId: 1, deleted: 1/)
+  })
+
+  it('reads a row from before the hosting mark as not hosting, and a marked one as hosting, in the rollup', async () => {
+    const day = new Date(today - 5 * DAY)
+    const fields = { dayUtc: { $date: day.toISOString() }, surfaces: ['cli'], signupDay: { $date: day.toISOString() }, staff: false,
+      expiresAt: { $date: new Date(day.getTime() + 40 * DAY).toISOString() } }
+    await db.$runCommandRaw({ insert: 'product_usage_activity', documents: [
+      { ...fields, subject: 'before-hosting', worked: true },
+      { ...fields, subject: 'hosting', worked: false, hosting: true },
+    ] })
+    await rollupPeople(new Date(NOW))
+    const total = async (metric: string) => (await db.productUsageTotal.findUnique({ where: { dayUtc_metric: { dayUtc: day, metric } } }))?.value
+    expect(await total('people_hosting')).toBe(1)
+    expect(await total('people_working')).toBe(1)
+    expect(await total('people_active')).toBe(2)
   })
 })
 
@@ -149,5 +197,124 @@ describe('the pending-upload sweep', () => {
       expect(read.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ purpose: 1, createdAt: 1/)
       expect(read.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(Math.max(read.nreturned ?? 0, 2))
     }
+  })
+})
+
+describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
+  // Mongo's TTL monitor deletes by the expiry index's key, about once a minute: receipts past their 30 days, never a scan.
+  it('finds the receipts past their 30 days by the operation_expiry index, reading only those', async () => {
+    const { OPERATION_EXPIRY_MS } = await import('../src/superTabs/operations.js')
+    const row = (ageMs: number) => ({ id: randomUUID(), tabId: 'tab', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {}, createdAt: new Date(Date.now() - ageMs) })
+    await db.superTabOperation.createMany({ data: [...Array.from({ length: 40 }, () => row(DAY)), ...Array.from({ length: 3 }, () => row(40 * DAY))] })
+    const cutoff = new Date(Date.now() - OPERATION_EXPIRY_MS).toISOString()
+    const answer = await db.$runCommandRaw({ explain: { find: 'SuperTabOperation', filter: { createdAt: { $lt: { $date: cutoff } } } }, verbosity: 'executionStats' }) as
+      { queryPlanner: { winningPlan: unknown }; executionStats: { nReturned: number; totalDocsExamined: number } }
+    const winning = JSON.stringify(answer.queryPlanner.winningPlan)
+    expect(winning).toMatch(/"stage":"IXSCAN"/)
+    expect(winning).toMatch(/"indexName":"operation_expiry"/)
+    expect(answer.executionStats.nReturned).toBe(3)
+    expect(answer.executionStats.totalDocsExamined).toBe(3)
+  })
+})
+
+describe('the usage-receipt sweep\'s done check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
+  // backend/AGENTS.md rule 3: its hourly read while the rule is refused takes one key of the expiry index, never a scan of millions.
+  it('reads the newest old receipt by one key of the product_usage_expiry index', async () => {
+    const { lastOldReceipt } = await import('../src/lib/productUsageReceiptSweep.js')
+    const now = new Date('2026-11-02T03:00:00Z')
+    // New receipts (4-day life) and old ones (36-day life): a read the index does not bound examines them all.
+    await db.productUsageReceipt.createMany({ data: [
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `new-${i}`, expiresAt: new Date(now.getTime() + (i % 4) * DAY), life: 4 })),
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `old-${i}`, expiresAt: new Date(now.getTime() + (6 + i) * DAY) })),
+    ] })
+    let newest: Date | null = null
+    const entries = await profiled(db, async () => { newest = await lastOldReceipt(db, now) })
+    expect(newest).toEqual(new Date(now.getTime() + 35 * DAY))
+    const rows = reads(entries, 'product_usage_receipts', ['expiresAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ expiresAt: 1/)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('the read-mark sweep where the expiry is refused (superTabs/readMarks.ts sweepReadMarks)', () => {
+  // backend/AGENTS.md rule 3: every 30 s, one chunk of the oldest marks by the read_mark_expiry index, then exactly those by _id
+  // (#2923: a delete on both _id and the range was planned on the range's index and examined every match).
+  it('reads one chunk of the oldest marks by read_mark_expiry and deletes them by _id, examining only those', async () => {
+    const { READ_MARK_EXPIRY_MS, sweepReadMarks } = await import('../src/superTabs/readMarks.js')
+    const now = new Date(NOW)
+    const mark = (n: number, ageMs: number) => ({ id: `plan-mark-${n}`, tabId: 'tab-plan', personId: 'p', conversationId: `c${n}`, sequence: 1,
+      updatedAt: new Date(NOW - ageMs) })
+    // 40 live marks and 10 past 180 days: a read the index does not bound examines them all.
+    await db.superTabReadMark.createMany({ data: [...Array.from({ length: 40 }, (_, i) => mark(i, DAY)),
+      ...Array.from({ length: 10 }, (_, i) => mark(100 + i, READ_MARK_EXPIRY_MS + (i + 1) * DAY))] })
+    let removed = 0
+    const entries = await profiled(db, async () => { removed = await sweepReadMarks(db, now, 4) })
+    expect(removed).toBe(4)
+    const [found] = reads(entries, 'SuperTabReadMark', ['updatedAt'], ['_id'])
+    expect(found?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ updatedAt: 1/)
+    expect(found!.keysExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(5)
+    expect(found!.docsExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(4)
+    const [removal] = reads(entries, 'SuperTabReadMark', ['_id', 'updatedAt'])
+    expect(removal?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ _id: 1/)
+    expect(removal!.docsExamined, JSON.stringify(plan([removal!]))).toBeLessThanOrEqual(4)
+  })
+})
+
+// Dee, #1891; ENGINEERING.md 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
+// mark's index, equality on its first two fields and the activity range last, newest first and capped.
+describe('the pull request watch', () => {
+  it('reads the open tasks active this week by the finished mark index, the newest first, capped', async () => {
+    const { watchPullRequests } = await import('../src/superTabs/pullRequestEvents.js')
+    let n = 0
+    const group = (activeAt: number, patch: { workFinished?: boolean; data?: Record<string, unknown> } = {}) => {
+      const key = `g${++n}`
+      return { id: `tab-w:${key}`, tabId: 'tab-w', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
+        workFinished: patch.workFinished ?? false, data: { pullRequestUrls: [`https://github.com/acme/app/pull/${n}`], ...patch.data } }
+    }
+    // Finished work and work quiet for a month, which a read the index does not bound examines too; a step, which it filters.
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, () => group(NOW - DAY, { workFinished: true })), ...Array.from({ length: 20 }, () => group(NOW - 30 * DAY)),
+      group(NOW - 3 * 3_600_000), group(NOW - 2 * 3_600_000), group(NOW - 3_600_000, { data: { reviewOf: 'g1' } }), group(NOW - 60_000),
+    ] })
+    const asked: string[] = []
+    const reader = { watch: async (url: string) => { asked.push(url); return null }, botLogin: async () => null, done: async () => {} }
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2))
+    expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+  })
+})
+
+describe('the hourly unused-upload sweep', () => {
+  // Ken's prod scan of 11-04 (#2676): Performance Advisor suggested an index for it. The sweep's claim reads uploads by
+  // `usedBy` and `proposedBy` (both null), `purpose` and age; its remove step reads the uploads it took by `usedBy` alone.
+  // One index starting with `usedBy` bounds both; a used upload, the most of them, is never examined.
+  it('reads only the unused day-old uploads, and then only the ones it took, by the usedBy index', async () => {
+    const { sweepUnsentAttachments } = await import('../src/lib/attachmentSweep.js')
+    const upload = (createdAt: number, fields: Record<string, unknown> = {}) => ({ id: randomUUID(), tabId: 'tab-u', conversationId: 'c', actorKey: 'a',
+      name: 'f.png', mime: 'image/png', size: 1, objectKey: `k-${randomUUID()}`, createdAt: new Date(createdAt), ...fields })
+    await db.superTabAttachment.createMany({ data: [
+      // Sent files, a week old: a read not bounded by `usedBy` examines them all.
+      ...Array.from({ length: 20 }, () => upload(NOW - 7 * DAY, { usedBy: `message-${randomUUID()}` })),
+      upload(NOW - 7 * DAY, { proposedBy: 'proposal-1' }), upload(NOW - 60_000),
+      upload(NOW - 2 * DAY), upload(NOW - 3 * DAY),
+    ] })
+    const deleted: string[] = []
+    const store = { delete: async (key: string) => { deleted.push(key) } }
+    const entries = await profiled(db, () => sweepUnsentAttachments(db, { store } as never, new Date(NOW), { chunk: 100, chunks: 1, pauseMs: 0 }))
+    expect(deleted).toHaveLength(2)
+    const claims = reads(entries, 'SuperTabAttachment', ['usedBy', 'proposedBy', 'createdAt']).filter(e => e.op === 'query')
+    expect(claims, JSON.stringify(plan(claims))).toHaveLength(1)
+    expect(claims[0]!.nreturned).toBe(2)
+    expect(claims[0]!.docsExamined, JSON.stringify(plan(claims))).toBeLessThanOrEqual(2)
+    expect(claims[0]!.planSummary, JSON.stringify(plan(claims))).toMatch(/IXSCAN \{ usedBy: 1, proposedBy: 1, purpose: 1, createdAt: 1/)
+    const taken = reads(entries, 'SuperTabAttachment', ['usedBy'], ['proposedBy']).filter(e => e.op === 'query')
+    expect(taken, JSON.stringify(plan(taken))).toHaveLength(1)
+    expect(taken[0]!.docsExamined, JSON.stringify(plan(taken))).toBeLessThanOrEqual(2)
+    expect(taken[0]!.planSummary, JSON.stringify(plan(taken))).toMatch(/IXSCAN \{ usedBy: 1/)
   })
 })

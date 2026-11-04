@@ -29,30 +29,6 @@ class SuperTabComposerToggle extends StatelessWidget {
   static const _iconSize = 12.0;
   static const _gap = 4.0;
 
-  /// The width this choice takes with [label] in one line, as drawn in
-  /// [context] (its text size included): what a send row measures to tell
-  /// whether a label fits. Matches [DesktopPill]'s compact quiet control:
-  /// side padding, the icon and its gap, and the reserved rim.
-  static double widthOf(BuildContext context, String label) {
-    final text = TextPainter(
-      text: TextSpan(
-        text: label,
-        style: DesktopChrome.text(size: _textSize, height: 1.25),
-      ),
-      textDirection: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context),
-      maxLines: 1,
-    )..layout();
-    final width = text.width;
-    text.dispose();
-    return 6 * 2 +
-        grid.AppDesktop.focusWidth * 2 +
-        _iconSize +
-        _gap +
-        width +
-        1;
-  }
-
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);

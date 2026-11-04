@@ -413,7 +413,8 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     await tester.pump();
-    expect(chosen, AccountMenuChoice.addPhone);
+    // Profile, the person's own name and @username, heads the rows (#2654).
+    expect(chosen, AccountMenuChoice.profile);
 
     // Up from nothing is the last row, and Down from there the first again.
     await _mountMenu(tester, onChoice: answer);
@@ -432,7 +433,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     await tester.pump();
-    expect(chosen, AccountMenuChoice.devices);
+    expect(chosen, AccountMenuChoice.addPhone);
 
     await _mountMenu(tester, onChoice: answer);
     await tester.tapAt(const Offset(40, 700));
@@ -444,7 +445,7 @@ void main() {
   });
 
   testWidgets('an account with no name says its email once; Add Phone is '
-      'the first row whatever the account has', (tester) async {
+      'the row after Profile whatever the account has', (tester) async {
     await _mountMenu(tester, name: '');
     expect(find.text('dee@example.com'), findsOneWidget);
     // It was hidden once the account had a phone, which the menu learned only
@@ -456,6 +457,7 @@ void main() {
     expect(_menu, findsNothing);
     AccountMenuChoice? chosen;
     await _mountMenu(tester, onChoice: (value) => chosen = value);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

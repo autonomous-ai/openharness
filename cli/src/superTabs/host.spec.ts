@@ -23,7 +23,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -91,6 +91,27 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     idle: () => { status = 'delivered' }, send: () => { status = 'queued'; claimId = null },
     revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
 }
+
+// Import an agent (task #2379; security review of #2783): an agent any Swarm still lists on this machine is in a Swarm,
+// its chats archived or its stop asked, though it has no role to restart with.
+describe('whether a Swarm lists a session on this machine', () => {
+  it('names a session any roster row of this machine lists, whatever its chats or stop', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let rows: Record<string, unknown>[] = [{ tabId: 'tab', agent, stopRequested: true }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm(rows) : swarmReply(path, { agents: [{ ...agent, workDecision: 'stop' }],
+        conversations: [{ id: 'task', archived: true, agentIds: ['agent'] }] }) } }))
+    const sources = sourcesOf(t.core)
+    // The restart role says none: its chats are archived and its stop asked.
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+    expect(await swarmListedFor(sources, 'harness')).toBe(true)
+    expect(await swarmListedFor(sources, 'personal')).toBe(false)
+    // Another machine's row of the same session id is not this machine's.
+    rows = [{ tabId: 'tab', agent: { ...agent, machineId: 'machine-2' } }]
+    expect(await swarmListedFor(sources, 'harness')).toBe(false)
+  })
+})
 
 describe('current Swarm role lookup', () => {
   // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator,
@@ -556,6 +577,53 @@ describe('Super Tab native delivery handoff', () => {
     host.stop(); release()
     await Promise.resolve()
   })
+  // Ken's prod scan (11-04): 615 agent.configuration refusals in 32 minutes, AGENT_UNAVAILABLE, about 19 a minute: a host
+  // re-posts every 5 s an observation the Swarm will never take (an agent that must be shared again, or is gone).
+  describe('a configuration report the Swarm refuses (#2675)', () => {
+    const refusing = (t: ReturnType<typeof setup>, status: number, code: string) => {
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@high')
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const sent: string[] = []
+      vi.mocked(t.call).mockImplementation(async (...args) => {
+        const body = args[2] as { operationId?: string; command?: { type?: string } } | undefined
+        if (args[1].endsWith('/commands') && body?.command?.type === 'agent.configuration') {
+          sent.push(body.operationId!)
+          return { status, body: { success: false, error: { code, message: 'Refused.' } } }
+        }
+        return original(...args)
+      })
+      return sent
+    }
+    const passes = async (host: SuperTabHost, t: ReturnType<typeof setup>, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await host.tick()
+        await new Promise(resolve => setImmediate(resolve))
+        t.wait(5_000)
+      }
+    }
+
+    it('is not sent again after a permanent refusal, and a new reading is reported once', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 400, 'AGENT_UNAVAILABLE')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(1)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@high')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(2)
+      expect(new Set(sent).size).toBe(2)
+    })
+
+    it('backs off after a passing failure instead of sending every 5 seconds', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 503, 'BACKEND_UNAVAILABLE')
+      // Two minutes of passes: 24 at the old pace.
+      await passes(host, t, 24)
+      expect(sent.length).toBeGreaterThanOrEqual(2)
+      expect(sent.length).toBeLessThanOrEqual(6)
+    })
+  })
+
   it('retires a human-resolved journal entry without resubmitting its native input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()
@@ -820,6 +888,27 @@ describe('Super Tab native delivery handoff', () => {
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
   })
+  it('only the machine\'s own person\'s message may close its question', async () => {
+    const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
+      vi.mocked(t.core.account.identity).mockResolvedValue(accountId ? { accountId, email: `${accountId}@example.com` } : null)
+    const person = { kind: 'person', id: 'p1', name: 'sam@example.com' }
+    const own = setup({ author: person, text: 'Yes', createdAt: '2026-11-03T05:00:00.000Z' })
+    signedIn(own, 'p1')
+    await own.open().tick()
+    expect(vi.mocked(own.core.turns.deliver).mock.calls[0]![3]).toEqual({ answersQuestion: true, writtenAt: Date.parse('2026-11-03T05:00:00.000Z') })
+    const other = setup({ author: person, text: 'Yes', createdAt: '2026-11-03T05:00:00.000Z' })
+    signedIn(other, 'p2')
+    await other.open().tick()
+    expect(vi.mocked(other.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+    const out = setup({ author: person, text: 'Yes' })
+    signedIn(out, null)
+    await out.open().tick()
+    expect(vi.mocked(out.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+    const agent = setup({ author: { kind: 'agent', id: 'p1', name: 'Builder' }, text: 'Done' })
+    signedIn(agent, 'p1')
+    await agent.open().tick()
+    expect(vi.mocked(agent.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+  })
   // Final review: with no --to a reply reaches the coordinator (or, from the coordinator, the task's assignee), so an Engineer
   // answering a Reviewer reached the PM, and the PM answering an agent that was not the assignee reached no one.
   it('names an agent author with --to in the reply line, and no one for a person', async () => {
@@ -902,6 +991,31 @@ describe('Super Tab native delivery handoff', () => {
     it('a thread\'s only reply has no thread line', async () => {
       const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })
       expect(await delivered(t)).not.toContain('In a thread')
+    })
+    // Ken 11-03 (#2492): in a thread of his Buddy chat he answered "ok để thử"; the delivery quoted only the thread's root,
+    // so the Buddy guessed at the reply. A Buddy reads no Swarm state (no place or work line), but it gets the thread line,
+    // with the read command in its own prefix (no --agent: its guard refuses one).
+    const asBuddy = (t: ReturnType<typeof setup>) =>
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    it('a Buddy gets the thread line with its own --thread command, and no place or work line', async () => {
+      const { t, reads } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Buddy' }, { name: 'Ken' }] }]) })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread Ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from Buddy, Ken. '
+        + "Read the whole thread before acting on it: harness super-tab --port 18473 --machine 'machine-1' --tab 'tab' messages 'g12' --thread 'root'")
+      expect(prompt).not.toContain('--agent')
+      expect(prompt).not.toContain('In task #12')
+      expect(prompt).not.toContain('You are assigned')
+      // The root is in the page the quoted reply was read from: no read beyond it.
+      expect(reads).toEqual(['root'])
+    })
+    it('a Buddy\'s news from a thread elsewhere reads nothing for a thread line (its read boundary)', async () => {
+      const { t, reads } = wired({ thread: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Dev1' }] }]) }, undefined, { buddyNews: true })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt.startsWith('News for your owner')).toBe(true)
+      expect(prompt).not.toContain('In a thread')
+      expect(reads).toEqual([])
     })
     it('a work.assign delivered right after it names the new task', async () => {
       let swarm: Record<string, unknown> = { ...SWARM, conversations: [SWARM.conversations[0]] }
@@ -3215,7 +3329,7 @@ describe('built-in skill text after a CLI update', () => {
     let inFlight = 0
     /** A notice the backend refuses (an older backend, an outage), and every refused request. */
     let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
-    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
+    const refused: Array<{ operationId: string; asAgentId?: string; command: Record<string, any> }> = []
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
@@ -3389,12 +3503,37 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
       ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
     for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
-    // Only the agent sees its notice; no person reads it in a chat.
+    // Only the agent sees its notice; no person reads it in a chat. Marked as a skills notice, its coordinator's goes in its digest.
     for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
+    for (const s of f.sent) expect(s.command.notice).toBe('skills')
     expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
     // A second pass and a restarted host find the files current and say nothing more.
     await f.pass(host, 5_000)
     await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes. A Buddy session's notice is
+  // a top-level post the backend refuses (a session answers only in its own thread), and the host tried it every minute.
+  it('stops a skill notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.asAgentId === 'a-builder' ? { status: 403, body: { success: false,
+      error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
+    const host = await f.pass()
+    for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
+    expect(f.refused.filter(r => r.asAgentId === 'a-builder')).toHaveLength(1)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-lead', 'a-reviewer'])
+  })
+
+  it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "notice"' } } } : undefined)
+    const host = await f.pass()
+    expect(f.refused).toHaveLength(3)
+    expect(f.sent.map(s => [s.asAgentId, s.command.agentOnly, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', true, false], ['a-lead', true, false], ['a-reviewer', true, false]])
+    await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
   })
 
@@ -3404,8 +3543,8 @@ describe('built-in skill text after a CLI update', () => {
       error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
     const host = await f.pass()
     expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
-    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command]).sort()).toEqual([
-      ['a-builder', ['a-builder'], false], ['a-lead', ['a-lead'], false], ['a-reviewer', ['a-reviewer'], false]])
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', ['a-builder'], false, false], ['a-lead', ['a-lead'], false, false], ['a-reviewer', ['a-reviewer'], false, false]])
     await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
     expect(f.refused).toHaveLength(3)
@@ -3541,6 +3680,8 @@ describe('project instructions from the roster', () => {
      *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
     const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
     let lag: number | undefined, history = true
+    /** The built-in PM schedule the backend serves its coordinator's read (2026-11-04 PM schedule design). */
+    let builtIn = '## Built-in PM schedule (from the Swarm)\n\nThe Swarm wakes you for these jobs.'
     /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
     let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
     const rows = () => agents.map(agent => {
@@ -3575,7 +3716,7 @@ describe('project instructions from the roster', () => {
         }
         const at = saves[(lag ?? saves.length) - 1]!
         return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
-          coordinatorName: 'Product Manager', notesRevision: 1,
+          coordinatorName: 'Product Manager', notesRevision: 1, ...(read[2] === 'a-pm' ? { builtIn } : {}),
           ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
       }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
@@ -3605,10 +3746,33 @@ describe('project instructions from the roster', () => {
       /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
       template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
         doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
-      setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+      setDoc: (next: typeof doc) => { doc = next }, setBuiltIn: (text: string) => { builtIn = text }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
   }
   const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  // 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, which changes with backend
+  // builds while the document's revision and hash stay; the roster's builtInHash says when.
+  it('rereads when the built-in hash moves', async () => {
+    const f = docFixture(['pm'])
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-1' })
+    const host = await f.pass()
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('The Swarm wakes you for these jobs.')
+    f.setBuiltIn('## Built-in PM schedule (from the Swarm)\n\nEvery 30 minutes, the open-task sweep.')
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-2' })
+    await f.pass(host, 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(2)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('Every 30 minutes, the open-task sweep.')
+  })
+
+  it('caches the coordinator\'s read apart from a worker\'s', async () => {
+    const f = docFixture(['pm', 'tester'])
+    await f.pass()
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(1)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('## Built-in PM schedule (from the Swarm)')
+    expect(readFileSync(f.file('tester'), 'utf8')).not.toContain('Built-in PM schedule')
+  })
 
   // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
   // the daemon restarted. The template's hash moves with each backend build that changes it.
@@ -3812,12 +3976,13 @@ describe('project instructions from the roster', () => {
   it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
     const f = docFixture(['pm', 'tester'])
     const host = await f.pass()
-    expect(f.reads).toEqual([instructionsRead('a-pm'), historyRead('a-pm')])
+    // The coordinator's read carries the built-in PM schedule, so it is its own; the project's other agents share one.
+    expect([...f.reads].sort()).toEqual([instructionsRead('a-pm'), historyRead('a-pm'), instructionsRead('a-tester'), historyRead('a-tester')].sort())
     expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
     expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
     f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
     await f.pass(host, 1_000)
-    expect(f.reads).toHaveLength(4)
+    expect(f.reads).toHaveLength(8)
     expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
     expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
   })
@@ -3886,6 +4051,26 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
   return { ...t, host, rows, commands, keepLeadAlive, closeMember, poll, live: (value: boolean) => { live = value } }
 }
 const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+// Task #2354: the switch its owner asked for reaches the Buddy's machine on its row, and is carried out there with the Buddy's
+// thread sessions on this machine (superTabs/buddyModel.ts).
+describe('a Buddy\'s model request', () => {
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const buddyRow = (agent: Record<string, unknown>) => ({ tabId: 'tab', active: true, agent: { machineId: 'machine-1', buddyOf: BUDDY_OF, ...agent } })
+
+  it('is handed to the Buddy model runner with the Buddy\'s own thread sessions, and no one else\'s', async () => {
+    const serve = vi.fn(async () => {})
+    const main = buddyRow({ id: 'buddy', harnessId: 'h-main', modelRequest: { id: 'req1', gridModel: 'm' } })
+    const session = buddyRow({ id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
+    const other = { tabId: 'tab', active: true, agent: { id: 'other', harnessId: 'h-other', machineId: 'machine-1',
+      buddyOf: { personId: 'someone', generation: 'g' }, buddySession: { thread: 'u', from: 0 } } }
+    const t = lifeFixture([main, session, other], { buddyModels: { serve } })
+    await t.poll()
+    await vi.waitFor(() => expect(serve).toHaveBeenCalledTimes(1))
+    expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
+      [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
+  })
+})
 
 // Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
 // with it. Its host asks the backend to end it, as the machine's owner, when idle or when its terminal is gone.
@@ -4128,6 +4313,14 @@ describe('ending a Buddy\'s thread sessions', () => {
 })
 
 describe('keeping a Swarm Lead alive', () => {
+  it('services a landed PM switch after the source is no longer marked as Lead', async () => {
+    const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
+      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } } })])
+    await t.poll()
+    const results = t.commands.map(command => command.command as Record<string, unknown>).filter(command => command.type === 'agent.switchResult')
+    expect(results).toContainEqual({ type: 'agent.switchResult', agentId: 'agent', switchId: 'landed-switch', ok: true })
+  })
+
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
   // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
   it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {
@@ -5073,7 +5266,8 @@ describe('a delivery held by a busy pane', () => {
     expect(t.saved().entries).toEqual({})
     await seconds(t, host, 5)
     expect(writes(t)).toBe(122)
-  })
+    // 120 simulated ticks: about 2 s here, past the 5 s default on a loaded CI runner.
+  }, 20_000)
 
   it('a cancel pushed while held stops the retry', async () => {
     const t = setup(), host = t.open()

@@ -37,6 +37,7 @@ abstract final class AppIcons {
   static const arrowUp = LucideIcons.arrowUp400;
   static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
+  static const atSign = LucideIcons.atSign400;
   static const bell = LucideIcons.bell400;
   static const bellOff = LucideIcons.bellOff400;
   static const bellRing = LucideIcons.bellRing400;
@@ -134,11 +135,16 @@ abstract final class AppIcons {
   static const logOut = LucideIcons.logOut400;
   static const maximize = LucideIcons.maximize400;
   static const menu = LucideIcons.menu400;
+
+  /// The Windows workspace's app-menu button: one vertical frame line with its
+  /// shortcut notch, the drawing the owner picked for the tab strip.
+  static const galleryVerticalEnd = LucideIcons.galleryVerticalEnd400;
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
   static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
+  static const mic = LucideIcons.mic400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
@@ -185,6 +191,7 @@ abstract final class AppIcons {
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
+  static const squareKanban = LucideIcons.squareKanban400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;

@@ -6,13 +6,16 @@ import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
+import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
+import { logger } from '../../utils/logger.js'
+import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
+import { lowerReadMark, readMarkRows, readThreadMarks, writeThreadFollow, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
+import { clearReminder, listReminders, REMINDER_AHEAD_MS, remindersDigest, setReminder, type ReminderItem } from '../reminders.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
+import { FIELDS, readable, row as messageRow } from './inbox.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -30,7 +33,7 @@ import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -53,14 +56,17 @@ function readableGroups(read: Read): Set<string> {
 }
 
 /** The reader's marks of the conversations and threads they can read now: a mark never names a conversation the reader has
- *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent). */
-function readableMarks(read: Read, marks: Map<string, number>, threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
-  Pick<Derived, 'readMarks' | 'threadMarks' | 'chatSettings'> {
+ *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent), and one
+ *  with no mark their Mark unread moved last none either (`unreadMarks` absent). */
+function readableMarks(read: Read, marks: ReadMarkRow[], threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
+  Pick<Derived, 'readMarks' | 'unreadMarks' | 'threadMarks' | 'chatSettings'> {
   if (read.actor.kind !== 'person') return {}
   const readable = readableGroups(read)
+  const kept = marks.filter(mark => readable.has(mark.conversationId))
+  const unreadMarks = Object.fromEntries(kept.filter(mark => mark.lowered).map(mark => [mark.conversationId, mark.sequence]))
   const threadMarks = Object.fromEntries([...threads].filter(([id]) => readable.has(id)).map(([id, held]) => [id, Object.fromEntries(held)]))
   const chatSettings = Object.fromEntries([...settings].filter(([id]) => readable.has(id)))
-  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable.has(id))),
+  return { readMarks: Object.fromEntries(kept.map(mark => [mark.conversationId, mark.sequence])), ...(Object.keys(unreadMarks).length ? { unreadMarks } : {}),
     ...(Object.keys(threadMarks).length ? { threadMarks } : {}), ...(Object.keys(chatSettings).length ? { chatSettings } : {}) }
 }
 
@@ -140,7 +146,18 @@ export class SwarmReads {
     return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
   }
 
-  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string): Promise<Changes> {
+  /** Every machine the reader sees, whole: what a client that asks for lines in its changes reads when it needs more than liveness. */
+  async machineReadings(user: AuthUser, tabId: string, asAgentId?: string): Promise<MachineReadings> {
+    const t0 = this.now()
+    return this.read(user, tabId, async (tx, cached) => {
+      const base = await readLight(tx, cached, tabId, LIGHT)
+      const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base)
+      // A Buddy reads no machines (read/changes.ts).
+      return { format: READ_FORMAT, serverTime: t0, machines: isBuddyReader(read.view.state, read.actor) ? [] : read.view.parts.machines }
+    })
+  }
+
+  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string, options: { lightMachines?: boolean } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
@@ -155,7 +172,7 @@ export class SwarmReads {
       const person = asAgentId ? null : user.sub
       const [changed, tagged, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
         person ? waitingTagConversations(tx, tabId, person, t0) : [],
-        person ? readMarks(tx, tabId, person, from.since) : new Map<string, number>(),
+        person ? readMarkRows(tx, tabId, person, from.since) : [],
         person ? readThreadMarks(tx, tabId, person, from.since) : new Map<string, Map<string, number>>(),
         person ? readChatSettings(tx, tabId, person, from.since) : new Map<string, NotifyLevel>()])
       // Starts: only unfinished ones whole in the base, then the poll's own.
@@ -166,11 +183,11 @@ export class SwarmReads {
       // moved, so the mark goes only to a reader who can still read it.
       const held = new Set(base.groups.map(g => g.key))
       const named = [...new Set([...tagged, ...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
-        ...marks.keys(), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
+        ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor),
+        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined),
         derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
     })
   }
@@ -225,6 +242,13 @@ export class SwarmReads {
     })
   }
 
+  /** The stored mark is the answer: a failed tag resolve is only logged, since the client never resends a mark at or below it. */
+  private async resolveTags(input: Parameters<typeof resolveRead>[1]): Promise<void> {
+    try { await resolveRead(this.db, input) } catch (error) {
+      logger.warn('[swarm-read] tags not resolved', { tabId: input.tabId, conversationId: input.conversationId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
    *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
    *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
@@ -233,7 +257,20 @@ export class SwarmReads {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
-    return { sequence: await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now }) }
+    const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
+    await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
+    return { sequence: stored }
+  }
+
+  /** The person's Mark unread from the message at `sequence`: their mark of a conversation they can read goes to just before it,
+   *  never forward (readMarks.ts lowerReadMark), and never past the conversation's newest message. Checked as markRead: only a
+   *  person reading as themselves, and every chat they cannot read is the same refusal. Tags it resolved and Activity it read
+   *  stay so; a reply only in a thread keeps its thread's mark. */
+  async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { group } = await this.readGroup(user, tabId, conversationId)
+    const target = Math.min(sequence - 1, group.data!.lastMessageSequence)
+    return { sequence: await lowerReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: target, now: this.now() }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -247,6 +284,7 @@ export class SwarmReads {
     const stored = await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now })
     // The thread's replies the mark passes are read in Activity too (activity.ts).
     await markActivityThreadRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
+    await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
     return { sequence: stored }
   }
 
@@ -262,15 +300,7 @@ export class SwarmReads {
   private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
-    const actor = await this.store.actor(this.db, user, state)
-    let newest: number
-    try {
-      newest = readConversation(state, actor, conversationId).lastMessageSequence
-    } catch (error) {
-      if (error instanceof SuperTabError && error.status === 404) unavailable()
-      throw error
-    }
+    const newest = (await this.readableChat(user, tabId, conversationId)).conversation.lastMessageSequence
     const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
       { $project: { source: 1, recipientIds: 1, thread: 1 } }])
     const root = found && { id: found._id as string, source: found.source ?? null, recipientIds: (found.recipientIds as string[] | undefined) ?? [], thread: found.thread }
@@ -302,6 +332,52 @@ export class SwarmReads {
     return await listActivity(this.db, tabId, state, actor, this.now())
   }
 
+  /** The person's due reminders in this Swarm and when the next one is due (reminders.ts), those they can read now. A person
+   *  reading as themselves only. */
+  async reminders(user: AuthUser, tabId: string): Promise<{ due: ReminderItem[]; next: string | null }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { state } = await this.store.readLoad(user, tabId)
+    const actor = await this.store.actor(this.db, user, state)
+    author(state, actor)
+    if (actor.kind !== 'person') return fail('FORBIDDEN', 'Only a person has reminders.', 403)
+    return await listReminders(this.db, tabId, state, actor, this.now())
+  }
+
+  /** Sets the person's reminder of one message to `at` (reminders.ts), replacing one they set before: a time after now and at
+   *  most REMINDER_AHEAD_MS ahead, on a message they read as a page shows it, in that chat. Every miss (a chat they cannot read,
+   *  another chat's message, one that does not exist or that a page would not show them) is the same refusal. Only a person
+   *  reading as themselves. */
+  async setReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string, at: string): Promise<{ id: string; dueAt: string }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const now = this.now(), dueAt = Date.parse(at)
+    if (!(dueAt > now) || dueAt > now + REMINDER_AHEAD_MS) fail('INVALID_REMINDER', 'Choose a time in the next 30 days.', 400)
+    const { state } = await this.readableChat(user, tabId, conversationId)
+    const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: messageId, tabId, conversationId } }, { $project: { ...FIELDS, conversationId: 1 } }])
+    if (!found || !(await readable(this.db, tabId, [messageRow(found)], state)).length) fail('NOT_FOUND', 'This message is unavailable.', 404)
+    return await setReminder(this.db, { tabId, personId: user.sub, conversationId, messageId, dueAt, now })
+  }
+
+  /** Clears the person's reminder of one message of a chat they can read (reminders.ts), as Activity's Reminders does when they
+   *  open it, and answers whether there was one. Only their own, as themselves. */
+  async clearReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string): Promise<{ cleared: boolean }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    await this.readableChat(user, tabId, conversationId)
+    return { cleared: await clearReminder(this.db, { tabId, personId: user.sub, conversationId, messageId }) }
+  }
+
+  /** Conversation `conversationId` and the Swarm's state, for a person reading as themselves who reads it: every conversation
+   *  they cannot read, or that does not exist, is the same refusal. The Swarm is read with that conversation alone. */
+  private async readableChat(user: AuthUser, tabId: string, conversationId: string): Promise<{ state: SuperTabState; conversation: Conversation }> {
+    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
+    const actor = await this.store.actor(this.db, user, state)
+    try {
+      return { state, conversation: readConversation(state, actor, conversationId) }
+    } catch (error) {
+      if (error instanceof SuperTabError && error.status === 404) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      throw error
+    }
+  }
+
   /** Marks the person's Activity made at or before `through` read on every device, never past now. */
   async markActivityRead(user: AuthUser, tabId: string, through: string): Promise<{ marked: number }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
@@ -319,8 +395,8 @@ export class SwarmReads {
   }
 
   /** A person's own read marks (an agent has none), every one or those moved since `since`. */
-  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<Map<string, number>> {
-    return actor.kind === 'person' ? readMarks(tx, tabId, actor.userId, since) : new Map()
+  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<ReadMarkRow[]> {
+    return actor.kind === 'person' ? readMarkRows(tx, tabId, actor.userId, since) : []
   }
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
@@ -334,7 +410,7 @@ export class SwarmReads {
       readProject(state, actor, projectId)
       // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
       const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
-      const dormant = await recentDormantGroups(tx, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
+      const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
       const names = await profileNames(tx, state.people.map(p => p.id))
       // Which machines the reader sees, with the daily rows no other read carries.
@@ -412,13 +488,13 @@ export class SwarmReads {
     const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor),
-        activityDigest(tx, tabId, actor.userId, t0)]) : undefined,
+        activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
       view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
         ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-          decisionsDigest: counts[1].digest, activityDigest: counts[2] } : {}) }, state) }
+          decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state) }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

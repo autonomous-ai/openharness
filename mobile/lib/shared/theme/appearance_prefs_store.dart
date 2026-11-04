@@ -5,6 +5,28 @@ import '../../core/local_key_value_store.dart';
 import 'app_theme.dart';
 import 'color_palette.dart';
 
+/// Light or dark, as Settings opened from Swarm offers it: System, Dark or Light.
+///
+/// Beside [HarnessPalette], not instead of it. App colors (the terminal's Settings) still picks an
+/// exact palette, and a palette carries its own brightness; Theme only says which side of it to
+/// wear — see [AppearancePrefs.paletteFor].
+enum AppThemeMode {
+  /// This phone's own light or dark, followed as it changes.
+  system('System'),
+  dark('Dark'),
+  light('Light');
+
+  const AppThemeMode(this.label);
+
+  /// What the control says.
+  final String label;
+
+  /// The saved name read back; anything else — a build that had a mode this one does not — is
+  /// null, which is "the palette decides", as before Theme existed.
+  static AppThemeMode? fromId(String? id) =>
+      values.where((mode) => mode.name == id).firstOrNull;
+}
+
 /// The app's coordinated palette and UI typography on this computer.
 ///
 /// This does not change the terminal's type. The terminal renders a grid a remote
@@ -18,9 +40,48 @@ class AppearancePrefs {
     this.uiFamily,
     this.uiSize = uiSizeDefault,
     this.palette = HarnessPalette.graphite,
+    this.themeMode,
   });
 
+  /// The palette chosen in App colors — or, before any was, the shipped one.
   final HarnessPalette palette;
+
+  /// Settings ▸ Appearance ▸ Theme, as Swarm's Settings offers it. Null — the default, and what
+  /// App colors sets — means [palette] decides on its own, light or dark, as it always has. So
+  /// nobody's app changes until they choose here.
+  final AppThemeMode? themeMode;
+
+  /// The palette each side falls back to when [palette] is on the other: the phone's two themes,
+  /// as Swarm's pages are drawn and reviewed in.
+  static const darkPalette = HarnessPalette.graphite;
+  static const lightPalette = HarnessPalette.paper;
+
+  /// The palette the app wears on a phone whose own appearance is [platform].
+  ///
+  /// [palette] itself while it is on the side [themeMode] asks for — so a Midnight chosen in App
+  /// colors stays Midnight under Dark, and comes back after a trip to Light — and the shipped
+  /// palette of that side when it is not.
+  HarnessPalette paletteFor(Brightness platform) => _side(switch (themeMode) {
+    null => palette.brightness,
+    AppThemeMode.system => platform,
+    AppThemeMode.dark => Brightness.dark,
+    AppThemeMode.light => Brightness.light,
+  });
+
+  /// The palette a terminal's page wears: the dark side whenever Theme is chosen, whatever the app
+  /// wears around it — a terminal is read as a terminal. Left to App colors ([themeMode] null),
+  /// the terminal wears [palette], light or dark, as before.
+  HarnessPalette get terminalPalette =>
+      themeMode == null ? palette : _side(Brightness.dark);
+
+  /// What Theme's control shows chosen: [themeMode], or the side [palette] is on while App colors
+  /// decides — which is exactly what Dark or Light would draw.
+  AppThemeMode get shownThemeMode =>
+      themeMode ?? (palette.isDark ? AppThemeMode.dark : AppThemeMode.light);
+
+  HarnessPalette _side(Brightness side) => palette.brightness == side
+      ? palette
+      : (side == Brightness.dark ? darkPalette : lightPalette);
 
   /// The face the app's chrome is set in. `null` means the system font, which is
   /// what [AppFont.sans] falls back to.
@@ -47,15 +108,20 @@ class AppearancePrefs {
   /// [uiFamily] is nullable and `copyWith` cannot express "unset" with
   /// `?? this.x`, so going back to the system font needs its own flag. Without
   /// one, choosing System silently does nothing.
+  ///
+  /// [themeMode] is nullable for the same reason, and [clearThemeMode] is its flag.
   AppearancePrefs copyWith({
     String? uiFamily,
     double? uiSize,
     HarnessPalette? palette,
+    AppThemeMode? themeMode,
     bool clearUiFamily = false,
+    bool clearThemeMode = false,
   }) => AppearancePrefs(
     uiFamily: clearUiFamily ? null : (uiFamily ?? this.uiFamily),
     uiSize: uiSize ?? this.uiSize,
     palette: palette ?? this.palette,
+    themeMode: clearThemeMode ? null : (themeMode ?? this.themeMode),
   );
 
   @override
@@ -63,10 +129,11 @@ class AppearancePrefs {
       other is AppearancePrefs &&
       other.uiFamily == uiFamily &&
       other.uiSize == uiSize &&
-      other.palette == palette;
+      other.palette == palette &&
+      other.themeMode == themeMode;
 
   @override
-  int get hashCode => Object.hash(uiFamily, uiSize, palette);
+  int get hashCode => Object.hash(uiFamily, uiSize, palette, themeMode);
 }
 
 /// The user's appearance choices, remembered across launches.
@@ -84,6 +151,10 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   static const _familyKey = 'app_ui_font_family';
   static const _sizeKey = 'app_ui_font_size';
   static const _paletteKey = 'app_color_palette';
+  static const _themeModeKey = 'app_theme_mode';
+
+  /// The palette and the theme mode on their way to disk — one write loop for the two, because
+  /// App colors moves both at once (see [setPalette]).
   Future<void>? _paletteSave;
 
   final LocalKeyValueStore _storage;
@@ -99,11 +170,13 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _familyKey,
         _sizeKey,
         _paletteKey,
+        _themeModeKey,
       ]);
       value = AppearancePrefs(
         uiFamily: _familyFrom(saved[_familyKey]),
         uiSize: _sizeFrom(saved[_sizeKey]),
         palette: HarnessPalette.fromId(saved[_paletteKey]),
+        themeMode: AppThemeMode.fromId(saved[_themeModeKey]),
       );
     } catch (_) {
       value = const AppearancePrefs();
@@ -112,9 +185,22 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   /// Preview now, persist in order. Rapid choices coalesce while storage is
   /// busy so an older write cannot replace the user's final selection.
+  ///
+  /// App colors names an exact palette, so it hands light and dark back to the palette too: a
+  /// Theme left on System would otherwise answer a tap on Midnight, on a light phone, with Paper.
   Future<void> setPalette(HarnessPalette palette) {
-    if (value.palette == palette) return _paletteSave ?? Future.value();
-    value = value.copyWith(palette: palette);
+    if (value.palette == palette && value.themeMode == null) {
+      return _paletteSave ?? Future.value();
+    }
+    value = value.copyWith(palette: palette, clearThemeMode: true);
+    return _paletteSave ??= _savePalette();
+  }
+
+  /// Theme's System, Dark or Light. The palette stays as App colors left it — see
+  /// [AppearancePrefs.paletteFor] — and persists in the same ordered loop as [setPalette].
+  Future<void> setThemeMode(AppThemeMode mode) {
+    if (value.themeMode == mode) return _paletteSave ?? Future.value();
+    value = value.copyWith(themeMode: mode);
     return _paletteSave ??= _savePalette();
   }
 
@@ -122,8 +208,15 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     try {
       while (true) {
         final id = value.palette.name;
+        final mode = value.themeMode?.name;
         await _storage.write(_paletteKey, id);
-        if (value.palette.name == id) break;
+        if (mode == null) {
+          // Deleted, not written as '': absent IS "the palette decides".
+          await _storage.delete(_themeModeKey);
+        } else {
+          await _storage.write(_themeModeKey, mode);
+        }
+        if (value.palette.name == id && value.themeMode?.name == mode) break;
       }
     } catch (_) {
       // The chosen palette remains usable for this run if storage fails.
@@ -172,6 +265,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       await _storage.delete(_familyKey);
       await _storage.delete(_sizeKey);
       await _storage.delete(_paletteKey);
+      await _storage.delete(_themeModeKey);
     } catch (_) {
       // See above.
     }
@@ -197,6 +291,21 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   static double _clampSize(double size) => !size.isFinite
       ? AppearancePrefs.uiSizeDefault
       : size.clamp(AppearancePrefs.uiSizeMin, AppearancePrefs.uiSizeMax);
+}
+
+/// Puts [prefs]' palettes on [AppTheme] for a phone whose own appearance is [platform], and returns
+/// the app's: [AppearancePrefs.paletteFor] as the app's, and [AppearancePrefs.terminalPalette] as a
+/// terminal page's when it differs. What the app does before it builds its theme — see
+/// `AppearanceBuilder`.
+HarnessPalette applyAppearance(
+  AppearancePrefs prefs, {
+  required Brightness platform,
+}) {
+  final app = prefs.paletteFor(platform);
+  final terminal = prefs.terminalPalette;
+  AppTheme.palette.value = app;
+  AppTheme.terminalPaletteOverride.value = terminal == app ? null : terminal;
+  return app;
 }
 
 /// The one instance the app reads.

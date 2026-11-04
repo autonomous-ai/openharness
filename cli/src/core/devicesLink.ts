@@ -131,7 +131,10 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
       const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
       return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
         : action === 'cardSay' ? { action, harnessId, text, ...chat, ...(typeof payload.chatId === 'string' ? { chatId: payload.chatId } : {}),
-          ...(payload.reviewed === true ? { reviewed: true } : {}) }
+          ...(payload.reviewed === true ? { reviewed: true } : {}),
+          // A swarmThread dial's pinned thread (null: none) and whether its words may start one (spec 2026-11-03-dial-thread-face).
+          ...(payload.thread === null || typeof payload.thread === 'string' ? { thread: payload.thread } : {}),
+          ...(payload.threaded === true ? { threaded: true } : {}) }
         : action === 'cardWorker' ? { action, machineId, harnessId }
         : action === 'cardSide' ? { action, tabId, side }
         : { action, tabId, leadId, session, ...chat })

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { stableId } from './model.js'
-import { baseRule, cacheDigest, dormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
-import type { Part, PartKind, SwarmParts } from './parts/index.js'
+import { baseRule, boardRule, cacheDigest, dormantAgentRule, lightDormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import type { GroupData, Part, PartKind, SwarmParts } from './parts/index.js'
+import { projectLightGroup } from './parts/lightSelect.js'
 import type { SwarmDelta } from './parts/load.js'
 
 // Part<never> fits any entry's list in these tests.
@@ -140,6 +141,25 @@ describe('dormant selections', () => {
   })
 })
 
+describe('lightDormantAgentRule (B4, #2597)', () => {
+  const whole = (key: string, version: number, agentIds: string[], dormant = true) => part('group', key, version, { id: key, title: key, kind: 'task', agentIds,
+    brief: 'a long brief', checks: [{ id: 'c1', description: 'Works', independent: false, status: 'pending' }], archived: false, audience: null, assignment: null },
+    dormant ? { dormant: true } : {}) as Part<GroupData>
+
+  it('holds a changed quiet conversation of the agent light, as a light load gives it', () => {
+    const next = lightDormantAgentRule('a1').apply([], delta([whole('g1', 2, ['a1'])])) as Part<GroupData>[]
+    expect(next).toEqual([projectLightGroup(whole('g1', 2, ['a1']))])
+    expect(next[0]!.data!.brief).toBe('')
+    expect(next[0]!.data!.checks).toEqual([])
+  })
+
+  it('lets go of one the agent left or that woke, and keeps the held list when nothing newer came', () => {
+    const held = [projectLightGroup(whole('g1', 2, ['a1'])), projectLightGroup(whole('g2', 2, ['a1']))]
+    expect((lightDormantAgentRule('a1').apply(held, delta([whole('g1', 3, ['a2']), whole('g2', 3, ['a1'], false)])) as Part[])).toEqual([])
+    expect(lightDormantAgentRule('a1').apply(held, delta([whole('g1', 2, ['a1']), whole('g9', 1, ['a2'])]))).toBe(held)
+  })
+})
+
 describe('feedRule (spec 2026-11-02 poll cost, Part 1.1)', () => {
   it('keeps tombstones, dormant groups and readAt, takes the newer version', () => {
     const held = { from: 500, parts: [part('group', 'g1', 1, { a: 1 }), part('machine', 'm1', 1, {}, { readAt: 900 })] }
@@ -175,5 +195,38 @@ describe('startsOfRule (spec 2026-11-02 poll cost, Part 1.4)', () => {
     expect(rule.apply(held, delta([start('s1', 2, 'h1', { deleted: true })]))).toEqual([])
     expect(rule.apply(held, delta([start('s1', 2, 'h9')]))).toEqual([])
     expect(rule.apply(held, delta([start('s3', 1, 'h7')]))).toBe(held)
+  })
+})
+
+describe('boardRule (task #2674)', () => {
+  const FLOOR = Date.UTC(2026, 8, 28)
+  const at = (days: number) => new Date(FLOOR + days * 86_400_000).toISOString()
+  const group = (key: string, version: number, opts: { dormant?: boolean; projectId?: string; lastActivityAt?: string; deleted?: boolean } = {}) =>
+    part('group', key, version, { id: key, title: key, kind: 'task', brief: 'a long brief', agentIds: ['a1'], checks: [], archived: false,
+      requesterId: 'p1', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt: 1, shippedAt: 2 },
+      assignment: { id: 'w1', status: 'done', result: 'a long result', execution: { machineId: 'm' } },
+      ...opts.projectId ? { projectId: opts.projectId } : {}, lastActivityAt: opts.lastActivityAt ?? at(3) },
+    { ...opts.dormant === false ? {} : { dormant: true }, ...opts.deleted ? { deleted: true } : {} }) as Part<GroupData>
+
+  it('holds a quiet conversation of the projects active since the floor with the board\'s fields only', () => {
+    const [held] = boardRule(['lead'], FLOOR).apply([], delta([group('g1', 2)])) as Part<GroupData>[]
+    expect(held).toMatchObject({ key: 'g1', version: 2, dormant: true })
+    expect(held!.data).toEqual({ id: 'g1', title: 'g1', kind: 'task', archived: false, requesterId: 'p1',
+      pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt: 1, shippedAt: 2 }, assignment: { id: 'w1', status: 'done' },
+      lastActivityAt: at(3) })
+  })
+
+  it('leaves out one of another project, one quiet since before the floor, one awake and one removed', () => {
+    const rule = boardRule(['lead', 'p2'], FLOOR)
+    expect(rule.apply([], delta([group('g1', 1, { projectId: 'p3' }), group('g2', 1, { lastActivityAt: at(-1) }),
+      group('g3', 1, { dormant: false }), group('g4', 1, { deleted: true })]))).toEqual([])
+    expect((rule.apply([], delta([group('g5', 1, { projectId: 'p2' })])) as Part[]).map(g => g.key)).toEqual(['g5'])
+  })
+
+  it('lets go of a held one that woke, moved project or was removed, and keeps the held list when nothing newer came', () => {
+    const rule = boardRule(['lead'], FLOOR)
+    const held = rule.apply([], delta([group('g1', 1), group('g2', 1), group('g3', 1)])) as Part<GroupData>[]
+    expect(rule.apply(held, delta([group('g1', 2, { dormant: false }), group('g2', 2, { projectId: 'p9' }), group('g3', 2, { deleted: true })]))).toEqual([])
+    expect(rule.apply(held, delta([group('g1', 1), group('g9', 1, { projectId: 'p9' })]))).toBe(held)
   })
 })

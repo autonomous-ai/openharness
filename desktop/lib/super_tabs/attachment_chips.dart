@@ -16,6 +16,7 @@ import 'attachment_text_viewer.dart'
 import 'attachment_viewer.dart';
 import 'file_links.dart';
 import 'model.dart';
+import 'voice_bubble.dart';
 
 /// The files a message carries, as Slack shows them: each picture on
 /// Harness's file storage in place (`attachment_image.dart`, on a computer),
@@ -23,17 +24,20 @@ import 'model.dart';
 /// — a text file in a viewer that fetches it then, anything else in the
 /// browser. Links last minutes (backend fileLinks.ts): one about to end is
 /// asked for again, of message [messageId] in [conversationId], before it is
-/// opened.
+/// opened. A voice message's file is a bubble that plays it
+/// (`voice_bubble.dart`), with the message's [words] behind its →A.
 class SuperTabAttachments extends StatelessWidget {
   const SuperTabAttachments(
     this.attachments, {
     super.key,
     this.conversationId,
     this.messageId,
+    this.words = '',
   });
 
   final List<SuperTabAttachment> attachments;
   final String? conversationId, messageId;
+  final String words;
 
   @override
   Widget build(BuildContext context) {
@@ -44,24 +48,26 @@ class SuperTabAttachments extends StatelessWidget {
       messageId: messageId,
       fresh: fresh,
     );
+    final voices = <SuperTabAttachment>[];
     final pictures = <SuperTabAttachment>[];
     final chips = <SuperTabAttachment>[];
     for (final file in attachments) {
-      // A browser's fetch follows a redirect off the attachments host, so
-      // there a picture stays a chip that opens in a new tab. A picture over
-      // the form's limit is a chip too: every reader would fetch and decode
-      // it whole to draw it in place. So is one whose link this app refuses.
-      final inPlace =
-          file.isImage &&
-          file.size <= kSuperTabFormAttachmentMaxBytes &&
-          !kIsWeb &&
-          !ref(file).refused;
-      (inPlace ? pictures : chips).add(file);
+      if (file.voice != null) {
+        voices.add(file);
+        continue;
+      }
+      (superTabShowsInPlace(ref(file)) ? pictures : chips).add(file);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       spacing: grid.AppDesktop.controlGap,
       children: [
+        for (final file in voices)
+          SuperTabVoiceBubble(
+            key: ValueKey('super-attachment-voice:${file.id}'),
+            file: ref(file),
+            words: words,
+          ),
         for (final file in pictures)
           SuperTabInlineImage(
             key: ValueKey('super-attachment-picture:${file.id}'),
@@ -80,6 +86,17 @@ class SuperTabAttachments extends StatelessWidget {
     );
   }
 }
+
+/// Whether a message draws [ref]'s picture in place, and the viewer pages
+/// through it. A browser's fetch follows a redirect off the attachments
+/// host, so there a picture stays a chip that opens in a new tab. A picture
+/// over the form's limit is a chip too: every reader would fetch and decode
+/// it whole to draw it in place. So is one whose link this app refuses.
+bool superTabShowsInPlace(SuperTabFileRef ref) =>
+    ref.file.isImage &&
+    ref.file.size <= kSuperTabFormAttachmentMaxBytes &&
+    !kIsWeb &&
+    !ref.refused;
 
 class _AttachmentChip extends StatefulWidget {
   const _AttachmentChip({super.key, required this.file});

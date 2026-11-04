@@ -152,7 +152,7 @@ model User {
   externalId      String    @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
   stagExternalId  String? // staging SSO subject; authentication still keys by email
   passwordHash    String? // legacy only; SSO users have none
-  name            String?
+  name            String? // from SSO once, while empty; later sign-ins never overwrite it (UserService.upsertFromSso)
   role            String    @default("user") // user | admin
   // Which Autonomous account plane this user signs in against. Existing rows are backfilled to
   // staging because they were created while the app used staging globally; new users default prod.
@@ -556,7 +556,8 @@ model ProductUsageTotal {
   @@index([dayUtc], map: "product_usage_expiry")
 }
 
-/// Random report receipt, used only to prevent retries counting twice. No identity or report body.
+/// Random report receipt, used only to prevent retries counting twice. No identity or report body. Removed at expiresAt by a TTL index
+/// (product_usage_expiry); the old 36-day receipts go by 2026-12-04, sooner if the sweep may install its rule (lib/productUsageReceiptSweep.ts).
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
@@ -579,6 +580,9 @@ model ProductUsageActivity {
   dayUtc    DateTime
   surfaces  String[]
   worked    Boolean  @default(false)
+  /// A Swarm agent's turn ran on this person's Mac that day. Not `worked`, which is only their own sessions' turns. Set only when true;
+  /// absent on rows from before 2026-11-04.
+  hosting   Boolean?
   signupDay DateTime
   staff     Boolean
   expiresAt DateTime
@@ -879,6 +883,9 @@ model HarnessShare {
 
   @@unique([machineId, agentId, recipientEmail])
   @@index([recipientEmail, autonomousEnv, expiresAt])
+  /// The share list (routes/harnessShares.ts): one recipient's unrevoked shares by createdAt, read without a sort in memory and
+  /// without fetching the revoked ones. expiresAt last, so an expired share is dropped from its key before it is fetched.
+  @@index([recipientEmail, autonomousEnv, revokedAt, createdAt, expiresAt])
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }
@@ -1225,10 +1232,34 @@ model SuperTabReadMark {
   conversationId String
   sequence       Int
   updatedAt      DateTime
+  /// When the person's Mark unread moved the mark back (readMarks.ts lowerReadMark); set with updatedAt in that write and
+  /// cleared by a read that raises it, so the mark's last move was a Mark unread while the two are equal. Unset otherwise.
+  loweredAt      DateTime?
 
   @@index([tabId, personId, updatedAt])
-  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  /// A mark untouched for 180 days goes: by this index's expiry (superTabs/readMarks.ts ensureReadMarkExpiry), or where the
+  /// database refuses it, by the worker's sweep (startReadMarkSweep). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
+}
+
+/// A person's reminder of one message (superTabs/reminders.ts): bring it back to them at `dueAt`, in Activity's Reminders. Their
+/// own, never shown to others. One row per person and message: setting it again replaces its time, and opening it deletes it.
+/// At most REMINDER_CAP pending per person and Swarm; the worker's hourly sweep deletes those due more than REMINDER_EXPIRY_MS
+/// (30 days) ago, and a Swarm's purge its rows.
+model SuperTabReminder {
+  /// stableId(tabId, personId, messageId).
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  messageId      String
+  dueAt          DateTime
+  createdAt      DateTime
+
+  /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
+  @@index([tabId, personId, dueAt])
+  /// The sweep's reminders due more than 30 days ago (reminders.ts sweepReminders); no TTL option, which the app user cannot set.
+  @@index([dueAt])
 }
 
 /// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
@@ -1340,11 +1371,22 @@ model SuperTabAttachment {
   proposedBy     String?
   /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
   purpose        String?
+  /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
+  /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
+  voice          Json?
+  /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
+  /// is taken over.
+  voiceSince     DateTime?
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
   /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
   @@index([purpose, createdAt])
+  /// Unused uploads by age, for the hourly unused-upload sweep (lib/attachmentSweep.ts): its claim (usedBy and proposedBy
+  /// null, purpose, createdAt) and its remove step (usedBy alone). Performance Advisor's suggestion of 11-04 with its first
+  /// two keys swapped, so the remove step's read is bounded too (#2676). Built by the backend release's schema push: a
+  /// production write that needs Ken's go.
+  @@index([usedBy, proposedBy, purpose, createdAt])
 }
 
 /// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
@@ -1355,6 +1397,7 @@ model SuperTabUploadAllowance {
   at DateTime
 }
 
+/// One command's receipt, so a repeat of the same request gets the same answer. Removed 30 days after createdAt by a TTL index.
 model SuperTabOperation {
   id           String   @id @map("_id")
   tabId        String
@@ -1366,7 +1409,13 @@ model SuperTabOperation {
   parts        Json?
   createdAt    DateTime @default(now())
 
-  @@index([tabId])
+  /// A Swarm's receipts, and by date: Atlas's Performance Advisor saw a read scan 107 k rows to return 40 (Ken's plan, 2026-11-04). No
+  /// backend read uses the date yet; check on Atlas after the release, and shorten it to tabId if nothing does. It replaces the index on
+  /// tabId alone, its prefix, since this collection gets a write on every command.
+  @@index([tabId, createdAt])
+  /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
+  /// schema step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "operation_expiry")
 }
 
 // A conversation-scoped provenance receipt. It grants no terminal access.
@@ -1482,7 +1531,8 @@ model SuperTabAttempt {
   @@index([tabId, conversationId, createdAt])
 }
 
-/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Deleted 90 days after createdAt on each write (routeDecisions.ts
+/// RETENTION_MS; the costs report reads 90 days). Stored trimmed (routeRecord.ts storedRecord).
 model SuperTabRouteDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1778,6 +1828,9 @@ model SwarmHead {
   visibilityEpoch Int       @default(1)
   /// The tab revision when it was split into parts (0 for a Swarm born in parts). Every later message sequence is above it.
   sequenceBase    Int       @default(0)
+  /// The highest version of any agent tombstone the sweep purged (superTabs/agentTombstones.ts): an agent added with no
+  /// tombstone starts above it, so its versions never go back. Missing until the first purge.
+  agentFloor      Int?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -1868,6 +1921,9 @@ model SwarmAgent {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
+  @@index([tabId, deleted])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
@@ -1895,6 +1951,9 @@ model SwarmMachine {
   /// The last write of its own reading alone (a report every 15 s): readers of changes see it, while `changedAt`, and so the
   /// Swarm's newest change, stays at the last change of anything else (Stability Roadmap 2.2).
   readAt          DateTime?
+  /// The last reading that changed more than its volatile fields (parts/commit.ts machineContentChanged): a client that asks gets
+  /// a line for any other reading, not the part (read/changes.ts). Overwritten in place, and gone with its row. Absent before 2026-11-04.
+  contentAt       DateTime?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])

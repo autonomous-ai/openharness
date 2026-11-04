@@ -1,7 +1,8 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
+import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
-import { githubRepository } from '../github/repository.js'
+import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
@@ -97,6 +98,20 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   return rows
 }
 
+export { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './buddyModel.js'
+
+/** A Buddy's model switch its machine never reported is dropped (the Buddy stays where it was), and its owner's Buddy chat
+ *  says so once. Run by the liveness sweep, as staleSwitches is: the Buddy's own machine may be the one down. */
+export function staleModelRequests(state: SuperTabState, now: number): MessageDraft[] {
+  const drafts = expiredModelRequests(state, now).map(({ buddy, requestId, conversationId, text, machines }): MessageDraft => ({
+    id: stableId('buddy-model-stale', buddy.id, requestId), conversationId, replyTo: null, recipients: [], text,
+    source: { kind: 'system', ...(machines.length ? { machines } : {}) },
+    author: { kind: 'agent', id: buddy.id, name: buddy.name, displayName: agentDisplayName(state.agents, buddy.id), membershipGeneration: buddy.membershipGeneration } }))
+  // After the expiry, so a Buddy whose machine never answered one request home is asked again on the next sweep.
+  unservedBuddyModels(state, now, buddy => stableId('buddy-model-gone', buddy.id, String(now)))
+  return drafts
+}
+
 /** A linked task (`reviewOf`) the Swarm does not archive by itself: none of its checks carries evidence, nobody cancelled it,
  *  and the task it links to is still going. Once that task is done or cancelled the link is moot. By hand any agent of the
  *  project or a person archives it (project instructions, phase 4). */
@@ -139,17 +154,46 @@ export const cancelReason = (group: Conversation): string => (group.assignment?.
 
 /** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
 const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
+/** A repository's name, or owner/name, as a result writes it next to "PR #N": "from autonomous-harness PR #2716", "PR #12 in acme/tool". */
+const REPO_NAME = '([A-Za-z0-9](?:[\\w.-]*\\w)?(?:/[A-Za-z0-9](?:[\\w.-]*\\w)?)?)'
+const NAME_BEFORE = new RegExp(`(?:^|[\\s(])(from\\s+)?${REPO_NAME}\\s+$`, 'i'), NAME_AFTER = new RegExp(`^\\s+(?:in|of)\\s+${REPO_NAME}`, 'i')
+/** English compounds a result writes before "PR", which look like a repository's name and are none. */
+const COMPOUND = /^(?:follow-(?:up|on)|(?:re|co|pre|non|one)-\w+)$/i
+
+/** Whether [name] next to a "PR #N" plainly names a repository other than the project's. Dropping one of its own numbers
+ *  archives a group while that pull request is open (#558); reading another's as its own waits at most until that number
+ *  closes here or is not found. So "Desktop/CLI PR #12", "test-only PR #12" and "PR #12 in docs/plans" stay its own (review
+ *  of #2895): a name counts after "from" ("Ported from autonomous-harness PR #2716"), or as owner/name of the project's owner. */
+function otherRepository(name: string | undefined, from: boolean, repository: GitHubRepository | null): boolean {
+  if (!name) return false
+  const [owner, repo] = name.toLowerCase().split('/')
+  if (repo === undefined) return from && /^[a-z]/.test(owner!) && /[._-]/.test(owner!) && !COMPOUND.test(owner!) && owner !== repository?.name.toLowerCase()
+  if (name.toLowerCase() === repository?.fullName.toLowerCase()) return false
+  return from || owner === repository?.owner.toLowerCase()
+}
+
+/** How a pull request an archive waits on ended: merged, closed, or missing, a number GitHub knows no pull request by in
+ *  that repository (another repository's, #2602). */
+export type SettledPullRequest = 'merged' | 'closed' | 'missing'
 
 /** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
  *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
- *  that PR was open (#558). Null when it names a number with no GitHub repository to read it in: it stays open. */
+ *  that PR was open (#558). A number another repository's name sits next to is that repository's, and never waited on
+ *  ("Ported from autonomous-harness PR #2716" held a task open forever, #2602). Null when it names a number with no GitHub
+ *  repository to read it in: it stays open. */
 export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
   const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
   const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
   appendPullRequestUrls(named, texts)
-  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)].map(match => match[1]!))
-  if (!numbers.length) return named.pullRequestUrls!
   const repository = githubRepository(repositoryUrl)
+  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)]
+    .filter(match => {
+      const before = NAME_BEFORE.exec(text!.slice(0, match.index))
+      return !otherRepository(before?.[2], !!before?.[1], repository)
+        && !otherRepository(NAME_AFTER.exec(text!.slice(match.index + match[0].length))?.[1], false, repository)
+    })
+    .map(match => match[1]!))
+  if (!numbers.length) return named.pullRequestUrls!
   if (!repository) return null
   return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
 }
@@ -201,7 +245,7 @@ export function reviewClosable(state: SuperTabState, review: Conversation, now: 
 const pullNumber = (url: string) => `#${url.slice(url.lastIndexOf('/') + 1)}`
 
 /** The one quiet line a closed review gets, naming each pull request and how it ended. */
-export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, 'merged' | 'closed'>>, now: number): MessageDraft | null {
-  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url]}`).join(', ')
+export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, SettledPullRequest>>, now: number): MessageDraft | null {
+  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url] === 'missing' ? 'not found' : settled[url]}`).join(', ')
   return leadLine(state, review, now, `Closed: ${prs}; no Swarm review is needed now.`)
 }

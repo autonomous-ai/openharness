@@ -30,7 +30,7 @@ import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from 
 import { Ledger, ledgerPath, type Pending, type Started, type Told } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
-import { TELL_OFF_TEXT } from '../messages/tell.js'
+import { NOT_ONE_TEXT, TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
@@ -352,6 +352,42 @@ const notStarted = (env: NodeJS.ProcessEnv, a: Asked, away: Away | null = null):
   new AgentClientError(a.state === 'failed' ? 'NEVER_STARTED' : 'NOT_STARTED', askedLine(env, a, away))
 
 interface Target { daemon: Daemon; frame: Frame; machineId: string; machine: string; yours: boolean; remote: boolean }
+
+/**
+ * Whether [t] is a harness the person started on this machine and the caller a Swarm session here (started by an agent with
+ * no starter on this machine): the shape of a person's Buddy passing their words to their own harness (#2626). Only a filter
+ * on what is asked: this machine decides from its own registry whether the caller is that person's Buddy, with their grant,
+ * and whose the harness is (messages/tell.ts `relayRefusal`). Never for another machine's harness.
+ */
+/** A Swarm session in its pane here (started by an agent, with no starter on this machine): a person's Buddy has this shape. */
+function swarmCaller(s: Setup, o: Opened): boolean {
+  const caller = o.caller
+  if (!caller || caller.outside || !s.pane) return false
+  const self = o.frames.find((f) => f.id === caller.agentId)
+  return self?.startedBy === 'agent' && !self.parentAgentId
+}
+
+/**
+ * The harness [name] means for a Swarm session here (security review 2 of #2626): one it started, by any part of its name
+ * among those alone, as `target` reads it; else a live harness the person started here, by its exact name or id. Anything
+ * else is one refusal that names no other harness, so a Buddy reads no list of the machine's harnesses from its answers.
+ */
+async function closedTarget(s: Setup, o: Opened, name: string): Promise<Target> {
+  const all = await list(o.daemon, true)
+  const mine: Opened = { ...o, frames: all.filter((f) => yoursOn(o, o.where.machineId, f.id)), stopped: true }
+  try { return await target(s, mine, name) } catch (error) { if (!(error instanceof AgentClientError) || error.code !== 'UNKNOWN_HARNESS') throw error }
+  const frame = named(all).find((f) => f.status !== 'stopped' && exactly(name)(f))
+  const t: Target | null = frame ? { daemon: o.daemon, frame, machineId: o.where.machineId, machine: o.machine, yours: false, remote: false } : null
+  if (!t || !relayable(s, o, t)) throw new AgentClientError('NOT_YOURS', NOT_ONE_TEXT)
+  return t
+}
+
+function relayable(s: Setup, o: Opened, t: Target): boolean {
+  const caller = o.caller
+  if (!caller || caller.outside || !s.pane || t.remote || t.machineId !== o.where.machineId || t.frame.location === 'cloud') return false
+  const self = o.frames.find((f) => f.id === caller.agentId)
+  return self?.startedBy === 'agent' && !self.parentAgentId && t.frame.startedBy !== 'agent' && !t.frame.parentAgentId && t.frame.id !== caller.agentId
+}
 
 /** A machine's harnesses by the names the verbs call them: a terminal is the person's, and an unnamed one is its id's start. */
 const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
@@ -773,7 +809,16 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     const o = await opened(s)
     let t: Target | null = null
     try {
-      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
+      const notYours = () => new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
+      if (o.orphan) throw notYours()
+      // A person's Buddy here passes their words to their own idle harness here, as its machine allows (#2626): found by
+      // its exact name (closedTarget). Any other agent is refused before anything is looked up.
+      if (o.caller) {
+        if (away || !swarmCaller(s, o)) throw notYours()
+        t = await closedTarget(s, o, names[0])
+        if (t.yours) throw notYours()
+        return await relayReply(s, o, t, text, flags.has('--json'))
+      }
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
@@ -795,6 +840,22 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+/** `harness reply` from a person's Buddy (#2626): asked of this machine from its pane, as a tell is; the machine checks it is their
+ *  Buddy and their harness, the switch, and that the harness is idle. */
+async function relayReply(s: Setup, o: Opened, t: Target, text: string, json: boolean): Promise<number> {
+  if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
+  const name = t.frame.name ?? t.frame.id.slice(0, 8)
+  let reply: Record<string, unknown>
+  try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'tell', pane: s.pane, machine: o.machine, agentId: t.frame.id, text, reply: true }, 20_000) } catch (error) {
+    if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+    throw error
+  }
+  const failed = reply.state === 'failed'
+  const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.` : `${name} has it: typed once its composer is free.`
+  s.out(json ? JSON.stringify({ ok: !failed, name, id: t.frame.id, message: reply.id ?? null, state: reply.state ?? 'queued', effect }) : `${name} on ${t.machine}: ${effect}`)
+  return failed ? EXIT.failed : EXIT.ok
 }
 
 /** How long words sent from here still steer a follow-up that names nothing ("and the other one?") to where they went. */
@@ -921,10 +982,11 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         throw new AgentClientError('NOT_YOURS', 'harness tell runs in the pane of the harness that started the one it tells. To talk to a harness yourself, open it in Harness.')
       }
       if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
-      t = await target(s, o, names[0], away)
+      // A Swarm session finds what it did not start by its exact name only (closedTarget): a Buddy is given no list.
+      t = swarmCaller(s, o) && !away ? await closedTarget(s, o, names[0]) : await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness tell reaches a harness in a pane only.`)
-      if (!t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
+      if (!t.yours && !relayable(s, o, t)) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
       // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts).
       if (stateOf(t.frame) === 'stopped') {
         throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
@@ -942,7 +1004,8 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       try { o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
       catch { /* `wait` then reads its last answer as it would without the line */ }
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
-      const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: `until it has answered; then read it: ${step(s.env, 'show', at)}` }]
+      // A Buddy passing words on reads no answer (its guard runs neither wait nor show): nothing to suggest.
+      const next: NextStep[] = t.yours ? [{ run: step(s.env, 'wait', at), when: `until it has answered; then read it: ${step(s.env, 'show', at)}` }] : []
       const state = typeof reply.state === 'string' ? reply.state : 'queued'
       const failed = state === 'failed'
       const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.`

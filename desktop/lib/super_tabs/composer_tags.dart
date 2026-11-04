@@ -80,7 +80,8 @@ List<SuperTabComposerChoice> superTabTagChoices(
     (person) =>
         person.id != c.accountId &&
         reads(person) &&
-        person.username.contains(query),
+        (person.username.contains(query) ||
+            (person.name?.toLowerCase().contains(query) ?? false)),
   );
   final offered = agents
       ? snapshot.agents.where(
@@ -96,8 +97,9 @@ List<SuperTabComposerChoice> superTabTagChoices(
   return [
     for (final person in people)
       (
-        label: person.username,
-        detail: null,
+        // Shown by the name they set, tagged by their username.
+        label: person.shownName,
+        detail: person.name == null ? null : '@${person.username}',
         choose: () => choose(person.id, person.username),
         leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
         kind: 'person',
@@ -111,6 +113,22 @@ List<SuperTabComposerChoice> superTabTagChoices(
         kind: 'agent',
       ),
   ].take(superTabCompletionLimit).toList();
+}
+
+/// [value] with `@` typed at its caret, in place of any selection, as @ Tag
+/// types it: after a space where the caret follows a word, so the tag list
+/// opens there ([superTabTagAtCaret]).
+TextEditingValue superTabTagPrompt(TextEditingValue value) {
+  final text = value.text;
+  final selection = value.selection.isValid
+      ? value.selection
+      : TextSelection.collapsed(offset: text.length);
+  final before = text.substring(0, selection.start);
+  final at = before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '@' : ' @';
+  return TextEditingValue(
+    text: before + at + text.substring(selection.end),
+    selection: TextSelection.collapsed(offset: before.length + at.length),
+  );
 }
 
 /// [value] with the tag typed at [at] replaced by [token] and a space, the

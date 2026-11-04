@@ -1,12 +1,13 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machinesFull, MACHINES_FULL_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
+import { setName, writtenNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -22,7 +23,7 @@ import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQues
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
-import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
+import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED, publicReason } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
@@ -32,24 +33,29 @@ import { cloneData } from './cloneData.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
+import { othersWorkNotice } from './othersWork.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, proposalTitle, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
+import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
+import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BUILT_IN_HEADING } from './pmSchedule.js'
+import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
@@ -59,6 +65,12 @@ const NO_REASON = 'No reason given.'
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
+/** A calendar day, YYYY-MM-DD, that exists. */
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as YYYY-MM-DD.')
+  .refine(value => {
+    const date = new Date(`${value}T00:00:00Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value)
+  }, 'Give a date that exists.')
 /** What a host reports it can do for a Product Manager's switch; a host from before it is never asked (HOST_OUTDATED). */
 const SWITCH_CAPABILITY = 'leadSwitch'
 const SWITCH_LEASE_MS = 15 * 60_000
@@ -146,6 +158,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
+  // The projects that may use a machine; null: every project (Tony, 11-03).
+  z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -186,7 +200,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
-  z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id,
+  // A Personal Swarm's one start of a project's Lead by its person's Desktop, on their message in its chat (leadStart.ts).
+  z.object({ type: z.literal('lead.claim'), projectId: id, machineId: id }).strict(),
+  z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id, machineId: id.optional(),
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional() }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
@@ -201,12 +217,18 @@ export const commandSchema = z.discriminatedUnion('type', [
     step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
-    proposalMessageId: id.optional() }).strict()
+    proposalMessageId: id.optional(),
+    // A person's own message in the project chat that asked for the work: it stays the task's root (Dee, 2026-11-03).
+    requestMessageId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
+  // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
+  // to stay; `notBefore` a day it should not start before, null to clear.
+  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional() }).strict()
+    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.'),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -221,7 +243,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // owner's message there asking for it. Its files are its own uploads in that chat, or files its owner sent there (store.ts proposable).
   // `projectId` is the project a person's one Buddy sends to (authorizeCommandAccess reads it as its person would); a project
   // session or a project chat's Buddy has its own project, and naming another reads as a project that does not exist.
-  z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, projectId: id.optional(), goal: z.string().trim().min(1).max(2000),
+  z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, projectId: id.optional(), title: z.string().trim().min(1).max(80).optional(), goal: z.string().trim().min(1).max(2000),
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
@@ -233,6 +255,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
   // their machine's host, which acts as them. Idempotent: a thread with no session is told so and nothing changes.
+  // The person's own Buddy onto a model the Swarm's grid serves now, or back to their subscription (null): buddyModel.ts.
+  z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable() }).strict(),
+  // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
+  z.object({ type: z.literal('buddy.modelResult'), agentId: id, requestId: id, ok: z.boolean(), fresh: z.boolean().optional(),
+    error: z.string().max(300).optional() }).strict(),
   z.object({ type: z.literal('buddy.sessionEnd'), conversationId: id, thread: id, reason: z.enum(['ended', 'idle', 'stopped', 'maintenance']) }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
@@ -253,6 +280,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.switchClaim'), agentId: id, switchId: id }).strict(),
+  // The source PM's host sends the prepared handoff to the candidate start; it is not a general chat message or visible to readers.
+  z.object({ type: z.literal('agent.switchHandoff'), agentId: id, switchId: id, handoffChangeId: id,
+    note: z.string().max(32_000) }).strict(),
   // The host's own words for why it failed: free text, so capped and redacted.
   z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional(), down: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
@@ -269,13 +299,18 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
+  z.object({ type: z.literal('member.timeZone'), timeZone: z.string().min(1).max(64).nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
   z.object({ type: z.literal('member.username'), username: z.string().max(64).nullable() }).strict(),
+  z.object({ type: z.literal('member.name'), name: z.string().max(200).nullable() }).strict(),
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
     mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional(),
+    // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
+    // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
+    notice: z.literal('skills').optional(),
     // A person's thread reply in their own Buddy chat that starts the thread's own Buddy session (buddySessions.ts).
     newSession: z.literal(true).optional(),
     // A New session in one project (spec: The model): it reads that project alone, and is the only Buddy that writes into it.
@@ -327,12 +362,14 @@ export const operationSchema = z.object({ operationId: id, command: commandSchem
  *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
 const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
-  'buddy.propose': ['goal', 'scope'],
+  'buddy.propose': ['title', 'goal', 'scope'],
   'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
+  'buddy.modelResult': ['error'],
+  'agent.switchHandoff': ['note'],
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
@@ -380,6 +417,8 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
   return copy
 }
 
+/** A message row a group names as its proposal, as the store loads it. */
+interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
   operationId: string
   now: number
@@ -419,7 +458,11 @@ export interface CommandContext {
    *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
   buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
-  proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
+  proposal?: ProposalRow & {
+    /** When the named row is a reply with no source of its own: the row it replies to (proposalNamed). */
+    root?: ProposalRow }
+  /** The chat message a new group names as its request (conversation.create requestMessageId), loaded from this tab by the store. */
+  request?: { id: string; conversationId: string; author: Author; source: unknown; replyTo: string | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** Whether it went to a thread session, which the main Buddy never hears: the main Buddy proposes for none of those. */
@@ -443,6 +486,8 @@ export interface CommandContext {
   /** The files `message.send` or `buddy.propose` names, each checked by the store: uploaded by this actor to this conversation and
    *  unused, or for a proposal, sent there by its Buddy's owner (store.ts proposable). */
   attachments?: Attachment[]
+  /** The words of each voice message's file among [attachments], by its id, read by the store (store.ts readVoice). */
+  voiceWords?: Record<string, string>
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
   /** The message `message.react` names, read by the store (reactions.ts). */
@@ -561,10 +606,13 @@ function ownedPath(entry: string): string | null {
 const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
-function protectLead(state: SuperTabState, agentId: string): void {
+function protectLead(state: SuperTabState, agentId: string, actor: Actor): void {
   const project = ledProject(state, agentId), target = state.agents.find(a => a.id === agentId)
   if (project && target) {
-    fail('LEAD_PROTECTED', `${target.displayName ?? target.name} is the ${coordinatorNameOf(project)} of project ${project.name}. Delete the project first.`)
+    const reason = canReadProject(state, actor, project)
+      ? `${target.displayName ?? target.name} is the ${coordinatorNameOf(project)} of project ${project.name}. Delete the project first.`
+      : "A Product Manager of a project you can't see prevents this action."
+    fail('LEAD_PROTECTED', reason)
   }
 }
 
@@ -601,8 +649,9 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'swarm.delete' || command.type === 'swarm.restore') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  // So does choosing one's own username (usernames.ts).
-  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username') return void author(state, actor)
+  // So does choosing one's own username (usernames.ts) or name (personNames.ts), and one's app telling one's time zone.
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username'
+    || command.type === 'member.name' || command.type === 'member.timeZone') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -622,7 +671,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -684,13 +733,21 @@ function askedByOf(state: SuperTabState, project: SwarmProject, personId: string
   }
   return member.id
 }
+/** The proposal a group names. The PM is delivered the reply holding its details, not its root, so naming that reply means the
+ *  proposal (Scholes, 11-04): only the Buddy's own reply under its own proposal does; proposalOf judges the root it returns. */
+function proposalNamed(named: CommandContext['proposal']): ProposalRow | undefined {
+  const root = named?.root
+  return root && !named.source && named.author.kind === 'agent' && named.author.id === root.source?.buddyId ? root : named
+}
 /** The Buddy whose proposal a new group comes from: the message must be a Buddy's proposal posted in the project's chat. Its
  *  row is the Swarm's own (buddy.propose), so a Buddy removed since still earns for it. */
-function proposalOf(state: SuperTabState, project: SwarmProject, proposal: CommandContext['proposal']): { buddyId: string; messageId: string; personId?: string } {
+function proposalOf(state: SuperTabState, project: SwarmProject, proposal: ProposalRow | undefined): { buddyId: string; messageId: string; personId?: string } {
   const author = proposal?.author
-  const buddy = author?.kind === 'agent' ? state.agents.find(a => a.id === author.id) : undefined
+  const buddyId = author?.kind === 'agent' ? author.id : typeof proposal?.source?.buddyId === 'string' ? proposal.source.buddyId : undefined
+  const buddy = buddyId ? state.agents.find(a => a.id === buddyId) : undefined
+  const attributed = author?.kind === 'agent' || (author?.kind === 'person' && author.id === proposal?.source?.personId && !!buddyId)
   if (!proposal || proposal.conversationId !== project.leadConversationId || proposal.source?.kind !== 'buddy-proposal'
-    || author?.kind !== 'agent' || (buddy && !isBuddy(buddy))) {
+    || !attributed || (buddy && !isBuddy(buddy))) {
     fail('PROPOSAL_UNKNOWN', 'Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.', 400)
   }
   // The person it was sent for, as buddy.propose recorded them: the Swarm writes this source, never a sender.
@@ -704,7 +761,17 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
   const main = owner && !(buddy && isSwarmBuddy(buddy) && !buddy.buddySession)
     ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
     : undefined
-  return { buddyId: main?.id ?? author.id, messageId: proposal.id, ...personId ? { personId } : {} }
+  return { buddyId: main?.id ?? buddyId!, messageId: proposal.id, ...personId ? { personId } : {} }
+}
+/** The person's own top-level message in [project]'s chat that asked for a new group; anything else reads as unknown. */
+function requestOf(state: SuperTabState, project: SwarmProject, request: CommandContext['request']): { messageId: string; personId: string } {
+  const author = request?.author
+  const member = author?.kind === 'person' ? state.people.find(p => p.id === author.id && p.generation === author.membershipGeneration) : undefined
+  if (!request || request.conversationId !== project.leadConversationId || request.replyTo || request.source || !member
+    || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+    fail('REQUEST_UNKNOWN', 'Name a person\'s own message in this project\'s chat, or leave the request out.', 400)
+  }
+  return { messageId: request.id, personId: member.id }
 }
 /** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
  *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
@@ -712,6 +779,9 @@ function proposalRequester(state: SuperTabState, project: SwarmProject, personId
   const member = personId ? state.people.find(p => p.id === personId) : undefined
   return member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project) ? member.id : undefined
 }
+/** Who may cancel a lost or stopped task, and a live one (work.cancel), for the refusals that name them. */
+const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can cancel it.'
+const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can cancel work in progress. Ask the project\'s coordinator.'
 /** What an agent opening a group for nobody is told, so the person who asked still gets the credit (groups #294, #327). */
 export const REQUESTER_UNKNOWN = 'Name the person who asked: conversation.requester with their personId for this group, or requesterId when you open a group.'
 
@@ -729,8 +799,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // no longer a member (a command that removed them).
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
-  syncTaskLines(original, effects, input.type === 'work.status' ? input.conversationId : undefined, sender,
-    stableId(original.id, actorKey(actor), context.operationId))
+  syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   return effects
 }
 
@@ -830,15 +899,24 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // Before any role check: a viewer or an agent is told what anyone without the Swarm is told (deletion.ts).
   if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username'
+    && command.type !== 'member.name' && command.type !== 'member.timeZone')
   authorizeCommandAccess(state, actor, command, context)
+  /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
+   *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
+  const machineOwnerWord = (pool: ContributedMachine, askedIn: { conversationId: string } | undefined) => {
+    if (actor.kind === 'person') return actor.userId === pool.contributorId
+    const asked = askedIn && context.askedIn
+    return !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
+      && context.now - asked.createdAt <= RULE_MESSAGE_MS && state.conversations.find(c => c.id === askedIn.conversationId)?.leadId === actor.agentId
+  }
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[], mentions?: string[], holdMentions?: true) => {
-    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
+    attachments?: Attachment[], mentions?: string[], holdMentions?: true, id = operationId) => {
+    effects.messages.push({ id, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
       ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}), ...(holdMentions ? { holdMentions } : {}) })
     result.messageId = operationId
   }
@@ -1117,10 +1195,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const projectId = command.sessionProjectId ?? context.reply?.sessionProject
       const project = swarm ? projectId ? readProject(state, actor, projectId) : undefined : groupProject(state, chat)
       const me = person(state, owner.id)
-      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, ...(swarm ? { buddyNarrow: true as const } : {}) }
+      // A session of one project never reads beyond its folder, in either chat (task #2356: one in an older project chat ran
+      // wide, so it read its person's whole home, other projects' clones included, while that chat's own Buddy was narrow).
+      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, buddyNarrow: true as const }
         : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }
       const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
-        ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
+        // The model its Buddy runs on: a shared one starts on the Swarm's grid (buddyModel.ts).
+        ...sessionModel(state, main, context.now),
         name: main.displayName ?? main.name, ...folder, requirements: BUDDY_REQUIREMENTS,
         buddyOf: { personId: owner.id, generation: owner.generation },
         // The main chat's sequence before this message: the session's excerpt reads up to it (buddySessions.ts sessionContext).
@@ -1168,6 +1249,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    * one already starting takes it too. Nothing while they have no one Buddy, as before. When it cannot start, why, in plain
    * words, for the line that tells its person (buddyDownLine).
    */
+  /** [project]'s Lead [agentId] joined its chat: it hears what its person sent there while it had none (leadStart.ts). */
+  const arrived = (project: SwarmProject, agentId: string) => {
+    if (!project.leadWaiting && !project.leadClaim) return
+    const late = leadArrived(state, project, agentId, context.now)
+    if (late.length) effects.lateDeliveries = [...effects.lateDeliveries ?? [], ...late]
+  }
   const startOldChatBuddy = (chat: Conversation): string | undefined => {
     if (command.type !== 'message.send' || actor.kind !== 'person') return
     const owner = requireChatOwner(state, chat, actor.userId)
@@ -1277,7 +1364,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
     }
-    if (!lead) protectLead(state, target.id)
+    if (!lead) protectLead(state, target.id, actor)
     if (close) recordClosing(state, target, context.now)
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
@@ -1295,7 +1382,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
       fail('MACHINE_CLEANING', 'This machine is still cleaning up after your last Buddy there. Try again in a minute.')
     }
-    if ((state.machines?.length ?? 0) >= 32) fail('MACHINES_FULL', 'This Swarm cannot take another machine.')
+    if (machinesFull(state)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
     const pool: ContributedMachine = { machineId, name: setup.name, cwd: setup.cwd, scope: 'swarm', engines: [...new Set(setup.engines)],
       maxAgents: 1, contributorId: me.id, membershipGeneration: me.generation, generation: operationId, paused: false, buddyOnly: true }
     ;(state.machines ??= []).push(pool)
@@ -1395,7 +1482,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
 
   /** Changing or clearing the Lead of a project's Lead conversation would let it be stopped next. */
   const keepLead = (group: Conversation, next: string | null) => {
-    if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
+    if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId, actor)
   }
 
   // An agent reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain). Not a post: its host
@@ -1423,6 +1510,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const resumeAt = command.alert === 'limit' && command.resetAt && Date.parse(command.resetAt) > context.now
           ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
         effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+        // A Buddy on a shared model goes back to its owner's subscription: the member serving it set that limit (PRODUCT.md,
+        // Contribution, Safe), and a model that keeps failing answers nothing.
+        sendBuddyHome(state, agent(state, command.agentId), command.alert === 'limit' ? 'limit' : 'failing', operationId, context.now)
       }
       break
     }
@@ -1495,28 +1585,74 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
+    case 'lead.claim': {
+      // Only a Personal Swarm: its person's Desktop starts the Lead on their own machine, where their project's folder is. A
+      // Team Swarm's project gets its coordinator from a person who chooses it (task #2633).
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person starts a project\'s coordinator.', 403)
+      if (!isPersonalSwarm(state)) fail('PERSONAL_SWARM_ONLY', 'Only a Personal Swarm starts a project\'s coordinator on its first message.', 409)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
+      const project = manageProject(state, actor, command.projectId)
+      const home = conversation(state, project.leadConversationId)
+      if (home.leadId && home.agentIds.includes(home.leadId)) fail('LEAD_EXISTS', `This project already has its ${coordinatorNameOf(project)}.`)
+      // One start at a time: another machine's recent claim, or a start the Swarm runs, is the one. The same machine claims
+      // again only once its own start ended, which its Desktop knows.
+      const held = project.leadClaim
+      if (leadStarting(state, project.id) || (held && held.machineId !== command.machineId && context.now - held.at < LEAD_CLAIM_MS)) {
+        result.leadStart = 'waiting'
+        break
+      }
+      project.leadClaim = { id: operationId, machineId: command.machineId, at: context.now }
+      result.leadStart = 'start'
+      break
+    }
     case 'lead.switch': {
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person moves a project\'s coordinator.', 403)
       const project = projectOf(state, command.projectId)
       const home = conversation(state, project.leadConversationId)
       const pm = state.agents.find(a => a.id === home.leadId && home.agentIds.includes(a.id))
       const pool = state.machines?.find(m => m.machineId === pm?.machineId)
-      // The project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent machine's borrower).
-      if (pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
+      // On its machine: the project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent
+      // machine's borrower). To another machine: only the project's owner, as a new PM start (security reviews of #2705).
+      const moving = command.machineId !== undefined && command.machineId !== pm?.machineId
+      if (!moving && pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
       else manageProject(state, actor, project.id)
       const name = coordinatorNameOf(project)
       if (!pm || !pool) fail('NO_LEAD', `This project has no running ${name}.`)
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
-      if (!contributedEngines(pool).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${pool.name}.`, 403)
-      // The default account has one id (a literal 'default' is the same account), and the request stores that id.
-      const profileId = command.profileId === 'default' ? defaultProfileId(pool.machineId, command.engine) : command.profileId
-      if (profileId !== defaultProfileId(pool.machineId, command.engine) && !pool.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
-        fail('PROFILE_UNKNOWN', `That account isn’t on ${pool.name} any more.`, 409)
+      let destination = pool
+      if (command.machineId && command.machineId !== pool.machineId) {
+        const previousPlacement = project.lead
+        const start = placeLead(state, project, person(state, actor.userId), command.machineId,
+          { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
+          stableId(operationId, 'switch-start'), context)
+        if (previousPlacement) project.lead = previousPlacement
+        else delete project.lead
+        destination = state.machines!.find(m => m.machineId === start.request.machineId)!
+        if (destination.machineId === pool.machineId) {
+          // A Mac whose Team account already runs it placed it back there: a switch where it runs, with no candidate to start
+          // (security review 2 of #2705).
+          state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
+        } else {
+          // A refused command keeps none of its writes, the start above included.
+          if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
+          start.request.leadFor!.switchId = operationId
+        }
+      }
+      if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
+      // The default account has one id per destination machine (a literal 'default' is the same account).
+      const profileId = command.profileId === 'default' ? defaultProfileId(destination.machineId, command.engine) : command.profileId
+      if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
+        fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
+      }
+      if (destination.machineId !== pool.machineId) {
+        const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
+        start.request.profileId = profileId
       }
       const { type: _type, projectId: _projectId, ...asked } = command
-      pm.switchRequest = { id: operationId, ...asked, profileId, requestedBy: actor.userId, at: new Date(context.now).toISOString() }
+      pm.switchRequest = { id: operationId, ...asked, profileId, ...(destination.machineId !== pool.machineId ? { targetMachineId: destination.machineId } : {}),
+        requestedBy: actor.userId, at: new Date(context.now).toISOString() }
       break
     }
     case 'project.skills':
@@ -1541,12 +1677,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions.
       const project = manageProject(state, actor, command.projectId)
+      // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
+      const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
+        && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
       for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
       // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
       for (const start of state.starts ?? []) {
         if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
       }
-      deleteProject(state, actor, command.projectId)
+      deleteProject(state, actor, command.projectId, orphaned, context.now)
+      // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
+      for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
       break
     }
     case 'project.sharing': {
@@ -1574,6 +1715,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!command.askedBy) fail('ASKED_BY_REQUIRED', 'Name the member who asked for this change (askedBy).', 400)
       }
       const askedBy = command.askedBy ? askedByOf(state, project, command.askedBy) : (actor as Extract<Actor, { kind: 'person' }>).userId
+      // The Swarm adds the built-in PM schedule to every coordinator's read (pmSchedule.ts); one copied into the document would
+      // be read twice, and go stale when the built-in one changes. Refused out loud, never stripped.
+      if (command.text.split('\n').some(line => line.trim() === BUILT_IN_HEADING)) {
+        fail('INSTRUCTIONS_BUILT_IN', 'Remove the "Built-in PM schedule" section: the Swarm adds it to every read, so it is never saved in the document.', 400)
+      }
       const current = project.instructionsRevision ?? 0
       if (command.baseRevision !== current) {
         // Refused with the text it missed, to merge and save again (design, Concurrency): never two writers' texts kept silently.
@@ -1689,7 +1835,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
-      if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
+      if (!state.machines.some(m => m.machineId === command.machineId) && machinesFull(state, !!context.contribution?.hostMachineId)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
@@ -1711,6 +1857,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
+      // The week its owner was told of others' work here: saving settings again does not tell them twice (othersWork.ts).
+      const othersToldWeek = state.machines.find(m => m.machineId === command.machineId)?.othersToldWeek
+      // Its owner's choice of projects is its own command's (machine.projects): saving the settings keeps it.
+      const projects = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)?.projects
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -1718,7 +1868,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}) })
+        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
+        ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
@@ -1737,14 +1888,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
       // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      const asked = actor.kind === 'agent' && command.askedIn && context.askedIn
-      const ownerAsked = !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
-        && context.now - asked.createdAt <= RULE_MESSAGE_MS && !!state.conversations.find(c => c.id === command.askedIn!.conversationId)?.leadId
-        && state.conversations.find(c => c.id === command.askedIn!.conversationId)!.leadId === actor.agentId
-      if (!(actor.kind === 'person' && actor.userId === pool.contributorId) && !ownerAsked) {
+      if (!machineOwnerWord(pool, command.askedIn)) {
         fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
       }
       resumeEngine(pool, command.engine)
+      break
+    }
+    case 'machine.projects': {
+      // Which projects may run agents here (Tony, 11-03): its owner's choice, or a Lead's passing on their chat message. A Mac's
+      // Harness Team account follows its Mac (machines.ts machineProjectRefusal), so it is set on the Mac.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (pool.hostMachineId || pool.buddyOnly) fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (!machineOwnerWord(pool, command.askedIn)) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, chooses its projects.", 403)
+      }
+      if (command.projectIds === null) { delete pool.projects; break }
+      // Only projects its owner may read: they cannot keep a machine for a project they do not see.
+      const keeper = person(state, pool.contributorId)
+      const asOwner: Actor = { kind: 'person', userId: keeper.id, email: keeper.email }
+      pool.projects = [...new Set(command.projectIds)].map(projectId => readProject(state, asOwner, projectId).id)
       break
     }
     case 'machine.remove': {
@@ -1757,11 +1919,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The Mac leaves with its Harness Team account and the agents there, told once as the Mac; that account's host cleans
       // its own folders.
       const moving = pool ? teamPoolsOf(state, pool).filter(m => !m.removal) : []
-      const removed = removeMachine(command.machineId, pool, [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))],
+      const removingAgents = [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))]
+      const readableAgentIds = new Set(removingAgents.filter(a => canReadAgent(state, actor, a)).map(a => a.id))
+      const removed = removeMachine(command.machineId, pool, removingAgents,
         machine => `${who} removed ${machine} from the Swarm`)
       for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
-      result.removedAgents = [...removed]
+      result.removedAgents = [...removed].filter(id => readableAgentIds.has(id))
       // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
       // Swarm's deletion, and the cap (the oldest goes: that one could come back once).
       if (pool) {
@@ -1875,9 +2039,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
-      const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
+      const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined
+      if (command.requestMessageId && (command.proposalMessageId || command.reviewOf || command.audience)) {
+        fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
+      }
+      const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
-        : proposalRequester(state, project, proposal?.personId) ?? (actor.kind === 'person' ? actor.userId : undefined)
+        : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       const number = nextConversationNumber(state)
       state.groupCounter = number
       // The agent that opens a task is in it, so an Engineer that opens its own review can post there and pass its checks.
@@ -1899,6 +2067,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
+      // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
+      if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId } }
       result.conversationId = operationId
       result.number = number
       // A build group an agent opens for nobody credits nobody when it ships: say so, as the PM can still name them.
@@ -1937,8 +2107,31 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
       const group = open(state, command.conversationId)
+      // Its requester may close it once it is lost or stopped (work.cancel), so among people only an owner names who asked;
+      // anyone else could name themselves and cancel a task they never asked for (security review 2 of #2907). Agents name
+      // the person they opened it for, as before.
+      if (actor.kind === 'person' && ![state.ownerId, groupProject(state, group).ownerId].includes(actor.userId)) {
+        fail('FORBIDDEN', 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.', 403)
+      }
       if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
       else delete group.requesterId
+      break
+    }
+    case 'work.queue': {
+      chatOnly(command.conversationId)
+      coordinatorOrPerson(state, actor, command.conversationId)
+      const task = open(state, command.conversationId)
+      // One answer for whatever is not an open task of this project, so it never tells what another project holds.
+      const siblings = queueSiblings(state, groupProject(state, task))
+      if (!siblings.includes(task)) fail('QUEUE_UNKNOWN', 'Only an open task of a project moves in its Next up.', 400)
+      if (command.after !== undefined) {
+        if (command.after !== null && (command.after === task.id || !siblings.some(s => s.id === command.after))) {
+          fail('QUEUE_UNKNOWN', 'Name an open task of this project to place it after, or null for the top.', 400)
+        }
+        for (const [groupId, rank] of placeAfter(siblings, task.id, command.after)) conversation(state, groupId).queueRank = rank
+      }
+      if (command.notBefore === null) delete task.notBefore
+      else if (command.notBefore !== undefined) task.notBefore = command.notBefore
       break
     }
     case 'conversation.merged': {
@@ -1957,28 +2150,32 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // One refusal for every link it cannot take, so a link never tells what another project or a private chat holds.
       const original = command.fixes === undefined ? undefined : fixedOriginal(state, group, command.fixes, mergedAt)
         ?? fail('FIX_LINK', 'No merged pull request in this project matches that link within the last 14 days.', 400)
-      const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
-      appendPullRequestUrls(group, [command.pullRequestUrl])
+      // Only the project's own pull requests are recorded: a link into any other repository, another owner's included, is refused.
+      const repositoryUrl = groupRepositoryUrl(state, group), own = githubRepository(repositoryUrl)
+      const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
+        ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.fullName}).`, 400)
+      const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
+      appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       recordMerged(group, mergedAt)
       // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
       // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card. A fix of an
       // earlier merge says so once more.
       const fixed = original ? recordFix(original, group, mergedAt) : false
-      const card = pullRequestCard(group, command.pullRequestUrl)
+      const card = pullRequestCard(group, pullRequestUrl)
       if (fixed || (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt)) {
-        message(group.id, `Merged ${command.pullRequestUrl}${original ? `, a fix of ${command.fixes}` : ''}`, [], card?.messageId ?? null, SYSTEM_ROW)
+        message(group.id, `Merged ${pullRequestUrl}${original ? `, a fix of ${command.fixes}` : ''}`, [], card?.messageId ?? null, SYSTEM_ROW)
         const posted = effects.messages.at(-1)!
         if (card) posted.thread = card.messageId
-        else bindPullRequestCards(group, posted)
+        else bindPullRequestCards(group, posted, repositoryUrl)
       }
-      recordCardMerged(group, command.pullRequestUrl, mergedAt)
+      recordCardMerged(group, pullRequestUrl, mergedAt)
       break
     }
     case 'conversation.archive': {
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
-      if (command.archived && unfinishedWork(group)) fail('WORK_UNFINISHED', 'This task did not finish. Hand it on, or cancel it with a reason, before archiving.')
+      if (command.archived && unfinishedWork(group)) fail('WORK_UNFINISHED', `This task did not finish. Hand it on, or cancel it with a reason, before archiving. ${WHO_CANCELS_ENDED}`)
       const tags = command.archived && !group.archived ? cancelledTags(state, group, actor) : []
       if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
@@ -2056,12 +2253,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW)
+      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
+        undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
       else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
         group.leadId = agentId
+        if (group.id === project.leadConversationId) arrived(project, agentId)
       }
       result.agentId = agentId
       // Creation already handed this first request to the native harness (and
@@ -2073,7 +2272,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.
-      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, coordinatorNameOf(project)), [], null, SYSTEM_ROW)
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, coordinatorNameOf(project)), [], null, SYSTEM_ROW,
+        undefined, undefined, undefined, stableId(operationId, 'launch-refused'))
       break
     }
     case 'agent.start': {
@@ -2170,8 +2370,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
       const project = readProject(state, actor, command.projectId ?? agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
       const name = owner.email.split('@')[0]!
-      message(home.id, proposalText(name, command), home.leadId && home.agentIds.includes(home.leadId) ? [home.leadId] : [], null,
-        { kind: 'buddy-proposal', personId: owner.id, ownerMessageId: command.ownerMessageId }, attachments)
+      message(home.id, proposalTitle(command), [], null,
+        { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: command.ownerMessageId })
+      const root = effects.messages.at(-1)!
+      root.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
+      effects.messages.push({ id: stableId(operationId, 'proposal-details'), conversationId: home.id, author: sender,
+        text: proposalText(command), replyTo: root.id, thread: root.id,
+        recipients: home.leadId && home.agentIds.includes(home.leadId) ? [home.leadId] : [],
+        ...(attachments.length ? { attachments } : {}) })
       // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,
       // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
       if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,
@@ -2203,6 +2409,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'buddy.rename':
       renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
       break
+    case 'buddy.model':
+      askBuddyModel(state, actor, command.gridModel, operationId, context.now)
+      break
+    case 'buddy.modelResult': {
+      // The machines a line names leave a Buddy's read of it (store.ts withoutMachineNames): a Buddy reads no machines.
+      buddyModelResult(state, actor, command, context.now).forEach((line, i) => {
+        const source = { ...SYSTEM_ROW, ...(line.machines.length ? { machines: line.machines } : {}) }
+        if (i === 0) message(line.conversationId, line.text, [], null, source)
+        else effects.messages.push({ id: stableId(operationId, 'buddy-model', String(i)), conversationId: line.conversationId, author: sender,
+          text: line.text, replyTo: null, recipients: [], source })
+      })
+      break
+    }
     case 'buddy.sessionEnd': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person ends their own Buddy session.', 403)
       const chat = readConversation(state, actor, command.conversationId)
@@ -2316,6 +2535,31 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
         }
+        const switchId = start.request.leadFor?.switchId
+        if (switchId) {
+          const switchSource = state.agents.find(a => a.switchRequest?.id === switchId)
+          const destination = machineContribution(state, start.request.machineId)
+          const project = projectOf(state, start.request.leadFor!.projectId)
+          if (!switchSource || switchSource.switchRequest?.targetMachineId !== start.request.machineId
+            || switchSource.switchRequest.engine !== start.request.engine
+            || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
+            fail('STALE_SWITCH', 'This PM switch is no longer current.')
+          }
+          if (!destination?.observation?.capabilities?.includes(SWITCH_CAPABILITY)
+            || !destination.observation.capabilities.includes(LEAD_CAPABILITY)) {
+            fail('HOST_OUTDATED', `Update Harness on ${destination?.name ?? 'that machine'} to move the ${coordinatorNameOf(project)}.`, 409)
+          }
+          const profileId = switchSource.switchRequest.profileId
+          if (profileId !== defaultProfileId(destination.machineId, switchSource.switchRequest.engine)
+            && !destination.observation.profiles?.some(p => p.engine === switchSource.switchRequest!.engine && p.id === profileId)) {
+            fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
+          }
+          if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
+          if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
+            || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
+            fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
+          }
+        }
         admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherWorkspaceMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
@@ -2357,6 +2601,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           if (entry) endBuddySession(chat, entry, 'failed', command.error)
           break
         }
+        const switchId = start.request.leadFor?.switchId
+        const source = switchId && state.agents.find(a => a.switchRequest?.id === switchId)
+        if (switchId && source) {
+          const home = conversation(state, projectOf(state, start.request.leadFor!.projectId).leadConversationId)
+          delete source.switchRequest
+          const reason = publicReason(command.error)
+          message(home.id, `Couldn't switch the PM: ${reason[0]!.toLowerCase()}${reason.slice(1)} It is back on ${ENGINE_NAMES[source.configuration.engine] ?? 'its engine'}.`, [], null, SYSTEM_ROW)
+          break
+        }
         // A Product Manager's start says so in its project's conversation (leadStart.ts).
         if (start.request.leadFor) {
           const ended = leadStartFailed(state, start, command.error)
@@ -2385,8 +2638,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, start.request.conversationId)
       const agentId = stableId(start.request.machineId, command.harnessId)
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+      const switchId = start.request.leadFor?.switchId
+      const switchSource = switchId && state.agents.find(a => a.switchRequest?.id === switchId)
+      if (switchId) {
+        const project = projectOf(state, start.request.leadFor!.projectId)
+        if (!switchSource || switchSource.switchRequest?.targetMachineId !== start.request.machineId
+          || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
+          fail('STALE_SWITCH', 'This PM switch is no longer current.')
+        }
+        if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
+          || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
+          fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
+        }
+      }
       // Answered, not refused: a refusal would take the row with it. Its host closes the session (cli superTabs/start.ts).
-      const overtaken = start.request.leadFor ? leadOvertaken(state, start, group) : null
+      const overtaken = start.request.leadFor && !switchId ? leadOvertaken(state, start, group) : null
       if (overtaken) {
         start.error = overtaken.reason
         result.refused = overtaken.reason
@@ -2409,6 +2675,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(!start.request.gridModel && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
         ...(start.request.buddySession ? { buddySession: start.request.buddySession } : {}),
+        ...(start.request.profileId ? { profileId: storedProfileId(start.request.machineId, command.configuration.engine, start.request.profileId) } : {}),
         ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       // A main Buddy stays first, as older clients take a Buddy chat's first agent for its Buddy (buddySessions.ts).
@@ -2435,11 +2702,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
       }
       if (start.request.leadFor) {
-        // Taking over from a Lead that left, as agent.add does.
-        if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
-        // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
-        const joined = leadJoined(state, start, group, agentId)
-        message(group.id, joined.text, [], null, joined.source)
+        if (switchId && switchSource) {
+          const project = projectOf(state, start.request.leadFor.projectId)
+          const pool = state.machines?.find(m => m.machineId === start.request.machineId)
+          group.leadId = agentId
+          switchSource.switchLanded = { id: switchId, requestedBy: switchSource.switchRequest!.requestedBy, candidateAgentId: agentId }
+          delete switchSource.switchRequest
+          project.lead = { status: 'started', machineId: start.request.machineId, machineName: pool?.name ?? start.request.machineId }
+        } else {
+          // Taking over from a Lead that left, as agent.add does.
+          if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+          // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
+          const joined = leadJoined(state, start, group, agentId)
+          message(group.id, joined.text, [], null, joined.source)
+          if (group.leadId === agentId) arrived(projectOf(state, start.request.leadFor.projectId), agentId)
+        }
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       // Naming who started it, as any agent added to a chat is named with who added it (#2207).
@@ -2516,7 +2793,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = projectOf(state, agentProjectId(state, target))
       const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
       if (!projectAgent(state, actor, project.id) && !isOwner) fail('FORBIDDEN', 'Only an agent of this project, the contributor or tab owner can release a worker.', 403)
-      protectLead(state, target.id)
+      protectLead(state, target.id, actor)
       // Only its own active work holds a decision back, not the active work of a task it sits in.
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
       // A Buddy is its owner's to stop (buddies.ts); it never had work, which was all that kept it from here before.
@@ -2562,13 +2839,39 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       result.expiresAt = Date.parse(target.switchRequest.claimedUntil)
       break
     }
+    case 'agent.switchHandoff': {
+      const target = agent(state, command.agentId)
+      const request = target.switchRequest
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || request?.id !== command.switchId
+        || switchExpired(request, context.now) || !request.claimedUntil || Date.parse(request.claimedUntil) <= context.now) {
+        fail('STALE_SWITCH', 'Only the source host can hand off the current PM switch.', 403)
+      }
+      if (!/^[0-9a-f]{32}$/.test(command.handoffChangeId) || Buffer.byteLength(command.note, 'utf8') > 32_000) {
+        fail('HANDOFF_INVALID', 'This PM handoff is too large or invalid.', 400)
+      }
+      const start = state.starts?.find(candidate => candidate.request.leadFor?.switchId === command.switchId
+        && candidate.request.machineId === request.targetMachineId)
+      if (!start || start.error || start.harnessId) fail('STALE_SWITCH', 'This PM switch no longer has a pending destination.', 409)
+      if (start.request.handoffNote !== undefined) {
+        if (start.request.handoffNote !== command.note || start.request.handoffChangeId !== command.handoffChangeId) {
+          fail('HANDOFF_EXISTS', 'This PM switch already has a different handoff.', 409)
+        }
+        break
+      }
+      start.request.handoffNote = command.note
+      start.request.handoffSourceAgentId = target.harnessId
+      start.request.handoffChangeId = command.handoffChangeId
+      break
+    }
     case 'agent.switchResult': {
       const target = agent(state, command.agentId)
       // agent.rebind clears a request whose new session started but keeps its id, so the result of either is the one to answer.
       if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded?.id].includes(command.switchId)) {
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
-      const project = ledProject(state, target.id), landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
+      const landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
+      const promoted = landed?.candidateAgentId ? state.agents.find(candidate => candidate.id === landed.candidateAgentId) : undefined
+      const project = ledProject(state, target.id) ?? (promoted ? ledProject(state, promoted.id) : undefined)
       const asked = (landed ?? target.switchRequest)?.requestedBy
       // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
       const moved = command.ok || !!landed
@@ -2577,16 +2880,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       delete target.switchLanded
       if (!project) break
       const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
-      const engine = ENGINE_NAMES[target.configuration?.engine ?? ''] ?? 'its engine'
-      const label = target.profileId && state.machines?.find(m => m.machineId === target.machineId)?.observation?.profiles
-        ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
+      const running = moved && promoted ? promoted : target
+      const engine = ENGINE_NAMES[running.configuration?.engine ?? ''] ?? 'its engine'
+      const label = running.profileId && state.machines?.find(m => m.machineId === running.machineId)?.observation?.profiles
+        ?.find(p => p.engine === running.configuration?.engine && p.id === running.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
         text: moved ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.`
           : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
       // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
       const owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
       if (moved && label && asked && owner && asked !== owner.id) {
-        const who = usernameOf(state, asked) ?? state.people.find(p => p.id === asked)?.email ?? 'Someone'
+        const who = writtenNameOf(state, asked) ?? state.people.find(p => p.id === asked)?.email ?? 'Someone'
         effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: openSwarmBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
           source: { kind: 'pm-switch-notice', machineId: target.machineId },
           text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
@@ -2703,6 +3007,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'member.status':
       setStatus(state, actor, command.status, context.now)
       break
+    case 'member.timeZone':
+      setTimeZone(state, actor, command.timeZone)
+      break
     case 'message.react': {
       // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4).
       const group = open(state, command.conversationId)
@@ -2715,6 +3022,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'member.username':
       setUsername(state, actor, command.username)
+      break
+    case 'member.name':
+      setName(state, actor, command.name)
       break
     case 'agent.avatar':
       setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
@@ -2753,6 +3063,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
+      const voice = attachments.find(a => a.voice)
+      if (voice && (attachments.length > 1 || command.text || command.mentions?.length)) {
+        fail('VOICE_ALONE', 'Send a voice message on its own, without text, tags or other files.', 400)
+      }
       // The text is where tags live, as people tag in chat: each name it says tags that person, if they may read here. A tag
       // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
       // shows the same words. Only from the command, so a retry writes the same text.
@@ -2761,7 +3076,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
       const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
-      const text = withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
+      const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
@@ -2843,10 +3158,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.agentOnly && (actor.kind !== 'agent' || recipients.length !== 1 || recipients[0] !== actor.agentId || mentions.length)) {
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
+      if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
+      // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
+      // A Team Swarm's says Not sent, as before.
+      const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
+      if (unled && unled.leadConversationId === group.id && state.projects?.includes(unled) && !(group.leadId && group.agentIds.includes(group.leadId))) {
+        leadWaits(unled, operationId, context.now)
+      }
       // The message that makes it LOOP_NOTICE_AT in a row between two agents tells their Lead, once; delivery is never held.
       const speaker = actor.kind === 'agent' ? agent(state, actor.agentId) : null
       const partner = speaker && recipients.length === 1 && recipients[0] !== speaker.id ? agent(state, recipients[0]!) : null
@@ -3039,6 +3361,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       renewLease(group.assignment, context.now)
       leadActed(group.id, 'assign')
       recordRun(state, group, group.assignment, worker, context.now)
+      const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
+      if (others) effects.messages.push({ id: stableId(operationId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
+        replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null
@@ -3143,7 +3468,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           ...(!coordinator && short.mentions.length ? { mentions: short.mentions } : {}) })
         // The task's line says it shipped (taskLine.ts), in place of the Shipped line; its links are kept as that line's were.
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
-          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
+          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)], groupRepositoryUrl(state, group))
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
@@ -3174,11 +3499,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
-      if (!allowed) fail('FORBIDDEN', 'Only an agent of this project or the tab owner can cancel work.', 403)
-      // A retry after the cancel keeps the first reason and tells the worker once.
-      if (assignment.status === 'cancelled') break
       // A stopped task is unfinished too, and only a cancel closes it (tidy.ts unfinishedWork): its worker is finished already.
       const lost = assignment.status === 'lost', stopped = assignment.status === 'stopped'
+      // With no worker left to tell, the person who asked for it and its project's owner close it too, or it would stay for
+      // good where most people are not the Swarm owner (Diego, 2026-11-04, #2639). Live work stays the project's agents' and
+      // the Swarm owner's.
+      const ended = lost || stopped || assignment.status === 'cancelled'
+      const closes = ended && actor.kind === 'person' && [group.requesterId, project.ownerId].includes(actor.userId)
+      if (!allowed && !closes) fail('FORBIDDEN', ended ? WHO_CANCELS_ENDED : WHO_CANCELS_LIVE, 403)
+      // A retry after the cancel keeps the first reason and tells the worker once.
+      if (assignment.status === 'cancelled') break
       if (!activeWork(group) && !lost && !stopped) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
       // A removed worker (reconciling) can never confirm a stop, so this is the only way to close its task; nobody is left to tell.
       // A lost task's agent was told already that its task moved, and does not wait for a decision.
@@ -3230,7 +3560,24 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
-      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now })
+      // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
+      // it (Diego, 2026-11-04, #2656). A live checker's failure stands whoever passes. The PM is the project's coordinator
+      // now, not the task's lead: a replaced PM's removal clears its lead on every task it led (review of #2916).
+      const project = groupProject(state, group)
+      const accountable = actor.kind === 'agent' ? ledProject(state, actor.agentId)?.id === project.id
+        : [state.ownerId, project.ownerId].includes(actor.userId)
+      const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
+        : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
+      const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
+        accountable ? departed : undefined)
+      const first = !earlier
+      // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
+      // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
+      for (const failure of cleared) {
+        message(group.id, `${name} cleared ${failure.name ? `${failure.name}'s` : 'a checker\'s'} failure of “${check.description}”, as they left the Swarm: `
+          + (failure.evidence.split('\n')[0] ?? '').trim().slice(0, 300), [], null, SYSTEM_ROW)
+      }
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       const byAssignee = actor.kind === 'agent' && actor.agentId === group.assignment.agentId
       // A checker's verdict on a check counts once per attempt.
@@ -3246,6 +3593,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
       if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
+      // form for a post to carry, and its step waits for the new revision instead of moving after 30 quiet minutes (Ken,
+      // 2026-11-04: ~18 of 51 steps moved in two days were waiting on the Engineer's fix).
+      if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
+        const build = state.conversations.find(c => c.id === group.reviewOf)
+        if (build) changesRequested(state, build, actor.agentId, context.now)
+      }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break
     }
@@ -3289,18 +3643,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   if (removed.length) Object.assign(result, credentialResult(removed))
   for (const draft of effects.messages) {
     const group = state.conversations.find(c => c.id === draft.conversationId)
-    if (group) bindPullRequestCards(group, draft)
+    if (group) bindPullRequestCards(group, draft, groupRepositoryUrl(state, group))
   }
   // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
   for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
-  // Each row is stored under its id: two alike roll the whole command back on a duplicate key, in the store alone (review of
-  // #2275: the review-capacity notice took the Ready for review row's id, so no Builder could hand over during a shortage).
+  assertUniqueMessageIds(command.type, effects.messages)
+  return effects
+}
+
+/** Reject an invalid command result before the store tries to write duplicate message keys. */
+export function assertUniqueMessageIds(commandType: string, messages: Array<{ id: string }>): void {
   const ids = new Set<string>()
-  for (const draft of effects.messages) {
-    if (ids.has(draft.id)) throw new Error(`Command ${command.type} wrote two messages with the id ${draft.id}.`)
+  for (const draft of messages) {
+    if (ids.has(draft.id)) throw new SuperTabError('DUPLICATE_MESSAGE_ID', `Command ${commandType} produced duplicate message IDs.`, 400)
     ids.add(draft.id)
   }
-  return effects
 }
 
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */

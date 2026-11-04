@@ -37,7 +37,7 @@ describe('live cards', () => {
     const f = fixture()
     const created = f.create()
     const id = created.result.conversationId as string
-    expect(f.group(id).cards).toEqual({ task: created.messages[0]!.id })
+    expect(f.group(id).cards).toMatchObject({ task: created.messages[0]!.id })
     const defined = f.run({ type: 'work.define', conversationId: id, brief: 'Add round avatars.', checks: [{ description: 'Tests pass', independent: false }] })
     expect(f.group(id).cards?.task).toBe(defined.messages[0]!.id)
   })

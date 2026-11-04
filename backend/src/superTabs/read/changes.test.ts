@@ -144,3 +144,67 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(requires(receive(fresh, changed, owner).groups)).toEqual({ machines: ['secret-mac', 'mac'] })
   })
 })
+
+// A client that asks for it gets a line for a machine's own reading (Ken's machine-cap plan, 2026-11-04).
+describe('a machine\'s reading, for a client that asks for lines', () => {
+  const SINCE = NOW + 1_000
+  const lightly = (parts: SwarmParts, changed: Part[], actor: Actor) => {
+    const view = readerView(parts, actor, LATER, { teamMachines: [] })
+    return changesFor(view, changed, actor, { since: SINCE })
+  }
+  const reading = (parts: SwarmParts, change: (p: Part) => void = () => {}) => {
+    const part = parts.machines.find(p => p.key === 'mac')! as Part
+    part.version += 1
+    part.readAt = LATER
+    const data = part.data as { contribution: { observation?: unknown } }
+    data.contribution.observation = { receivedAt: LATER, resources: {}, quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] }
+    change(part)
+    return part
+  }
+
+  it('is a line when only the reading moved', () => {
+    const { parts } = scene()
+    const out = lightly(parts, [reading(parts)], peer)
+    expect(out.machines).toEqual([])
+    expect(out.machineReadings).toEqual([{ key: 'mac', version: R + 1, receivedAt: LATER }])
+  })
+
+  it('is the whole part when its content changed since the cursor', () => {
+    const { parts } = scene()
+    const out = lightly(parts, [reading(parts, p => { p.contentAt = LATER })], peer)
+    expect(keys(out.machines)).toEqual(['mac'])
+    expect(out.machineReadings).toEqual([])
+  })
+
+  it('is the whole part when anything else changed since the cursor, and a line when its content changed before it', () => {
+    const { parts } = scene()
+    expect(keys(lightly(parts, [reading(parts, p => { p.changedAt = LATER })], peer).machines)).toEqual(['mac'])
+    const { parts: older } = scene()
+    expect(lightly(older, [reading(older, p => { p.contentAt = SINCE - 1 })], peer).machines).toEqual([])
+  })
+
+  it('is a removal, never a line, when the machine left', () => {
+    const { parts } = scene()
+    const gone = write(parts, 'machines', 'mac', p => { p.deleted = true; p.readAt = LATER })
+    const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, { teamMachines: [] }), [gone], peer, { since: SINCE })
+    expect(out.machines).toEqual([{ key: 'mac', version: R + 1, changedAt: LATER, deleted: true }])
+    expect(out.machineReadings).toEqual([])
+  })
+
+  it('tells a Buddy nothing, and anyone nothing of a Buddy-only machine', () => {
+    const { parts, s } = scene()
+    s.edit(state => { state.agents.push({ ...state.agents[0]!, id: 'buddy', buddyOf: { personId: peer.userId, generation: 'g' } } as never) })
+    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
+    expect(lightly(withBuddy, [reading(withBuddy)], buddy).machineReadings).toEqual([])
+    const hidden = reading(parts, p => { (p.data as { contribution: { buddyOnly?: true } }).contribution.buddyOnly = true })
+    expect(lightly(parts, [hidden], peer).machineReadings).toEqual([])
+  })
+
+  it('leaves the reply as it was for a client that did not ask', () => {
+    const { parts } = scene()
+    const out = receive(parts, [reading(parts)], peer)
+    expect(keys(out.machines)).toEqual(['mac'])
+    expect(out).not.toHaveProperty('machineReadings')
+  })
+})

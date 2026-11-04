@@ -227,51 +227,43 @@ class _StoreHarnessActionsState extends State<StoreHarnessActions> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (targets.isNotEmpty)
-                MenuAnchor(
+                AppDropdown(
                   controller: _menu,
                   childFocusNode: _buttonFocus,
-                  consumeOutsideTap: true,
-                  alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-                  style: grid.AppMenu.style(maxHeight: 360),
-                  menuChildren: [
-                    SizedBox(
-                      width: menuWidth,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
-                        child: Text(
-                          'Recent harnesses',
-                          style: grid.AppType.label(
-                            color: grid.AppPalette.textSecondary,
-                          ),
+                  width: menuWidth,
+                  maxHeight: 360,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                      child: Text(
+                        'Recent harnesses',
+                        style: grid.AppType.label(
+                          color: grid.AppPalette.textSecondary,
                         ),
                       ),
                     ),
                     for (var i = 0; i < targets.length; i++)
-                      SizedBox(
-                        width: menuWidth,
-                        child: Tooltip(
-                          message: targets[i].tooltip,
-                          child: AppMenuItem(
-                            key: ValueKey(
-                              'store-resume-choice:${targets[i].destinationId}',
-                            ),
-                            focusNode: i == 0 ? _firstChoiceFocus : null,
-                            metrics: AppMenuRowMetrics.roomy,
-                            icon: AppIcons.history,
-                            label: targets[i].title,
-                            detail: targets[i].detail,
-                            trailing: targets[i].machine.nodeOnline == false
-                                ? Tooltip(
-                                    message: 'Machine offline',
-                                    child: Icon(
-                                      AppIcons.cloudOff,
-                                      size: 14,
-                                      color: grid.AppPalette.textFaint,
-                                    ),
-                                  )
-                                : null,
-                            onPressed: () => _resume(targets[i]),
+                      Tooltip(
+                        message: targets[i].tooltip,
+                        child: AppMenuItem(
+                          key: ValueKey(
+                            'store-resume-choice:${targets[i].destinationId}',
                           ),
+                          focusNode: i == 0 ? _firstChoiceFocus : null,
+                          icon: AppIcons.history,
+                          label: targets[i].title,
+                          detail: targets[i].detail,
+                          trailing: targets[i].machine.nodeOnline == false
+                              ? Tooltip(
+                                  message: 'Machine offline',
+                                  child: Icon(
+                                    AppIcons.cloudOff,
+                                    size: 14,
+                                    color: grid.AppPalette.textFaint,
+                                  ),
+                                )
+                              : null,
+                          onPressed: () => _resume(targets[i]),
                         ),
                       ),
                   ],

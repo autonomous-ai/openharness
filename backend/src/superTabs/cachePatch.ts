@@ -12,7 +12,9 @@ import { createHash } from 'node:crypto'
 import { PART_KINDS, type GroupData, type MachineData, type Part, type PartKind, type SwarmParts } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
 import { startFinished } from './parts/write.js'
+import { projectLightGroup } from './parts/lightSelect.js'
 import { stableId, type AgentStart } from './model.js'
+import { boardGroup, lastActive } from './leaderboard/boardGroups.js'
 
 export interface PatchRule<T> {
   /** The part kinds whose changes this entry holds: a refresh reads only those. */
@@ -24,10 +26,10 @@ export interface PatchRule<T> {
   comparable?(patched: T, fresh: T): [unknown, unknown]
 }
 
-/** A changed part as a load would have given it: a change read adds `readAt`, which no load carries. */
+/** A changed part as a load would have given it: a change read adds `readAt` and `contentAt`, which no load carries. */
 function asLoaded<T>(changed: Part): Part<T> {
-  if (changed.readAt === undefined) return changed as Part<T>
-  const { readAt: _readAt, ...loaded } = changed
+  if (changed.readAt === undefined && changed.contentAt === undefined) return changed as Part<T>
+  const { readAt: _readAt, contentAt: _contentAt, ...loaded } = changed
   return loaded as Part<T>
 }
 
@@ -137,10 +139,28 @@ export function dormantAgentRule(agentId: string): PatchRule<Part<GroupData>[]> 
   return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts, 'group', p => asleep(p) && (p.data as GroupData).agentIds.includes(agentId)) }
 }
 
+/** A `light-dormant:agent:{id}` entry (cachedReads.ts deriveLight, B4): the same selection as `dormantAgentRule`'s, each
+ *  conversation light (parts/lightSelect.ts projectLightGroup), as `loadLightGroups` loads it. */
+export function lightDormantAgentRule(agentId: string): PatchRule<Part<GroupData>[]> {
+  const keep = (p: Part) => asleep(p) && (p.data as GroupData).agentIds.includes(agentId)
+  return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts.map(p => p.kind === 'group' && keep(p) ? projectLightGroup(p as Part<GroupData>) : p),
+    'group', keep) }
+}
+
 /** A `dormant:project:{id}` entry: the project's live dormant groups; a group stored with no project is the default one's
  *  (projects.ts groupProject). */
 export function dormantProjectRule(projectId: string): PatchRule<Part<GroupData>[]> {
   return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts, 'group', p => asleep(p) && ((p.data as GroupData).projectId ?? 'lead') === projectId) }
+}
+
+/** A `board:{floor}:{projects}` entry (leaderboard/read.ts): the projects' quiet conversations last active since `floor`, each
+ *  with the board's fields only (leaderboard/boardGroups.ts), as `loadBoardGroups` loads them; a group stored with no project
+ *  is the default one's. One that wakes, moves project or is removed goes. */
+export function boardRule(projectIds: readonly string[], floor: number): PatchRule<Part<GroupData>[]> {
+  const projects = new Set(projectIds)
+  const keep = (p: Part) => asleep(p) && projects.has((p.data as GroupData).projectId ?? 'lead') && lastActive(p.data as GroupData) >= floor
+  return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts.map(p => p.kind === 'group' && keep(p) ? boardGroup(p as Part<GroupData>) : p),
+    'group', keep) }
 }
 
 /** A `group:{id}` entry: that live group, dormant or not, or none. */

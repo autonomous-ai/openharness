@@ -45,6 +45,7 @@ async function pendingSwarms(db: PrismaClient, report: WorkspaceMigrationReport)
     .filter(r => !r.workspaceId)
   report.skipped = rows.filter(r => r.format !== 2).map(r => r.id)
   const split = rows.filter(r => r.format === 2)
+  if (!split.length) return []
   const heads = new Map((await db.swarmHead.findMany({ where: { id: { in: split.map(r => `${r.id}:head`) } } })).map(h => [h.tabId, h]))
   const members = await db.swarmMember.findMany({ where: { tabId: { in: split.map(r => r.id) }, deleted: false } })
   return split.flatMap(row => {

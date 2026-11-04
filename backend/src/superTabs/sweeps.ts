@@ -13,10 +13,13 @@ import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
+import { sweepReminders } from './reminders.js'
+import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
- *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
- *  version (`compactTombstones`): versions never reset (spec ruling 6, review round 1). Run by the singleton worker at
+ *  A person or machine can come back under the same key, so its tombstone is kept for good, compacted to its
+ *  version (`compactTombstones`): versions never reset (spec ruling 6, review round 1). An agent's goes at `purgeAt` once
+ *  nothing open names it (agentTombstones.ts). Run by the singleton worker at
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
@@ -29,7 +32,7 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   await ensureIndex(db, 'SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 })
 }
 
-/** A removed person, agent or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
+/** A removed person or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
  *  is where a part added again under that key continues (parts/write.ts). Readers already passed its removal. */
 async function compactTombstones(db: PrismaClient, now: number): Promise<number> {
   // Plain matches on the purge index (parts/indexed.ts). Through Prisma, `purgeAt: { lt }` was $expr, which no index bounds
@@ -37,7 +40,7 @@ async function compactTombstones(db: PrismaClient, now: number): Promise<number>
   // compacted again, each hour (roadmap Phase 3.6).
   const due = { deleted: true, purgeAt: { $lt: { $date: new Date(now).toISOString() } } }
   let compacted = 0
-  for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine'] as const) {
+  for (const collection of ['SwarmMember', 'SwarmMachine'] as const) {
     for (;;) {
       const ids = (await readBy(db, collection, 'purge', [{ $match: due }, { $limit: BATCH }, { $project: { _id: 1 } }])).map(row => row._id as string)
       if (!ids.length) break
@@ -192,11 +195,21 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
+/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
+export async function reminderRows(db: PrismaClient, now: number) {
+  try {
+    return { expired: await sweepReminders(db, now) }
+  } catch (error) {
+    logger.warn('[swarm-sweeps] reminders failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
-    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
+    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

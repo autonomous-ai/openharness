@@ -373,18 +373,17 @@ void main() {
           .descendant(of: recentTile, matching: find.byType(AnimatedContainer))
           .first,
     );
+    // Keyboard focus shows in the fill, never as a colored line.
     expect(
-      ((container.decoration! as BoxDecoration).border! as Border).top.color,
+      (container.decoration! as BoxDecoration).color,
       isNot(Colors.transparent),
     );
     expect(tester.widget<AppChoiceTile>(newTile).selected, isTrue);
     expect(tester.widget<AppSelectField<String>>(recentTile).selected, isFalse);
     expect(
       ((container.decoration! as BoxDecoration).border! as Border).top.color,
-      isNot(
-        tester.widget<TextButton>(newButton).style!.side!.resolve({})!.color,
-      ),
-      reason: 'Keyboard focus has its own rim, separate from the saved choice',
+      Colors.transparent,
+      reason: 'Keyboard focus draws no line, unlike the saved choice',
     );
   });
 

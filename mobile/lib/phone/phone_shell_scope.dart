@@ -12,6 +12,8 @@ class PhoneShellScope extends InheritedWidget {
     required this.onOpenAgent,
     this.onShowSwarm,
     this.canOpenMachine,
+    this.agentStopped,
+    this.onResumeAgent,
     required super.child,
   });
 
@@ -26,6 +28,18 @@ class PhoneShellScope extends InheritedWidget {
   /// This phone has [machineId] linked and can open its terminals
   /// ([onOpenAgent]). Null where nothing can be opened.
   final bool Function(String machineId)? canOpenMachine;
+
+  /// Whether [agentId] on [machineId] is stopped there, as this phone's list
+  /// of the account's own machines says: null while it runs or is not listed;
+  /// true for stopped work [onResumeAgent] can bring back, false for stopped
+  /// work it cannot. Null where nothing can be resumed.
+  final bool? Function(String machineId, String agentId)? agentStopped;
+
+  /// Brings [agentId]'s stopped work on [machineId] back and waits for its
+  /// terminal: null once it can be opened ([onOpenAgent]), or what to say.
+  /// Null where nothing can be resumed.
+  final Future<String?> Function(String machineId, String agentId)?
+  onResumeAgent;
 
   /// Swarm Home at the root, every page over it closed: Swarm asked for from
   /// the terminal (its mark, Find). Null where the shell has no Swarm Home to

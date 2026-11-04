@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
+import { knownTimeZone } from './digest.js'
 import { agentProjectId, projectAgent } from './projects.js'
 
 /** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */
@@ -10,7 +11,7 @@ export const MAX_STATUS_LENGTH = 80
 export interface PersonStatus { text: string; emoji: (typeof STATUS_EMOJI)[number] | null; until: string | null }
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: words that hide their real shape.
-const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
+export const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
 export const statusSchema = z.object({
   text: z.string().trim().min(1).max(MAX_STATUS_LENGTH).refine(printable, 'Use printable words.'),
   emoji: z.enum(STATUS_EMOJI).nullable().optional(),
@@ -25,6 +26,15 @@ export function setStatus(state: SuperTabState, actor: Actor, status: z.infer<ty
   const until = status.until ? new Date(status.until).toISOString() : null
   if (until && Date.parse(until) <= now) fail('STATUS_EXPIRED', 'Choose a time that has not passed yet.', 400)
   member.status = { text: status.text, emoji: status.emoji ?? null, until }
+}
+
+/** `member.timeZone`: a person's own app tells the Swarm their time zone, or that it knows none. A viewer may too. */
+export function setTimeZone(state: SuperTabState, actor: Actor, timeZone: string | null): void {
+  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a time zone.', 403)
+  const member = person(state, actor.userId)
+  if (timeZone === null) return void delete member.timeZone
+  if (!knownTimeZone(timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
+  member.timeZone = timeZone
 }
 
 /** Pictures a person may pick instead of uploading one; Desktop draws each. */

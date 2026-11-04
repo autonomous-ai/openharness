@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { activeWork, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -199,15 +199,72 @@ describe('projects inside an invite-only swarm', () => {
       cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String(f.run({ type: 'agent.start', request }).startId)
-    const start = f.state.starts!.find(s => s.id === startId)!
+    let start = f.state.starts!.find(s => s.id === startId)!
     start.dispatched = phase !== 'queued'
-    if (phase === 'settling') { start.poolGeneration = 'pool'; start.harnessId = 'native'; start.poolSettled = false }
+    if (phase === 'settling') {
+      start.poolGeneration = 'pool'; start.harnessId = 'native'; start.poolSettled = false
+      // Its agent is up while its machine settles it (agent.started adds it); one whose agent is gone is a test below.
+      f.add(request.conversationId, 'native', false)
+      start = f.state.starts!.find(s => s.id === startId)!
+    }
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts')
     if (phase === 'settling') start.poolSettled = true
     else f.run({ type: 'agent.startFailed', startId, error: 'The machine confirmed nothing started.' })
     f.run({ type: 'project.delete', projectId: p.projectId })
     expect(f.state.starts).toEqual([])
     expect(() => f.run({ type: 'agent.started', startId, harnessId: 'late', configuration })).toThrow('unavailable')
+  })
+
+  it('deletes past a queued start whose task is archived, which can never launch', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request })
+    f.state.conversations.find(c => c.id === conversationId)!.archived = true
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.starts).toEqual([])
+  })
+
+  it('deletes past a settling start whose agent was removed earlier, which its machine never settles', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String(f.run({ type: 'agent.start', request }).startId)
+    Object.assign(f.state.starts!.find(s => s.id === startId)!, { dispatched: true, poolGeneration: 'pool', harnessId: 'native', poolSettled: false })
+    const agentId = f.add(conversationId, 'native', false)
+    f.run({ type: 'agent.remove', agentId })
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.starts).toEqual([])
+  })
+
+  it('deletes past starts stuck over an hour, and names what still holds a refused delete', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const queued = String(f.run({ type: 'agent.start', request }).startId)
+    const settling = String(f.run({ type: 'agent.start', request: { ...request, name: 'Checker' } }).startId)
+    Object.assign(f.state.starts!.find(s => s.id === settling)!, { dispatched: true, dispatchedAt: 1000, poolGeneration: 'pool', harnessId: 'native', poolSettled: false })
+    f.add(conversationId, 'native', false)
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts before deleting it: Builder in “Work”, Checker in “Work”.')
+    f.run({ type: 'project.delete', projectId: p.projectId }, owner, { now: 1000 + STUCK_START_MS + 1 })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.starts!.some(s => s.id === queued || s.id === settling)).toBe(false)
+  })
+
+  it('still refuses a dispatched start in an archived task: its machine may be starting the agent', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String(f.run({ type: 'agent.start', request }).startId)
+    f.state.starts!.find(s => s.id === startId)!.dispatched = true
+    f.state.conversations.find(c => c.id === conversationId)!.archived = true
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts')
   })
 
   it('lets the owner or lead share a missing repository address once, without replacing it', () => {

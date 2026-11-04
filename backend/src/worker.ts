@@ -18,11 +18,13 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
+import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
@@ -32,8 +34,11 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
+import { startReadMarkSweep } from './superTabs/readMarks.js'
 import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
 import { startSwarmPurge } from './superTabs/purge.js'
+import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
+import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
 import { logger } from './utils/logger.js'
 
@@ -51,7 +56,7 @@ async function start(): Promise<void> {
   await migrateUserIdentityByEmail()
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
-  await releaseSchema()
+  const schema = await releaseSchema()
   // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
   await markFinishedGroups(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
@@ -69,12 +74,15 @@ async function start(): Promise<void> {
   let stopSweeps = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
+  let stopPullRequestWatch = (): void => {}
   let stopDeliveries = (): void => {}
   let stopCompaction = (): void => {}
   let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
+  let stopReadMarkSweep = (): void => {}
   let stopPendingUploads = (): void => {}
   let stopSwarmPurge = (): void => {}
+  let stopAttachmentSweep = (): void => {}
   let stopReflection = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
@@ -85,11 +93,14 @@ async function start(): Promise<void> {
     stopSweeps()
     stopLegacyDrop()
     stopArchive()
+    stopPullRequestWatch()
     stopDeliveries()
     stopCompaction()
     stopReceiptSweep()
+    stopReadMarkSweep()
     stopPendingUploads()
     stopSwarmPurge()
+    stopAttachmentSweep()
     stopReflection()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
@@ -104,10 +115,15 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
+  // Read marks untouched for 180 days, where the database refused their index expiry, a chunk every 30 s (superTabs/readMarks.ts).
+  stopReadMarkSweep = startReadMarkSweep(prisma, schema.readMarkExpirySet)
   // Uploads begun on a link and never finished go an hour after the link expired, with what they stored (lib/pendingUploadSweep.ts).
   stopPendingUploads = startPendingUploadSweep(prisma, env)
   // Deleted Swarms past their 7 days go with their records and stored files (superTabs/purge.ts).
   stopSwarmPurge = startSwarmPurge(prisma, env)
+  // Swarm uploads nobody sent within a day, row and stored file, once an hour (lib/attachmentSweep.ts). It logs whether it
+  // is on; settings it cannot read turn off only the sweep.
+  stopAttachmentSweep = startAttachmentSweepFrom(prisma, () => attachmentsFromEnv(env))
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
@@ -117,6 +133,11 @@ async function start(): Promise<void> {
   // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
   // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
   logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
+  // Agent tombstones compacted for good before #2150 get a purge time, so the sweeps purge them (superTabs/agentTombstones.ts).
+  // Remove in the release after the one that runs it.
+  // A failure leaves them compacted, as before, and never stops the worker starting.
+  await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
+    error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
@@ -124,6 +145,9 @@ async function start(): Promise<void> {
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
   stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  // GitHub events on an open task's pull request reach its Engineer within a minute (superTabs/pullRequestEvents.ts): only
+  // with the app, which reads them.
+  if (githubApp) stopPullRequestWatch = startPullRequestWatch(prisma, swarms, () => appPullRequestWatch(githubApp))
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every hour, finished deliveries 14 days old move into their messages' receipts, kept forever (superTabs/deliveryCompaction.ts).

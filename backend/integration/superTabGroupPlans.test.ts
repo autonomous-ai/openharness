@@ -13,7 +13,9 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
+import { HeldParts } from '../src/superTabs/parts/held.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
+import { weekStart } from '../src/superTabs/leaderboard/week.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
@@ -184,6 +186,23 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
   })
 
+  it('a machine\'s next report reads its conversations\' columns through the same indexes, and whole only those that changed (B3)', async () => {
+    const held = new HeldParts()
+    const observed = () => db.$transaction(tx => parts.loadObserved(tx, s.tabId, s.machineId, held))
+    const groups = (await observed()).groups.map(g => g.key)
+    const quiet = await profiled(observed)
+    expectIndexed(quiet)
+    // No more examined than a whole read examines, and no conversation read whole: nothing changed.
+    expect(quiet.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(quiet)).toBeLessThanOrEqual(groups.length + 1)
+    expect(where(quiet, ['key']).filter(r => !mentions(r.shape, 'dormant'))).toEqual([])
+    await db.swarmGroup.update({ where: { id: `${s.tabId}:${s.web}` }, data: { version: { increment: 1 }, changedAt: new Date() } })
+    const changed = await profiled(observed)
+    expectIndexed(changed)
+    // The changed one alone, by key.
+    const whole = changed.filter(r => r.bytes > 0 && mentions(r.shape, 'key') && !mentions(r.shape, 'dormant'))
+    expect(whole.map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { tabId: 1, key: 1 }'], 1]])
+  })
+
   it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {
     const quiet = s.quietLead[5]!.key
     for (const [named, expected] of [
@@ -278,11 +297,14 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     const recent = (rows: typeof s.quietLead) => rows.filter(r => r.lastActivityAt.getTime() >= since).map(r => r.key).sort()
     for (const [projectId, expected] of [['lead', recent(s.quietLead)], [s.other, recent(s.quietOther)], [s.empty, []]] as const) {
       let found: string[] = []
-      const reads = await profiled(async () => { found = (await db.$transaction(tx => recentDormantGroups(tx, s.tabId, projectId, since))).map(g => g.id).sort() })
+      const reads = await profiled(async () => { found = (await db.$transaction(tx => recentDormantGroups(tx, DIRECT, s.tabId, projectId, since))).map(g => g.id).sort() })
       expect(found).toEqual(expected)
       expect(reads).toHaveLength(1)
       expectIndexed(reads)
-      expect(reads[0]!.docsExamined, `${projectId} ${JSON.stringify(reads)}`).toBeLessThanOrEqual(expected.length)
+      // The read cache holds the board's groups from the Monday its window starts in (cachePatch.ts boardRule, task #2674): Mongo
+      // examines those, at most six days more than the window, and the read keeps the window.
+      const held = [...s.quietLead, ...s.quietOther].filter(r => r.lastActivityAt.getTime() >= weekStart(since) && (projectId === 'lead' ? s.quietLead : projectId === s.other ? s.quietOther : []).includes(r)).length
+      expect(reads[0]!.docsExamined, `${projectId} ${JSON.stringify(reads)}`).toBeLessThanOrEqual(held)
     }
   })
 

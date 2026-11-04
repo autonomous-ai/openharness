@@ -495,13 +495,15 @@ it('gives up after three pending reads, and passes on a refused request without 
 it('lets a machine owner preview and then remove their machine, as the person, without a participating harness', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async (_type: string, payload?: Record<string, unknown>) => payload?.method === 'GET'
-    ? { ok: true, value: { blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }], soleSourceProjects: [] } }
+    ? { ok: true, value: { previewVersion: 2, blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }],
+      hiddenAgentCount: 1, soleSourceProjects: [], hiddenSoleSourceProjectCount: 1 } }
     : { ok: true, value: { revision: 2 } })
   const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99', env: {} }
   expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box'], deps)).toBe(0)
   expect(request.mock.calls.filter(c => c[0] === 'super_tabs')).toHaveLength(1)
-  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal' }), 30_000)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal/v2' }), 30_000)
   expect(print.mock.calls.at(-1)![0]).toContain('Builder')
+  expect(print.mock.calls.at(-1)![0]).toContain('hiddenAgentCount')
   expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(0)
   const sent = request.mock.calls.at(-1)![1]!
   expect(sent).toMatchObject({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { command: { type: 'machine.remove', machineId: 'box' } } })
@@ -643,6 +645,18 @@ it('prints the instructions as text with the header and the coordinator\'s notes
   expect(print).toHaveBeenLastCalledWith('Instructions of project p1, revision 5\n\nPlain.')
   expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'INSTRUCTIONS_UNAVAILABLE' })
+})
+
+// 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, printed after the document so
+// a new PM session reads it at launch, and before the notes.
+it('prints the built-in schedule after the document', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async () => ({ ok: true, value: { projectId: 'p1', revision: 2, text: 'Work by this.', template: false, coordinatorName: 'Ana',
+    builtIn: '## Built-in PM schedule (from the Swarm)\n\nB', notes: [{ id: 'n1', text: 'Be quick', askedBy: 'ken', at: 0, expiresAt: null }] } }))
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith(['Instructions of project p1, revision 2', '', 'Work by this.', '', '## Built-in PM schedule (from the Swarm)\n\nB', '',
+    "Ana's notes:", '- Be quick (note n1, asked by ken, 1970-01-01T00:00:00.000Z)'].join('\n'))
 })
 
 it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whatever type the JSON names', () => {

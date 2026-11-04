@@ -4,6 +4,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
+import 'package:harness_mobile/swarm/swarm_activity.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -175,6 +176,13 @@ void main() {
       'every device; a list never opened stays unread', (tester) async {
     final hidden = ValueNotifier(false);
     addTearDown(hidden.dispose);
+    // The tab asked to open on Replies, as a tile asks it: All, which has
+    // the reaction too, is never open.
+    final asks = ValueNotifier<SwarmActivityAsk?>((
+      filter: SwarmActivityFilter.threads,
+      n: 1,
+    ));
+    addTearDown(asks.dispose);
     final fake = await pump(
       tester,
       [
@@ -182,14 +190,22 @@ void main() {
         activityRow('x1', kind: 'reaction', emoji: 'check', minute: 12),
       ],
       home: Scaffold(
-        body: ValueListenableBuilder(
-          valueListenable: hidden,
-          builder: (_, out, _) =>
-              OutOfSight(hidden: out, child: const SwarmActivityView()),
+        body: SwarmActivityAsks(
+          asks: asks,
+          child: ValueListenableBuilder(
+            valueListenable: hidden,
+            builder: (_, out, _) =>
+                OutOfSight(hidden: out, child: const SwarmActivityView()),
+          ),
         ),
       ),
     );
-    await filter(tester, 'threads');
+    expect(
+      tester
+          .widget<SwarmActivityFilterPill>(key('swarm-activity-filter-threads'))
+          .selected,
+      isTrue,
+    );
 
     // A chat opened from a row is over Activity, not instead of it.
     await tester.tap(key('swarm-activity-reply-activity:$tab:r2'));
@@ -212,6 +228,45 @@ void main() {
     expect(weight(tester, 'River replied to your message'), AppFont.regular);
     final pill = key('swarm-activity-filter-reactions');
     expect(find.descendant(of: pill, matching: find.text('1')), findsOneWidget);
+  });
+
+  testWidgets('All, the tab\'s first, has every row: left, all it showed is '
+      'read on every device', (tester) async {
+    final hidden = ValueNotifier(false);
+    addTearDown(hidden.dispose);
+    final fake = await pump(
+      tester,
+      [
+        activityRow('r2', minute: 9),
+        activityRow('x1', kind: 'reaction', emoji: 'check', minute: 12),
+      ],
+      home: Scaffold(
+        body: ValueListenableBuilder(
+          valueListenable: hidden,
+          builder: (_, out, _) =>
+              OutOfSight(hidden: out, child: const SwarmActivityView()),
+        ),
+      ),
+    );
+    expect(
+      tester
+          .widget<SwarmActivityFilterPill>(key('swarm-activity-filter-all'))
+          .selected,
+      isTrue,
+    );
+    expect(find.text('River replied to your message'), findsOneWidget);
+    expect(
+      key('swarm-activity-row-activity:$tab:x1'),
+      findsOneWidget,
+      reason: 'the reaction too',
+    );
+
+    hidden.value = true;
+    await tester.pumpAndSettle();
+
+    expect(marks(fake), [
+      {'through': DateTime.utc(2026, 11, 1, 7, 12).toIso8601String()},
+    ]);
   });
 
   testWidgets('a Swarm the person can no longer read leaves the list at once', (

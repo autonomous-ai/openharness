@@ -1,535 +1,507 @@
-import 'dart:typed_data';
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/widgets/engine_identity.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
-import 'package:harness/super_tabs/roster.dart';
-import 'package:harness/super_tabs/task_line.dart';
+import 'package:harness/super_tabs/message_text.dart';
+import 'package:harness/super_tabs/ship_row.dart';
+import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
+import 'package:harness/super_tabs/unread_line.dart';
 
-import 'super_tab_mentions_test.dart' show showView;
+import 'box_render_preview_test.dart' show loadPreviewFonts;
+import 'super_tab_mentions_test.dart' show showView, shot;
 import 'support/super_tab_fixture.dart';
 
-final at = DateTime.utc(2026, 11, 2, 9);
+const _legacyProposal =
+    "Proposal from Dee's Buddy, on Dee's behalf.\n\n"
+    'Goal: Save offline drafts.\nScope: Desktop and phone\nPriority: high';
 
-Map<String, dynamic> taskRow(
-  String state, {
-  String id = 'line-1',
-  String? answerFor,
-  String taskId = 'group-1',
-  int sequence = 5,
-  String? title = 'Phone Activity opens the right message',
-  String? text,
-}) => {
-  'id': id,
+Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
+  'id': 'root',
   'conversationId': 'lead',
-  'sequence': sequence,
-  'text': text ?? 'Phone Activity opens the right message · $state',
-  'createdAt': at.toIso8601String(),
-  'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
+  'thread': 'root',
+  'sequence': 1,
+  'text': legacy
+      ? kind == 'task-line'
+            ? 'Save offline drafts · in review'
+            : _legacyProposal
+      : "Let's build: Offline drafts",
+  'createdAt': '2026-11-03T09:00:00Z',
+  'author': legacy
+      ? {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'}
+      : {'kind': 'person', 'id': 'requester', 'name': 'dee@example.com'},
   'source': {
-    'kind': 'task-line',
-    'taskId': taskId,
-    'title': ?title,
-    'state': state,
-    'answerFor': ?answerFor,
+    'kind': kind,
+    if (kind == 'task-line') ...{
+      'taskId': 'offline',
+      'title': 'Save offline drafts',
+      'state': 'review',
+    } else
+      'personId': 'requester',
   },
+  'reactions': [
+    {
+      'emoji': 'heart',
+      'count': 1,
+      'by': [
+        {'kind': 'agent', 'id': 'buddy'},
+      ],
+    },
+  ],
 };
 
-Map<String, dynamic> proposalRow() => {
-  'id': 'proposal-1',
-  'conversationId': 'lead',
-  'thread': 'proposal-1',
-  'sequence': 6,
-  'text': 'Activity read fix\n\nA second line of detail the row leaves out.',
-  'createdAt': at.toIso8601String(),
-  'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
-  'source': {'kind': 'buddy-proposal', 'personId': 'owner'},
-};
-
-ConversationServer serverWith(List<Map<String, dynamic>> rows) {
-  final server = ConversationServer();
+ConversationServer _server(String kind, {bool legacy = false}) {
+  final server = ConversationServer()..threads = true;
+  (server.state['people'] as List).add({
+    'id': 'requester',
+    'email': 'dee@example.com',
+    'username': 'dee',
+    'role': 'member',
+  });
   server.state['agents'] = [
     {
-      'id': 'kai',
-      'name': 'Kai',
-      'machineId': 'm',
-      'harnessId': 'h',
+      'id': 'buddy',
+      'name': 'Draft Buddy',
+      'machineId': 'mac',
+      'harnessId': 'buddy',
       'contributorId': 'owner',
       'configuration': {'engine': 'codex'},
     },
   ];
-  server.messages.addAll(rows);
-  final conversations = (server.state['conversations'] as List)
-      .cast<Map<String, dynamic>>();
-  final lead = conversations.firstWhere((g) => g['id'] == 'lead');
-  lead['lastMessageSequence'] = rows.length + 5;
-  // The task a line opens.
-  conversations.add({
-    ...lead,
-    'id': 'group-1',
-    'title': 'Phone Activity opens the right message',
-    'lastMessageSequence': 1,
-    'leadId': null,
-  });
+  server.messages.addAll([
+    _root(kind, legacy: legacy),
+    {
+      'id': 'details',
+      'conversationId': 'lead',
+      'thread': 'root',
+      'replyTo': 'root',
+      'sequence': 2,
+      'text': 'Goal: Save offline drafts.\nScope: Desktop and phone\nPriority: high',
+      'createdAt': '2026-11-03T09:01:00Z',
+      'author': {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'},
+    },
+  ]);
+  (server.state['conversations'] as List).first['lastMessageSequence'] = 2;
   return server;
 }
 
-Finder get line => find.byType(SuperTabTaskLine);
+Finder _row(String id, {bool thread = false}) => find.byKey(
+  ValueKey('${thread ? 'super-thread-message' : 'super-message'}-$id'),
+);
 
 void main() {
-  for (final (state, word, icon) in [
-    ('planned', 'planned', AppIcons.circleDashed),
-    ('working', 'working', AppIcons.circleDot),
-    ('review', 'in review', AppIcons.circleDot),
-    ('ready', 'ready', AppIcons.circleDot),
-    ('shipped', 'shipped', AppIcons.check),
-    ('done', 'done', AppIcons.check),
-    ('stopped', 'stopped', AppIcons.circleSlash),
-  ]) {
-    testWidgets('a $state task is one line: its mark, name and "$word"', (
+  // A source-based compact row, title substitution, or task-conversation
+  // navigation loses message content/actions; these exercise the real view.
+  for (final kind in ['task-line', 'buddy-proposal']) {
+    testWidgets('$kind root keeps the requester identity and message actions', (
       tester,
     ) async {
-      final c = await showView(tester, serverWith([taskRow(state)]));
-      await c.loadMessages('lead');
+      final server = _server(kind);
+      await showView(tester, server);
+      final row = _row('root');
+      expect(tester.widget(row), isA<SuperTabMessageRow>());
+      expect(
+        find.descendant(of: row, matching: find.text('dee')),
+        findsOneWidget,
+      );
+      final avatar = tester.widget<SuperTabAvatar>(
+        find.descendant(of: row, matching: find.byType(SuperTabAvatar)).first,
+      );
+      expect(avatar.identity, 'person:requester');
+      expect(
+        find.descendant(of: row, matching: find.text('Offline drafts')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('super-proposal-label')), findsNothing);
+      expect(find.textContaining('Scope:'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('super-thread-count-root')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: row, matching: find.byTooltip('Reply')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: row, matching: find.byTooltip('Add reaction')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('super-reaction-root-heart')));
       await tester.pumpAndSettle();
-      expect(line, findsOneWidget);
+      final sent =
+          server.posts.lastWhere(
+                (p) => (p['command'] as Map?)?['type'] == 'message.react',
+              )['command']
+              as Map;
+      expect(sent['messageId'], 'root');
+      expect(sent['emoji'], 'heart');
+      expect(sent['on'], isTrue);
       expect(
-        find.descendant(of: line, matching: find.text(word)),
+        find.descendant(of: row, matching: find.text('2')),
         findsOneWidget,
       );
-      expect(
-        find.descendant(of: line, matching: find.byIcon(icon)),
-        findsOneWidget,
-      );
-      expect(
-        tester.getSize(line).height,
-        lessThan(48),
-        reason: 'one line, not a card',
-      );
-      // Not also drawn as a message, with its author.
-      expect(find.byType(SuperTabMessageRow), findsNothing);
     });
+
+    testWidgets(
+      '$kind Reply opens the ordinary project thread and sends there',
+      (tester) async {
+        final server = _server(kind);
+        final c = await showView(tester, server);
+        await tester.tap(
+          find.descendant(of: _row('root'), matching: find.byTooltip('Reply')),
+        );
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'lead');
+        expect(c.openedThread?.root, 'root');
+        expect(find.byType(SuperTabThreadPanel), findsOneWidget);
+        expect(find.textContaining('Scope: Desktop and phone'), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const ValueKey('super-thread-composer')),
+          'Please include attachments.',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('super-thread-send')));
+        await tester.pumpAndSettle();
+        final sent =
+            server.posts.lastWhere(
+                  (p) => (p['command'] as Map?)?['type'] == 'message.send',
+                )['command']
+                as Map;
+        expect(sent['conversationId'], 'lead');
+        expect(sent['replyTo'], 'root');
+        expect(sent['text'], 'Please include attachments.');
+        expect(find.text('Please include attachments.'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'legacy $kind keeps its complete text and ordinary thread at narrow width',
+      (tester) async {
+        final c = await showView(tester, _server(kind, legacy: true));
+        await tester.binding.setSurfaceSize(const Size(800, 800));
+        await tester.pumpAndSettle();
+        final row = _row('root');
+        expect(tester.widget(row), isA<SuperTabMessageRow>());
+        expect(
+          find.descendant(of: row, matching: find.text('Draft Buddy')),
+          findsOneWidget,
+        );
+        final text = tester.widget<SuperTabMessageText>(
+          find.descendant(of: row, matching: find.byType(SuperTabMessageText)),
+        );
+        expect(
+          text.text,
+          kind == 'task-line'
+              ? 'Save offline drafts · in review'
+              : _legacyProposal,
+        );
+        if (kind == 'buddy-proposal') {
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.textContaining("on Dee's behalf."),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.textContaining('Priority: high'),
+            ),
+            findsOneWidget,
+          );
+        } else {
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.text('Save offline drafts · in review'),
+            ),
+            findsOneWidget,
+          );
+        }
+        await tester.tap(find.byKey(const ValueKey('super-thread-line-root')));
+        await tester.pumpAndSettle();
+        expect(c.openedThread?.root, 'root');
+        expect(c.selectedId, 'lead');
+        expect(find.byType(SuperTabThreadPanel), findsOneWidget);
+        expect(find.textContaining('Scope: Desktop and phone'), findsWidgets);
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.byKey(const ValueKey('super-thread-close')));
+        await tester.pumpAndSettle();
+        expect(c.openedThread, isNull);
+      },
+    );
   }
 
-  testWidgets('the name comes from the title, not the text older apps read', (
+  testWidgets('a legacy task root keeps its recorded ship message visible', (
     tester,
   ) async {
-    final c = await showView(
-      tester,
-      serverWith([
-        taskRow(
-          'review',
-          title: 'Offline drafts',
-          text: 'Offline drafts · in review',
-        ),
-      ]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(find.text('Offline drafts'), findsOneWidget);
-    expect(find.text('Offline drafts · in review'), findsNothing);
+    final server = _server('task-line', legacy: true);
+    server.messages.add({
+      'id': 'ship',
+      'conversationId': 'lead',
+      'thread': 'ship',
+      'sequence': 3,
+      'text': 'Shipped: Offline drafts',
+      'createdAt': '2026-11-03T09:02:00Z',
+      'author': {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'},
+      'source': {
+        'kind': 'ship',
+        'conversationId': 'offline',
+        'title': 'Offline drafts',
+        'requesterId': 'requester',
+        'builderIds': ['buddy'],
+      },
+    });
+    (server.state['conversations'] as List).first['lastMessageSequence'] = 3;
+    await showView(tester, server);
+    expect(find.text('Save offline drafts · in review'), findsOneWidget);
+    expect(find.byType(SuperTabShipRow), findsOneWidget);
+    expect(find.text('Shipped: Offline drafts'), findsOneWidget);
+    expect(find.text('Built by'), findsOneWidget);
   });
 
-  testWidgets('a line with no title still reads, as its text says it', (
-    tester,
-  ) async {
-    final c = await showView(
-      tester,
-      serverWith([taskRow('review', title: null, text: 'Offline drafts')]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(find.text('Offline drafts'), findsOneWidget);
-  });
+  // Dee, 2026-11-04 (#2552): an ask's row reads as its title alone, with where
+  // it stands after the time; older rows still carry the old prefix.
+  group('an ask row', () {
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
+        testWidgets('$kind "$text" shows the title alone', (tester) async {
+          final server = _server(kind);
+          server.messages.first
+            ..['text'] = text
+            ..['reactions'] = <dynamic>[];
+          await showView(tester, server);
+          expect(
+            find.descendant(
+              of: _row('root'),
+              matching: find.text('Offline drafts'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.textContaining("Let's build"), findsNothing);
+        });
+      }
+    }
 
-  testWidgets('an edited line redraws in place at the next read', (
-    tester,
-  ) async {
-    final server = serverWith([
-      taskRow(
-        'working',
-        text: 'Offline drafts · working',
-        title: 'Offline drafts',
-      ),
-    ]);
-    final c = await showView(tester, server);
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: line, matching: find.text('working')),
-      findsOneWidget,
-    );
-
-    // The server edits the one message, and moves the chat's reaction counter.
-    server.messages.first
-      ..['text'] = 'Offline drafts · in review'
-      ..['source'] = {
-        ...server.messages.first['source'] as Map,
-        'state': 'review',
-      };
-    final group = (server.state['conversations'] as List)
-        .cast<Map<String, dynamic>>()
-        .firstWhere((g) => g['id'] == 'lead');
-    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
-    await c.loadMessages('lead');
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: line, matching: find.text('in review')),
-      findsOneWidget,
-    );
-    expect(line, findsOneWidget);
-  });
-
-  testWidgets('a task waiting on the reader says Answer', (tester) async {
-    final c = await showView(
-      tester,
-      serverWith([taskRow('waiting', answerFor: 'owner')]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: line, matching: find.text('Answer')),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets(
-    'a task waiting on someone else never says Answer to the reader',
-    (tester) async {
-      final c = await showView(
+    for (final (ask, tag) in [
+      ('proposal', '✋ Proposal'),
+      ('on-it', '● On it'),
+      ('shipped', '✓ Shipped'),
+    ]) {
+      testWidgets('$ask shows $tag after the time, in its muted style', (
         tester,
-        serverWith([taskRow('waiting', answerFor: 'someone-else')]),
-      );
-      await c.loadMessages('lead');
-      await tester.pumpAndSettle();
+      ) async {
+        final server = _server('buddy-proposal')..threadAsks['root'] = ask;
+        await showView(tester, server);
+        final shown = find.descendant(
+          of: _row('root'),
+          matching: find.text(tag),
+        );
+        expect(shown, findsOneWidget);
+        expect(
+          tester.widget<Text>(shown).style,
+          SwarmType.time(tester.element(shown)),
+        );
+        final time = find.descendant(
+          of: _row('root'),
+          matching: find.textContaining(RegExp(r'^\d+:\d\d')),
+        );
+        expect(
+          tester.getTopLeft(time).dx,
+          lessThan(tester.getTopLeft(shown).dx),
+        );
+        expect(
+          tester.getTopLeft(find.text('dee')).dx,
+          lessThan(tester.getTopLeft(time).dx),
+        );
+      });
+    }
+
+    testWidgets('has no tag once the PM has replied with no task', (
+      tester,
+    ) async {
+      await showView(tester, _server('buddy-proposal'));
+      for (final tag in ['✋ Proposal', '● On it', '✓ Shipped', 'Task']) {
+        expect(
+          find.descendant(of: _row('root'), matching: find.textContaining(tag)),
+          findsNothing,
+        );
+      }
+    });
+
+    testWidgets('tags a person\'s own message a task was opened from', (
+      tester,
+    ) async {
+      final server = _server('task-line');
+      server.messages.first.remove('source');
+      server.threadAsks['root'] = 'on-it';
+      await showView(tester, server);
       expect(
-        find.descendant(of: line, matching: find.text('Answer')),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: line, matching: find.text('working')),
+        find.descendant(of: _row('root'), matching: find.text('● On it')),
         findsOneWidget,
       );
-    },
-  );
-
-  testWidgets('an unknown state keeps the line and says nothing it cannot', (
-    tester,
-  ) async {
-    final c = await showView(tester, serverWith([taskRow('later')]));
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(line, findsOneWidget);
-    expect(find.text('later'), findsNothing);
-  });
-
-  testWidgets('clicking a task opens its conversation on the right', (
-    tester,
-  ) async {
-    final server = serverWith([taskRow('working')]);
-    server.messages.add({
-      'id': 'in-task',
-      'conversationId': 'group-1',
-      'sequence': 1,
-      'text': 'Ready: PR #2605.',
-      'createdAt': at.toIso8601String(),
-      'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
     });
-    final c = await showView(tester, server);
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
-    expect(find.text('Ready: PR #2605.'), findsOneWidget);
-    // Headed as the line reads, with its mark (screen 3).
-    expect(
-      find.descendant(
-        of: find.byType(SuperTabTaskPanel),
-        matching: find.byIcon(AppIcons.circleDot),
-      ),
-      findsOneWidget,
-    );
-    // The project stays open beside it.
-    expect(c.selectedId, 'lead');
-    await tester.tap(find.byKey(const ValueKey('super-task-panel-close')));
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
-  });
 
-  testWidgets('the panel shows the whole conversation, without hidden rows', (
-    tester,
-  ) async {
-    final server = serverWith([taskRow('review')]);
-    (server.state['conversations'] as List).add({
-      ...conversationFixture('step-1', 'Review'),
-      'projectId': 'lead',
-      'reviewOf': 'group-1',
-      'step': 'Review',
-      'number': 7,
-      'lastMessageSequence': 2,
-    });
-    Map<String, dynamic> inTask(
-      String id,
-      String conversation,
-      int sequence,
-      String text, {
-      Map<String, Object?> source = const {},
-      String? thread,
-    }) => {
-      'id': id,
-      'conversationId': conversation,
-      'sequence': sequence,
-      'thread': thread ?? id,
-      'text': text,
-      'createdAt': at.toIso8601String(),
-      'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
-      'source': source,
-    };
-    server.messages.addAll([
-      inTask('t1', 'group-1', 1, 'Ready: PR #2605.'),
-      inTask(
-        't2',
-        'group-1',
-        2,
-        'Kai has gone quiet.',
-        source: {'kind': 'work-stalled'},
-      ),
-      inTask('t3', 'group-1', 3, 'A reply in a thread.', thread: 't1'),
-      inTask('v1', 'step-1', 1, 'Please review.'),
-      inTask('v2', 'step-1', 2, 'With fixes: one Important.', thread: 'v1'),
-    ]);
-    final c = await showView(tester, server);
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.text('Ready: PR #2605.'), findsOneWidget);
-    expect(find.text('With fixes: one Important.'), findsOneWidget);
-    expect(find.text('Kai has gone quiet.'), findsNothing);
-    // Agents answer with replies: a verdict is one (screen 3 lists them all).
-    expect(find.text('A reply in a thread.'), findsOneWidget);
-  });
-
-  testWidgets('a thread opened takes the task panel\'s place for good', (
-    tester,
-  ) async {
-    final server = serverWith([taskRow('working'), proposalRow()]);
-    final c = await showView(tester, server);
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
-    c.openThread('proposal-1');
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabThreadPanel), findsOneWidget);
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
-    c.closeThread();
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
-  });
-
-  testWidgets('Members takes the task panel\'s place, as it takes a thread\'s', (
-    tester,
-  ) async {
-    final c = await showView(tester, serverWith([taskRow('working')]));
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-members-button')));
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabRoster), findsOneWidget);
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
-  });
-
-  testWidgets('on a narrow window, a click outside closes the task panel', (
-    tester,
-  ) async {
-    final c = await showView(tester, serverWith([taskRow('working')]));
-    await c.loadMessages('lead');
-    await tester.binding.setSurfaceSize(const Size(900, 800));
-    await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
-    await tester.tapAt(const Offset(20, 400));
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
-  });
-
-  group('the panel\'s reply', () {
-    final field = find.byKey(const ValueKey('super-task-reply'));
-    final send = find.byKey(const ValueKey('super-task-send'));
-
-    ConversationServer assigned() {
-      final server = serverWith([taskRow('working')]);
-      final task = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((g) => g['id'] == 'group-1');
-      task['agentIds'] = ['kai'];
-      task['assignment'] = {'agentId': 'kai', 'status': 'working'};
-      return server;
-    }
-
-    Future<SuperTabController> open(
-      WidgetTester tester,
-      ConversationServer server,
-    ) async {
-      final c = await showView(tester, server);
-      await c.loadMessages('lead');
-      await tester.pumpAndSettle();
-      await tester.tap(line);
-      await tester.pumpAndSettle();
-      return c;
-    }
-
-    testWidgets('goes to the agent with the task, as a plain message', (
+    testWidgets('a message that is no ask keeps its words and has no tag', (
       tester,
     ) async {
-      final server = assigned();
-      await open(tester, server);
-      await tester.enterText(field, 'Yes, ship it.');
-      await tester.pump();
-      await tester.tap(send);
-      await tester.pumpAndSettle();
-      final sent =
-          server.posts.lastWhere(
-                (p) => (p['command'] as Map?)?['type'] == 'message.send',
-              )['command']
-              as Map;
-      expect(sent['conversationId'], 'group-1');
-      expect(sent['text'], 'Yes, ship it.');
-      expect(sent['replyTo'], isNull);
-      expect(sent['recipientIds'], ['kai']);
-      expect(tester.widget<TextField>(field).controller!.text, isEmpty);
-    });
-
-    testWidgets('a file with no words goes too', (tester) async {
-      final server = assigned();
-      final c = await open(tester, server);
-      c.threadAttachments('group-1', 'group-1').add([
-        HarnessAttachment('a.txt', Uint8List.fromList([104, 105])),
-      ]);
-      await tester.pump();
-      await tester.tap(send);
-      await tester.pumpAndSettle();
-      final sent =
-          server.posts.lastWhere(
-                (p) => (p['command'] as Map?)?['type'] == 'message.send',
-              )['command']
-              as Map;
-      expect(sent['conversationId'], 'group-1');
-      expect(sent['attachmentIds'], hasLength(1));
-    });
-
-    testWidgets('while something else is saving, the words stay in the box', (
-      tester,
-    ) async {
-      final server = assigned();
-      final c = await open(tester, server);
-      final hold = server.holdCommands = Completer<void>();
-      final other = c.command({
-        'type': 'conversation.rename',
+      final server = _server('task-line');
+      server.messages.add({
+        'id': 'plain',
         'conversationId': 'lead',
-        'title': 'x',
+        'thread': 'plain',
+        'sequence': 3,
+        'text': "Let's build: a shed",
+        'createdAt': '2026-11-03T09:30:00Z',
+        'author': {
+          'kind': 'person',
+          'id': 'requester',
+          'name': 'dee@example.com',
+        },
       });
-      await tester.pump();
-      await tester.enterText(field, 'Do not lose me.');
-      await tester.pump();
-      await tester.tap(send, warnIfMissed: false);
-      await tester.pump();
-      expect(
-        tester.widget<TextField>(field).controller!.text,
-        'Do not lose me.',
-      );
-      server.holdCommands = null;
-      hold.complete();
-      await other;
-      await tester.pumpAndSettle();
-      await tester.tap(send);
-      await tester.pumpAndSettle();
-      expect(
-        server.posts.map((p) => (p['command'] as Map?)?['text']),
-        contains('Do not lose me.'),
-      );
-    });
-
-    testWidgets('a reply on its way shows in the panel', (tester) async {
-      final server = assigned();
-      await open(tester, server);
-      final hold = server.holdCommands = Completer<void>();
-      await tester.enterText(field, 'On its way.');
-      await tester.pump();
-      await tester.tap(send);
-      await tester.pump();
+      await showView(tester, server);
+      expect(find.text("Let's build: a shed"), findsOneWidget);
       expect(
         find.descendant(
-          of: find.byType(SuperTabTaskPanel),
-          matching: find.textContaining('On its way.'),
+          of: _row('plain'),
+          matching: find.textContaining('On it'),
         ),
-        findsWidgets,
+        findsNothing,
       );
-      server.holdCommands = null;
-      hold.complete();
+    });
+
+    testWidgets('an agent\'s engine mark stays between its name and the time', (
+      tester,
+    ) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      (server.state['agents'] as List).add({
+        'id': 'pm',
+        'name': 'Lead',
+        'displayName': 'River',
+        'machineId': 'mac',
+        'harnessId': 'pm',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+      });
+      server.messages.first['author'] = {
+        'kind': 'agent',
+        'id': 'pm',
+        'name': 'Lead',
+      };
+      await showView(tester, server);
+      double left(Finder within) => tester.getTopLeft(within).dx;
+      final name = find.descendant(
+        of: _row('root'),
+        matching: find.text('River'),
+      );
+      final mark = find.descendant(
+        of: _row('root'),
+        matching: find.byType(EngineMark),
+      );
+      final tag = find.descendant(
+        of: _row('root'),
+        matching: find.text('● On it'),
+      );
+      expect(left(name), lessThan(left(mark)));
+      expect(left(mark), lessThan(left(tag)));
+    });
+
+    testWidgets('keeps its header when the same person wrote just before', (
+      tester,
+    ) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      server.messages.insert(0, {
+        'id': 'before',
+        'conversationId': 'lead',
+        'thread': 'before',
+        'sequence': 0,
+        'text': 'A word first',
+        'createdAt': '2026-11-03T08:59:00Z',
+        'author': {
+          'kind': 'person',
+          'id': 'requester',
+          'name': 'dee@example.com',
+        },
+      });
+      await showView(tester, server);
+      expect(
+        find.descendant(of: _row('root'), matching: find.text('● On it')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: _row('root'), matching: find.text('dee')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('has no tag at the head of its own thread', (tester) async {
+      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      final c = await showView(tester, server);
+      c.openThread('root');
       await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: _row('root', thread: true),
+          matching: find.text('● On it'),
+        ),
+        findsNothing,
+      );
     });
   });
 
-  testWidgets('a task the reader\'s read does not hold opens nothing', (
+  testWidgets('plain proposal and task thread screenshot fixture', (
     tester,
   ) async {
-    final c = await showView(
-      tester,
-      serverWith([taskRow('working', taskId: 'not-readable')]),
-    );
-    await c.loadMessages('lead');
+    await loadPreviewFonts();
+    final server = _server('buddy-proposal');
+    server.messages.first['reactions'] = <dynamic>[];
+    final c = await showView(tester, server, brightness: Brightness.light);
+    await shot(tester, 'desktop-plain-chat');
+    c.openThread('root');
     await tester.pumpAndSettle();
-    await tester.tap(line);
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabTaskPanel), findsNothing);
+    expect(find.textContaining('Scope: Desktop and phone'), findsOneWidget);
+    await shot(tester, 'desktop-plain-chat-thread');
   });
 
-  testWidgets('a proposal says its goal, not the server\'s opening words', (
-    tester,
-  ) async {
-    final c = await showView(
-      tester,
-      serverWith([
-        {
-          ...proposalRow(),
-          'text':
-              "Proposal from diego's Buddy, on diego's behalf.\n\n"
-              'Goal: Activity read fix\nScope: The app\nPriority: high',
-        },
-      ]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(find.textContaining(': Activity read fix'), findsOneWidget);
-    expect(find.textContaining('behalf'), findsNothing);
-    expect(find.textContaining('Scope'), findsNothing);
-  });
-
-  testWidgets('a proposal is one line that opens', (tester) async {
-    final c = await showView(tester, serverWith([proposalRow()]));
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    final row = find.byType(SuperTabProposalLine);
-    expect(row, findsOneWidget);
-    expect(tester.getSize(row).height, lessThan(48));
-    expect(find.textContaining('second line of detail'), findsNothing);
-    await tester.tap(row);
-    await tester.pumpAndSettle();
-    expect(c.openedThread?.root, 'proposal-1');
-    expect(find.textContaining('second line of detail'), findsOneWidget);
+  test("a root the server posted in the reader's name is not their own "
+      'writing, so it reads nothing before it (plain chat, #2294)', () {
+    final c = ConversationServer().controller();
+    addTearDown(c.dispose);
+    SuperTabMessage row(
+      int sequence,
+      Map<String, Object> author, [
+      String? kind,
+    ]) => SuperTabMessage.fromJson({
+      'id': 'm$sequence',
+      'conversationId': 'lead',
+      'sequence': sequence,
+      'text': 'Message $sequence',
+      'createdAt': '2026-11-03T09:00:00Z',
+      'author': author,
+      'source': ?(kind == null ? null : {'kind': kind}),
+    });
+    final reader = {
+      'kind': 'person',
+      'id': c.accountId,
+      'name': 'owner@example.com',
+    };
+    final river = {'kind': 'agent', 'id': 'lead-agent', 'name': 'River'};
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      final root = row(3, reader, kind);
+      expect(root.postedForAuthor, isTrue);
+      expect(c.isOwn(root), isFalse);
+      expect(
+        superTabFirstUnread(
+          [row(1, river), row(2, river), root],
+          1,
+          own: c.isOwn,
+        ),
+        'm2',
+      );
+    }
+    expect(c.isOwn(row(4, reader)), isTrue);
   });
 }

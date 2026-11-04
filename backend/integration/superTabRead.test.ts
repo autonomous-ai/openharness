@@ -329,6 +329,46 @@ describe('dormant groups on demand (design 4.5)', () => {
   })
 })
 
+describe('what a reader can tell of a task\'s merge (task #2558)', () => {
+  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser, asAgentId: string) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
+      payload: { operationId: randomUUID(), command, asAgentId } })
+    return { status: response.statusCode, body: response.json() as unknown }
+  }
+  // Backlog sorts on these: shippedAt says only that the task reached Done; a pull request card's mergedAt says it merged.
+  it('a Done task with an open pull request reads as shipped with no merge, and only a recorded merge sets one', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const pullRequest = 'https://github.com/example/app/pull/7'
+    const read = async () => (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
+    const { assignment } = await read()
+    const done = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId: assignment.id, status: 'done',
+      result: `Ready: ${pullRequest}` }, owner, s.worker)
+    expect(done.status, JSON.stringify(done.body)).toBe(200)
+    const unmerged = await read()
+    expect(unmerged.shippedAt).toEqual(expect.any(Number))
+    expect(unmerged.pullRequestUrls).toEqual([pullRequest])
+    expect(unmerged.cards?.pullRequests?.some((card: { mergedAt?: number }) => card.mergedAt !== undefined) ?? false).toBe(false)
+    const merged = await post(s.tabId, { type: 'conversation.merged', conversationId: s.web, pullRequestUrl: pullRequest }, owner, s.lead)
+    expect(merged.status, JSON.stringify(merged.body)).toBe(200)
+    const card = (await read()).cards.pullRequests.find((c: { url: string }) => c.url === pullRequest)
+    expect(card.mergedAt).toEqual(expect.any(Number))
+  })
+
+  it('a merge recorded on a batch pull request makes a merged card on the task, whatever became of its own', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const [own, batch] = ['https://github.com/example/app/pull/7', 'https://github.com/example/app/pull/8']
+    const read = async () => (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
+    const { assignment } = await read()
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId: assignment.id, status: 'done', result: `Ready: ${own}` }, owner, s.worker)
+    await post(s.tabId, { type: 'conversation.merged', conversationId: s.web, pullRequestUrl: batch }, owner, s.lead)
+    const cards = (await read()).cards.pullRequests as Array<{ url: string; mergedAt?: number }>
+    expect(cards.find(c => c.url === batch)?.mergedAt).toEqual(expect.any(Number))
+    expect(cards.find(c => c.url === own)?.mergedAt).toBeUndefined()
+  })
+})
+
 describe('a dormant group\'s required machines', () => {
   it('names to each reader only the machines that reader sees, in the dormant list and read by id', async () => {
     const s = await scene((f, ids) => {
@@ -676,10 +716,10 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(written.version).toBeGreaterThan(R)
     clock = Date.now()
     const seen = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
-    // The task's line in its project chat takes the new name too (taskLine.ts): that chat is written in the same commit.
-    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version]).sort()).toEqual([['lead', written.version], [s.web, written.version]].sort())
+    // The task's message in its project chat is never edited (plain chat, task #2294): only the task is written.
+    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version])).toEqual([[s.web, written.version]])
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
-      .toEqual([['lead', written.version, 'Lead'], [s.web, written.version, 'Renamed for real']])
+      .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
   })
 })

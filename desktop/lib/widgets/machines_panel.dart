@@ -539,8 +539,9 @@ class _MachinesPanelState extends State<_MachinesPanel>
     }
 
     // Anchor the context menu inside this overlay so it stays above the list.
-    return MenuAnchor(
+    return AppDropdown(
       controller: controller,
+      consumeOutsideTap: false,
       onOpen: () {
         if (!identical(_openRowMenu, controller)) _openRowMenu?.close();
         _openRowMenu = controller;
@@ -553,15 +554,9 @@ class _MachinesPanelState extends State<_MachinesPanel>
         }
         _restoreFocus();
       },
-      menuChildren: [
+      children: [
         if (onEditPassword != null)
-          AppMenuItem(
-            label: 'Change password',
-            onPressed: () {
-              controller.close();
-              onEditPassword();
-            },
-          ),
+          AppMenuItem(label: 'Change password', onPressed: onEditPassword),
         AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
         if (!machine.isLocalMachine)
           AppMenuItem(

@@ -454,25 +454,27 @@ void main() {
           'm1',
           1,
           text: 'Here is the plan',
+          // A file the app does not read itself opens in the browser; a text
+          // file opens in the app (swarm_file_viewer_test.dart).
           attachments: [
             {
               'id': 'f1',
-              'name': 'plan.md',
-              'mime': 'text/markdown',
+              'name': 'plan.pdf',
+              'mime': 'application/pdf',
               'size': 2048,
-              'url': 'https://cdn.harness.autonomous.ai/f1/plan.md',
+              'url': 'https://cdn.harness.autonomous.ai/f1/plan.pdf',
             },
           ],
         ),
       ]),
     );
 
-    expect(find.textContaining('plan.md'), findsOneWidget);
+    expect(find.textContaining('plan.pdf'), findsOneWidget);
 
-    await tester.tap(find.textContaining('plan.md'));
+    await tester.tap(find.textContaining('plan.pdf'));
     await tester.pump();
 
-    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.pdf']);
   });
 
   testWidgets('a numbered task message opens that task conversation', (
@@ -797,7 +799,7 @@ void main() {
     expect(fake.commands.single['replyTo'], isNull);
   });
 
-  testWidgets('the composer has an @ Tag chip (Tony, 11-01): it and an @ '
+  testWidgets('the composer has an @ button (Tony, 11-01): it and an @ '
       'typed in the field open the same picker', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
 
@@ -2529,6 +2531,11 @@ void main() {
       expect(key('swarm-replied-in-thread-m3'), findsNothing);
       expect(key('swarm-thread-box'), findsOneWidget);
       expect(find.text('Reply'), findsOneWidget, reason: 'the field hint');
+      // Also send is in Reply options, folded until it is opened.
+      expect(find.text('Reply options'), findsOneWidget);
+      expect(find.text('Also send to the chat'), findsNothing);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(find.text('Also send to the chat'), findsOneWidget);
     });
 
@@ -2768,8 +2775,19 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(key('swarm-thread-field'), 'Ship it as drawn.');
+      String said() =>
+          tester.widget<Text>(key('swarm-thread-options-label')).data!;
+      // Folded under Reply options until it is opened, nothing ticked.
+      expect(key('swarm-thread-also-send'), findsNothing);
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       await tester.tap(key('swarm-thread-also-send'));
       await tester.pump();
+      // Folded again, its line says the reply goes to the chat too.
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      expect(said(), 'Reply options · Also send to the chat');
       await tester.tap(key('swarm-thread-send'));
       await tester.pumpAndSettle();
 
@@ -2777,6 +2795,9 @@ void main() {
       expect(fake.commands.single['replyTo'], 'm1');
       expect(inThread('Ship it as drawn.'), findsOneWidget);
       // Ticked for this reply alone.
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(
         tester
             .widget<Semantics>(key('swarm-thread-also-send'))
@@ -2791,6 +2812,12 @@ void main() {
           .body!['operationId'];
       expect(find.text('Ship it as drawn.'), findsOneWidget);
       expect(key('swarm-replied-in-thread-${sentId(sent)}'), findsOneWidget);
+
+      // Opened again, the thread starts with Reply options folded.
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-thread-options'), findsOneWidget);
+      expect(key('swarm-thread-also-send'), findsNothing);
     });
 
     bool sendable(WidgetTester tester, String button) =>

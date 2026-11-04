@@ -47,6 +47,13 @@ class SuperTabReadMarkSender<K> {
     if (_sending.add(conversationId)) _drain(conversationId);
   }
 
+  /// Forgets what was sent for [conversationId]: once Mark unread moved its mark back, the next read is sent again.
+  void forget(K conversationId) {
+    _sent.remove(conversationId);
+    _next.remove(conversationId);
+    _failed.remove(conversationId);
+  }
+
   Future<void> _drain(K conversationId) async {
     while (!_disposed) {
       final sequence = _next.remove(conversationId);

@@ -126,33 +126,64 @@ class SuperTabAttention extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// The red number of [conversationId]: tags of the reader in its main
-  /// stream, and decisions asked of them there (an agent asking a person to
-  /// decide tags them). A tag in a reply that lives only in its thread counts
-  /// on Threads instead.
-  ///
-  /// As in Slack, a tag stops counting once the reader has read past it,
-  /// answered or not; a decision once its chat is read (its row does not say
-  /// which message asked). Nothing counts once access is gone.
-  int mentionsIn(String conversationId) {
+  /// Unread tags Activity shows under Needs you for [conversationId]. A tag
+  /// in a followed thread can also appear under New replies; it remains a
+  /// separate item that needs the reader and counts on its conversation row.
+  int tagsIn(String conversationId) {
     if (controller.accessRevoked) return 0;
     // A muted chat never counts (Slack); its tags stay listed in Activity.
     if (controller.notifyOf(conversationId) == SuperTabNotify.muted) return 0;
-    final tags = mentions.waiting
-        .where(
-          (m) =>
-              m.conversationId == conversationId &&
-              m.threadId == null &&
-              (m.messageSequence ?? _unknown) >
-                  controller.readMark(conversationId),
-        )
+    return mentions.waiting.where((m) {
+      if (m.conversationId != conversationId) return false;
+      final mark = m.threadId == null
+          ? controller.readMark(conversationId)
+          : controller.threadReadMark(m.threadId!);
+      return (m.messageSequence ?? _unknown) > mark;
+    }).length;
+  }
+
+  /// Open decisions Activity shows as Needs you for [conversationId].
+  int decisionsIn(String conversationId) {
+    if (controller.accessRevoked ||
+        controller.notifyOf(conversationId) == SuperTabNotify.muted) {
+      return 0;
+    }
+    return decisions.open
+        .where((decision) => decision.conversationId == conversationId)
         .length;
-    final asked = decisions.open
-        .where((d) => d.conversationId == conversationId)
-        .length;
-    if (asked == 0) return tags;
-    final group = controller.snapshot?.conversation(conversationId);
-    return tags + (group != null && controller.unreadShown(group) ? asked : 0);
+  }
+
+  /// The red number of [conversationId]: tags and decisions Activity shows
+  /// under Needs you for this conversation. Nothing counts once access is
+  /// gone.
+  int mentionsIn(String conversationId) =>
+      tagsIn(conversationId) + decisionsIn(conversationId);
+
+  /// What a conversation's red number counts, for its hover label.
+  String? badgeTooltipIn(String conversationId) {
+    final tags = tagsIn(conversationId);
+    final asked = decisionsIn(conversationId);
+    if (tags == 0 && asked == 0) return null;
+    return [
+      if (tags > 0) '$tags ${tags == 1 ? 'tag' : 'tags'}',
+      if (asked > 0)
+        '$asked ${asked == 1 ? 'decision' : 'decisions'} waiting for you',
+    ].join(', ');
+  }
+
+  /// Whether [threadId] contains an unread tag of the reader.
+  bool hasUnreadTagInThread(String conversationId, String threadId) {
+    if (controller.accessRevoked ||
+        controller.notifyOf(conversationId) == SuperTabNotify.muted) {
+      return false;
+    }
+    final mark = controller.threadReadMark(threadId);
+    return mentions.waiting.any(
+      (mention) =>
+          mention.conversationId == conversationId &&
+          mention.threadId == threadId &&
+          (mention.messageSequence ?? _unknown) > mark,
+    );
   }
 
   /// A tag from a server that does not say where it is: it counts until

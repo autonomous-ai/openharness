@@ -8,6 +8,7 @@ import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'reminders.dart';
 
 /// What one row of Needs you is.
 enum SuperTabNeedKind { decision, agent, mention }
@@ -23,6 +24,7 @@ class SuperTabNeed {
     this.at,
     this.decision,
     this.mention,
+    this.privateProjectName,
   });
   final SuperTabNeedKind kind;
 
@@ -30,12 +32,16 @@ class SuperTabNeed {
   final String id;
 
   /// What the row says: the question, `<agent> is waiting on you`, or
-  /// `<author> mentioned you in # <project>`.
+  /// `<author> mentioned you in # <project>`; a private project carries its
+  /// name separately for the lock mark.
   final String title;
   final String conversationId;
   final DateTime? at;
   final SuperTabDecision? decision;
   final SuperTabMention? mention;
+
+  /// When a mention names a private project, its lock replaces the textual #.
+  final String? privateProjectName;
 }
 
 /// The reader's Activity in one Swarm: the one place for everything new for
@@ -44,6 +50,7 @@ class SuperTabNeed {
 ///
 /// * Needs you: decisions asked of them, agents waiting on them and their
 ///   tags. Its length is Activity's number.
+/// * Reminders: messages they asked to come back to, once due.
 /// * New replies: the followed threads with replies they have not read.
 /// * Done today: tasks that shipped today.
 ///
@@ -53,11 +60,13 @@ class SuperTabActivity extends ChangeNotifier {
   SuperTabActivity._(this.controller)
     : mentions = SuperTabMentions.of(controller),
       decisions = SuperTabDecisions.of(controller),
-      attention = SuperTabAttention.of(controller) {
+      attention = SuperTabAttention.of(controller),
+      reminders = SuperTabReminders.of(controller) {
     controller.addListener(notifyListeners);
     controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
+    reminders.addListener(notifyListeners);
   }
 
   @visibleForTesting
@@ -72,6 +81,7 @@ class SuperTabActivity extends ChangeNotifier {
   final SuperTabMentions mentions;
   final SuperTabDecisions decisions;
   final SuperTabAttention attention;
+  final SuperTabReminders reminders;
   bool _open = false, _disposed = false;
 
   SuperTabSnapshot? get _snapshot =>
@@ -82,6 +92,12 @@ class SuperTabActivity extends ChangeNotifier {
   List<SuperTabNeed> get needsYou {
     final snapshot = _snapshot;
     if (snapshot == null) return const [];
+    bool isPrivateProject(String projectId) =>
+        snapshot.projects
+            .where((p) => p.id == projectId)
+            .firstOrNull
+            ?.isPrivate ==
+        true;
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
     final asked = decisions.open;
     final decided = {for (final d in asked) d.conversationId};
@@ -114,10 +130,14 @@ class SuperTabActivity extends ChangeNotifier {
           kind: SuperTabNeedKind.mention,
           id: 'mention:${m.id}',
           title:
-              '${people[m.leadId]?.username ?? m.leadName} mentioned you in # ${m.projectName}',
+              '${people[m.leadId]?.shownName ?? m.leadName} mentioned you in '
+              '${isPrivateProject(m.projectId) ? '' : '# ${m.projectName}'}',
           conversationId: m.conversationId,
           at: m.createdAt,
           mention: m,
+          privateProjectName: isPrivateProject(m.projectId)
+              ? m.projectName
+              : null,
         ),
     ];
   }
@@ -127,18 +147,10 @@ class SuperTabActivity extends ChangeNotifier {
   static const _unknown = 9007199254740991;
 
   /// The tags that need the reader: not read past (the number clears by
-  /// reading). One in a thread that New replies lists is shown there instead;
-  /// a tag in a thread the reader does not follow still needs them.
+  /// reading). A tagged thread may also be in New replies; its mention remains
+  /// a separate Needs you item so the conversation badge represents it.
   Iterable<SuperTabMention> get _tags {
-    final listed = {
-      for (final t in newReplies) '${t.conversationId}/${t.rootId}',
-    };
-    return mentions.waiting.where(
-      (m) =>
-          mentionUnread(m) &&
-          (m.threadId == null ||
-              !listed.contains('${m.conversationId}/${m.threadId}')),
-    );
+    return mentions.waiting.where(mentionUnread);
   }
 
   /// A task whose agent waits on the reader (it needs a decision, or is
@@ -202,7 +214,7 @@ class SuperTabActivity extends ChangeNotifier {
 
   /// The Activity row's red number: what needs the reader, and nothing else.
   /// A tag counts until it is read, a decision or an agent waiting until it
-  /// is answered. Before the tags are read the server's count stands in.
+  /// is answered, a due reminder until it is opened. Before the tags are read the server's count stands in.
   int get count {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
@@ -211,6 +223,7 @@ class SuperTabActivity extends ChangeNotifier {
         ? snapshot.mentionsWaiting
         : _tags.length;
     return tags +
+        reminders.due.length +
         snapshot.decisionsWaiting +
         snapshot.conversations
             .where((g) => _waiting(snapshot, g, decided))
@@ -251,6 +264,7 @@ class SuperTabActivity extends ChangeNotifier {
     controller.removeListener(notifyListeners);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);
+    reminders.removeListener(notifyListeners);
     super.dispose();
   }
 }

@@ -226,7 +226,7 @@ void cable_client_list_swarms(void);
 //        supertab {id, tab, name, count, leads:[{id, projectId, project, engine, owner, local, state, since?, order?}]}
 //                                          one Swarm, ≤12 Leads; `tab` is its desk tab or ""; `order` is the project's
 //                                          place in the app (absent from an older daemon: the frame's order)
-//        supertab.recap {tab, lead, text, at, none}    the open Lead's last message
+//        supertab.recap {tab, lead, text, at, none, thread?}    the open Lead's last message
 //        supertab.focus {tab, lead}        the desktop moved to that Lead
 //        question {…, superTab, attention} a Super Tab wait (id "supertab:…"); never an answer screen here
 //   out  supertab.recap.get / supertab.open / supertab.select {tab, lead}
@@ -235,6 +235,7 @@ void cable_client_list_swarms(void);
 void cable_client_supertab_send(const char *t, const char *tab, const char *lead);
 // `supertab.side` {tab, side}: the dial swiped that Swarm to its Buddy side (true) or its PM side (spec
 // 2026-10-29-round-dial-pm-buddy). A tab id it cannot hold sends nothing.
+void cable_client_supertab_thread_leave(const char *tab, const char *lead);   // {t: supertab.thread.leave, tab, lead}
 void cable_client_supertab_side(const char *tab, bool buddy);
 void cable_client_supertab_side_kept(const char *tab);
 

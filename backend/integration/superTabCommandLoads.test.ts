@@ -3,16 +3,18 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
 
 // Ken's prod DB profile, 2026-11-02: a command naming the PM read every group the PM was ever in, 1,628 of them and growing with
 // every task, up to 1.66 s a read. Those that write its groups need them; those that only ask about it do not.
+const REFUSED = 'Swarm command refused'
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '220000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -67,6 +69,40 @@ async function groupsRead(run: () => Promise<unknown>): Promise<number> {
 }
 
 const FEW = 100
+
+describe('a refused command in the log', () => {
+  const secret = 'do-not-log-this'
+  it('writes one line, its code and type and no values; one that passes writes none (Ken, 2026-11-04)', async () => {
+    const { execute, tab } = await swarm()
+    const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      await execute({ type: 'conversation.create', title: secret, brief: secret, checks: [] })
+      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([])
+      await expect(execute({ type: 'conversation.rename', conversationId: secret, title: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      // And whose (#2675): its Swarm, no agent, and no declared client; never its words.
+      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([[REFUSED, { code: 'NOT_FOUND', type: 'conversation.rename',
+        tabId: tab, agentId: null, asAgent: false, client: 'other', version: null }]])
+      expect(JSON.stringify(said.mock.calls)).not.toContain(secret)
+    } finally {
+      said.mockRestore()
+    }
+  })
+})
+
+describe('a refused command from an agent, in the log (#2675)', () => {
+  it('names the agent the command names, that an agent sent it, and the client and version it declared', async () => {
+    const { store, tab, lead } = await swarm()
+    const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      await expect(store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.alert', agentId: 'gone-agent', alert: 'prompt', active: true } },
+        lead, undefined, { kind: 'cli', version: '0.5.34' })).rejects.toBeTruthy()
+      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([[REFUSED, expect.objectContaining({ type: 'agent.alert', tabId: tab,
+        agentId: 'gone-agent', asAgent: true, client: 'cli', version: '0.5.34' })]])
+    } finally {
+      said.mockRestore()
+    }
+  })
+})
 
 describe('a command naming the coordinator', () => {
   it('agent.alert reads none of its 1,000 dormant groups, and its row still lands', async () => {
