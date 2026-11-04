@@ -21,6 +21,8 @@ were `gpt-6-luna`, the default of one Mac owner's account, which the catalog doe
 - CLI `route.ts`: `catalogFrom` keeps `engineDefault`. A `codex` row at `default` model or effort read from an older
   backend is not offered. `catalogRow` takes the `engineDefault` row for a member launched on the engine's own model, so
   it keeps its Sol rating.
+- A Codex start that names no model at all is left as it is: Desktop's import sends none to keep an existing session's model, and
+  the route always names one. Only `model: 'default'` is resolved.
 - `gpt-6-luna` is not rated: there is no benchmark for it, so it is never offered unless a person names it, when it is
   offered unrated as before.
 
