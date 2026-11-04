@@ -36,6 +36,7 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(section).toContain('A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you.')
     expect(section).toContain('The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work')
     expect(section).not.toContain('reaches the project\'s coordinator')
+    expect(section).toContain('its result says when it reached no agent.')
     expect(section).not.toContain('Nothing is dropped')
   })
   // Task #2901 (Ken, 2026-11-04): PMs took the route's top line against the project's Routing instructions.
