@@ -23,7 +23,6 @@ import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
 import 'task_steps.dart';
-import 'task_groups.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -200,9 +199,6 @@ class SuperTabController extends ChangeNotifier {
       final order = initial['sendOrder'];
       if (order is List) _sendOrder.addAll(order.whereType<String>());
       _savedSelection = initial['selectedId'] is String;
-      expandedProjects.addAll(
-        (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
-      );
       expandedMachines.addAll(
         (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
       );
@@ -993,7 +989,6 @@ class SuperTabController extends ChangeNotifier {
   /// Each conversation's reads under way, newest and older apart: an older
   /// page asked for during a poll's read is a read of its own.
   final _reading = <(String, bool), Future<void>>{};
-  final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
@@ -1039,42 +1034,6 @@ class SuperTabController extends ChangeNotifier {
     if (sessionProjectId == projectId) return;
     sessionProjectId = projectId;
     _saveSoon();
-    _changed();
-  }
-
-  void toggleProject(String id) {
-    if (!expandedProjects.remove(id)) {
-      expandedProjects.add(id);
-      unawaited(loadDormant(id));
-    }
-    _saveSoon();
-    _changed();
-  }
-
-  /// Projects whose "Closed (N)" row is open; every one starts collapsed and
-  /// the choice is not saved.
-  final closedOpenProjects = <String>{};
-
-  void toggleClosed(String projectId) {
-    if (!closedOpenProjects.remove(projectId)) {
-      closedOpenProjects.add(projectId);
-    }
-    _changed();
-  }
-
-  /// Each project's task groups folded or unfolded against their default
-  /// (`<project>/<group>`), remembered as Closed is: not saved.
-  final _taskGroupsToggled = <String>{};
-
-  /// Whether [group] of [projectId]'s tasks is folded in the sidebar; only
-  /// The rest starts folded.
-  bool taskGroupFolded(String projectId, SuperTabTaskGroup group) =>
-      group.foldedByDefault !=
-      _taskGroupsToggled.contains('$projectId/${group.name}');
-
-  void toggleTaskGroup(String projectId, SuperTabTaskGroup group) {
-    final key = '$projectId/${group.name}';
-    if (!_taskGroupsToggled.remove(key)) _taskGroupsToggled.add(key);
     _changed();
   }
 
@@ -2685,7 +2644,6 @@ class SuperTabController extends ChangeNotifier {
     'tabId': tabId,
     'accountId': accountId,
     'selectedId': selectedId,
-    'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
@@ -3389,14 +3347,6 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
-    final group = snapshot!.conversation(id)!;
-    // A workgroup is shown under its project, so its project opens. A Buddy
-    // chat has its own row under Buddies and leaves projects as they were.
-    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
-      expandedProjects.add(group.projectId);
-      unawaited(loadDormant(group.projectId));
-      if (group.closed) closedOpenProjects.add(group.projectId);
-    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {
@@ -3678,10 +3628,7 @@ class SuperTabController extends ChangeNotifier {
               ..._readAt.keys,
               ..._refused.keys,
               ..._threadDraftConversations.values,
-            ].any(removed.contains) ||
-            expandedProjects.any(
-              (id) => !next.projects.any((project) => project.id == id),
-            );
+            ].any(removed.contains);
         _messages.removeWhere((id, _) => !allowed.contains(id));
         _staleHeld.removeWhere((id) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
@@ -3708,9 +3655,6 @@ class SuperTabController extends ChangeNotifier {
         _refused.removeWhere((id, _) => removed.contains(id));
         _before.removeWhere((id, _) => !allowed.contains(id));
         _readAt.removeWhere((id, _) => removed.contains(id));
-        expandedProjects.removeWhere(
-          (id) => !next.projects.any((project) => project.id == id),
-        );
         if (!allowed.contains(selectedId)) {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
@@ -3727,9 +3671,6 @@ class SuperTabController extends ChangeNotifier {
           // A read for the parts before has nothing to give these.
           _dormantPages.clear();
           _dormantReads.clear();
-          for (final project in expandedProjects) {
-            unawaited(loadDormant(project));
-          }
           if (_closedShippedSince case final since?) {
             _forgetClosedShipped();
             unawaited(readClosedShipped(since));
