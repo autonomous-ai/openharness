@@ -81,6 +81,12 @@ class SuperTabUnreadLines {
     return (_at[id] = superTabFirstUnread(shown, mark, own: own)) != null;
   }
 
+  /// Mark unread from [messageId]: [id]'s line goes above it, whatever came after it.
+  void placeAt(String id, String messageId) {
+    _at[id] = messageId;
+    _seen.remove(id);
+  }
+
   /// Whether [id]'s line waits for older messages: loading, or a read back that failed and is not yet done. Nothing is
   /// followed or marked read meanwhile, and no line is placed short of the first unread.
   bool waitsForHistory(String id) =>

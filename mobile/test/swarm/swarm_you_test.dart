@@ -26,13 +26,14 @@ import 'swarm_fixture.dart';
 /// and Your devices with what is ready, and Settings.
 void main() {
   /// The Swarms [swarms], each with the person as tony@example.com, [status]
-  /// set when given, its models on, and [models] served by the person's
+  /// and [name] set when given, its models on, and [models] served by the person's
   /// machine Studio, read just now; and [others], more machines read just
   /// now, as given.
   FakeSwarm backend({
     List<Map<String, dynamic>> models = const [],
     List<Map<String, dynamic>> others = const [],
     Map<String, dynamic>? status,
+    String? name,
     List<({String id, String name})> swarms = const [
       (id: tab, name: 'Autonomous'),
     ],
@@ -55,6 +56,7 @@ void main() {
           part(me, 1, {
             ...person(me),
             'email': 'tony@example.com',
+            'name': ?name,
             'status': ?status,
           }),
         ];
@@ -176,12 +178,86 @@ void main() {
     expect(inside('swarm-you-me', find.text('Autonomous')), findsOneWidget);
     expect(inside('swarm-you-me', find.byType(SwarmAvatar)), findsOneWidget);
     expect(inside('swarm-you-status', find.text('Active')), findsOneWidget);
-    expect(inside('swarm-you-status', find.text('Change')), findsOneWidget);
+    expect(inside('swarm-you-profile', find.text('Change')), findsOneWidget);
 
-    await tester.tap(key('swarm-you-status'));
+    await tester.tap(key('swarm-you-profile'));
     await tester.pumpAndSettle();
 
     expect(find.byType(SwarmProfileSheet), findsOneWidget);
+  });
+
+  testWidgets('Status and Name are one Profile row: the name, the status '
+      'under it, one Change, then Username', (tester) async {
+    await pump(
+      tester,
+      backend(
+        name: 'Minh Nguyen',
+        status: {'text': 'Focusing', 'emoji': '🎯'},
+      ),
+    );
+
+    final captions = [
+      for (final caption in tester.widgetList<SwarmCaption>(
+        find.byType(SwarmCaption),
+      ))
+        caption.text,
+    ];
+    expect(captions, ['Profile', 'Username']);
+    expect(key('swarm-you-name'), findsNothing);
+    expect(inside('swarm-you-profile', find.text('Minh Nguyen')), findsOne);
+    expect(inside('swarm-you-profile', find.text('🎯 Focusing')), findsOne);
+    expect(inside('swarm-you-profile', find.text('Change')), findsOne);
+    expect(
+      tester
+          .getTopLeft(inside('swarm-you-profile', find.text('Minh Nguyen')))
+          .dy,
+      lessThan(tester.getTopLeft(key('swarm-you-status')).dy),
+      reason: 'the status sits under the name',
+    );
+    expect(
+      tester.getTopLeft(key('swarm-you-profile')).dy,
+      lessThan(tester.getTopLeft(key('swarm-you-username')).dy),
+    );
+  });
+
+  testWidgets('with no name set the row asks for one, over Active', (
+    tester,
+  ) async {
+    await pump(tester, backend());
+
+    expect(inside('swarm-you-profile', find.text('Add your name')), findsOne);
+    expect(inside('swarm-you-status', find.text('Active')), findsOne);
+  });
+
+  testWidgets('a long name and status stay on one line each on a small '
+      'phone at large text', (tester) async {
+    await pump(
+      tester,
+      backend(
+        name: 'Maximilian Alexander Featherstonehaugh-Wolfeschlegel',
+        status: {
+          'text': 'Out for the whole afternoon at the dentist, back at five',
+          'emoji': '🦷',
+        },
+      ),
+    );
+    tester.view.physicalSize = const Size(960, 1704);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final row = tester.getRect(key('swarm-you-profile'));
+    expect(row.right, lessThanOrEqualTo(320));
+    expect(
+      tester.getRect(inside('swarm-you-profile', find.text('Change'))).right,
+      lessThanOrEqualTo(row.right),
+    );
+    for (final line in tester.widgetList<Text>(
+      inside('swarm-you-profile', find.byType(Text)),
+    )) {
+      expect(line.maxLines, anyOf(isNull, 1), reason: '${line.data}');
+    }
   });
 
   testWidgets('a status set shows in place of Active', (tester) async {
@@ -432,9 +508,17 @@ void main() {
     expect(inside('swarm-you-me', find.text('You')), findsOneWidget);
     expect(find.byType(SwarmSkeletonRows), findsNothing);
     expect(find.textContaining('ready now'), findsNothing);
-    for (final row in ['status', 'models', 'devices', 'settings']) {
+    for (final row in ['profile', 'username', 'models', 'devices']) {
       expect(key('swarm-you-$row'), findsOneWidget, reason: row);
     }
+    expect(key('swarm-you-settings'), findsOneWidget);
+    expect(inside('swarm-you-profile', find.text('Name')), findsOne);
+    expect(inside('swarm-you-status', find.text('Set a status')), findsOne);
+    expect(inside('swarm-you-profile', find.text('Change')), findsNothing);
+
+    await tester.tap(key('swarm-you-profile'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SwarmProfileSheet), findsNothing);
   });
 
   testWidgets('every row takes a thumb', (tester) async {
@@ -444,7 +528,7 @@ void main() {
       computers: FakeComputers(const [studio])..own = [own(studio)],
     );
 
-    for (final row in ['status', 'models', 'devices', 'settings']) {
+    for (final row in ['profile', 'username', 'models', 'devices', 'settings']) {
       final size = tester.getSize(key('swarm-you-$row'));
       expect(size.height, greaterThanOrEqualTo(44), reason: row);
       expect(size.width, greaterThanOrEqualTo(44), reason: row);

@@ -23,7 +23,22 @@ abstract final class AppTheme {
   /// through the same [watch], since a widget that reads one token generally
   /// reads both.
   static final FontNotifier fonts = FontNotifier();
-  static final palette = ValueNotifier(HarnessPalette.graphite);
+  static final palette = PaletteNotifier(HarnessPalette.graphite);
+
+  /// The palette a terminal's page wears when it is not [palette], or null for "the same".
+  ///
+  /// Set from Settings ▸ Appearance ▸ Theme (`AppearancePrefs.terminalPalette`): with the theme
+  /// chosen there the terminal keeps the dark side whatever the app wears, so Light — or System on
+  /// a light phone — leaves the agent's page dark. App colors leaves it null: a palette picked
+  /// there dresses the terminal too, as it always has.
+  ///
+  /// Read through [terminalPalette], and only under a `TerminalLook`
+  /// (`terminal/terminal_look.dart`), which is what marks a terminal's page.
+  static final terminalPaletteOverride = ValueNotifier<HarnessPalette?>(null);
+
+  /// The palette a terminal's page wears — see [terminalPaletteOverride].
+  static HarnessPalette get terminalPalette =>
+      terminalPaletteOverride.value ?? palette.value;
 
   static bool get isDark => brightness.value == Brightness.dark;
 
@@ -58,6 +73,25 @@ abstract final class AppTheme {
     });
   }
 
+  /// Read tokens as they would resolve on [other] — its colours AND its
+  /// brightness — the way [as] reads another brightness, and on the same terms:
+  /// swapped silently, read synchronously, put back in a `finally`.
+  ///
+  /// For a page that wears a palette the app does not: a terminal's, under a
+  /// `TerminalLook`, which stays dark in a light app.
+  static T asPalette<T>(HarnessPalette other, T Function() read) {
+    final previous = palette.value;
+    if (previous == other) return as(other.brightness, read);
+    return palette.muted(() {
+      try {
+        palette.value = other;
+        return as(other.brightness, read);
+      } finally {
+        palette.value = previous;
+      }
+    });
+  }
+
   /// Registers the calling widget to rebuild whenever [brightness] flips, and
   /// returns the current value.
   ///
@@ -86,6 +120,9 @@ abstract final class AppTheme {
     context.dependOnInheritedWidgetOfExactType<_BrightnessScope>();
     context.dependOnInheritedWidgetOfExactType<_FontScope>();
     context.dependOnInheritedWidgetOfExactType<_PaletteScope>();
+    // The terminal's palette can move while the app's stays put — App colors picking the very
+    // palette Theme had resolved to, for one — and a terminal's page has to hear that too.
+    context.dependOnInheritedWidgetOfExactType<_TerminalPaletteScope>();
     return brightness.value;
   }
 }
@@ -122,14 +159,26 @@ class FontNotifier extends ChangeNotifier {
 /// spurious rebuilds to draw three previews, all to end up back where we
 /// started. [muted] suppresses the broadcast for a change that is, from the
 /// outside, not a change at all.
-class BrightnessNotifier extends ValueNotifier<Brightness> {
+class BrightnessNotifier extends QuietNotifier<Brightness> {
   BrightnessNotifier(super.value);
+}
+
+/// The palette global, silent in the same way as [BrightnessNotifier] — for
+/// [AppTheme.asPalette], which swaps both.
+class PaletteNotifier extends QuietNotifier<HarnessPalette> {
+  PaletteNotifier(super.value);
+}
+
+/// A [ValueNotifier] that can be moved and moved back without a broadcast —
+/// see [BrightnessNotifier].
+class QuietNotifier<T> extends ValueNotifier<T> {
+  QuietNotifier(super.value);
 
   bool _muted = false;
 
   /// Run [body] with notifications suppressed. Only for a swap that restores the
   /// original value before anything can observe it — see [AppTheme.as].
-  T muted<T>(T Function() body) {
+  R muted<R>(R Function() body) {
     final previous = _muted;
     _muted = true;
     try {
@@ -165,7 +214,13 @@ class BrightnessScope extends StatelessWidget {
       notifier: AppTheme.brightness,
       child: _FontScope(
         notifier: AppTheme.fonts,
-        child: _PaletteScope(notifier: AppTheme.palette, child: child),
+        child: _PaletteScope(
+          notifier: AppTheme.palette,
+          child: _TerminalPaletteScope(
+            notifier: AppTheme.terminalPaletteOverride,
+            child: child,
+          ),
+        ),
       ),
     );
   }
@@ -181,6 +236,11 @@ class _FontScope extends InheritedNotifier<FontNotifier> {
 
 class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
   const _PaletteScope({required super.notifier, required super.child});
+}
+
+class _TerminalPaletteScope
+    extends InheritedNotifier<ValueNotifier<HarnessPalette?>> {
+  const _TerminalPaletteScope({required super.notifier, required super.child});
 }
 
 /// The app's palette — a warm paper white with near-black ink in light, a deep

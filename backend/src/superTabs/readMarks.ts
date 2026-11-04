@@ -4,6 +4,8 @@
  *  marks' collection). A person's marks go only to their own reads (read/service.ts); agents, Buddies included, have none. */
 import { Prisma, type PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
+import { removeChunk, startChunkSweep } from '../lib/chunkSweep.js'
+import { logger } from '../utils/logger.js'
 import { fail, stableId } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { ms } from './parts/light.js'
@@ -15,10 +17,34 @@ export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
  *  mark went reads as far as its conversation's mark, as on a device that never kept one. */
 export const THREAD_MARK_CAP = 500
 
-/** Run by the singleton worker at startup, like the mention expiry. Thread marks need no index option: the hourly sweep
- *  deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
-export async function ensureReadMarkExpiry(db: PrismaClient): Promise<void> {
-  await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry', expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 })
+/** Run by the singleton worker at startup, like the mention expiry; answers whether the expiry is set. Where the database user
+ *  may not set it (production's, no collMod), startReadMarkSweep removes the old marks instead. Thread marks need no index
+ *  option: the hourly sweep deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
+export async function ensureReadMarkExpiry(db: Pick<PrismaClient, '$runCommandRaw'>): Promise<boolean> {
+  return await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry',
+    expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 }) === 'ready'
+}
+
+/** Where the expiry is refused: one chunk of 500 marks every 30 s, as the usage-receipt sweep (lib/productUsageReceiptSweep.ts). */
+export const READ_MARK_SWEEP = { chunk: 500, everyMs: 30_000 } as const
+
+/** Removes up to [chunk] marks untouched for READ_MARK_EXPIRY_MS, oldest first, by the expiry index, and answers how many went.
+ *  A mark moved between the read of the chunk and its delete stays (lib/chunkSweep.ts). */
+export async function sweepReadMarks(db: Pick<PrismaClient, '$runCommandRaw'>, now: Date, chunk: number = READ_MARK_SWEEP.chunk): Promise<number> {
+  return removeChunk(db, { collection: 'SuperTabReadMark', sort: { updatedAt: 1 }, hint: 'read_mark_expiry', chunk,
+    filter: { updatedAt: { $lt: { $date: new Date(now.getTime() - READ_MARK_EXPIRY_MS).toISOString() } } } })
+}
+
+/** In the singleton worker, where the database refused the expiry (ensureReadMarkExpiry false: production's app user may not
+ *  run collMod, Ken's prod scan 11-04), removes old marks itself: one chunk now and every READ_MARK_SWEEP.everyMs, for as long
+ *  as the worker runs, since marks keep ageing. Where the expiry is set, it runs nothing. Answers its stop. */
+export function startReadMarkSweep(db: Pick<PrismaClient, '$runCommandRaw'>, expirySet: boolean,
+  settings: Partial<{ chunk: number; everyMs: number; now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
+  if (expirySet) return () => {}
+  const { chunk, everyMs, now, log } = { ...READ_MARK_SWEEP, now: () => new Date(), log: logger, ...settings }
+  log.warn(`[read-marks] the database refused the read-mark expiry: removing marks untouched for ${READ_MARK_EXPIRY_MS / 86_400_000} days `
+    + `here instead, ${chunk} every ${everyMs / 1000} s`)
+  return startChunkSweep({ label: '[read-marks]', everyMs, log, pass: async () => ({ removed: await sweepReadMarks(db, now(), chunk), done: false }) })
 }
 
 export interface ReadMarkWrite { tabId: string; personId: string; conversationId: string; sequence: number; now: number }
@@ -26,7 +52,7 @@ export interface ThreadMarkWrite extends ReadMarkWrite { threadId: string }
 
 /** The calls `raise` makes, which both mark collections answer alike. */
 interface MarkRows {
-  updateMany(args: { where: { id: string; sequence: { lt: number } }; data: { sequence: number; updatedAt: Date } }): Promise<{ count: number }>
+  updateMany(args: { where: { id: string; sequence: { lt: number } }; data: { sequence: number; updatedAt: Date } & Record<string, unknown> }): Promise<{ count: number }>
   findUnique(args: { where: { id: string }; select: { sequence: true } }): Promise<{ sequence: number } | null>
   create(args: { data: Record<string, unknown> & { id: string } }): Promise<unknown>
 }
@@ -34,11 +60,12 @@ interface MarkRows {
 /** Moves row `id` forward to `sequence` and answers the mark as stored, with whether this call created the row. An older
  *  mark never replaces a newer one: the update matches only a lower mark. When another device's write lands between the
  *  update and the look after it (two first writes racing to create the row, or one raising it), the update runs again;
- *  every retry follows a write that raised the mark, so a few settle it. */
-async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Date, data: Record<string, unknown>): Promise<{ sequence: number; created: boolean }> {
+ *  every retry follows a write that raised the mark, so a few settle it. `moved` is set on the row with the mark. */
+async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Date, data: Record<string, unknown>, moved: Record<string, unknown> = {}):
+  Promise<{ sequence: number; created: boolean }> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const moved = await rows.updateMany({ where: { id, sequence: { lt: sequence } }, data: { sequence, updatedAt } })
-    if (moved.count) return { sequence, created: false }
+    const raised = await rows.updateMany({ where: { id, sequence: { lt: sequence } }, data: { ...moved, sequence, updatedAt } })
+    if (raised.count) return { sequence, created: false }
     const held = await rows.findUnique({ where: { id }, select: { sequence: true } })
     if (held && held.sequence >= sequence) return { sequence: held.sequence, created: false }
     if (held) continue
@@ -52,11 +79,35 @@ async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Da
   return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
 }
 
-/** Moves the person's mark of a conversation forward to `sequence` and answers the mark as stored (`raise`). */
+/** Moves the person's mark of a conversation forward to `sequence` and answers the mark as stored (`raise`). A read that moves
+ *  it ends a Mark unread: the mark no longer reads as lowered (lowerReadMark). */
 export async function writeReadMark(db: PrismaClient, mark: ReadMarkWrite): Promise<number> {
   const { tabId, personId, conversationId, sequence } = mark
   return (await raise(db.superTabReadMark as unknown as MarkRows, stableId(tabId, conversationId, personId), sequence, new Date(mark.now),
-    { tabId, personId, conversationId })).sequence
+    { tabId, personId, conversationId }, { loweredAt: null })).sequence
+}
+
+/** The person's Mark unread: moves their mark of a conversation back to `sequence`, never forward (a chat already unread from
+ *  earlier stays as it is), and answers the mark as stored. The one write that lowers a mark. It sets `loweredAt` with
+ *  `updatedAt`, so their other devices, which keep the higher of a mark and the one they hold, take this one instead
+ *  (readMarkRows `lowered`). A chat with no mark counts as read (read/inbox.ts), so it gets one. One conditional update; when
+ *  another device creates or moves the row between it and the look after it, it runs again, as `raise` does. */
+export async function lowerReadMark(db: PrismaClient, mark: ReadMarkWrite): Promise<number> {
+  const { tabId, personId, conversationId, sequence } = mark
+  const id = stableId(tabId, conversationId, personId), at = new Date(mark.now)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await db.superTabReadMark.updateMany({ where: { id, sequence: { gt: sequence } }, data: { sequence, updatedAt: at, loweredAt: at } })).count) return sequence
+    const held = await db.superTabReadMark.findUnique({ where: { id }, select: { sequence: true } })
+    if (held && held.sequence <= sequence) return held.sequence
+    if (held) continue
+    try {
+      await db.superTabReadMark.create({ data: { id, tabId, personId, conversationId, sequence, updatedAt: at, loweredAt: at } })
+      return sequence
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
+    }
+  }
+  return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
 }
 
 /** Moves the person's mark of one thread forward to `sequence` and answers the mark as stored (`raise`). A new mark past
@@ -141,11 +192,20 @@ async function capThreadMarks(db: PrismaClient, tabId: string, personId: string)
   await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q: { _id: { $in: oldest.map(row => row._id as string) } }, limit: 0 }] })
 }
 
+/** One of the person's read marks; `lowered` when its last move was their Mark unread (lowerReadMark). */
+export interface ReadMarkRow { conversationId: string; sequence: number; lowered: boolean }
+
+/** The person's marks in this tab; with `since`, only those moved at or after it. A Mark unread is its row's last move while
+ *  `loweredAt` equals `updatedAt`: a read since clears it, and one from a backend that did not clear it moves `updatedAt`. */
+export async function readMarkRows(db: PrismaClient, tabId: string, personId: string, since?: number): Promise<ReadMarkRow[]> {
+  const rows = await db.superTabReadMark.findMany({ where: { tabId, personId, ...(since === undefined ? {} : { updatedAt: { gte: new Date(since) } }) },
+    select: { conversationId: true, sequence: true, updatedAt: true, loweredAt: true } })
+  return rows.map(row => ({ conversationId: row.conversationId, sequence: row.sequence, lowered: row.loweredAt?.getTime() === row.updatedAt.getTime() }))
+}
+
 /** The person's marks in this tab, by conversation; with `since`, only those moved at or after it. */
 export async function readMarks(db: PrismaClient, tabId: string, personId: string, since?: number): Promise<Map<string, number>> {
-  const rows = await db.superTabReadMark.findMany({ where: { tabId, personId, ...(since === undefined ? {} : { updatedAt: { gte: new Date(since) } }) },
-    select: { conversationId: true, sequence: true } })
-  return new Map(rows.map(row => [row.conversationId, row.sequence]))
+  return new Map((await readMarkRows(db, tabId, personId, since)).map(row => [row.conversationId, row.sequence]))
 }
 
 /** The person's thread marks in this tab, by conversation then thread root: every one (at most THREAD_MARK_CAP), or with

@@ -107,7 +107,7 @@ import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
-    show superTabChatNotice, superTabMentionNotice;
+    show superTabChatNotice, superTabMentionNotice, superTabReminderNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -1925,6 +1925,7 @@ class AppNotifier extends ChangeNotifier {
         : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
+    onReminder: superTabReminderNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
@@ -5058,9 +5059,9 @@ class AppNotifier extends ChangeNotifier {
       // the view's _syncThreadPane calls threadPaneShown when it is.
       controller.openThread(root, shown: false);
     }
-    bool holds() => controller
-        .messages(id)
-        .any((m) => m.id == root || m.thread == root);
+
+    bool holds() =>
+        controller.messages(id).any((m) => m.id == root || m.thread == root);
     if (!holds()) await controller.refresh();
     bool superseded() =>
         _disposed ||
@@ -8006,6 +8007,31 @@ class AppNotifier extends ChangeNotifier {
       _keptProfileId = profile.id;
     }
     await _profileCache.write(machineId, profile);
+  }
+
+  /// Saves the signed-in person's own account name (Profile, task #2654) and
+  /// shows it at once; answers why it was refused, in one short line, or null
+  /// once saved.
+  Future<String?> setAccountName(String name) async {
+    final revision = _authRevision;
+    try {
+      final me = await api.updateMe(name: name);
+      if (me == null || !_authWorkCurrent(revision)) return null;
+      final profile = CurrentUserProfile.fromMe(me);
+      // Another account's answer is not this one's name: leave it for the
+      // next profile read to settle.
+      if (currentUser?.id != null && profile.id != currentUser?.id) return null;
+      currentUser = profile;
+      unawaited(_keepProfile(profile, revision));
+      notifyListeners();
+      return null;
+    } on ApiException catch (error) {
+      // A daemon (or, in a browser, a backend) from before the route.
+      if (error.status == 404) return 'Update Harness to change your name.';
+      return error.message;
+    } catch (_) {
+      return 'Your name was not saved. Try again.';
+    }
   }
 
   Future<void> _readProfile(int revision) async {

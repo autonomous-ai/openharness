@@ -696,6 +696,10 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     score: scores[person.id],
     columns: columns,
     own: person.id == c.accountId,
+    // Any machine of theirs in this Swarm, offline ones too (task #2699).
+    noMachine:
+        !(c.snapshot?.machines.any((m) => m['contributorId'] == person.id) ??
+            true),
     onTap: () => _person(person, scores[person.id]),
   );
 

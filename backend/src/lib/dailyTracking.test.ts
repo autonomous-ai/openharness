@@ -7,7 +7,7 @@ const warn = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
 vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate }, swarmAgent: { aggregateRaw: swarmAgentFind } } }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
-import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
+import { CLIENT_SURFACES, TUI_SURFACES, machineConnectChanges, mobileOpenMetrics, presenceStateFromRow, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
 beforeEach(() => {
   record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
@@ -97,6 +97,22 @@ describe('a machine\'s last-seen time', () => {
   it('rejects when the stamp fails, so the socket\'s next heartbeat tries again', async () => {
     machineUpdate.mockRejectedValue(new Error('mongo down'))
     await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })).rejects.toThrow('mongo down')
+  })
+
+  it('writes the changed connection facts and the stamp in one update', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: { clientVersion: '0.5.14' } })
+    expect(machineUpdate.mock.calls).toEqual([[{ where: { machineId: 'machine-1' }, data: { clientVersion: '0.5.14', lastSeenAt: now } }]])
+  })
+
+  it('writes nothing to the machine when no fact changed and its stamp is not due, and still counts the connect', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: {}, stamp: false })
+    expect(machineUpdate).not.toHaveBeenCalled()
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_machine_connections'])
+  })
+
+  it('writes a changed fact without a stamp when the stamp is not due', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, changes: { hostname: 'new-host' }, stamp: false })
+    expect(machineUpdate.mock.calls).toEqual([[{ where: { machineId: 'machine-1' }, data: { hostname: 'new-host' } }]])
   })
 
   it('is stamped even when the connect total fails', async () => {
@@ -192,6 +208,34 @@ describe('presenceWriteDue', () => {
     const lateNight = new Date('2026-09-16T23:59:50.000Z')
     const last = { dayKey: '2026-09-16', wroteAt: lateNight.getTime() }
     expect(presenceWriteDue(last, new Date('2026-09-17T00:00:05.000Z'), FIVE_MIN)).toBe(true)
+  })
+})
+
+describe('a machine row read at a connect', () => {
+  const FIVE_MIN = 5 * 60_000
+  const stamped = new Date('2026-11-04T05:00:00.000Z')
+
+  it('floors a new socket\'s stamps on the row\'s last stamp, not on the socket\'s start', () => {
+    const state = presenceStateFromRow(stamped)
+    expect(state).toEqual({ dayKey: '2026-11-04', wroteAt: stamped.getTime() })
+    expect(presenceWriteDue(state, new Date(stamped.getTime() + 60_000), FIVE_MIN)).toBe(false)
+    expect(presenceWriteDue(state, new Date(stamped.getTime() + FIVE_MIN), FIVE_MIN)).toBe(true)
+  })
+
+  it('is due at once for a row never stamped', () => {
+    for (const lastSeenAt of [null, undefined]) expect(presenceStateFromRow(lastSeenAt)).toEqual({ dayKey: null, wroteAt: 0 })
+  })
+
+  it('rewrites only the connection facts that differ from the row', () => {
+    const row = { hostname: 'mac', name: 'Mac', clientVersion: '0.5.13', computerId: 'c1', countryCode: 'VN', sessionKind: 'computer' }
+    expect(machineConnectChanges(row, { hostname: 'mac', clientVersion: '0.5.13', computerId: 'c1', countryCode: 'VN', sessionKind: 'computer' })).toEqual({})
+    expect(machineConnectChanges(row, { hostname: 'mac', clientVersion: '0.5.14', computerId: 'c1', sessionKind: 'computer' })).toEqual({ clientVersion: '0.5.14' })
+    expect(machineConnectChanges({ ...row, sessionKind: null, countryCode: null }, { sessionKind: 'computer', countryCode: 'SG' }))
+      .toEqual({ sessionKind: 'computer', countryCode: 'SG' })
+  })
+
+  it('leaves out a fact the connect did not send', () => {
+    expect(machineConnectChanges({ hostname: 'mac' }, { hostname: undefined, sessionKind: 'team' })).toEqual({ sessionKind: 'team' })
   })
 })
 

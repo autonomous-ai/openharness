@@ -230,14 +230,16 @@ class ProjectSidebar extends StatelessWidget {
   }) {
     final project = reading?.project;
     final selected = !_paneCovered && controller.selectedId == group.id;
-    // A project's row is bold for anything in it for a person (#2427), its
-    // tasks' too, never agents' progress alone.
+    // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
+    // person's message or a tag of the reader there, never agents' progress
+    // alone (#2427). A task's unread is on its card and in Activity, and its
+    // tags count in the row's number.
     final unread = reading == null
         ? controller.unreadShown(group)
-        : reading.unread.isNotEmpty;
+        : reading.unread.contains(group.id);
     // Tags in its chat, which opening it clears (Dee, Slack's way), and the
     // tasks that need the reader, so someone in another project still sees
-    // them (task #2569). Tags in tasks make it bold, and are in Activity.
+    // them (task #2569). Tags in tasks count here and are in Activity.
     final mentions = attention?.mentionsIn(group.id) ?? 0;
     final needsYou = reading?.needsYou ?? 0;
     final badge = mentions + needsYou;
@@ -576,8 +578,9 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// Whether the unread filter keeps [read]'s project: its chat or an open
-  /// workgroup is unread or tags the reader, or the open chat is in it.
-  /// By the rule its rows are bold by (#2427): what is for a person.
+  /// workgroup is unread or tags the reader, or the open chat is in it. What
+  /// is for a person (#2427), and wider than its row's bold, which is its
+  /// chat's alone (task #2638): a project with an unread task stays listed.
   bool _hasUnread(_ProjectReading read) =>
       (!_paneCovered && read.sidebar.selectedProjectId == read.project.id) ||
       read.unread.isNotEmpty ||

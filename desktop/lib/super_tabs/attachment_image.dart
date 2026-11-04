@@ -653,6 +653,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
                             widget.onClose();
                             show();
                           },
+                          choices: const [],
                         ),
                       ],
                     ),

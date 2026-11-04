@@ -10,6 +10,7 @@ import 'package:harness_mobile/clipboard/native_clipboard.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 
 import 'phone_sheet.dart';
 import 'tty.dart';
@@ -542,10 +543,14 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   List<Widget> _rule() => _canSendImage
       ? [
           const SizedBox(width: 6),
-          Container(width: 1, height: 22, color: AppGlass.hair),
+          Container(width: 1, height: 22, color: _hair),
           const SizedBox(width: 6),
         ]
       : [const SizedBox(width: _gap)];
+
+  /// The rules' hairline, on the terminal's palette ([TerminalLook]): this bar sits on a
+  /// terminal's page, which stays dark in a light app.
+  Color get _hair => TerminalLook.read(context, () => AppGlass.hair);
 
   /// How wide [_rule] is — `6 + 1 + 6`, or the single gap in its place.
   double get _ruleWidth => _canSendImage ? 13 : _gap;
@@ -619,7 +624,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// the way [_rule] sets the phone's own two apart.
   List<Widget> _hintRule() => [
     const SizedBox(width: 6),
-    Container(width: 1, height: 22, color: AppGlass.hair),
+    Container(width: 1, height: 22, color: _hair),
     const SizedBox(width: 6),
   ];
 
@@ -940,9 +945,13 @@ class _KeyCapState extends State<_KeyCap> {
               style: style(
                 lit
                     ? foreground
-                    : widget.live
-                    ? AppPalette.textSecondary
-                    : AppPalette.textFaint,
+                    // On the terminal's palette, as the bar is ([TerminalLook]).
+                    : TerminalLook.read(
+                        context,
+                        () => widget.live
+                            ? AppPalette.textSecondary
+                            : AppPalette.textFaint,
+                      ),
                 FontWeight.w400,
               ),
             ),

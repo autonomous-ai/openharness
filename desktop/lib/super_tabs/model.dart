@@ -658,6 +658,7 @@ class SuperTabSnapshot {
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
+      remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -795,6 +796,10 @@ class SuperTabSnapshot {
   /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
   /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
   final String? activityDigest;
+
+  /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
+  /// cleared; null from a backend before reminders (superTabs/reminders.ts).
+  final String? remindersDigest;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.
@@ -1193,7 +1198,8 @@ class SuperTabAttachment {
       unlinked = row['unlinked'] == true,
       expiresAt = row['expiresAt'] is num
           ? (row['expiresAt'] as num).toInt()
-          : null;
+          : null,
+      voice = SuperTabVoice.read(row['voice']);
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -1213,6 +1219,11 @@ class SuperTabAttachment {
   /// When [link] stops opening, in epoch milliseconds.
   final int? expiresAt;
 
+  /// The clip's facts when this file is a voice message (backend
+  /// superTabs/voiceMessages.ts); null for any other file, and from an older
+  /// server.
+  final SuperTabVoice? voice;
+
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.
   bool get isImage => const {
@@ -1221,6 +1232,57 @@ class SuperTabAttachment {
     'image/gif',
     'image/webp',
   }.contains(mime);
+}
+
+/// A voice message's clip, as the server read it once before it was sent:
+/// its words are the message's text.
+class SuperTabVoice {
+  const SuperTabVoice({
+    required this.durationMs,
+    required this.waveform,
+    required this.transcribed,
+    this.failure,
+  });
+
+  /// [row] as a clip, or null when any part of it does not read: the file is
+  /// still shown, as an ordinary file.
+  static SuperTabVoice? read(Object? row) {
+    if (row is! Map) return null;
+    final duration = row['durationMs'], bars = row['waveform'];
+    final transcribed = row['transcribed'], failure = row['failure'];
+    if (duration is! num ||
+        duration < 0 ||
+        bars is! List ||
+        !bars.every((bar) => bar is num) ||
+        transcribed is! bool) {
+      return null;
+    }
+    return SuperTabVoice(
+      durationMs: duration.toInt(),
+      waveform: List.unmodifiable([
+        for (final bar in bars.cast<num>()) bar.toInt().clamp(0, barMax),
+      ]),
+      transcribed: transcribed,
+      failure: failure is String ? failure : null,
+    );
+  }
+
+  /// The tallest bar of [waveform].
+  static const barMax = 31;
+
+  final int durationMs;
+
+  /// The clip's loudness in bars, each 0 to [barMax].
+  final List<int> waveform;
+
+  /// Whether the message's text is the clip's words.
+  final bool transcribed;
+
+  /// Why it has no words: `limit` (the sender's daily voice quota was used)
+  /// or `failed`.
+  final String? failure;
+
+  Duration get length => Duration(milliseconds: durationMs);
 }
 
 /// A message's files. A row that does not read is left out, so one bad row

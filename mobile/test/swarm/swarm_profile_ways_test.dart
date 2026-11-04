@@ -93,7 +93,7 @@ void main() {
   Finder inside(String value, Finder finder) =>
       find.descendant(of: key(value), matching: finder);
 
-  testWidgets('You starts with you, and its status opens your profile', (
+  testWidgets('You starts with you, and its profile row opens your profile', (
     tester,
   ) async {
     await pump(tester, const SwarmYouPage());
@@ -103,10 +103,10 @@ void main() {
       findsOneWidget,
     );
     expect(
-      tester.getSize(key('swarm-you-status')).height,
+      tester.getSize(key('swarm-you-profile')).height,
       greaterThanOrEqualTo(44),
     );
-    await tester.tap(key('swarm-you-status'));
+    await tester.tap(key('swarm-you-profile'));
     await frames(tester);
     expect(find.text('Your profile'), findsOneWidget);
   });

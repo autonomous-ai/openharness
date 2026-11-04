@@ -14,6 +14,7 @@ import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
+import 'package:harness_mobile/terminal/terminal_look.dart';
 
 import 'daemon_consent.dart';
 import 'daemon_hatch.dart';
@@ -29,7 +30,8 @@ Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
   unawaited(host.zoo.refresh());
   final navigator = Navigator.of(context, rootNavigator: true);
   return showModalBottomSheet<void>(
-    context: context,
+    // The app's sheet even from a terminal's header — see [TerminalLook.outside].
+    context: TerminalLook.outside(context),
     useRootNavigator: true,
     isScrollControlled: true,
     backgroundColor: DaemonInk.ground,

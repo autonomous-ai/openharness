@@ -12,6 +12,7 @@ import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'private_project_lock.dart';
+import 'reminders.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -88,6 +89,21 @@ superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
         title: group.title,
         body: 'New messages',
         chat: (tabId: tabId, conversationId: group.id),
+      );
+
+/// What tells the person a reminder they set is due: the operating system, on
+/// Desktop only, as tags are. A click opens its chat in its Swarm [tabId];
+/// Activity holds it until it is opened.
+void Function(String tabId, SuperTabReminder reminder)? superTabReminderNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (tabId, reminder) => system.postNotice(
+        id: 'harness-reminder:$tabId:${reminder.key}',
+        title: reminder.authorName ?? reminder.conversationTitle,
+        body: reminder.text,
+        chat: (tabId: tabId, conversationId: reminder.conversationId),
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend

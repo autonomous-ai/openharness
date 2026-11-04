@@ -73,14 +73,31 @@ const FEW = 100
 describe('a refused command in the log', () => {
   const secret = 'do-not-log-this'
   it('writes one line, its code and type and no values; one that passes writes none (Ken, 2026-11-04)', async () => {
-    const { execute } = await swarm()
+    const { execute, tab } = await swarm()
     const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     try {
       await execute({ type: 'conversation.create', title: secret, brief: secret, checks: [] })
       expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([])
       await expect(execute({ type: 'conversation.rename', conversationId: secret, title: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
-      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([[REFUSED, { code: 'NOT_FOUND', type: 'conversation.rename' }]])
+      // And whose (#2675): its Swarm, no agent, and no declared client; never its words.
+      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([[REFUSED, { code: 'NOT_FOUND', type: 'conversation.rename',
+        tabId: tab, agentId: null, asAgent: false, client: 'other', version: null }]])
       expect(JSON.stringify(said.mock.calls)).not.toContain(secret)
+    } finally {
+      said.mockRestore()
+    }
+  })
+})
+
+describe('a refused command from an agent, in the log (#2675)', () => {
+  it('names the agent the command names, that an agent sent it, and the client and version it declared', async () => {
+    const { store, tab, lead } = await swarm()
+    const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      await expect(store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.alert', agentId: 'gone-agent', alert: 'prompt', active: true } },
+        lead, undefined, { kind: 'cli', version: '0.5.34' })).rejects.toBeTruthy()
+      expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([[REFUSED, expect.objectContaining({ type: 'agent.alert', tabId: tab,
+        agentId: 'gone-agent', asAgent: true, client: 'cli', version: '0.5.34' })]])
     } finally {
       said.mockRestore()
     }

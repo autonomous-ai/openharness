@@ -373,6 +373,34 @@ describe('process-owned hook server', () => {
   })
 })
 
+describe('the account name proxy', () => {
+  it('passes the signed-in person\'s new name on only with the local header, body and answer verbatim', async () => {
+    const update = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { user: { id: 'u1', name: 'Elvis' }, echo: body } } }))
+    const { base } = await start({ onAuthMeUpdate: update })
+    const refused = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"name":"Elvis"}' })
+    expect(refused.status).toBe(403)
+    expect(update).not.toHaveBeenCalled()
+
+    const saved = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":"Elvis"}' })
+    expect(saved.status).toBe(200)
+    expect(((await saved.json()) as { data: unknown }).data).toEqual({ user: { id: 'u1', name: 'Elvis' }, echo: { name: 'Elvis' } })
+    expect(update).toHaveBeenCalledWith({ name: 'Elvis' })
+
+    const bad = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
+    expect(bad.status).toBe(400)
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers a refusal as the backend gave it, so the app can say why', async () => {
+    const { base } = await start({
+      onAuthMeUpdate: async () => ({ status: 400, body: { success: false, error: { code: 'INVALID_NAME', message: 'Use 1 to 60 characters, with no hidden ones.' } } }),
+    })
+    const response = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":" "}' })
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('INVALID_NAME')
+  })
+})
+
 describe('the desk proxy', () => {
   it('reads the desk ungated and writes its ops only with the local header, body passed through', async () => {
     const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, tabs: [], echo: body } } }))

@@ -3,6 +3,7 @@ import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
+import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -538,6 +539,7 @@ export class SuperTabHost {
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
+  private readonly configurationRetries = new CommandRetries(() => this.now())
   private nextConfigurationsAt = 0
   private replacementsRunning: Promise<void> | null = null
   private nextReplacementsAt = 0
@@ -1701,7 +1703,12 @@ export class SuperTabHost {
     } catch (error) {
       // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
       // the same operation id now names a different request. It was delivered once; record it rather than retry forever.
-      if (!(error instanceof SuperTabHostError) || error.code !== 'OPERATION_REUSED') throw error
+      if (error instanceof SuperTabHostError && error.code === 'OPERATION_REUSED') return true
+      // A notice the Swarm refuses for good is settled, not tried every minute: a Buddy session may post only in its own
+      // thread, so its top-level notice was refused once a minute for as long as it ran (Ken, 11-04: 125
+      // BUDDY_SESSION_THREAD refusals in 32 minutes, #2675).
+      if (!permanentRefusal(error)) throw error
+      this.log(`The skills notice for ${id} was refused (${(error as SuperTabHostError).code}); it is not sent again.`)
     }
     return true
   }
@@ -2157,15 +2164,25 @@ export class SuperTabHost {
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
+    const owed: string[] = []
     for (const row of rows) {
       if (this.stopped) return
+      let key: string | undefined
       try {
         const observation = configurationObservation(this.core, this.machineId, row)
-        if (observation) await backend(this.core, 'POST', observation.path, observation.body)
+        if (!observation) continue
+        key = observation.body.operationId
+        owed.push(key)
+        // A reading the Swarm refused for good goes no more; a new reading is a new operation, sent once (#2675).
+        if (!this.configurationRetries.due(key)) continue
+        await backend(this.core, 'POST', observation.path, observation.body)
+        this.configurationRetries.sent(key)
       } catch (error) {
+        if (key) this.configurationRetries.failed(key, error)
         this.log(error instanceof Error ? error.message : String(error))
       }
     }
+    this.configurationRetries.keep(owed)
   }
 
   private async recordReplacements(rows: unknown[]): Promise<void> {

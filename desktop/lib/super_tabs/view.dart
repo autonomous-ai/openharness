@@ -1,11 +1,8 @@
 import 'dart:async';
-
-import 'package:clock/clock.dart';
-
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderSliverMultiBoxAdaptor, SliverMultiBoxAdaptorParentData;
@@ -47,6 +44,7 @@ import 'composer_toggle.dart';
 import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
+import 'reminders.dart';
 import 'activity_view.dart';
 import 'attention.dart';
 import 'controller.dart';
@@ -89,6 +87,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -837,8 +836,20 @@ class _SuperTabViewState extends State<SuperTabView>
       _unread.clear(id);
       _newAfter.remove(id);
     });
-    c.markRead(id);
+    c.markRead(id, explicit: true);
     return true;
+  }
+
+  /// More ▸ Mark unread: the New messages line goes above [message] at once,
+  /// and back where it was if the server did not keep it.
+  Future<void> _markUnread(SuperTabMessage message) async {
+    final id = message.conversationId;
+    final kept = c.markUnread(id, message);
+    if (c.selectedId == id) setState(() => _unread.placeAt(id, message.id));
+    if (await kept || !mounted) return;
+    if (c.selectedId == id) setState(() => _unread.clear(id));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text("Couldn't mark unread")));
   }
 
   void _jumpToLatest() {
@@ -1831,6 +1842,77 @@ class _SuperTabViewState extends State<SuperTabView>
     return message;
   }
 
+  /// The date pill's choice (day_jump.dart): [id]'s first message on or
+  /// after [from], lit, as a link opens one. The very beginning (null) is
+  /// its first message, and a time after everything said is its newest.
+  /// Older pages are read until one from before [from] is held, at most 50
+  /// as a link reads; past them it says so, and the list stays.
+  Future<void> _jumpToTime(String id, DateTime? from) async {
+    void say(String text) =>
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(text)));
+    final request = ++_jumpRequest;
+    bool current() =>
+        mounted &&
+        request == _jumpRequest &&
+        c.selectedId == id &&
+        !c.accessRevoked;
+    bool before(SuperTabMessage m) =>
+        from != null && (m.createdAt?.isBefore(from) ?? false);
+    try {
+      if (from == null) {
+        await c.loadBackTo(id, 0);
+      } else {
+        // A copy read back to an early page holds nothing from then on: the
+        // latest first, then back from there.
+        final newest = _shownMessages(id).lastOrNull;
+        if (c.hasNewer(id) && (newest == null || before(newest))) {
+          await c.showLatest(id);
+        }
+        for (var page = 0; !_shownMessages(id).any(before); page++) {
+          if (!current() || !c.hasOlder(id)) break;
+          if (page == 50) {
+            say('That day is too far back to open.');
+            return;
+          }
+          // A read that fails keeps its error and its place: nothing came.
+          final loaded = c.messages(id).length;
+          await c.loadMessages(id, older: true);
+          if (current() && c.messages(id).length == loaded) {
+            say('Couldn’t load earlier messages.');
+            return;
+          }
+        }
+      }
+    } catch (_) {
+      if (current()) say('Messages could not be read.');
+      return;
+    }
+    if (!current()) return;
+    final shown = _shownMessages(id);
+    final target = from == null
+        ? shown.firstOrNull
+        : shown.where((m) => !before(m)).firstOrNull ?? shown.lastOrNull;
+    if (target == null) return;
+    final row = _rowShowing(id, target.id) ?? target.id;
+    setState(() {
+      _target = row;
+      // Stop following the end: that day's message is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (at) {
+        unawaited(Scrollable.ensureVisible(at, alignment: .3));
+        _light(row);
+      },
+    );
+    _focus.requestFocus();
+  }
+
   /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
   void _takeMessageRequest() {
     final request = c.messageRequest;
@@ -1968,8 +2050,43 @@ class _SuperTabViewState extends State<SuperTabView>
   /// is held is looked in first, then what arrived after it, then older pages,
   /// until the message is among them; one that is not found says so, and the
   /// list stays.
-  Future<void> _openMention(SuperTabMention mention) async {
-    final id = mention.conversationId;
+  Future<void> _openMention(SuperTabMention mention) =>
+      _openAtMessage(mention.conversationId, mention.messageId, answer: true);
+
+  /// More ▸ Remind me: the message comes back in Activity at [when].
+  Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
+    final at = when.from(clock.now());
+    final kept = await SuperTabReminders.of(c).set(message, at);
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          kept
+              ? 'Reminder set for ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(at))}'
+              : "Couldn't set the reminder",
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// A due reminder opened from Activity: its message, which clears it.
+  Future<void> _openReminder(SuperTabReminder reminder) async {
+    unawaited(SuperTabReminders.of(c).open(reminder));
+    await _openAtMessage(
+      reminder.conversationId,
+      reminder.messageId,
+      answer: false,
+    );
+  }
+
+  /// Opens conversation [id] at message [messageId], from Activity; [answer]
+  /// replies to it (a tag).
+  Future<void> _openAtMessage(
+    String id,
+    String messageId, {
+    required bool answer,
+  }) async {
     final request = ++_jumpRequest;
     // A closed or quiet conversation is asked for by id, as a message link does: the tag of a task with no worker is in one,
     // and a row that did nothing left the reader not knowing why it was there.
@@ -1981,7 +2098,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
       return;
     }
-    final message = await _findMessage(id, mention.messageId);
+    final message = await _findMessage(id, messageId);
     if (!mounted || request != _jumpRequest) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -2005,7 +2122,8 @@ class _SuperTabViewState extends State<SuperTabView>
       if (!message.inMainStream) return;
     }
     setState(() {
-      if (c.canWrite &&
+      if (answer &&
+          c.canWrite &&
           c.selected?.archived == false &&
           message.thread == null) {
         _replies[id] = message;
@@ -3490,6 +3608,11 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       linkTarget: _linkTarget,
       onOpenLink: _openLink,
+      // A reply only in its thread is read with its thread's own mark.
+      onMarkUnread: inThread || !message.inMainStream
+          ? null
+          : () => unawaited(_markUnread(message)),
+      onRemind: (when) => unawaited(_remind(message, when)),
       // A message with a thread is answered there; one from before threads
       // keeps the inline reply.
       onReply: !writable || inThread
@@ -4122,6 +4245,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           SuperTabStickyDay(
                             pillKey: const ValueKey('super-day-pill'),
                             hidden: finding != null,
+                            onJump: (from) =>
+                                unawaited(_jumpToTime(c.selectedId, from)),
                             child: NotificationListener<ScrollNotification>(
                               onNotification: (event) {
                                 if (event.depth != 0) return false;
@@ -4338,7 +4463,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 Expanded(
                   child: SuperTabReplyPreview(
                     author: 'Replying to ${_authorName(reply)}',
-                    text: reply.text,
+                    text: superTabQuoteText(reply),
                   ),
                 ),
                 fingerTarget(
@@ -4859,6 +4984,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                       unawaited(_openMention(mention)),
                                   onOpenThread: _openThreadFromList,
                                   onOpenConversation: _openConversation,
+                                  onOpenReminder: (reminder) =>
+                                      unawaited(_openReminder(reminder)),
                                 )
                               : const SizedBox.shrink(),
                           _manageVisible

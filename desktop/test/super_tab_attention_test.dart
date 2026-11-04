@@ -171,8 +171,8 @@ void main() {
       }
 
       testWidgets('a tag in a task conversation counts on the project row as '
-          'a task that needs the reader; the row is bold and kept by the '
-          'unread filter', (tester) async {
+          'a task that needs the reader, and the unread filter keeps it; the '
+          'row is bold only for its own chat (task #2638)', (tester) async {
         final server = projectServer();
         fromLead(server, 'Please look', conversationId: 'offline');
         server.tag('message-1', conversationId: 'offline');
@@ -183,7 +183,7 @@ void main() {
         expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
         expect(
           rowText(tester, 'super-group-lead', 'web-project').style?.fontWeight,
-          FontWeight.w600,
+          isNot(FontWeight.w600),
         );
         c.toggleUnreadOnly();
         await tester.pumpAndSettle();

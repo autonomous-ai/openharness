@@ -50,6 +50,8 @@ export interface ReadExtras {
   decisionsDigest?: string
   /** Which of their Activity rows are unread, as a digest (activity.ts). */
   activityDigest?: string
+  /** Which reminders they have and when each is due, as a digest (reminders.ts). */
+  remindersDigest?: string
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -151,6 +153,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
+    ...(actor.kind === 'person' && extras.remindersDigest !== undefined ? { remindersDigest: extras.remindersDigest } : {}),
     threadSessions: true as const,
     sessionsFromChat: true as const,
     // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.

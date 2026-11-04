@@ -25,6 +25,16 @@ describe('chat file links', () => {
     expect(Object.keys(linked!).sort()).toEqual(['expiresAt', 'id', 'link', 'mime', 'name', 'size', 'url'])
   })
 
+  it('keeps a voice message\'s facts on its file, and drops a malformed one', async () => {
+    const voice = { durationMs: 81_000, waveform: [1, 2, 3], transcribed: false, failure: 'limit' as const }
+    const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(
+      { ...file('super-tabs/tab1/abc/Voice_message.wav', 'clip'), voice },
+      { ...file('super-tabs/tab1/abc/odd.wav', 'odd'), voice: { durationMs: 'long' } as never },
+    )], now)
+    expect(read!.attachments[0]).toMatchObject({ id: 'clip', voice })
+    expect(read!.attachments[1]).not.toHaveProperty('voice')
+  })
+
   it('links only files in the reading Swarm\'s own folder', async () => {
     const links = new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs')
     const [read] = await links.forRows('tab1', [row(
