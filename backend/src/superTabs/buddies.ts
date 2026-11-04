@@ -224,7 +224,9 @@ const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)�
  *  send word, after at most a few ok/please words; it says no "not", has no sentence break and is at most 10 words. Words
  *  that read as a label as often as an ask ("Report: …", "File: …", "Pass: …") are left out: in doubt, the Buddy shows the line. */
 const SEND_LEAD = /^(?:(?:ok(?:ay)?|yes|yeah|sure|please|pls|can you|could you|would you|go ahead and|and|then|just|ừ|vâng|được|làm ơn|hãy)[\s,]+)*(?:post|send|share|propose|tell|forward|submit|raise|gửi|đăng|chuyển|nói|đề xuất)(?=[\s,]|$)/iu
-const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|đừng|không|chưa)(?![\p{L}])|n['’]t(?![\p{L}])/iu
+/** A "no" anywhere in the lead-in, before or after its send word ("Tell nobody", "Send nothing yet", "Gửi ko được"; security
+ *  review 1 of #3055), with the chat spellings of không (ko) and chẳng, khỏi. */
+const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|nobody|nothing|none|neither|nor|without|đừng|không|ko|chưa|chẳng|khỏi)(?![\p{L}])|n['’]t(?![\p{L}])/iu
 /** "Tell me why …", "send us …", "nói cho tôi …": a question to the Buddy, not an ask to send (security review 2 of #3055). */
 const TO_ME = /(?:^|[^\p{L}])(?:post|send|share|tell|forward|gửi|chuyển|nói)\s+(?:(?:cho|với)\s+)?(?:me|us|tôi|mình)(?![\p{L}])/iu
 const asksToSend = (lead: string): boolean => {
