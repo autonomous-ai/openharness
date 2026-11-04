@@ -178,6 +178,17 @@ describe('message.delete', () => {
     await expect(f.remove(f.web.conversationId, reply)).rejects.toThrow(refused('NOT_FOUND'))
   })
 
+  it('removes the tags a deleted message gave, so nobody keeps a waiting tag to a message they cannot open', async () => {
+    const f = await swarm()
+    const tagged = await f.send(f.web.conversationId, '@other can you look?', peer, { mentions: [other.sub] })
+    const kept = await f.send(f.web.conversationId, '@other and this one', peer, { mentions: [other.sub] })
+    await f.send(f.web.conversationId, 'Looking.', owner, { replyTo: kept })
+    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(2)
+    await f.remove(f.web.conversationId, tagged)
+    await f.remove(f.web.conversationId, kept)
+    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(0)
+  })
+
   it('keeps a root with replies as "This message was deleted." and its replies keep their thread', async () => {
     const f = await swarm()
     const root = await f.send(f.web.conversationId, 'Should we ship? Secret detail here.')
