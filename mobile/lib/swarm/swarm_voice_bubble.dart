@@ -220,12 +220,16 @@ class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
                   ),
                 ),
                 const SizedBox(width: AppSpace.s),
-                SwarmVoiceBars(
-                  key: const ValueKey('swarm-voice-bars'),
-                  waveform: widget.voice.waveform,
-                  played: played,
-                  playedColor: AppPalette.accent,
-                  restColor: AppPalette.textFaint,
+                // As wide as the column leaves it: a phone's narrow message
+                // column draws fewer bars.
+                Flexible(
+                  child: SwarmVoiceBars(
+                    key: const ValueKey('swarm-voice-bars'),
+                    waveform: widget.voice.waveform,
+                    played: played,
+                    playedColor: AppPalette.accent,
+                    restColor: AppPalette.textFaint,
+                  ),
                 ),
                 const SizedBox(width: AppSpace.s),
                 Text(
@@ -294,7 +298,9 @@ class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
 }
 
 /// A voice message's waveform: one bar for each of its [waveform] values,
-/// the [played] part in [playedColor], the rest in [restColor].
+/// or, where that is wider than the room it has, as many as fit, each the
+/// loudest of the values it stands for. The [played] part is in
+/// [playedColor], the rest in [restColor].
 class SwarmVoiceBars extends StatelessWidget {
   const SwarmVoiceBars({
     super.key,
@@ -313,13 +319,35 @@ class SwarmVoiceBars extends StatelessWidget {
   static const double bar = 2, gap = 2, low = 3, high = 24;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    width: math.max(1, waveform.length) * (bar + gap) - gap,
-    height: high,
-    child: CustomPaint(
-      painter: _BarsPainter(waveform, played, playedColor, restColor),
-    ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, room) {
+      final fit = ((room.maxWidth + gap) / (bar + gap)).floor();
+      final bars = _fitted(math.max(1, math.min(waveform.length, fit)));
+      return SizedBox(
+        width: bars.length * (bar + gap) - gap,
+        height: high,
+        child: CustomPaint(
+          painter: _BarsPainter(bars, played, playedColor, restColor),
+        ),
+      );
+    },
   );
+
+  List<int> _fitted(int count) {
+    if (count >= waveform.length) return waveform;
+    return [
+      for (var i = 0; i < count; i++)
+        waveform
+            .sublist(
+              i * waveform.length ~/ count,
+              math.max(
+                i * waveform.length ~/ count + 1,
+                (i + 1) * waveform.length ~/ count,
+              ),
+            )
+            .reduce(math.max),
+    ];
+  }
 }
 
 class _BarsPainter extends CustomPainter {

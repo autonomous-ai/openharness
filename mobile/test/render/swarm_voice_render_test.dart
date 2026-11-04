@@ -81,6 +81,7 @@ void main() {
           'g1',
           title: 'Login crash on iPhone',
           agentIds: ['agent-lead', 'agent-builder'],
+          leadId: 'agent-lead',
           status: 'working',
           lastMessageSequence: 2,
         ),
