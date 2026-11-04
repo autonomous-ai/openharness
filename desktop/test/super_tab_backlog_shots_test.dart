@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -117,11 +118,22 @@ void main() {
               'personId': 'scholes',
               'since': now,
             },
-          if (state == 5) 'shippedAt': now,
+          if (state >= 4) 'shippedAt': now,
           if (state > 0)
             'pullRequestUrls': [
               'https://github.com/autonomous-ai/openharness/pull/${number + 400}',
             ],
+          if (state == 5)
+            'cards': {
+              'pullRequests': [
+                {
+                  'url':
+                      'https://github.com/autonomous-ai/openharness/pull/${number + 400}',
+                  'messageId': 'card-$number',
+                  'mergedAt': now,
+                },
+              ],
+            },
         });
         number++;
       }
@@ -129,19 +141,63 @@ void main() {
     return server;
   }
 
+  /// [server]'s Swarm as Scholes met it: the reader has nothing open, and what
+  /// they asked for shipped and was archived.
+  void nothingOpenWithArchived(ConversationServer server) {
+    final conversations = server.state['conversations'] as List;
+    for (final g in conversations.cast<Map>()) {
+      if (g['requesterId'] == 'owner') g['requesterId'] = 'huy';
+    }
+    final shipped = DateTime(2026, 11, 3, 17).millisecondsSinceEpoch;
+    conversations.addAll(<Map<String, dynamic>>[
+      for (final (i, title) in const [
+        'Thread tags in the sidebar',
+        'Round dial fix',
+        'Machine row menu',
+      ].indexed)
+        {
+          ...conversationFixture('shipped-$i', title),
+          'projectId': 'p0',
+          'number': 2200 - i,
+          'requesterId': 'owner',
+          'archived': true,
+          'agentIds': ['thorne'],
+          'assignment': {'id': 'a-s$i', 'agentId': 'thorne', 'status': 'done'},
+          'shippedAt': shipped,
+          'pullRequestUrls': [
+            'https://github.com/autonomous-ai/openharness/pull/${2600 + i}',
+          ],
+          'cards': {
+            'pullRequests': [
+              {
+                'url':
+                    'https://github.com/autonomous-ai/openharness/pull/${2600 + i}',
+                'messageId': 'card-$i',
+                'mergedAt': shipped,
+              },
+            ],
+          },
+        },
+    ]);
+  }
+
   Future<void> show(
     WidgetTester tester,
     ConversationServer server, {
     Brightness brightness = Brightness.light,
     GlobalKey? picture,
+    Stopwatch? firstFrame,
   }) async {
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
+    // Reads wait, so the first frame is timed alone.
+    if (firstFrame != null) server.holdReads = Completer<void>();
     grid.AppTheme.brightness.value = brightness;
     addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
     await tester.binding.setSurfaceSize(const Size(900, 640));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    firstFrame?.start();
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: brightness),
@@ -162,24 +218,34 @@ void main() {
         ),
       ),
     );
+    firstFrame?.stop();
     await tester.pumpAndSettle();
   }
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['all', 'mine', 'project']) {
+    for (final scene in [
+      'all',
+      'mine',
+      'project',
+      'mine-empty',
+      'mine-shipped',
+    ]) {
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
-        await show(
-          tester,
-          swarm(perProject: 3),
-          brightness: brightness,
-          picture: picture,
-        );
-        if (scene == 'mine') {
+        final server = swarm(perProject: 3);
+        if (scene.startsWith('mine-')) nothingOpenWithArchived(server);
+        await show(tester, server, brightness: brightness, picture: picture);
+        if (scene.startsWith('mine')) {
           await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
           await tester.pumpAndSettle();
+          if (scene == 'mine-shipped') {
+            await tester.tap(
+              find.byKey(const ValueKey('super-backlog-mine-shipped')),
+            );
+            await tester.pumpAndSettle();
+          }
         } else if (scene == 'project') {
           await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
           await tester.pumpAndSettle();
@@ -201,22 +267,45 @@ void main() {
     }
   }
 
-  testWidgets('300 tasks across 30 projects: build and rebuild times', (
+  testWidgets('300 open and 300 closed tasks across 30 projects: times', (
     tester,
   ) async {
     final server = swarm(projects: 30, perProject: 10);
-    final first = Stopwatch()..start();
-    await show(tester, server);
-    first.stop();
+    final shipped = DateTime(2026, 11, 3, 17).millisecondsSinceEpoch;
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      for (var p = 0; p < 30; p++)
+        for (var i = 0; i < 10; i++)
+          {
+            ...conversationFixture('closed-$p-$i', 'Shipped and archived'),
+            'projectId': 'p$p',
+            'number': 1000 + p * 10 + i,
+            'requesterId': 'owner',
+            'archived': true,
+            'assignment': {
+              'id': 'c$p$i',
+              'agentId': 'thorne',
+              'status': 'done',
+            },
+            'shippedAt': shipped,
+          },
+    ]);
+    final first = Stopwatch();
+    await show(tester, server, firstFrame: first);
+    final settled = Stopwatch()..start();
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    settled.stop();
     final rebuild = Stopwatch()..start();
     await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
     await tester.pump();
     rebuild.stop();
     // ignore: avoid_print
     print(
-      'Backlog, 300 tasks: first frame ${first.elapsedMilliseconds} ms '
-      '(controller read included), filter rebuild '
-      '${rebuild.elapsedMilliseconds} ms (headless debug VM)',
+      'Backlog: first frame ${first.elapsedMilliseconds} ms, then '
+      '${settled.elapsedMilliseconds} ms to settle (closed reads on the fake '
+      'server included), filter rebuild ${rebuild.elapsedMilliseconds} ms '
+      '(headless debug VM)',
     );
   }, skip: !bench);
 }

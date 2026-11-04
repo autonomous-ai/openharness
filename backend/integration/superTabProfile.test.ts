@@ -516,7 +516,7 @@ describe('the ship moment', () => {
     expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
     const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ text: "Let's build: Avatars", recipientIds: [], source: { taskId: group } })
+    expect(lines[0]).toMatchObject({ text: 'Avatars', recipientIds: [], source: { taskId: group } })
     const merges = rows.filter(m => m.thread === lines[0]!.id && m.text.startsWith('Merged'))
     expect(merges).toEqual([expect.objectContaining({ text: 'Merged: PR #7. Ships in the next release.', recipientIds: [] })])
     expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [lines[0]!.id, merges[0]!.id] } } })).toBe(0)

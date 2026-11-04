@@ -37,6 +37,8 @@ const MAX_CELLS = 0x7fff
 const COLOR = /^#[0-9a-f]{6}$/
 /** The dial's thread title: the first line, at most 80 bytes (the cards service cuts it; checked again here). */
 const THREAD_TITLE_BYTES = 80
+/** A notice's thread root, cut to this: kept when longer than the dial holds, so no face matches it and the dial beeps. */
+const THREAD_ROOT_BYTES = 128
 /** The Pro keeps an id in 48 bytes with its NUL. */
 const ID = /^[A-Za-z0-9_-]{1,47}$/
 const id = (value: unknown): value is string => typeof value === 'string' && ID.test(value)
@@ -70,7 +72,10 @@ function chatIn(value: unknown): SwarmChat | null {
 function noticeIn(value: unknown, chats: ReadonlySet<string>): LeadNotice | null {
   const notice = object(value)
   if (typeof notice.chat !== 'string' || !chats.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
-  return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at }
+  // A reply inside a thread names its root (#2463): without it the desktop and the dial read it by opening the chat.
+  const thread = typeof notice.thread === 'string' && notice.thread ? cut(notice.thread, THREAD_ROOT_BYTES) : undefined
+  return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at,
+    ...(thread ? { thread } : {}) }
 }
 
 /** The reader's Buddy on a Lead, checked and cut; null when it is not one. */

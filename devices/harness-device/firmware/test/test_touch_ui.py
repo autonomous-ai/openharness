@@ -1950,27 +1950,27 @@ static void swarm_chat_checks(const char *dir) {
 
     // A notice for the face's chat is read at once and does not beep.
     enter_at("s1", "C1");
-    assert(!ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "Shall I cut the release?", 1792560000u));
+    assert(!ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "", "Shall I cut the release?", 1792560000u));
     int e = swarm_entry("C1");
     assert(e >= 0 && s.notice[e].read_on_dial && !s.notice[e].question && s.notice[e].swarm == 3);
     assert(!strcmp(s.notice[e].summary, "Shall I cut the release?") && !strcmp(s.notice[e].name, "docs"));
     assert(!strcmp(s.notice[e].machine, "openharness \xc2\xb7 PM"));
     // A notice for another chat stays unread and beeps once: the Lead chat, while the face shows the PM chat.
-    assert(ui_supertab_notice("s1", "C1", HT_CHAT_LEAD, "lead-docs", "Docs are merged.", 1792560001u));
+    assert(ui_supertab_notice("s1", "C1", HT_CHAT_LEAD, "lead-docs", "", "Docs are merged.", 1792560001u));
     e = swarm_entry("C1");
     assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Docs are merged."));
     assert(!strcmp(s.notice[e].machine, "openharness"));
     // Off the face: unread, and it beeps.
-    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is deployed.", 1792560002u));
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "", "Web is deployed.", 1792560002u));
     assert(swarm_entry("C2") >= 0 && !s.notice[swarm_entry("C2")].read_on_dial);
     // One entry per Lead: a second notice replaces the text and is unread again.
     notice_mark_read(&s.notice[swarm_entry("C2")]);
-    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is rolled back.", 1792560003u));
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "", "Web is rolled back.", 1792560003u));
     { int count = 0; for (int i = 0; i < s.notice_count; i++) count += !strcmp(s.notice[i].agent_id, "C2"); assert(count == 1); }
     e = swarm_entry("C2");
     assert(!strcmp(s.notice[e].summary, "Web is rolled back.") && !s.notice[e].read_on_dial);
     // A notice for a Lead the dial does not know is nothing.
-    { int before = s.notice_count; assert(!ui_supertab_notice("s1", "nobody", HT_CHAT_LEAD, "x", "?", 1)); assert(s.notice_count == before); }
+    { int before = s.notice_count; assert(!ui_supertab_notice("s1", "nobody", HT_CHAT_LEAD, "x", "", "?", 1)); assert(s.notice_count == before); }
 
     // It stays news across the desktop's inbox snapshot: kept, and not turned into a question.
     { cable_notif_t desk = {.agent_id = "a", .name = "Payments refactor", .summary = "Shipped."}; ui_notif_replace(&desk, 1); }
@@ -2271,6 +2271,35 @@ static void swarm_thread_checks(const char *dir) {
     assert(!strcmp(sw.lead, "T1") && swarm_sent >= 1 && !strcmp(swarm_wire[0], "select s1 T1"));
     puts("Swarm thread face: title, waiting, a recap only for the thread, swipe out sends the leave and the main recap ask and selects nothing, then swipes move on PASS");
 }
+// A PM reply inside a thread (#2463, Diego 2026-10-29): read at once only while the face shows that very thread, else it beeps
+// and stays unread. A message in the main stream keeps today's rule: read at once while the face shows its chat.
+static void swarm_thread_notice_checks(void) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+    desk_open();
+    const char ids[1][ID_MAX] = {"s1"};
+    ui_supertabs_ids(ids, 1);
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    enter_at("s1", "T0"); scene_take();
+    assert(!strcmp(sw.lead, "T0") && scene_says("Thread"));
+    // The face is in thread m9: a reply there is read at once and does not beep.
+    assert(!ui_supertab_notice("s1", "T0", HT_CHAT_PM, "pm1", "m9", "Fixed on Safari.", 1792560001u));
+    int e = swarm_entry("T0"); assert(e >= 0 && s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Fixed on Safari."));
+    // A reply in another thread of that chat beeps and stays unread.
+    assert(ui_supertab_notice("s1", "T0", HT_CHAT_PM, "pm1", "m7", "The other task is merged.", 1792560002u));
+    e = swarm_entry("T0"); assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "The other task is merged."));
+    ui_supertab_notice_read("s1", "T0", "pm1"); assert(swarm_entry("T0") < 0);
+    // The face back on the main chat: a thread reply beeps and stays unread, a main-stream one is read at once.
+    card_begin("s1", "t1", "openharness"); thread_lead("T0", "web-api", "", "", -1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    scene_take(); assert(!strcmp(sw.lead, "T0") && !scene_says("Thread"));
+    assert(ui_supertab_notice("s1", "T0", HT_CHAT_PM, "pm1", "m9", "Fixed on Chrome too.", 1792560003u));
+    e = swarm_entry("T0"); assert(e >= 0 && !s.notice[e].read_on_dial);
+    assert(!ui_supertab_notice("s1", "T0", HT_CHAT_PM, "pm1", "", "Next: the release.", 1792560004u));
+    e = swarm_entry("T0"); assert(e >= 0 && s.notice[e].read_on_dial);
+    // Off the face, a thread reply beeps as any notice does.
+    assert(ui_supertab_notice("s1", "T1", HT_CHAT_PM, "pm1", "m9", "Flashed.", 1792560005u));
+    puts("Swarm thread notices: read at once only on that thread's face, a beep on the main chat or another thread, main-stream notices as before PASS");
+}
 static void swarm_buddy_checks(const char *dir) {
     // 7a the PM side: today's face and two dots, the upper one lit.
     buddy_setup();
@@ -2324,7 +2353,7 @@ static void swarm_buddy_checks(const char *dir) {
         ui_supertab_recap("s1", "B0", "b0", "", "Two ways: cache the read, or move it to the host. I'd cache it. Want me to write it up and send it to the PM?", 1792560000u, false);
         scene_take(); assert(avatar() && card_top());
         // With the bell too (an unread notice off the face) every run still fits the scene.
-        assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "Flashed.", 1792560001u));
+        assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560001u));
         scene_take(); assert(avatar() && scene.count < HT_RUNS);
         ui_supertab_recap("s1", "B0", "b0", "", "", 1792560000u, true);
         // Nothing said yet: whatever the face writes instead stands clear of the avatar, at any of its captions.
@@ -2360,7 +2389,7 @@ static void swarm_buddy_checks(const char *dir) {
     int sent = swarm_sent; swipe_down();
     assert(swarm_sent == sent + 1 && !strcmp(swarm_wire[sent], "side s1 pm") && pm_dots() && !lilac_ring() && !scene_says("No Buddy"));
     // On the PM side an unread Lead notice still opens the inbox on a pull down.
-    assert(ui_supertab_notice("s1", "B0", HT_CHAT_LEAD, "lead-web", "Web is merged.", 1792560001u));
+    assert(ui_supertab_notice("s1", "B0", HT_CHAT_LEAD, "lead-web", "", "Web is merged.", 1792560001u));
     scene_take(); sent = swarm_sent; swipe_down();
     assert(s.view == INBOX && swarm_sent == sent);
     dispatch((action_t){.kind = A_HOME}); scene_take();
@@ -2430,7 +2459,7 @@ static void swarm_buddy_checks(const char *dir) {
     scene_take(); pm_runs = scene.count;
     assert(!badge() && pm_dots() && !offset_disc() && !scene_says("Your Buddy replied"));
     int entries = s.notice_count; int woke = wakes;
-    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Cache it.", 1792560002u));
+    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "", "Cache it.", 1792560002u));
     scene_take();
     assert(s.notice_count == entries && wakes == woke && badge() && !pm_dots() && !offset_disc() && scene_says("Your Buddy replied") && scene.count == pm_runs);
     FOCUS_PAGE("buddy-7d");
@@ -2441,18 +2470,18 @@ static void swarm_buddy_checks(const char *dir) {
     swipe_up(); assert(!badge()); swipe_down(); assert(!badge() && !scene_says("Your Buddy replied"));
     // The resting face keeps its own line on the lower arc: there the badge alone tells it.
     ui_supertab_recap("s1", "B0", "lead-web", "", "", 1792560000u, true);
-    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Later.", 1792560002u));
+    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "", "Later.", 1792560002u));
     scene_take(); assert(badge() && !offset_disc() && !scene_says("Your Buddy replied"));
     swipe_up(); swipe_down(); assert(!badge() && pm_dots());
     // A Buddy word while its side is open is read there; the desktop opening the Buddy chat reads one too.
     swipe_up(); buddy_card("buddy");
-    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Done.", 1792560003u));
+    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "", "Done.", 1792560003u));
     swipe_down(); assert(!badge());
-    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Again.", 1792560004u)); scene_take(); assert(badge());
+    assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "", "Again.", 1792560004u)); scene_take(); assert(badge());
     ui_supertab_notice_read("s1", "B0", "other"); scene_take(); assert(badge());
     ui_supertab_notice_read("s1", "B0", "b0"); scene_take(); assert(!badge());
     // A Lead notice is unchanged: an entry, and a beep off the face.
-    assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "Flashed.", 1792560005u) && s.notice_count == entries + 1);
+    assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560005u) && s.notice_count == entries + 1);
 
     // 7e-7g voice on the Buddy side: the Buddy's engine's pet, the ring kept, and "Sending to your Buddy".
     buddy_setup(); swipe_up(); buddy_card("buddy"); scene_take();
@@ -4057,6 +4086,7 @@ int main(int argc, char **argv) {
     swarm_restart_checks();
     swarm_buddy_checks(argc>1 ? argv[1] : NULL);
     swarm_thread_checks(argc>1 ? argv[1] : NULL);
+    swarm_thread_notice_checks();
 }
 '''
 extra_sources = []

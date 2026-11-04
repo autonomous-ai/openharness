@@ -235,8 +235,10 @@ function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }
   return { threads, buddies: blocks }
 }
 /** A Lead's new message as the round dial's alert, sized as the recap is. */
-function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
-  return fitText(n.text, (text) => ({ t: 'supertab.notice', tab, lead, chat: n.chat, chatId: n.chatId, id: n.id, text, at: n.at }))
+/** `threaded`: a swarmThread dial, which is told the thread a reply is in, and reads it only on that thread's face. */
+function noticeFrame(tab: string, lead: string, n: LeadNotice, threaded = false): Message {
+  return fitText(n.text, (text) => ({ t: 'supertab.notice', tab, lead, chat: n.chat, chatId: n.chatId, id: n.id, text, at: n.at,
+    ...(threaded && n.thread ? { thread: n.thread } : {}) }))
 }
 /** `make(text)`, with the text shortened (on a character) until the whole JSON fits what a dial reads: escapes can grow
  *  1,500 bytes of text past it. */
@@ -2843,7 +2845,8 @@ export class CableSession {
   private readonly recapsMissed = new Set<string>()
   /** A swarmChat dial's alerts (`${tab}:${lead}`): the notice it was last given or shown as already there, and whether it
    *  was read on the desktop since. A notice is sent once, never on an attach or resync (it was there before), never for
-   *  the chat the desktop has open; `notice.read` once when the desktop opens the chat of one that was sent. */
+   *  the chat the desktop has open (a thread reply: that thread); `notice.read` once when the desktop opens the chat (or the
+   *  thread) of one that was sent. */
   private readonly notices = new Map<string, { id: string; chatId: string; open: boolean }>()
   /** Until this session has seen a list with Swarms in it: the first one is a replay too. A dial can attach before its
    *  process has the cards (the devices' process started again), and the core's replay of the last list then comes as an
@@ -3025,7 +3028,7 @@ export class CableSession {
         if (this.swarmBuddy) notices.push([`${card.id}:${lead.id}:buddy`, lead.buddyNotice])
         for (const [key, notice] of notices) {
           live.add(key)
-          await this.pushNotice(key, card.id, lead.id, notice, replay, open?.superTabId === card.id ? open.conversationId : undefined)
+          await this.pushNotice(key, card.id, lead.id, notice, replay, open?.superTabId === card.id ? open : undefined)
         }
       }
     }
@@ -3049,17 +3052,19 @@ export class CableSession {
     }
   }
 
-  /** One alert of a Lead (held at `key`): sent once when it is new, unless replayed or read on the desktop (`openChat`, the
-   *  conversation the window has open in that Swarm); read on the dial once the desktop opens the chat of one it was sent. */
-  private async pushNotice(key: string, tab: string, lead: string, notice: LeadNotice | undefined, replay: boolean, openChat: string | undefined): Promise<void> {
+  /** One alert of a Lead (held at `key`): sent once when it is new, unless replayed or read on the desktop (`open`, the
+   *  conversation the window has open in that Swarm and the thread beside it); read on the dial once the desktop opens the
+   *  chat of one it was sent. A thread reply is read only by opening that thread: the chat shows it collapsed under "1
+   *  reply", and the PM's answer in a task thread used to ring nowhere while its chat was open (Diego, 2026-10-29). */
+  private async pushNotice(key: string, tab: string, lead: string, notice: LeadNotice | undefined, replay: boolean, open: { conversationId?: string; threadRoot?: string } | undefined): Promise<void> {
     const held = this.notices.get(key)
     if (!notice) { this.notices.delete(key); return }
-    const opened = openChat !== undefined && openChat === notice.chatId
+    const opened = open?.conversationId !== undefined && open.conversationId === notice.chatId && (notice.thread === undefined || open.threadRoot === notice.thread)
     if (held?.id !== notice.id) {
       // Replayed or read on the desktop: noted as not open on the dial, so nothing is sent for it now or later.
       const sent = !replay && !opened
       this.notices.set(key, { id: notice.id, chatId: notice.chatId, open: sent })
-      if (sent) await this.send(noticeFrame(tab, lead, notice))
+      if (sent) await this.send(noticeFrame(tab, lead, notice, this.swarmThread))
       return
     }
     if (held.open && opened) {
