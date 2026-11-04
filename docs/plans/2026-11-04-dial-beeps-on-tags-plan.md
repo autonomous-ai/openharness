@@ -26,13 +26,13 @@ alert (cable_client.c drops `chat: "group"`).
   recap is still read and pushed by `pushOpen` from the chat's sequence (unchanged), so the recap updates quietly. The
   Buddy's quiet `buddyNotice` (its own chat's reads) stays as it is.
 - Firmware: `handle_supertab_notice` takes `chat: "group"` as `HT_CHAT_GROUP`. `ui_supertab_notice` already reads a
-  notice on the face only when the face shows that chat and that thread, and beeps otherwise. Opening a message entry on
-  the dial also sends `supertab.notice.open {tab, lead}`. The daemon then has the window open the tagged chat and thread
-  (`superTabThread`, which selects that conversation and opens the thread), so the face follows it. A tag in a chat's
-  main stream opens with its own message as the root. When the window first has to move to that Swarm and project (the
-  dial's pick), the open waits for the window's announce of that project's Lead chat, at most 15 s.
-- Older firmware drops `group` notices and never sends `supertab.notice.open`. On it, tags in Lead chats beep and open the
-  project's face, and PM chatter is quiet. Tags in task chats need the new firmware.
+  notice on the face only when the face shows that chat and that thread, and beeps otherwise. The notice is the Lead's
+  inbox entry, so opening it on the dial enters that project's face, as a Lead's message does today.
+- Older firmware drops `group` notices. On it, tags in Lead chats and Buddy chats beep and open the project's face, and PM
+  chatter is quiet. Tags in task chats need the new firmware.
+- Not in this task: moving the window and the face into the tagged task thread when the entry is opened. Desktop's dial
+  pick opens a project's Lead chat only, and a thread open sent beside the pick races it. It goes to the PM as a proposal
+  (a pick that names its conversation and thread).
 
 **Tech Stack:** TypeScript (vitest) in cli/; C firmware with host tests (devices/harness-device/firmware/test/run.sh).
 
@@ -136,37 +136,15 @@ alert (cable_client.c drops `chat: "group"`).
 - [ ] **Step 5: Run** `run.sh`. Expected: PASS.
 - [ ] **Step 6: Commit.**
 
-### Task 3: Opening a tag on the dial opens its chat and thread
+### Task 3: The daemon sends a task chat's tag once
 
 **Files:**
-- Modify: `devices/harness-device/firmware/main/cable_client.c` (`cable_client_supertab_send` allows
-  `supertab.notice.open`)
-- Modify: `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c` (`A_NOTICE`: a message entry also sends it)
-- Modify: `cli/src/cable/cableSession.ts` (`supertab.notice.open`; the held notice keeps `chat` and `thread`)
-- Test: `cli/src/cable/cableSession.spec.ts`, `devices/harness-device/firmware/test/test_touch_ui.py`,
-  `test_cable_supertab.py`
+- Test: `cli/src/cable/cableSession.spec.ts`
 
-**Interfaces:**
-- Consumes: `LeadNotice` from Task 1; `CableHost.superTabThread(superTabId, conversationId, threadRoot)`.
-- Produces: frame `supertab.notice.open {tab, lead}` from the dial.
-
-- [ ] **Step 1: Write the failing tests:**
-  - cableSession: after a `group` notice with thread `r1` was sent, `supertab.notice.open` for its Lead, with the window
-    already on that project's Lead chat, calls `superTabThread(tab, 'g-web', 'r1')` once. With the window elsewhere, the
-    call waits for the announce of that project's Lead chat, and is dropped after 15 s. A main-stream tag in a task chat
-    opens with its own id as the root. A `lead` notice with no thread calls nothing. A notice the dial was never sent
-    calls nothing.
-  - firmware: opening a message entry sends `supertab.select` then `supertab.notice.open` with its tab and Lead; a
-    question entry sends no `supertab.notice.open`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts -t 'notice.open'` and `run.sh`.
-  Expected: FAIL.
-- [ ] **Step 3: Commit the failing tests.**
-- [ ] **Step 4: Implement** in cableSession: the held notice keeps `chat` and `thread`; `supertab.notice.open` sets a
-  pending open `{ tab, lead, conversationId, root, until }`; `pushSwarmFocus` fires it when the window shows that
-  project's Lead chat, and right away when it already does. In firmware: the `supertab.notice.open` frame and its send
-  in `A_NOTICE`.
-- [ ] **Step 5: Run** both. Expected: PASS.
-- [ ] **Step 6: Commit.**
+- [ ] **Step 1: Pin it:** a `group` notice with thread `r1` goes to a swarmThread dial once, with its chat and thread; the
+  same card again sends nothing; a new tag while the window has that thread open is read there and not sent. The cable
+  session's rule is unchanged (one send per id, none for the chat and thread open), so this passes at once.
+- [ ] **Step 2: Commit.**
 
 ### Task 4: Red/green evidence and the pull request
 
