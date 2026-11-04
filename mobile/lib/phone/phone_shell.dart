@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
@@ -11,7 +10,6 @@ import '../p2p/phone_terminal_p2p.dart';
 import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
-import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
@@ -28,8 +26,9 @@ import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
 import 'phone_status.dart';
+import 'resume_agent.dart';
 import 'settings_page.dart' show openPhoneSettings;
-import 'voice_input_controller.dart';
+import 'voice_recorder.dart';
 import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
 
@@ -121,18 +120,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       uploadAvatar: swarmAvatarUploadVia(
         (tabId, png) => widget.notifier.api.uploadSwarmAvatar(tabId, png),
       ),
-      // A chat's mic hears as a terminal's does: through the backend's
-      // speech-to-text, or sample mode's, which records nothing.
-      voice: () =>
-          VoiceInputScope.maybeOf(context)?.create() ??
-          VoiceInputController(
-            transcriber: (wav, lang) =>
-                widget.notifier.api.transcribeVoice(wav, lang: lang),
-          ),
-      // And first through the iPhone's own recognizer, the words in the box
-      // as they are said. Not in sample mode, which opens no microphone.
-      dictation: Platform.isIOS && VoiceInputScope.maybeOf(context) == null
-          ? SwarmChannelDictation()
+      // A chat's mic records voice messages with the terminal's recorder. Not
+      // in sample mode, which has no account to send them with.
+      voice: VoiceInputScope.maybeOf(context) == null
+          ? MicVoiceRecorder.new
           : null,
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
@@ -603,6 +594,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onShowSwarm: _showSwarm,
       canOpenMachine: (machineId) =>
           phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
+      agentStopped: (machineId, agentId) =>
+          phoneAgentStopped(widget.notifier, machineId, agentId),
+      onResumeAgent: (machineId, agentId) =>
+          phoneResumeAgent(widget.notifier, machineId, agentId),
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,

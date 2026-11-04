@@ -2,7 +2,9 @@
 import type { Prisma } from '@prisma/client'
 import type { Conversation } from '../model.js'
 import { fail } from '../model.js'
-import { groupsBy, quietSince } from '../parts/indexed.js'
+import type { CacheView } from '../cache.js'
+import { boardRule } from '../cachePatch.js'
+import { indexOrder, lastActive, loadBoardGroups } from './boardGroups.js'
 import { LEDGER_WEEKS } from './record.js'
 import { WEEK_MS, weekStart } from './week.js'
 
@@ -15,20 +17,20 @@ export function readableWeek(week: number | undefined, now: number): number {
   return week
 }
 
-/** What the board reads of a group (stats.ts, record.ts waitsNow) and its read check (projects.ts canReadGroup); the title
- *  names it in a person's details. */
-const BOARD_FIELDS = ['id', 'kind', 'projectId', 'title', 'leadId', 'audience', 'requesterId', 'reviewOf', 'step', 'archived', 'pullRequestUrls', 'ledger',
-  'assignment.id', 'assignment.status'] as const
-
-/** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then.
- *  Only the fields the board reads: every open board reads them once a minute (Diego's issue file, 2026-10-27). */
-export async function recentDormantGroups(tx: Prisma.TransactionClient, tabId: string, projectId: string | string[], since: number): Promise<Conversation[]> {
-  // Through the project index by name (parts/indexed.ts): planned, this read could take the dormancy one and read every quiet
-  // conversation of the Swarm to return none.
-  const rows = await groupsBy(tx, 'project', [{ $match: quietSince(tabId, projectId, since) },
-    { $project: { _id: 0, ...Object.fromEntries(BOARD_FIELDS.map(field => [`data.${field}`, 1])) } },
-  ]) as unknown as Array<{ data: Conversation }>
-  return rows.map(row => row.data)
+/** The quiet conversations of these projects last active since [since], board fields only (boardGroups.ts): a request shipped
+ *  in a week the board sums wrote its Done row then. Through the read cache (cachePatch.ts boardRule): held from the Monday the
+ *  window starts in, patched from each change, so a board read at an unchanged stamp reads none (task #2674). Answered in the
+ *  project index's order, as the read straight from Mongo gives them. */
+export async function recentDormantGroups(tx: Prisma.TransactionClient, cached: CacheView, tabId: string, projectId: string | string[],
+  since: number): Promise<Conversation[]> {
+  const projects = [...new Set([projectId].flat())].sort()
+  const floor = weekStart(since)
+  const held = await cached.get(tabId, `board:${floor}:${projects.join(',')}`, 'main', () => loadBoardGroups(tx, tabId, projects, floor),
+    boardRule(projects, floor))
+  return held.filter(p => lastActive(p.data!) >= since).sort(indexOrder).map(p => {
+    const { lastActivityAt: _lastActivityAt, ...data } = p.data!
+    return data as Conversation
+  })
 }
 
 /** The profile names of the board's people (contract.ts displayName), one read by id for the few people of a Swarm. A member id

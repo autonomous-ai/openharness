@@ -474,6 +474,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
+                                        strutStyle: grid.AppType.controlStrut(),
                                         style: DesktopChrome.control(color: ink)
                                             .copyWith(
                                               fontWeight: widget.attention
@@ -608,7 +609,13 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
     );
     // Always the anchor, menu or not: a tab whose share arrives keeps its
     // subtree (and keyboard focus); [_openMenu] opens nothing without rows.
-    return MenuAnchor(controller: _menu, menuChildren: _menuRows(), child: tab);
+    return AppDropdown(
+      controller: _menu,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: _menuRows(),
+      child: tab,
+    );
   }
 }
 

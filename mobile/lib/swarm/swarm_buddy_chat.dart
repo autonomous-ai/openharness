@@ -587,6 +587,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
             actions: [
               if (wrote) ...[
                 swarmTerminalAction(
+                  context: context,
                   agent: () => swarmBuddy(reader, actions.projectId),
                   allowed: () =>
                       !reader.accessRevoked &&
@@ -594,6 +595,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
                       swarmCanWrite(reader),
                   shell: shell,
                   computers: computers,
+                  until: reader,
                 ),
                 PhoneSheetAction(
                   icon: LucideIcons.pencil,

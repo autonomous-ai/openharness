@@ -488,6 +488,8 @@ export interface CommandContext {
   /** The files `message.send` or `buddy.propose` names, each checked by the store: uploaded by this actor to this conversation and
    *  unused, or for a proposal, sent there by its Buddy's owner (store.ts proposable). */
   attachments?: Attachment[]
+  /** The words of each voice message's file among [attachments], by its id, read by the store (store.ts readVoice). */
+  voiceWords?: Record<string, string>
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
   /** The message `message.react` names, read by the store (reactions.ts). */
@@ -3058,6 +3060,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
+      const voice = attachments.find(a => a.voice)
+      if (voice && (attachments.length > 1 || command.text || command.mentions?.length)) {
+        fail('VOICE_ALONE', 'Send a voice message on its own, without text, tags or other files.', 400)
+      }
       // The text is where tags live, as people tag in chat: each name it says tags that person, if they may read here. A tag
       // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
       // shows the same words. Only from the command, so a retry writes the same text.
@@ -3066,7 +3073,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
       const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
-      const text = withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
+      const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
@@ -3550,7 +3557,24 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
-      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now })
+      // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
+      // it (Diego, 2026-11-04, #2656). A live checker's failure stands whoever passes. The PM is the project's coordinator
+      // now, not the task's lead: a replaced PM's removal clears its lead on every task it led (review of #2916).
+      const project = groupProject(state, group)
+      const accountable = actor.kind === 'agent' ? ledProject(state, actor.agentId)?.id === project.id
+        : [state.ownerId, project.ownerId].includes(actor.userId)
+      const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
+        : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
+      const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
+        accountable ? departed : undefined)
+      const first = !earlier
+      // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
+      // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
+      for (const failure of cleared) {
+        message(group.id, `${name} cleared ${failure.name ? `${failure.name}'s` : 'a checker\'s'} failure of “${check.description}”, as they left the Swarm: `
+          + (failure.evidence.split('\n')[0] ?? '').trim().slice(0, 300), [], null, SYSTEM_ROW)
+      }
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       const byAssignee = actor.kind === 'agent' && actor.agentId === group.assignment.agentId
       // A checker's verdict on a check counts once per attempt.

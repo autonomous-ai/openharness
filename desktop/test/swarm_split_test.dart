@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_pane_icon.dart';
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
@@ -105,6 +106,15 @@ Future<void> _create(WidgetTester tester, _Creation connection) async {
 }
 
 void main() {
+  // These pin exact rectangles after a split, with Autobalance splits off.
+  setUp(() {
+    final previous = appearancePrefsStore.value;
+    addTearDown(() => appearancePrefsStore.value = previous);
+    appearancePrefsStore.value = previous.copyWith(
+      panes: previous.panes.copyWith(autobalanceSplits: false),
+    );
+  });
+
   for (final axis in PaneResizeAxis.values) {
     final direction = axis == PaneResizeAxis.x ? 'right' : 'down';
     final shortcut = axis == PaneResizeAxis.x

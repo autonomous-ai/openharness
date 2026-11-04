@@ -333,6 +333,40 @@ void main() {
     });
   });
 
+  testWidgets('a due reminder shows in Needs you and is not left to the PM', (
+    tester,
+  ) async {
+    await withClock(Clock.fixed(_now), () async {
+      final server = swarm()..followedThreads = null;
+      server.ask(['Takeable?']);
+      server.reminders.add({
+        'id': 'reminder-message-1',
+        'conversationId': 'lead',
+        'conversationTitle': 'Lead',
+        'messageId': 'message-1',
+        'messageSequence': 1,
+        'threadId': null,
+        'author': {'name': 'Avocet'},
+        'text': 'Send the release notes',
+        'dueAt': _utc(_now.subtract(const Duration(minutes: 5))),
+      });
+      server.state['remindersDigest'] = 'r1';
+      await show(tester, await loaded(tester, server));
+      final reminder = _key('super-activity-row-reminder:reminder-message-1');
+      final decision = find.text('Takeable?');
+      expect(reminder, findsOneWidget);
+      expect(
+        tester.getTopLeft(reminder).dy,
+        lessThan(tester.getTopLeft(decision).dy),
+      );
+      expect(_tab(tester, 'super-activity-tab-needs'), contains('2'));
+      await tester.tap(_key('super-activity-decide-all'));
+      await tester.pumpAndSettle();
+      expect(find.text('Let Product Manager decide all 1?'), findsOneWidget);
+      expect(find.textContaining('1 decision:'), findsOneWidget);
+    });
+  });
+
   testWidgets('mentions fold and show who said what', (tester) async {
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;

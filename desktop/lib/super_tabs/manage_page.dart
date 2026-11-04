@@ -6,6 +6,7 @@ import '../core/machine_resources.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
@@ -46,39 +47,15 @@ class SuperTabManageTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget tab(SuperTabManageTab value, String label) {
-      final on = selected == value;
-      return Padding(
-        padding: const EdgeInsets.only(right: grid.AppDesktop.menuInset),
-        child: Material(
-          color: on ? grid.AppSurface.selectedFill : Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            key: ValueKey('super-manage-tab-${value.name}'),
-            onTap: () => onChoose(value),
-            hoverColor: grid.AppSurface.hoverFill,
-            child: Semantics(
-              selected: on,
-              button: true,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: grid.AppDesktop.controlGap,
-                  vertical: grid.AppDesktop.menuInset,
-                ),
-                child: Text(
-                  label,
-                  style: DesktopChrome.control(
-                    medium: on,
-                    color: on ? null : DesktopChrome.muted,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
+    Widget tab(SuperTabManageTab value, String label) => Padding(
+      padding: const EdgeInsets.only(right: grid.AppDesktop.menuInset),
+      child: AppTabPill(
+        tapKey: ValueKey('super-manage-tab-${value.name}'),
+        label: label,
+        selected: selected == value,
+        onTap: () => onChoose(value),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(

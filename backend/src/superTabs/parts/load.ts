@@ -185,8 +185,8 @@ async function changedRows(tx: Transaction, tabIds: string[], since: Date, kinds
 }
 
 const changedPart = (kind: PartKind, row: Record<string, unknown>): Part => {
-  const readAt = row.readAt == null ? null : ms(row.readAt)
-  return { ...toPart(kind, rawPartRow(row)), ...readAt ? { readAt } : {} }
+  const readAt = row.readAt == null ? null : ms(row.readAt), contentAt = row.contentAt == null ? null : ms(row.contentAt)
+  return { ...toPart(kind, rawPartRow(row)), ...readAt ? { readAt } : {}, ...contentAt ? { contentAt } : {} }
 }
 
 /** What changed in one Swarm after `since`, for the read cache to patch what it holds (cache.ts; spec 2026-11-02 Phase 1):
@@ -225,7 +225,7 @@ export async function loadStartsOfAgents(tx: Transaction, tabId: string, agentId
 const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgent', group: 'SwarmGroup', machine: 'SwarmMachine', start: 'SwarmStart',
   progress: 'SwarmProgress' } as const satisfies Record<PartKind, NamedCollection>
 /** What a changed part is made of: its other fields are indexed copies of its data. */
-const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1,
+const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1, contentAt: 1,
   // A group's stored host digest (no other kind has one): the host signature's entry patches from it.
   hostDigest: 1,
   // The head's own columns (no other kind has them): a patched base keeps them too.

@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
@@ -11,9 +12,13 @@ import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_host.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'keymap_host_test.dart' show MemoryKeymap;
 import 'swarm_state_test.dart' show createApp;
 
 /// Set to a folder to write the PR's wave 2 pictures there.
@@ -190,6 +195,7 @@ Future<(SuperTabController, GlobalKey)> _show(
   WidgetTester tester,
   Brightness brightness, {
   String selected = 'web-lead',
+  bool keymap = false,
   ConversationServer? server,
 }) async {
   final previous = grid.AppTheme.brightness.value;
@@ -218,14 +224,17 @@ Future<(SuperTabController, GlobalKey)> _show(
       home: RepaintBoundary(
         key: picture,
         child: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            app: app,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onNewProject: () {},
-            machineName: (_) => 'Team Mac',
+          body: _keymapped(
+            keymap,
+            SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewProject: () {},
+              machineName: (_) => 'Team Mac',
+            ),
           ),
         ),
       ),
@@ -233,6 +242,27 @@ Future<(SuperTabController, GlobalKey)> _show(
   );
   await tester.pumpAndSettle();
   return (c, picture);
+}
+
+/// [view] under the keymap as the Swarm screen mounts it: its host, then the
+/// quick switcher's Swarm chat region.
+Widget _keymapped(bool keymap, Widget view) {
+  if (!keymap) return view;
+  final map = MemoryKeymap();
+  addTearDown(map.dispose);
+  return KeymapProvider(
+    keymap: map,
+    child: KeymapHost(
+      keymap: map,
+      enabled: () => true,
+      actions: const {},
+      child: KeymapRegion(
+        contextKind: KeymapContext.swarmChat,
+        actions: const {},
+        child: view,
+      ),
+    ),
+  );
 }
 
 Future<void> _done(WidgetTester tester, SuperTabController c) async {
@@ -279,15 +309,13 @@ void main() {
           tester,
           Brightness.dark,
           selected: 'lead',
+          keymap: true,
           server: server,
         );
         // Sidebar order: openharness (lead), roadmap (road-lead, muted), then
         // website (web-lead). Tasks are in the Tasks view, not here.
         expect(c.unreadShown(c.snapshot!.conversation('offline')!), isTrue);
-        expect(
-          c.unreadShown(c.snapshot!.conversation('road-lead')!),
-          isFalse,
-        );
+        expect(c.unreadShown(c.snapshot!.conversation('road-lead')!), isFalse);
         await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
@@ -310,7 +338,12 @@ void main() {
       'Option+Shift+Down and Up stop at the ends: nothing moves past the '
       'last unread chat or before the first',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
         final order = [
           for (final id in ['lead', 'web-lead'])
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
@@ -341,6 +374,36 @@ void main() {
         await _done(tester, c);
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'on Linux, where Alt is the workspace key as on the web, Alt+Shift+Down '
+      'and Up in the Swarm chat open the next and previous unread chat, not '
+      'Move pane',
+      (tester) async {
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+        await tester.pumpAndSettle();
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowDown);
+        // Tasks are in the Tasks view, not the sidebar: the next unread chat is
+        // website's.
+        expect(c.selectedId, 'web-lead');
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowUp);
+        expect(c.selectedId, 'lead');
+        await _done(tester, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
     );
 
     testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '
@@ -408,20 +471,12 @@ void main() {
         final other = find
             .ancestor(
               of: find.text(neighbour),
-              matching: find.byType(MenuItemButton),
+              matching: find.byType(AppMenuItem),
             )
             .first;
-        Material material(Finder row) => tester.widget<Material>(
-          find.descendant(of: row, matching: find.byType(Material)).first,
-        );
-        InkWell ink(Finder row) => tester.widget<InkWell>(
-          find.descendant(of: row, matching: find.byType(InkWell)).first,
-        );
         double inset(Finder row, String label) =>
             tester.getTopLeft(find.text(label)).dx - tester.getTopLeft(row).dx;
 
-        expect(material(notify).shape, material(other).shape);
-        expect(material(notify).color, material(other).color);
         expect(tester.getSize(notify), tester.getSize(other));
         expect(inset(notify, 'Notifications'), inset(other, neighbour));
         expect(
@@ -431,27 +486,19 @@ void main() {
           ),
           findsOneWidget,
         );
-        const hovered = {WidgetState.hovered};
-        expect(
-          ink(notify).overlayColor?.resolve(hovered),
-          ink(other).overlayColor?.resolve(hovered),
-        );
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: tester.getCenter(other));
         await tester.pump();
-        final otherHovered = material(other).shape;
         await mouse.moveTo(tester.getCenter(notify));
         await tester.pump();
         if (shotsOn) {
           await tester.pumpAndSettle();
           await captureWindow(tester, shots, 'notify-row-$menu-hover');
         }
-        expect(material(notify).shape, otherHovered);
         // Its submenu's rows are rows of the same kind (they had the border too).
         await tester.pumpAndSettle();
         for (final level in SuperTabNotify.values) {
           final row = find.byKey(ValueKey('super-notify-${level.name}'));
-          expect(material(row).shape, material(other).shape);
           expect(tester.getSize(row).height, tester.getSize(other).height);
         }
         await mouse.removePointer();

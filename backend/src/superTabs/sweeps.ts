@@ -13,6 +13,7 @@ import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
+import { sweepReminders } from './reminders.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -194,11 +195,21 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
+/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
+export async function reminderRows(db: PrismaClient, now: number) {
+  try {
+    return { expired: await sweepReminders(db, now) }
+  } catch (error) {
+    logger.warn('[swarm-sweeps] reminders failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
     tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
-    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now) }
+    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

@@ -160,6 +160,9 @@ export interface TeamCommandDeps {
   /** A path's permission bits, or null when it cannot be read. */
   mode(path: string): number | null
   admin: RunAdmin
+  /** Setup's step as it goes, for Desktop's waiting screen (./autoSetup.ts): `password` while the prompt is open, then
+   *  each step the script says (./script.ts `step`), then `report` while the team daemon signs in and checks. */
+  progress?(step: string): void
   readConfig(): TeamConfig | null
   readStatus(path: string): TeamStatus | null
   writeStatus(path: string, update: Partial<Omit<TeamStatus, 'version'>>): void
@@ -316,6 +319,7 @@ const TASK_START_TRIES = 5
 async function windowsHandOver(deps: TeamCommandDeps, layout: TeamLayout, signInAgain: boolean): Promise<{ handedOver: boolean } | { failed: string }> {
   let handedOver = false
   let noSignIn: string | null = null
+  deps.progress?.('sign-in')
   if (signInAgain || deps.readStatus(layout.statusFile)?.signIn?.state !== 'signed-in') {
     try {
       const { code } = await mintTeamHandoff(() => deps.auth(), deps.post)
@@ -327,6 +331,7 @@ async function windowsHandOver(deps: TeamCommandDeps, layout: TeamLayout, signIn
     }
   }
   // Started whether or not a code went over, as the Mac's script starts its daemon: with the sign-in it had, or none.
+  deps.progress?.('daemon')
   for (let tries = 1; ; tries++) {
     if (await deps.startTeamTask?.()) break
     if (tries >= TASK_START_TRIES) return { failed: `Task Scheduler would not start the team daemon's task ${layout.service.label}` }
@@ -396,6 +401,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   }
   const startedAt = deps.now()
   const asked = prompts(here.where)
+  deps.progress?.('password')
   const result = await deps.admin((stageDir) => ({
     script: scripts.setup({
       user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome, stageDir,
@@ -404,7 +410,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
       ...windows ? { ownerSid, ptyDir: installed.ptyDir ?? null } : {},
     }),
     files: { 'team.json': teamConfigJson(config), [scripts.serviceFile]: service },
-  }), repair ? asked.repair : asked.setup, ...via ? [via] : [])
+  }), repair ? asked.repair : asked.setup, via, (step) => deps.progress?.(step))
   if (!result.ok) {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was changed: the administrator prompt was cancelled.')
     if (result.code === 'NO_PROMPT') return fail(deps, json, 'NO_PROMPT', result.message)
@@ -422,6 +428,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
     }
     handedOver = handOver.handedOver
   }
+  deps.progress?.('report')
   if (!json) deps.out(handedOver ? 'Waiting for the team daemon to sign in and check its privacy…' : 'Waiting for the team daemon to check its privacy…')
   // The daemon reports through its status file (./privacy.ts): the sign-in when it redeemed one, the check every start.
   let report: TeamStatus | null = null

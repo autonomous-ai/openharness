@@ -24,7 +24,8 @@ import 'package:dio/dio.dart';
 import 'dart:ui'
     show
         Color,
-        Rect; // Rect: activeTileShape, the same one pane_preset.dart returns
+        Rect, // Rect: activeTileShape, the same one pane_preset.dart returns
+        Size;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart'
@@ -107,7 +108,7 @@ import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
-    show superTabChatNotice, superTabMentionNotice;
+    show superTabChatNotice, superTabMentionNotice, superTabReminderNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -1925,6 +1926,7 @@ class AppNotifier extends ChangeNotifier {
         : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
+    onReminder: superTabReminderNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
@@ -2644,6 +2646,15 @@ class AppNotifier extends ChangeNotifier {
   /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null
   /// when it cannot say: not this Mac's to set up, or a daemon too old.
   Future<({String state, String? detail})?> teamSetupStatus() async {
+    final read = await teamSetupProgress();
+    return read == null ? null : (state: read.state, detail: read.detail);
+  }
+
+  /// [teamSetupStatus], and while setup runs, [step]: the step it is on, and
+  /// [elapsed]: how long it has run, when the daemon says (the setup lock's
+  /// waiting step, Scholes 2026-11-04).
+  Future<({String state, String? detail, String? step, Duration? elapsed})?>
+  teamSetupProgress() async {
     final here = _teamAccountHere();
     if (here == null) return null;
     try {
@@ -2653,7 +2664,16 @@ class AppNotifier extends ChangeNotifier {
       final state = answer['state'];
       if (state is! String) return null;
       final detail = answer['detail'];
-      return (state: state, detail: detail is String ? detail : null);
+      final step = answer['step'];
+      final elapsedMs = answer['elapsedMs'];
+      return (
+        state: state,
+        detail: detail is String ? detail : null,
+        step: step is String ? step : null,
+        elapsed: elapsedMs is num && elapsedMs >= 0
+            ? Duration(milliseconds: elapsedMs.round())
+            : null,
+      );
     } catch (_) {
       return null;
     }
@@ -5040,9 +5060,9 @@ class AppNotifier extends ChangeNotifier {
       // the view's _syncThreadPane calls threadPaneShown when it is.
       controller.openThread(root, shown: false);
     }
-    bool holds() => controller
-        .messages(id)
-        .any((m) => m.id == root || m.thread == root);
+
+    bool holds() =>
+        controller.messages(id).any((m) => m.id == root || m.thread == root);
     if (!holds()) await controller.refresh();
     bool superseded() =>
         _disposed ||
@@ -7988,6 +8008,31 @@ class AppNotifier extends ChangeNotifier {
       _keptProfileId = profile.id;
     }
     await _profileCache.write(machineId, profile);
+  }
+
+  /// Saves the signed-in person's own account name (Profile, task #2654) and
+  /// shows it at once; answers why it was refused, in one short line, or null
+  /// once saved.
+  Future<String?> setAccountName(String name) async {
+    final revision = _authRevision;
+    try {
+      final me = await api.updateMe(name: name);
+      if (me == null || !_authWorkCurrent(revision)) return null;
+      final profile = CurrentUserProfile.fromMe(me);
+      // Another account's answer is not this one's name: leave it for the
+      // next profile read to settle.
+      if (currentUser?.id != null && profile.id != currentUser?.id) return null;
+      currentUser = profile;
+      unawaited(_keepProfile(profile, revision));
+      notifyListeners();
+      return null;
+    } on ApiException catch (error) {
+      // A daemon (or, in a browser, a backend) from before the route.
+      if (error.status == 404) return 'Update Harness to change your name.';
+      return error.message;
+    } catch (_) {
+      return 'Your name was not saved. Try again.';
+    }
   }
 
   Future<void> _readProfile(int revision) async {
@@ -20106,8 +20151,9 @@ class AppNotifier extends ChangeNotifier {
         (_, slot) => slot >= insertion ? slot + 1 : slot,
       );
       final key = '${targetPanes.length}:manual';
-      target.savePaneSizes(key, split.after);
-      target.arranged = split.after;
+      final after = _balancedIfAsked(split.after, target.arrangedMinimum);
+      target.savePaneSizes(key, after);
+      target.arranged = after;
       target.arrangedKey = key;
     }
     if (firstAgent &&
@@ -20404,6 +20450,81 @@ class AppNotifier extends ChangeNotifier {
   /// Focus follows the PANE, not the slot: `focusedPaneId` is an id, so a tile
   /// that was focused stays focused after it moves, which is what the hand that
   /// dragged it expects.
+  /// The arrangement after [paneId] lands on [side] of [targetPaneId]; null
+  /// when it can't, or when it is already there.
+  PaneArrangement? _moveBesideShape(
+    int paneId,
+    int targetPaneId,
+    PaneSide side,
+  ) {
+    if (paneId == targetPaneId || zoomedPaneId != null) return null;
+    if (activeSwarm.isUtility || activeSwarm.isOrchestrator) return null;
+    final shape = activeTileShape;
+    final from = panes.indexWhere((pane) => pane.id == paneId);
+    final to = panes.indexWhere((pane) => pane.id == targetPaneId);
+    if (shape == null || from == -1 || to == -1) return null;
+    final current = PaneArrangement(shape);
+    if (current.isBeside(from, to, side)) return null;
+    final minimum = activeSwarm.arrangedMinimum ?? Size.zero;
+    final moved = current.moveBeside(from, to, side, minimum: minimum);
+    if (moved != null) return moved;
+    // A layout whose hole no neighbour can fill: the rest fall back to their
+    // count's shape, as closing a pane there does, so an edge always moves it.
+    final rest = panes.length - 1;
+    final tiles = (presetFor(rest) ?? PanePreset.defaultFor(rest))?.tilesFor(
+      rest,
+    );
+    if (tiles == null || tiles.length != rest) return null;
+    return PaneArrangement(tiles)
+        .fillRowEnds()
+        .split(to > from ? to - 1 : to, side.axis, minimum: minimum);
+  }
+
+  /// Whether [paneId] is already on [side] of [targetPaneId], so a drop there
+  /// changes nothing.
+  bool isPaneBeside(int paneId, int targetPaneId, PaneSide side) {
+    final shape = activeTileShape;
+    final from = panes.indexWhere((pane) => pane.id == paneId);
+    final to = panes.indexWhere((pane) => pane.id == targetPaneId);
+    if (shape == null || from == -1 || to == -1 || from == to) return false;
+    return PaneArrangement(shape).isBeside(from, to, side);
+  }
+
+  /// Whether a drop on [side] of [targetPaneId] can land [paneId] there.
+  bool canMovePaneBeside(int paneId, int targetPaneId, PaneSide side) =>
+      _moveBesideShape(paneId, targetPaneId, side) != null;
+
+  /// Dragging a pane to another's edge: it takes half of that pane's room, as
+  /// the TUI's join-pane does, and its sessions stay untouched.
+  bool movePaneBeside(int paneId, int targetPaneId, PaneSide side) {
+    final next = _moveBesideShape(paneId, targetPaneId, side);
+    if (next == null) return false;
+    final moved = panes.removeAt(panes.indexWhere((p) => p.id == paneId));
+    final target = panes.indexWhere((p) => p.id == targetPaneId);
+    panes.insert(side.before ? target : target + 1, moved);
+    // Pins stay with their panes, wherever the list moved them.
+    for (final (slot, pane) in panes.indexed) {
+      if (isPanePinned(pane)) _setPin(pane, slot);
+    }
+    final key = '${panes.length}:manual';
+    final after = _balancedIfAsked(next, activeSwarm.arrangedMinimum);
+    activeSwarm.savePaneSizes(key, after);
+    activeSwarm.arranged = after;
+    activeSwarm.arrangedKey = key;
+    _paneLayoutRequest++;
+    _persistLayout();
+    notifyListeners();
+    return true;
+  }
+
+  /// [arrangement] evened out when Autobalance splits is on.
+  PaneArrangement _balancedIfAsked(
+    PaneArrangement arrangement,
+    Size? minimum,
+  ) => appearancePrefsStore.value.panes.autobalanceSplits
+      ? arrangement.balanced(minimum: minimum ?? Size.zero)
+      : arrangement;
+
   void reorderPane(int paneId, int targetPaneId, {bool reveal = false}) {
     if (paneId == targetPaneId) return;
     final from = panes.indexWhere((pane) => pane.id == paneId);

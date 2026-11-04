@@ -34,6 +34,7 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
+import { startReadMarkSweep } from './superTabs/readMarks.js'
 import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
 import { startSwarmPurge } from './superTabs/purge.js'
 import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
@@ -55,7 +56,7 @@ async function start(): Promise<void> {
   await migrateUserIdentityByEmail()
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
-  await releaseSchema()
+  const schema = await releaseSchema()
   // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
   await markFinishedGroups(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
@@ -78,6 +79,7 @@ async function start(): Promise<void> {
   let stopCompaction = (): void => {}
   let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
+  let stopReadMarkSweep = (): void => {}
   let stopPendingUploads = (): void => {}
   let stopSwarmPurge = (): void => {}
   let stopAttachmentSweep = (): void => {}
@@ -95,6 +97,7 @@ async function start(): Promise<void> {
     stopDeliveries()
     stopCompaction()
     stopReceiptSweep()
+    stopReadMarkSweep()
     stopPendingUploads()
     stopSwarmPurge()
     stopAttachmentSweep()
@@ -112,6 +115,8 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
+  // Read marks untouched for 180 days, where the database refused their index expiry, a chunk every 30 s (superTabs/readMarks.ts).
+  stopReadMarkSweep = startReadMarkSweep(prisma, schema.readMarkExpirySet)
   // Uploads begun on a link and never finished go an hour after the link expired, with what they stored (lib/pendingUploadSweep.ts).
   stopPendingUploads = startPendingUploadSweep(prisma, env)
   // Deleted Swarms past their 7 days go with their records and stored files (superTabs/purge.ts).

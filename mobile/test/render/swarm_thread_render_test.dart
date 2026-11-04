@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/color_palette.dart';
@@ -311,11 +310,7 @@ void main() {
         notices: SilentSystemNotices(),
         features: features,
         // The app's mic, in the chat's box and the thread's.
-        voice: () => VoiceInputController(
-          transcriber: FakeTranscriber().call,
-          recorder: FakeVoiceRecorder(),
-          language: ValueNotifier('en'),
-        ),
+        voice: () => FakeVoiceRecorder(),
       )..foreground = false;
       app = host;
       addTearDown(host.dispose);

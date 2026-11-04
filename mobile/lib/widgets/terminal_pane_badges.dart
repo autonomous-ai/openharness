@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../terminal/terminal_look.dart';
 import '../theme/app_theme.dart';
 
 /// Image/file transfer progress with a cancel action, kept in the pane's corner.
@@ -15,9 +16,14 @@ class TransferProgressBadge extends StatelessWidget {
     required this.onCancel,
   });
 
+  // In the pane's corner, so on the terminal's palette ([TerminalLook]).
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    return TerminalLook.read(context, _badge);
+  }
+
+  Widget _badge() {
     final percentLabel = fraction == null
         ? ''
         : ' · ${(fraction! * 100).round()}%';

@@ -20,7 +20,9 @@ import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
+import 'reminders.dart';
 import 'swarm_type.dart';
+import 'voice_length.dart';
 
 /// The face [message]'s row shows for its sender, shown as [author]: the
 /// [agent] or [person] who wrote it, while they are in the Swarm.
@@ -94,6 +96,8 @@ class SuperTabMessageRow extends StatefulWidget {
     this.linkTarget,
     this.onOpenLink,
     this.identity,
+    this.onMarkUnread,
+    this.onRemind,
   });
 
   final SuperTabMessage message;
@@ -177,6 +181,13 @@ class SuperTabMessageRow extends StatefulWidget {
   /// open it. Without them a link stays plain text.
   final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
   final ValueChanged<SwarmMessageLink>? onOpenLink;
+
+  /// The More menu's Mark unread: the chat reads as unread from this message
+  /// on. Null where it is not offered.
+  final VoidCallback? onMarkUnread;
+
+  /// The More menu's Remind me, with when. Null where it is not offered.
+  final ValueChanged<SuperTabRemindIn>? onRemind;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -278,6 +289,34 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
       ),
     );
   }
+
+  /// The More menu's choices, in Slack's order.
+  List<SuperTabMoreAction> get _moreActions => [
+    if (widget.link case final link?)
+      (
+        label: 'Copy link to message',
+        icon: AppIcons.link2,
+        onPressed: () => unawaited(_copyLink(link)),
+        choices: const [],
+      ),
+    if (widget.onMarkUnread case final markUnread?)
+      (
+        label: 'Mark unread',
+        icon: AppIcons.mail,
+        onPressed: markUnread,
+        choices: const [],
+      ),
+    if (widget.onRemind case final remind?)
+      (
+        label: 'Remind me',
+        icon: AppIcons.clock,
+        onPressed: null,
+        choices: [
+          for (final when in SuperTabRemindIn.values)
+            (label: when.label, onPressed: () => remind(when)),
+        ],
+      ),
+  ];
 
   Future<void> _copyLink(SwarmMessageLink link) async {
     await Clipboard.setData(ClipboardData(text: link.url));
@@ -397,6 +436,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final message = widget.message;
+    final voiceMessage = superTabVoiceOf(message) != null;
     final active = _hovered || _focused;
     // A message that tags the reader stands out, as Slack marks one that
     // names you: an accent bar on its edge over a wash of the accent.
@@ -579,11 +619,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         widget.replyAuthor ??
                                         widget.reply?.authorName ??
                                         'Earlier message',
-                                    text:
-                                        widget.reply?.text ??
-                                        (widget.replyGone
-                                            ? 'The original message is no longer in this conversation.'
-                                            : 'The original message isn’t loaded.'),
+                                    text: switch (widget.reply) {
+                                      final reply? => superTabQuoteText(reply),
+                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
+                                      null =>
+                                        'The original message isn’t loaded.',
+                                    },
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
@@ -597,7 +638,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              if (message.text.isNotEmpty)
+                              // A voice message's text is its words, shown
+                              // under its bubble from →A.
+                              if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: ConstrainedBox(
@@ -620,12 +663,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: Padding(
                                     padding: EdgeInsets.only(
-                                      top: message.text.isEmpty ? 0 : 8,
+                                      top: message.text.isEmpty || voiceMessage
+                                          ? 0
+                                          : 8,
                                     ),
                                     child: SuperTabAttachments(
                                       message.attachments,
                                       conversationId: message.conversationId,
                                       messageId: message.id,
+                                      words: message.text,
                                     ),
                                   ),
                                 ),
@@ -704,21 +750,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 onPressed: _copy,
                               ),
                             ),
-                            if (widget.link case final link?)
+                            if (_moreActions case final actions
+                                when actions.isNotEmpty)
                               fingerTarget(
                                 enabled: phone,
                                 SuperTabMessageMoreMenu(
                                   key: ValueKey(
                                     'super-message-more-${message.id}',
                                   ),
-                                  actions: [
-                                    (
-                                      label: 'Copy link to message',
-                                      icon: AppIcons.link2,
-                                      onPressed: () =>
-                                          unawaited(_copyLink(link)),
-                                    ),
-                                  ],
+                                  actions: actions,
                                 ),
                               ),
                           ],

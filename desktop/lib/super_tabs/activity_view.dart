@@ -19,6 +19,7 @@ import 'machine_status.dart' show superTabAgoShort;
 import 'model.dart';
 import 'notifications.dart';
 import 'private_project_lock.dart';
+import 'reminders.dart';
 
 enum _Tab { needs, mentions, threads }
 
@@ -32,6 +33,7 @@ class SuperTabActivityView extends StatefulWidget {
     required this.onOpenMention,
     required this.onOpenThread,
     required this.onOpenConversation,
+    this.onOpenReminder,
     this.now = DateTime.now,
   });
   final SuperTabActivity activity;
@@ -42,6 +44,9 @@ class SuperTabActivityView extends StatefulWidget {
 
   /// Opens the chat of an agent waiting on the reader, or of a decision.
   final ValueChanged<String> onOpenConversation;
+
+  /// Opens a due reminder's message, which clears it.
+  final ValueChanged<SuperTabReminder>? onOpenReminder;
   final DateTime Function() now;
 
   @override
@@ -374,6 +379,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
             ];
     }
     final needs = a.needsYou;
+    final due = a.reminders.due;
     final decided = [
       for (final n in needs)
         if (n.decision != null) n,
@@ -406,7 +412,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               ),
             ]);
           }();
-    if (needs.isEmpty) {
+    if (needs.isEmpty && due.isEmpty) {
       final handled = a.handledToday;
       final name = a.coordinatorFor(handled);
       return [
@@ -430,6 +436,9 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     }
     return [
       ?bar,
+      // A reminder the reader set is theirs to answer: it leads, above the
+      // decisions, and is not left to the PM.
+      for (final reminder in due) _reminder(reminder),
       // An agent waiting has no time of its own: it leads, above the days.
       for (final n in needs)
         if (n.decision == null) _need(n),
@@ -502,6 +511,24 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       previewLines: 2,
       extra: _options(decision),
       onTap: () => widget.onOpenConversation(decision.conversationId),
+    );
+  }
+
+  Widget _reminder(SuperTabReminder reminder) {
+    final project = _snapshot?.projectFor(reminder.conversationId);
+    final name = reminder.authorName?.trim() ?? '';
+    final who = name.isEmpty ? 'Reminder' : name;
+    final text = _oneLine(reminder.text);
+    return _ActivityRow(
+      key: ValueKey('super-activity-row-reminder:${reminder.id}'),
+      unread: true,
+      avatarName: who,
+      who: who,
+      where: project?.name,
+      privateWhere: project?.isPrivate == true,
+      trailing: _when(reminder.dueAt),
+      preview: text.isEmpty ? reminder.conversationTitle : text,
+      onTap: () => widget.onOpenReminder?.call(reminder),
     );
   }
 
@@ -689,7 +716,11 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         _tab = _opening();
         _settled = _readEnough(a);
       }
-      final error = a.mentions.error ?? a.decisions.error ?? a.attention.error;
+      final error =
+          a.mentions.error ??
+          a.decisions.error ??
+          a.reminders.error ??
+          a.attention.error;
       final body = switch (_tab) {
         _Tab.needs => _needsYou(),
         _Tab.mentions => _mentions(),
@@ -726,6 +757,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
                             unawaited(a.mentions.load());
                             unawaited(a.decisions.load());
                             unawaited(a.attention.load());
+                            unawaited(a.reminders.load());
                           },
                           child: const Text('Retry'),
                         ),

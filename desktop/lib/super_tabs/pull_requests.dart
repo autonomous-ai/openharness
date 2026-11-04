@@ -10,6 +10,7 @@ import '../shared/theme/pull_request_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'pull_request_entry.dart';
 import '../shared/theme/app_icons.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
@@ -536,18 +537,20 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
               if (c.snapshot?.isProjectLead(c.selectedId) == true)
                 Text('This project', style: DesktopChrome.metadata())
               else
-                DropdownButton<bool>(
+                AppSelectField<bool>(
                   value: _all,
-                  underline: const SizedBox.shrink(),
-                  items: const [
-                    DropdownMenuItem(value: false, child: Text('This group')),
-                    DropdownMenuItem(value: true, child: Text('This project')),
+                  width: AppSelectField.fitWidth(
+                    context,
+                    labels: const ['This group', 'This project'],
+                  ),
+                  semanticLabel: 'Show',
+                  options: const [
+                    SelectOption(value: false, label: 'This group'),
+                    SelectOption(value: true, label: 'This project'),
                   ],
                   onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _all = value);
-                      _changed();
-                    }
+                    setState(() => _all = value);
+                    _changed();
                   },
                 ),
             ],

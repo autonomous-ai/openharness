@@ -509,14 +509,17 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
                 obscureText: _obscure,
                 enableSuggestions: false,
                 autocorrect: false,
-                style: DesktopChrome.text(),
+                style: DesktopChrome.text(size: 13),
                 textAlignVertical: TextAlignVertical.center,
                 textInputAction: confirm
                     ? TextInputAction.done
                     : TextInputAction.next,
                 decoration: InputDecoration(
                   hintText: confirm ? 'Repeat password' : 'New remote password',
-                  hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                  hintStyle: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.hint,
+                  ),
                   suffixIconConstraints: const BoxConstraints(
                     minWidth: 40,
                     minHeight: 36,
@@ -542,9 +545,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
                               side: WidgetStateProperty.resolveWith(
                                 (states) => BorderSide(
                                   width: 1.5,
-                                  color: states.contains(WidgetState.focused)
-                                      ? DesktopChrome.accent
-                                      : Colors.transparent,
+                                  color: Colors.transparent,
                                 ),
                               ),
                             ),

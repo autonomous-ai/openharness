@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -236,7 +237,7 @@ void main() {
       final c = await show(tester, server);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
       await tester.pumpAndSettle();
       server.append('The review is ready.');
       await c.refresh();
@@ -275,7 +276,7 @@ void main() {
     final c = await show(tester, server);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     server.append('Not yet fetched');
     c.snapshot = SuperTabSnapshot.fromJson(server.state);
@@ -369,9 +370,8 @@ void main() {
     });
   }
 
-  testWidgets('a project stays unread until its unread workgroup is visited', (
-    tester,
-  ) async {
+  testWidgets('a project row is not held bold by an unread workgroup once '
+      'its chat is read (task #2638)', (tester) async {
     final server = ConversationServer()
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
@@ -391,11 +391,12 @@ void main() {
         .text
         .style
         ?.fontWeight;
+    // Its chat is open and read; the workgroup's news is on its card.
     expect(c.unread(c.selected!), isFalse);
-    expect(projectWeight(), grid.AppFont.semibold);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
-    expect(projectWeight(), grid.AppFont.semibold);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     // Opened as the project's Tasks view opens it (task #2569).
     await c.select('offline');
     await tester.pumpAndSettle();
@@ -662,7 +663,7 @@ void main() {
       expect(c.unread(c.selected!), isTrue);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-chat')));
       await tester.pumpAndSettle();

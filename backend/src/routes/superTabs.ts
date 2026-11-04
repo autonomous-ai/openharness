@@ -1,3 +1,4 @@
+import { declaredHttpClient } from '../superTabs/refusalLog.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
@@ -32,6 +33,7 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
 import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
 import { activityWait } from '../superTabs/activity.js'
+import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
@@ -57,6 +59,8 @@ const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
+const voiceParams = z.object({ tabId: id, attachmentId: id })
+const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
 // The store checks the name, type and size; this only bounds what reaches it.
 const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000), mime: z.string().max(1000), size: z.number().int() }).strict()
 const emptyBody = z.object({}).strict().optional()
@@ -77,7 +81,7 @@ const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
-const changesQuery = agentQuery.extend({ cursor })
+const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
@@ -93,11 +97,17 @@ const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+// Mark unread names the message it starts from: the mark goes to just before it.
+const unreadBody = z.object({ sequence: z.number().int().positive().safe() }).strict()
 const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const activityReadBody = z.object({ through: z.string().datetime() }).strict()
+// A time sets or replaces the reminder; null clears it. One POST, as Desktop reaches the backend through the daemon, which
+// forwards only GET and POST (cli superTabs/service.ts), and the web's transport sends no other.
+const reminderBody = z.object({ at: z.string().datetime({ offset: true }).nullable() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
+const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
@@ -229,9 +239,10 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+  const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers },
+    { VoiceQuotaExceededError, voiceQuotaService }, { pickWavLang, transcribeWavWithDeepgram }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
-    import('./harnessLinks.js')])
+    import('./harnessLinks.js'), import('../lib/voiceQuota.js'), import('../lib/deepgramWav.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -256,7 +267,16 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
       // Its observer sockets may be on any instance.
       accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) },
-      sessionsConfidential: sessions => { void tellSessionViewers(sessions) } })
+      sessionsConfidential: sessions => { void tellSessionViewers(sessions) },
+      // Chat voice messages are transcribed as the dial's and the phone's voice input are (routes/voice.ts), on the same daily
+      // quota of the person's account.
+      voice: {
+        reserve: (user, id, durationMs) => voiceQuotaService.reserveForUser(user.sub, user.autonomousEnv ?? 'prod', id, durationMs)
+          .then(() => 'ok' as const, error => { if (error instanceof VoiceQuotaExceededError) return 'limit' as const; throw error }),
+        transcribe: (wav, lang) => transcribeWavWithDeepgram(wav, 'audio/wav', pickWavLang(lang)),
+        commit: id => voiceQuotaService.commit(id),
+        release: id => voiceQuotaService.release(id).then(() => undefined),
+      } })
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
@@ -323,7 +343,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof operationSchema> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId',
     { preHandler: [validateParams(hostStartParams), validateBody(operationSchema)] }, (req, reply) => respond(reply, async () => {
       if (!('startId' in req.body.command) || req.body.command.startId !== req.params.startId) throw new SuperTabError('FORBIDDEN', 'The host request must name this start.', 403)
-      return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId)
+      return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId, declaredHttpClient(req.headers))
     }))
   // Whether teammates' agents can push to a project's repository: the Harness GitHub App installed there
   // (github/projectAccess.ts). `refresh=1`: a person installed it just now and checks again.
@@ -497,7 +517,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
-    (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId), nothingChanged)))
+    (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId,
+      req.query.machines === 'light' ? { lightMachines: true } : {}), nothingChanged)))
+  // The whole readings on demand, for a client that takes lines in its changes (read/changes.ts).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
+    { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => reads.machineReadings(req.user!, req.params.tabId, req.query.asAgentId)))
   // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
@@ -522,6 +547,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       const wait = await activityWait(req.user!, req.params.tabId)
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many Activity reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => reads.activity(req.user!, req.params.tabId))
+    })
+  // A person's due reminders and when the next is due (superTabs/reminders.ts), read when its digest moves or at that time.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/reminders',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await reminderWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many reminder reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => reads.reminders(req.user!, req.params.tabId))
     })
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
@@ -558,7 +590,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,
-      { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId)))
+      { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId, undefined, declaredHttpClient(req.headers))))
   // A chat file comes straight from the client (the desktop's and the browser's account token, or the daemon's for
   // `post --attach`), never through a machine or the relay. Multipart is parsed in this scope alone, so no other
   // Super Tab route's body handling changes.
@@ -600,6 +632,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof uploadParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete',
     { bodyLimit: 1024, preHandler: [validateParams(uploadParams), validateQuery(agentQuery), validateBody(emptyBody)] },
     (req, reply) => respond(reply, () => store.completeUpload(req.user!, req.params.tabId, req.params.uploadId, req.query.asAgentId)))
+  // A voice message's file, uploaded either way above, is read once before it is sent: its length, waveform and words (store.ts
+  // readVoice). Its answer carries no words; message.send makes them the message's text.
+  app.post<{ Params: z.infer<typeof voiceParams>; Querystring: z.infer<typeof voiceQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/:attachmentId/voice',
+    { bodyLimit: 1024, preHandler: [validateParams(voiceParams), validateQuery(voiceQuery), validateBody(emptyBody)] },
+    (req, reply) => respond(reply, () => store.readVoice(req.user!, req.params.tabId, req.params.attachmentId, req.query.lang ?? 'en', req.query.asAgentId)))
   // An avatar picture (superTabs/profile.ts) comes the same way, alone in its form; the command that sets it names whose it is.
   await app.register(async scope => {
     await scope.register(multipart, { limits: { fileSize: MAX_AVATAR_BYTES + 1, files: 1, fields: 0, parts: 1 } })
@@ -642,6 +679,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
+  // A person's own Mark unread (superTabs/readMarks.ts lowerReadMark): the one write that moves their mark back.
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof unreadBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/unread',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(unreadBody)] },
+    (req, reply) => respond(reply, () => reads.markUnread(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
   // A person's own thread mark (superTabs/readMarks.ts), as the conversation's above.
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(readMarkBody)] },
@@ -650,6 +691,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof followBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(followBody)] },
     (req, reply) => respond(reply, () => reads.followThread(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.follow)))
+  // A person's own reminder of a message (superTabs/reminders.ts): set or replace its time, or clear it (`at` null).
+  app.post<{ Params: z.infer<typeof reminderParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof reminderBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
+    { preHandler: [validateParams(reminderParams), validateQuery(noQuery), validateBody(reminderBody)] },
+    (req, reply) => respond(reply, () => req.body.at === null
+      ? reads.clearReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId)
+      : reads.setReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId, req.body.at)))
   // A person's own notification setting for a chat (superTabs/chatSettings.ts): all, mentions or muted.
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof notifyBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/notifications',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(notifyBody)] },

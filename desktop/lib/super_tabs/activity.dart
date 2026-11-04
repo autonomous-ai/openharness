@@ -9,6 +9,7 @@ import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'reminders.dart';
 
 /// What one row of Needs you is.
 enum SuperTabNeedKind { decision, agent }
@@ -45,8 +46,8 @@ class SuperTabNeed {
 /// them (Quiet Swarm design, screens 6 and 11b). Three lists over what the
 /// Swarm already holds, no feed of its own:
 ///
-/// * Needs you: decisions asked of them and agents waiting on them. Its
-///   length is Activity's number.
+/// * Needs you: reminders they set that are due, decisions asked of them and
+///   agents waiting on them. Its length is Activity's number.
 /// * Mentions: the tags of them, folded by author and chat.
 /// * Threads: the followed threads with replies they have not read.
 ///
@@ -56,11 +57,13 @@ class SuperTabActivity extends ChangeNotifier {
   SuperTabActivity._(this.controller)
     : mentions = SuperTabMentions.of(controller),
       decisions = SuperTabDecisions.of(controller),
-      attention = SuperTabAttention.of(controller) {
+      attention = SuperTabAttention.of(controller),
+      reminders = SuperTabReminders.of(controller) {
     controller.addListener(notifyListeners);
     controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
+    reminders.addListener(notifyListeners);
   }
 
   @visibleForTesting
@@ -75,6 +78,7 @@ class SuperTabActivity extends ChangeNotifier {
   final SuperTabMentions mentions;
   final SuperTabDecisions decisions;
   final SuperTabAttention attention;
+  final SuperTabReminders reminders;
   bool _open = false, _disposed = false;
 
   SuperTabSnapshot? get _snapshot =>
@@ -179,16 +183,17 @@ class SuperTabActivity extends ChangeNotifier {
   ];
 
   /// The Activity row's red number: what was asked of the reader and is
-  /// unanswered. Tags, replies and stuck tasks nobody was asked about are in
-  /// Activity but add nothing. Until the decisions are read the server's count
-  /// stands in for them.
+  /// unanswered, plus the reminders they set that are due. Tags, replies and
+  /// stuck tasks nobody was asked about are in Activity but add nothing. Until
+  /// the decisions are read the server's count stands in for them.
   int get count {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
     return (decisions.loaded
             ? decisions.open.length
             : snapshot.decisionsWaiting) +
-        _asking(snapshot).length;
+        _asking(snapshot).length +
+        reminders.due.length;
   }
 
   /// Whether the Activity row is bold: something needs the reader, or a tag
@@ -267,6 +272,7 @@ class SuperTabActivity extends ChangeNotifier {
     controller.removeListener(notifyListeners);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);
+    reminders.removeListener(notifyListeners);
     super.dispose();
   }
 }
