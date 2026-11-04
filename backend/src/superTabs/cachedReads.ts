@@ -218,7 +218,7 @@ export async function readChanged(db: Db, view: CacheView, tabId: string, since:
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from), kinds)).get(tabId) ?? [] }
   }
   const [main, machines] = await Promise.all([view.get(tabId, 'feed', 'main', load(FEED_MAIN_KINDS), feedRule),
-    view.get(tabId, 'feed:machines', 'all', load(['machine']), machineFeedRule)])
+    view.get(tabId, 'machine-feed', 'all', load(['machine']), machineFeedRule)])
   if (since < main.from || since < machines.from) return direct()
   return [...main.parts, ...machines.parts].filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since)
 }

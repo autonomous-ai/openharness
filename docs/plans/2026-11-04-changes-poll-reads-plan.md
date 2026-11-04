@@ -75,7 +75,7 @@ reply bytes; per round: operations and bytes by collection. Run before (main) an
 by kinds), `backend/src/superTabs/parts/load.ts` (`loadChanged` takes kinds already), tests in
 `cachedReads.test.ts`, `cachePatch.test.ts`.
 
-**Interfaces:** `feedRuleOf(kinds)`; entries `feed` (scope `main`, the six non-machine kinds) and `feed:machines` (scope
+**Interfaces:** `feedRuleOf(kinds)`; entries `feed` (scope `main`, the six non-machine kinds) and `machine-feed` (scope
 `all`, kind `machine`). `readChanged` returns the same parts as before, the six kinds then machines.
 
 - [ ] Failing test: after a machine-only bump, a feed read asks the delta for `machine` only, and its answer equals

@@ -3,6 +3,7 @@ import { delegate, extracted, partId, type HeadColumns, type PartRow } from './w
 import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
+import { recordDeltaRows } from '../cacheStats.js'
 import type { AgentStart } from '../model.js'
 import { ms } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
@@ -229,7 +230,8 @@ export async function loadDelta(tx: Transaction, tabId: string, since: number, k
 /** Each kind's changed rows whole: those `held` has at the same version from it, the rest read by id in one read per kind. */
 async function heldRows(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[], held: DeltaRows):
   Promise<Array<[PartKind, Array<Record<string, unknown>>]>> {
-  return Promise.all((await changedRows(tx, [tabId], new Date(since), kinds, STAMP_FIELDS)).map(async ([kind, stamps]) => {
+  const counted = { stamps: 0, whole: 0 }
+  const rows = await Promise.all((await changedRows(tx, [tabId], new Date(since), kinds, STAMP_FIELDS)).map(async ([kind, stamps]) => {
     const known = held.get(kind)
     const same = (row: Record<string, unknown>) => { const kept = known?.get(row._id as string); return kept && rowStamp(kept) === rowStamp(row) ? kept : null }
     const missing = stamps.filter(row => !same(row)).map(row => row._id as string)
@@ -237,8 +239,12 @@ async function heldRows(tx: Transaction, tabId: string, since: number, kinds: re
       .map(row => [row._id as string, row]))
     const rows = stamps.flatMap(row => { const whole = same(row) ?? read.get(row._id as string); return whole ? [whole] : [] })
     held.set(kind, new Map(rows.map(row => [row._id as string, row])))
+    counted.stamps += stamps.length
+    counted.whole += read.size
     return [kind, rows] as [PartKind, Array<Record<string, unknown>>]
   }))
+  recordDeltaRows(counted)
+  return rows
 }
 
 /** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)

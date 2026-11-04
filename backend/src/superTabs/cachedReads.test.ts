@@ -89,7 +89,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     vi.spyOn(view, 'get').mockImplementation(async (_tabId, name, _scope, _load, patch) => {
       rules.set(name.startsWith('light:') ? 'light:' : name, patch)
       if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
-      if (name === 'feed' || name === 'feed:machines') return { from: 0, parts: [] }
+      if (name === 'feed' || name === 'machine-feed') return { from: 0, parts: [] }
       if (name === 'lastChangedAt') return null
       if (name.startsWith('light:')) return { groups: [], starts: [] }
       if (name.startsWith('light-group:')) return null
@@ -113,7 +113,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     expect(rules.get('light:')).toBeUndefined()
     expect(rules.get('light-group:g2')).toBeUndefined()
     expect(rules.get('feed')).toBe(feedRule)
-    expect(rules.get('feed:machines')).toBe(machineFeedRule)
+    expect(rules.get('machine-feed')).toBe(machineFeedRule)
   })
 })
 

@@ -595,7 +595,7 @@ describe('the verify sample (spec 2026-11-02, "Checking it on prod")', () => {
     const cache = new SwarmCache(stamps, { verifyRate: 1, random: () => 0, delta: async () => ({ parts: [machine('m1', 2, { a: 2 })], head: null }) })
     let from = 100
     const load = vi.fn(async () => ({ from: from += 50, parts: [machine('m1', from > 200 ? 2 : 1, { a: from > 200 ? 2 : 1 })] }))
-    const read = async () => (await cache.at(['t1'])).get('t1', 'feed:machines', 'all', load, machineFeedRule)
+    const read = async () => (await cache.at(['t1'])).get('t1', 'machine-feed', 'all', load, machineFeedRule)
     await read()
     await stamps.bump('t1', ['machine'])
     from = 200

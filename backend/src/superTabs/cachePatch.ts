@@ -127,7 +127,7 @@ function feedRuleOf(kinds: readonly PartKind[]): PatchRule<{ from: number; parts
 export const FEED_MAIN_KINDS: readonly PartKind[] = PART_KINDS.filter(kind => kind !== 'machine')
 /** The `feed` entry: changed parts of every kind but machines. */
 export const feedRule = feedRuleOf(FEED_MAIN_KINDS)
-/** The `feed:machines` entry: changed machine parts, readings included, held at both stamps. */
+/** The `machine-feed` entry: changed machine parts, readings included, held at both stamps. */
 export const machineFeedRule = feedRuleOf(['machine'])
 
 /** A `startsOf:{agents}` entry (read/service.ts pollStarts): the live starts of these agents, an agent being its machine and
