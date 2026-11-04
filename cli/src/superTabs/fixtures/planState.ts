@@ -5,14 +5,14 @@ export const NOW = Date.parse('2026-10-27T01:00:00Z')
 /** The routing read of a backend from before the catalog: a policy alone (planCommand.spec.ts reads it as the catalog below). */
 export const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', localModels: { quality: 1, enabled: true }, models: [
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
-  { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
   { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
   { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: false },
 ] }
 /** The same rows as a catalog (route.ts catalogFrom). */
 export const catalog: Catalog = { grid: { strength: 1, models: [] }, models: [
   { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
-  { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true },
   { engine: 'claude', model: 'sonnet', effort: 'medium', strength: 2, cost: 2, offered: true },
   { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false },
 ] }

@@ -21,7 +21,7 @@ describe('planWork', () => {
 
   it('gives each open group its machine, engine, model and effort, start order and expected finish, against the route', async () => {
     const run = vi.fn<SolverRun>(async () => answer([
-      { task: 'g1', machine: 'm1', model: 'codex-default-default', start: 0, end: 60, order: 1 },
+      { task: 'g1', machine: 'm1', model: 'codex-gpt-6.1-sol-high', start: 0, end: 60, order: 1 },
       { task: 'g2', machine: 'm2', model: 'grid:deepseek/flash', start: 60, end: 180, order: 2 }]))
     const s = state({ rules, machines: [machine('m1', {}, served), machine('m2')] })
     const out = await planWork({ request: { groups: { g1: { difficulty: 'high', risk: 'low', size: 'medium' } } } }, scoped(s), { run, now: () => NOW, dataDir: '/unused' })
@@ -29,8 +29,8 @@ describe('planWork', () => {
     expect(out).toEqual({
       ok: true, status: 'OPTIMAL', makespanMinutes: 180, cost: 540, route: { makespanMinutes: 240, cost: 600 },
       plan: [
-        // Codex default leaves the effort to the engine; an owner's minimum effort no longer lifts it (project instructions, phase 4).
-        { order: 1, groupId: 'g1', group: 'Group g1', machineId: 'm1', machine: 'm1.local', engine: 'codex', model: 'default', effort: 'default',
+        // Codex is planned on a model the catalog names, never `default default` (task #2972).
+        { order: 1, groupId: 'g1', group: 'Group g1', machineId: 'm1', machine: 'm1.local', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high',
           startsInMinutes: 0, finishesInMinutes: 60, finishAt: at(60) },
         { order: 2, groupId: 'g2', group: 'Group g2', machineId: 'm2', machine: 'm2.local', engine: 'claude', gridModel: 'deepseek/flash', gridName: 'swarm-g',
           startsInMinutes: 60, finishesInMinutes: 180, finishAt: at(180) },
