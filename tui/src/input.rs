@@ -1377,7 +1377,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
 /// machine in a window of its own, the most urgent first — made, or gone to and given the ones it
 /// lacks.
 pub fn project_session(app: &mut App, machine: &str, root: &str) {
-    let name = crate::app::session_check_name(root.rsplit('/').next().unwrap_or(root)).unwrap_or_else(|| "project".into());
+    let name = crate::app::session_check_name(crate::sys::path_name(root)).unwrap_or_else(|| "project".into());
     let keys: Vec<(String, String)> = app.fleet.ranked().into_iter().filter(|a| a.machine_id == machine && a.project_root == root && a.status != "stopped").map(|a| a.key()).collect();
     if keys.is_empty() { return app.say(format!("{name} has no harnesses running"), theme::WARN) }
     match app.find_session(&format!("={name}")) {
@@ -1488,7 +1488,7 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     // flashed there first, as if the shortcut had opened that instead.
     if let Some(command) = &command {
         if let Some(window) = app.tabs.iter_mut().find(|t| t.id == tab && t.root.is_none() && !t.home) {
-            let program = command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+            let program = crate::sys::shell_label(command.split_whitespace().next().unwrap_or("")).to_string();
             window.opening = Some(if window.name.is_empty() || window.name == "New Tab" { program } else { window.name.clone() });
         }
     }

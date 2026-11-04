@@ -3351,7 +3351,7 @@ impl App {
         };
         // Named as tmux names a new window, for what it runs (the shell), until automatic-rename.
         let shell = self.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "sh".into());
-        let program = command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string();
+        let program = crate::sys::shell_label(command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell)).to_string();
         let mut tab = Tab::new(window.unwrap_or(&program));
         tab.first_named = true;
         if window.is_some() {

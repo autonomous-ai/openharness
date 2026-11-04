@@ -63,6 +63,27 @@ fn git_bash() -> Option<String> {
     candidates.into_iter().flatten().find(|path| std::path::Path::new(path).is_file())
 }
 
+/// Whether a path is a Windows one: `C:\work`, `C:/work`, `\\server\share`. By what it says and never by this computer: hn on a
+/// Mac shows the folders of a Windows machine, and the other way round.
+pub fn windows_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    path.starts_with(r"\\") || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
+}
+
+/// Whether a path, from any computer, names a folder from its root.
+pub fn path_absolute(path: &str) -> bool { path.starts_with('/') || windows_path(path) }
+
+/// A path's last part, from any computer: a backslash is a separator only in a Windows path, and a name's own character elsewhere.
+pub fn path_name(path: &str) -> &str {
+    if windows_path(path) {
+        let trimmed = path.trim_end_matches(['/', '\\']);
+        trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed)
+    } else {
+        let trimmed = path.trim_end_matches('/');
+        trimmed.rsplit('/').next().unwrap_or(trimmed)
+    }
+}
+
 /// The name of this program's shell, for a pane title.
 pub fn shell_label(shell: &str) -> &str {
     let name = shell.rsplit(['/', '\\']).next().unwrap_or("sh");
@@ -333,6 +354,18 @@ mod tests {
         assert_eq!(shell_args(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", Some("ls")), ["-NoLogo", "-Command", "ls"]);
         assert_eq!(shell_args(r"C:\Windows\System32\cmd.exe", Some("dir")), ["/d", "/s", "/c", "dir"]);
         assert_eq!(shell_args(r"C:\Program Files\Git\bin\bash.exe", None), ["-l", "-i"]);
+    }
+
+    #[test]
+    fn a_path_reads_by_the_computer_it_is_from() {
+        assert!(path_absolute("/Users/a") && path_absolute(r"C:\work") && path_absolute("C:/work") && path_absolute(r"\\pc\share"));
+        assert!(!path_absolute("work") && !path_absolute("C:") && !path_absolute("~/work") && !path_absolute("a:b"));
+        assert_eq!(path_name("/Users/a/project/"), "project");
+        assert_eq!(path_name(r"C:\Users\a\project\"), "project");
+        assert_eq!(path_name("C:/Users/a/project"), "project");
+        // On a Mac or Linux a backslash is part of a name.
+        assert_eq!(path_name(r"/tmp/odd\name"), r"odd\name");
+        assert_eq!(path_name("project"), "project");
     }
 
     #[test]

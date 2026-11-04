@@ -226,7 +226,7 @@ impl Form {
     }
     fn project_name(&self) -> String {
         match &self.draft.project {
-            Project::Folder(p) => p.trim_end_matches('/').rsplit('/').next()
+            Project::Folder(p) => Some(crate::sys::path_name(p))
                 .filter(|name| !name.is_empty()).unwrap_or("/").into(),
             Project::New(n) => {
                 if n.is_empty() {
@@ -727,7 +727,7 @@ fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     }
     // The chosen machine's home first, as the composer offers "this folder": a machine whose recent
     // agents all ran in scratch folders otherwise offered nothing else.
-    if let Some(home) = app.homes.get(chosen).filter(|h| h.starts_with('/')) {
+    if let Some(home) = app.homes.get(chosen).filter(|h| crate::sys::path_absolute(h)) {
         let label = if show_machine { format!("~ @ {}", machine_label(app, chosen)) } else { "~".into() };
         // (Its own id, not a recent project's "at:": chosen the same way, never counted among them.)
         rows.push(Row::new(format!("home:{chosen}\t{home}"), label).extra(format!("home {}", app.fleet.machine_name(chosen))).group("Home"));
@@ -1396,7 +1396,7 @@ fn choose(app: &mut App, form: &mut Form) {
             } else {
                 query
             };
-            if !path.starts_with('/') {
+            if !crate::sys::path_absolute(&path) {
                 form.error = "Enter an absolute path or ~/folder".into();
                 form.child = Some(c);
                 return;

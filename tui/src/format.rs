@@ -635,7 +635,7 @@ fn basename(p: &str) -> String {
     if p.is_empty() { return ".".into() }
     let t = p.trim_end_matches('/');
     if t.is_empty() { return "/".into() }
-    t.rsplit('/').next().unwrap_or(t).to_string()
+    crate::sys::path_name(t).to_string()
 }
 
 fn dirname(p: &str) -> String {

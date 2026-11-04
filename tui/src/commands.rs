@@ -1055,7 +1055,7 @@ pub fn template_replace(template: &str, s: &str, idx: usize) -> String {
 /// A path as tmux's file_read/file_write take it: from the folder of the shell that ran the
 /// command (else hn's), `-` as it is.
 fn client_path(app: &App, path: &str) -> String {
-    if path == "-" || path.starts_with('/') { return path.to_string() }
+    if path == "-" || crate::sys::path_absolute(path) { return path.to_string() }
     let cwd = app.cli_cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string())).unwrap_or_else(|| "/".into());
     format!("{cwd}/{path}")
 }
@@ -2633,7 +2633,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                     match source_text(app, "-", &text, parse_only, verbose) { Ok(items) => app.insert_next.extend(items), Err(e) => config_cause(app, "-", e) }
                     continue;
                 }
-                let pattern = if path.starts_with('/') { path.clone() } else { format!("{cwd}/{path}") };
+                let pattern = if crate::sys::path_absolute(&path) { path.clone() } else { format!("{cwd}/{path}") };
                 let found = glob(&pattern);
                 if found.is_empty() { if !quiet { app.error(format!("{path}: No such file or directory")) } continue }
                 files.extend(found);

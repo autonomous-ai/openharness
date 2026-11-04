@@ -90,7 +90,7 @@ pub fn insert_folder(line: &str, cursor: usize, value: &str) -> Result<(String, 
     let path = if value == "~" || value.starts_with("~/") {
         format!("{}{}", std::env::var("HOME").map_err(|_| "Home folder is unavailable.")?, &value[1..])
     } else { value.into() };
-    if !path.starts_with('/') {return Err("Choose an absolute folder path.".into())}
+    if !crate::sys::path_absolute(&path) {return Err("Choose an absolute folder path.".into())}
     let at = line.char_indices().nth(cursor).map(|(i,_)|i).unwrap_or(line.len());
     let (before, after) = line.split_at(at);
     let (mut quote, mut escaped) = (None, false);
