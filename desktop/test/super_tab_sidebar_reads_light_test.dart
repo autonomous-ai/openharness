@@ -99,13 +99,33 @@ void main() {
     },
   );
 
-  testWidgets('a person\'s new message in a task makes its project bold', (
-    tester,
-  ) async {
+  // Huy, 11-04 (task #2638): # lamp stayed bold after he read its chat, for
+  // one unread task under it. A project's row is its chat's: a task's unread
+  // is on its card and in Activity (the Tasks view, #2569).
+  testWidgets('the project chat read while a task under it is unread: the '
+      'project row is not bold', (tester) async {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     final controller = await show(tester, server);
+    server.append('Can you check the lamp?', conversationId: 'lead');
     server.append('Can you check this?', conversationId: 'g1');
+    await controller.select('lead');
+    await controller.refresh();
+    await tester.pumpAndSettle();
+    await news(tester, controller);
+    expect(
+      titleStyle(tester, project, 'Pilot').fontWeight,
+      isNot(grid.AppFont.semibold),
+    );
+    await close(tester, controller);
+  });
+
+  testWidgets('a person\'s new message in the project chat makes its row '
+      'bold', (tester) async {
+    final server = humansSwarm();
+    addNumberedWorkgroups(server, 1);
+    final controller = await show(tester, server);
+    server.append('Can you check the lamp?', conversationId: 'lead');
     await news(tester, controller);
     expect(
       titleStyle(tester, project, 'Pilot').fontWeight,
@@ -115,8 +135,8 @@ void main() {
   });
 
   testWidgets(
-    'a mention of the reader in a task makes its project bold, though an '
-    'agent wrote it',
+    'a mention of the reader in a task leaves its project regular: the tag '
+    'is the row\'s needs-you number and in Activity',
     (tester) async {
       final server = humansSwarm();
       addNumberedWorkgroups(server, 1);
@@ -125,7 +145,7 @@ void main() {
       await news(tester, controller);
       expect(
         titleStyle(tester, project, 'Pilot').fontWeight,
-        grid.AppFont.semibold,
+        isNot(grid.AppFont.semibold),
       );
       await close(tester, controller);
     },
