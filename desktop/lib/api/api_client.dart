@@ -315,6 +315,19 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  /// Saves the signed-in person's own account name (backend `PATCH
+  /// /api/auth/me`, task #2654) and answers the profile as [me] does. The
+  /// backend validates it and says why it refused in words; a daemon or backend
+  /// from before the route answers 404.
+  Future<Map<String, dynamic>?> updateMe({required String name}) async {
+    final res = await _dio.patch(
+      '/api/auth/me',
+      data: {'name': name},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- the desk: the account's tabs, the same on every computer (proxied by the local CLI) --
 
   /// `{revision, tabs}` as the backend holds it; null when the daemon predates the desk (404) or is

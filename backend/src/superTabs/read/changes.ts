@@ -7,17 +7,18 @@ import { groupForBuddy, type Actor, type Agent, type AgentStart, type Conversati
 import { isBuddyReader } from '../buddies.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
 import { knownKind, type MachineData, type Part } from '../parts/index.js'
-import type { ChangesDelta, DormantStub, Tombstone } from './contract.js'
+import type { ChangesDelta, DormantStub, MachineView, Tombstone } from './contract.js'
 import { envelope, progressView, seenIn, visibleGroupView, type ReaderView } from './views.js'
 
-export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'starts' | 'progress'>
+export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'machineReadings' | 'starts' | 'progress'>
 
 const stub = (part: Part): Tombstone => ({ key: part.key, version: part.version, changedAt: part.changedAt, deleted: true })
 const dormantStub = (part: Part): DormantStub => ({ key: part.key, version: part.version, changedAt: part.changedAt, dormant: true })
 /** A read check that names a project which no longer exists answers no. */
 const safely = (check: () => boolean): boolean => { try { return check() } catch { return false } }
 
-export function changesFor(view: ReaderView, changed: Part[], actor: Actor): PartChanges {
+/** [light]: the reader asked for a line for a machine's own reading, and its cursor's time: anything else since then sends the part. */
+export function changesFor(view: ReaderView, changed: Part[], actor: Actor, light?: { since: number }): PartChanges {
   const { state, parts: seen } = view
   const live = <T>(list: Array<{ key: string } & T>, key: string) => list.find(p => p.key === key)
   const groupReadable = (group: Conversation) => safely(() => canReadGroup(state, actor, group))
@@ -25,7 +26,7 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
     ?? changed.find(p => p.kind === 'group' && p.key === id)?.data as Conversation | undefined
   const visibleAgents = new Set(seen.agents.map(a => a.key))
   const seenMachines = seenIn(seen), buddy = isBuddyReader(state, actor)
-  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
+  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], ...light ? { machineReadings: [] } : {}, starts: [], progress: [] }
   for (const part of changed) {
     switch (part.kind) {
       case 'head': out.head = seen.head; break
@@ -61,7 +62,10 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         const data = part.data as MachineData | null
         if (data?.contribution?.buddyOnly || data?.cleanups?.some(c => c.buddyOnly) || data?.closingSessions?.some(c => c.buddyOnly)) break
         const machine = live(seen.machines, part.key)
-        if (machine && !part.deleted) out.machines.push(machine)
+        const receivedAt = (machine?.data as MachineView | undefined)?.observation?.receivedAt
+        if (machine && !part.deleted && light && receivedAt !== undefined && Math.max(part.changedAt, part.contentAt ?? 0) <= light.since) {
+          out.machineReadings!.push({ key: part.key, version: part.version, receivedAt })
+        } else if (machine && !part.deleted) out.machines.push(machine)
         // Machine ids are no secret among members, unlike conversations: a contribution that ended reads as a removal.
         else if (part.deleted || !(part.data as MachineData | null)?.contribution) out.machines.push(stub(part))
         break

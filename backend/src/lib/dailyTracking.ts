@@ -23,12 +23,41 @@ export async function recordRemoteUsage(userId: string, _machineId: string, now:
 export async function touchDeviceOnlineDay(userId: string, _deviceId: string, now: Date, opts: PresenceTouchOpts): Promise<void> {
   if (opts.isNewConnection) await recordRelayUsage(userId, now, 'relay_device_connections')
 }
-/** Stamps the machine's own `lastSeenAt` on every call — the caller floors heartbeats — and counts a connect.
- *  Both writes start together, so a failed total never costs the stamp; either failure rejects, so the
- *  caller's floor does not advance and its next heartbeat retries. */
-export async function touchMachineOnlineDay(userId: string, machineId: string, now: Date, opts: PresenceTouchOpts): Promise<void> {
+/** The connection facts an adapter connect reports (lib/adapterWs.ts), each a `machines` field. */
+export type MachineConnectChanges = Partial<Record<'hostname' | 'name' | 'clientVersion' | 'computerId' | 'countryCode' | 'sessionKind', string>>
+/** Those fields as the upgrade read them from the row. */
+export type MachineConnectRow = { [K in keyof MachineConnectChanges]?: string | null }
+
+/** The facts of `next` that differ from `row`: a connect rewrites only what changed (Ken's prod scan of 11-04, #2676:
+ *  every reconnect rewrote the same host, version and computer). A fact the connect did not send is left as it is. */
+export function machineConnectChanges(row: MachineConnectRow, next: MachineConnectChanges): MachineConnectChanges {
+  const changes: MachineConnectChanges = {}
+  for (const [key, value] of Object.entries(next) as Array<[keyof MachineConnectChanges, string | undefined]>) {
+    if (value !== undefined && row[key] !== value) changes[key] = value
+  }
+  return changes
+}
+
+/** A row's `lastSeenAt` as a socket's write state: a new socket floors its stamps on the row's last stamp, so a
+ *  reconnect a minute after the last one does not stamp again. A row never stamped is due at once. */
+export function presenceStateFromRow(lastSeenAt: Date | null | undefined): PresenceWriteState {
+  return lastSeenAt ? { dayKey: utcDayKey(lastSeenAt), wroteAt: lastSeenAt.getTime() } : { dayKey: null, wroteAt: 0 }
+}
+
+export interface MachineTouchOpts extends PresenceTouchOpts {
+  /** Connection facts that changed, written in the same update as the stamp. */
+  changes?: MachineConnectChanges
+  /** false when the row's stamp is not due: only `changes` are written. */
+  stamp?: boolean
+}
+
+/** One update of the machine's row: the changed facts and its `lastSeenAt` (the caller floors it), none when both are
+ *  empty; and a connect's total. Both start together, so a failed total never costs the stamp; either failure rejects,
+ *  so the caller's floor does not advance and its next heartbeat retries. */
+export async function touchMachineOnlineDay(userId: string, machineId: string, now: Date, opts: MachineTouchOpts): Promise<void> {
+  const data = { ...opts.changes, ...(opts.stamp === false ? {} : { lastSeenAt: now }) }
   await Promise.all([
-    prisma.machine.update({ where: { machineId }, data: { lastSeenAt: now } }),
+    Object.keys(data).length ? prisma.machine.update({ where: { machineId }, data }) : undefined,
     opts.isNewConnection ? recordRelayUsage(userId, now, 'relay_machine_connections') : undefined,
   ])
 }

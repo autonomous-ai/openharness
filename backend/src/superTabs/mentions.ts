@@ -305,8 +305,12 @@ export function mentionsDigest(ids: string[]): string {
 
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   const tagged = await readable(tx, tabId, state, actor, now, open)
-  const messages = tagged.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: tagged.map(t => t.row.messageId) } },
-    select: { id: true, text: true, author: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } }) : []
+  // By id with a plain `$in` (parts/indexed.ts readBy): Prisma's `id: { in }` goes as an `$expr` OR of one branch per id, which
+  // planned slowly (1,640 ms on prod, Ken's scan of 2026-11-04, task #2674).
+  const messages = tagged.length ? (await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(tagged.map(t => t.row.messageId))] }, tabId } },
+    { $project: { text: 1, author: 1, conversationId: 1, thread: 1, alsoInChat: 1, sequence: 1 } }])).map(r => ({ id: r._id as string,
+    text: r.text as string, author: r.author, conversationId: r.conversationId as string, thread: (r.thread as string | undefined) ?? null,
+    alsoInChat: (r.alsoInChat as boolean | undefined) ?? null, sequence: r.sequence as number })) : []
   const threads = await threadsOf(tx, tabId, messages)
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)

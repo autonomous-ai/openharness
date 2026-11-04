@@ -1232,10 +1232,33 @@ model SuperTabReadMark {
   conversationId String
   sequence       Int
   updatedAt      DateTime
+  /// When the person's Mark unread moved the mark back (readMarks.ts lowerReadMark); set with updatedAt in that write and
+  /// cleared by a read that raises it, so the mark's last move was a Mark unread while the two are equal. Unset otherwise.
+  loweredAt      DateTime?
 
   @@index([tabId, personId, updatedAt])
   /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
+}
+
+/// A person's reminder of one message (superTabs/reminders.ts): bring it back to them at `dueAt`, in Activity's Reminders. Their
+/// own, never shown to others. One row per person and message: setting it again replaces its time, and opening it deletes it.
+/// At most REMINDER_CAP pending per person and Swarm; the worker's hourly sweep deletes those due more than REMINDER_EXPIRY_MS
+/// (30 days) ago, and a Swarm's purge its rows.
+model SuperTabReminder {
+  /// stableId(tabId, personId, messageId).
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  messageId      String
+  dueAt          DateTime
+  createdAt      DateTime
+
+  /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
+  @@index([tabId, personId, dueAt])
+  /// The sweep's reminders due more than 30 days ago (reminders.ts sweepReminders); no TTL option, which the app user cannot set.
+  @@index([dueAt])
 }
 
 /// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
@@ -1352,6 +1375,11 @@ model SuperTabAttachment {
   @@index([tabId, actorKey, createdAt])
   /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
   @@index([purpose, createdAt])
+  /// Unused uploads by age, for the hourly unused-upload sweep (lib/attachmentSweep.ts): its claim (usedBy and proposedBy
+  /// null, purpose, createdAt) and its remove step (usedBy alone). Performance Advisor's suggestion of 11-04 with its first
+  /// two keys swapped, so the remove step's read is bounded too (#2676). Built by the backend release's schema push: a
+  /// production write that needs Ken's go.
+  @@index([usedBy, proposedBy, purpose, createdAt])
 }
 
 /// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
@@ -1916,6 +1944,9 @@ model SwarmMachine {
   /// The last write of its own reading alone (a report every 15 s): readers of changes see it, while `changedAt`, and so the
   /// Swarm's newest change, stays at the last change of anything else (Stability Roadmap 2.2).
   readAt          DateTime?
+  /// The last reading that changed more than its volatile fields (parts/commit.ts machineContentChanged): a client that asks gets
+  /// a line for any other reading, not the part (read/changes.ts). Overwritten in place, and gone with its row. Absent before 2026-11-04.
+  contentAt       DateTime?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])

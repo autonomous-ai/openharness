@@ -163,6 +163,9 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
+   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
+  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
@@ -1200,6 +1203,13 @@ export function startHookServer(
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      if (req.method === 'PATCH' && url === '/api/auth/me') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onAuthMeUpdate!(body)); return
       }
       // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
       // a credential. So not the CSRF header, which any local process can send, but the daemon's

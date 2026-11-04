@@ -857,15 +857,9 @@ void main() {
     tester,
   ) async {
     final server = _server(2);
-    server.append('Elsewhere', conversationId: 'offline');
-    server.messages.last['author'] = {
-      'kind': 'agent',
-      'id': 'worker',
-      'name': 'Worker',
-    };
     final c = await show(tester, server);
-    // The sidebar lists no tasks (task #2569): the task's news makes its
-    // project's row bold.
+    // A project's row is bold for its own chat (task #2638): its news, read
+    // on another device, clears it here.
     final name = c.snapshot!.projects.single.name;
     FontWeight? weight() => tester
         .widget<RichText>(
@@ -880,11 +874,15 @@ void main() {
         .text
         .style
         ?.fontWeight;
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    server.append('Elsewhere', conversationId: 'lead');
+    final sequence = server.messages.last['sequence'] as int;
+    await c.refresh();
     await tester.pumpAndSettle();
     expect(weight(), grid.AppFont.semibold);
     // Read on another device.
-    server.markReadElsewhere('offline', 3);
+    server.markReadElsewhere('lead', sequence);
     await c.refresh();
     await tester.pumpAndSettle();
     expect(weight(), isNot(grid.AppFont.semibold));
