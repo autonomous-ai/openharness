@@ -3465,7 +3465,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
-      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now })
+      // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
+      // it (Diego, 2026-11-04, #2656). A live checker's failure stands whoever passes.
+      const owners = [state.ownerId, groupProject(state, group).ownerId]
+      const accountable = actor.kind === 'agent' ? actor.agentId === group.leadId : owners.includes(actor.userId)
+      const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
+        : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
+      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now },
+        accountable ? departed : undefined)
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       const byAssignee = actor.kind === 'agent' && actor.agentId === group.assignment.agentId
       // A checker's verdict on a check counts once per attempt.

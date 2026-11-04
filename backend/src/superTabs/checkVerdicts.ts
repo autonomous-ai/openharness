@@ -7,11 +7,12 @@ import type { Check, CheckVerdict } from './model.js'
 
 /** Records [verdict] on [check], in place of its checker's earlier one, which it returns (undefined on its first). The
  *  verdicts are kept oldest first. A pass kept from before verdicts were is its checker's verdict; a failure from then names
- *  no checker, so it is not kept. */
-export function recordCheckVerdict(check: Check, verdict: CheckVerdict): CheckVerdict | undefined {
+ *  no checker, so it is not kept. A pass also drops the failures of the checkers [clears] names: those who left the Swarm,
+ *  when someone accountable for the task passes it (#2656), as nobody else could ever pass it in their place. */
+export function recordCheckVerdict(check: Check, verdict: CheckVerdict, clears: (by: string) => boolean = () => false): CheckVerdict | undefined {
   const kept = check.verdicts ?? (check.passedBy ? [{ by: check.passedBy, passed: true, evidence: check.evidence ?? '', at: 0 }] : [])
   const earlier = kept.find(v => v.by === verdict.by)
-  const verdicts = check.verdicts = [...kept.filter(v => v !== earlier), verdict]
+  const verdicts = check.verdicts = [...kept.filter(v => v !== earlier && (v.passed || !verdict.passed || !clears(v.by))), verdict]
   // The check passes only while no checker's latest verdict failed: its latest passer, else the latest failure's evidence.
   const failed = verdicts.findLast(v => !v.passed)
   check.passedBy = failed ? null : verdict.by
