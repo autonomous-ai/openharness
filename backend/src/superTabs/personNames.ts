@@ -8,6 +8,23 @@ import { agentNamesSeenBy, nameKey, swarmUsernames, usernameOf } from './usernam
 export const MAX_NAME_LENGTH = 40
 
 /**
+ * Why [name] (already trimmed) cannot be a name people see for a person, or null: a web address, or a role's or the
+ * Swarm's own name. A Swarm name (setName below) and the account name (lib/accountName.ts, review 1 of #2917) refuse
+ * the same ones.
+ */
+export function nameRefusal(name: string): { code: 'INVALID_NAME' | 'NAME_RESERVED'; message: string } | null {
+  // Read as every compare here reads it: width variants folded (NFKC), so `ＰＭ` is `PM` (review 2 of #2794).
+  const folded = name.normalize('NFKC')
+  // A web address would show as a link in the lines the server writes (review 2 of #2794).
+  if (/:\/\/|^www\./i.test(folded)) return { code: 'INVALID_NAME', message: 'Use a name, not a web address.' }
+  // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
+  if (isRoleName(folded) || reserved(folded) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(folded)) {
+    return { code: 'NAME_RESERVED', message: `${name} is a role's name. Choose another.` }
+  }
+  return null
+}
+
+/**
  * `member.name`: a person sets the name the Swarm shows for them ("Minh Nguyen"), or clears it to show their username
  * again. Their username stays the handle a tag types. Trimmed, with one space between words, and never another member's
  * name, username or email, or an agent's name they can see, as [nameKey] compares them: a name nobody can take to pass
@@ -22,14 +39,8 @@ export function setName(state: SuperTabState, actor: Actor, input: string | null
   if (!name || [...name].length > MAX_NAME_LENGTH || !printable(name)) {
     fail('INVALID_NAME', `Use 1 to ${MAX_NAME_LENGTH} characters, with no hidden ones.`, 400)
   }
-  // Read as every compare here reads it: width variants folded (NFKC), so `ＰＭ` is `PM` (review 2 of #2794).
-  const folded = name.normalize('NFKC')
-  // A web address would show as a link in the lines the server writes (review 2 of #2794).
-  if (/:\/\/|^www\./i.test(folded)) fail('INVALID_NAME', 'Use a name, not a web address.', 400)
-  // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
-  if (isRoleName(folded) || reserved(folded) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(folded)) {
-    fail('NAME_RESERVED', `${name} is a role's name. Choose another.`, 400)
-  }
+  const refused = nameRefusal(name)
+  if (refused) fail(refused.code, refused.message, 400)
   const key = nameKey(name)
   const usernames = swarmUsernames(state)
   const others = state.people.filter(p => p.id !== member.id)
