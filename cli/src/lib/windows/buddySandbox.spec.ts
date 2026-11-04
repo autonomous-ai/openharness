@@ -154,7 +154,9 @@ describe("running a Buddy's command", () => {
 describe('the script Claude Code runs', () => {
   it('finds srt-win in the signed payload, and only there', () => {
     const runtime = join(dir, 'runtime'); mkdirSync(join(runtime, 'pty', '1.2.3'), { recursive: true })
-    writeFileSync(join(runtime, 'current-pty'), '1.2.3')
+    expect(srtWinBinary(runtime)).toBeNull()
+    // Where the installer keeps it (ptyInstall.ts PTY_POINTER, install.ps1).
+    writeFileSync(join(runtime, 'pty', 'current-pty'), '1.2.3')
     expect(srtWinBinary(runtime)).toBeNull()
     writeFileSync(join(runtime, 'pty', '1.2.3', 'srt-win.exe'), 'x')
     expect(srtWinBinary(runtime)).toBe(join(runtime, 'pty', '1.2.3', 'srt-win.exe'))

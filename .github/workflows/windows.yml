@@ -117,6 +117,15 @@ jobs:
         env:
           HARNESS_PTY_VERSION: ${{ inputs.version }}
         run: cargo build --locked --release --target ${{ matrix.target }}
+      # hn (tui/): the terminal app. In the payload, so it is signed and updated with the terminal host, and finds conpty.dll
+      # beside itself. Its Windows tests run here; Mac and Linux keep theirs in release-tui.yml.
+      - name: 'hn: Rust tests'
+        if: ${{ !inputs.release }}
+        working-directory: tui
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: 'hn: build release'
+        working-directory: tui
+        run: cargo build --locked --release --target ${{ matrix.target }}
       # Every bin of the crate: harness-pty.exe, harness-launch.exe and harness.exe.
       - name: Build release
         working-directory: pty
@@ -132,6 +141,7 @@ jobs:
           $release = "pty/target/${{ matrix.target }}/release"
           Copy-Item "pty/vendor/conpty/${{ matrix.arch }}/conpty.dll", "pty/vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $release
           Copy-Item "serial/target/${{ matrix.target }}/release/harness-serial.exe" $release
+          Copy-Item "tui/target/${{ matrix.target }}/release/harness-tui.exe" $release
           Get-ChildItem $release -Filter '*.dll'
           Get-ChildItem $release -Filter 'OpenConsole.exe'
       - name: Check the release payload
@@ -194,7 +204,7 @@ jobs:
         run: |
           $release = "pty/target/${{ matrix.target }}/release"
           New-Item -ItemType Directory -Force payload | Out-Null
-          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe", "$release/srt-win.exe" payload/
+          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe", "$release/srt-win.exe", "$release/harness-tui.exe" payload/
           Get-ChildItem payload
       - uses: actions/upload-artifact@v4
         with:

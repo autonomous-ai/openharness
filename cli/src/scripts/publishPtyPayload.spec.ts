@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 const { PTY_FILES: manifestFiles } = await import('../../scripts/windows-install-manifest.mjs') as { PTY_FILES: string[] }
 
 const script = join(process.cwd(), 'scripts', 'publish-pty-payload.sh')
-const FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']
+const FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe', 'harness-tui.exe']
 const hasPython = spawnSync('python3', ['--version']).status === 0
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -29,7 +29,7 @@ const run = (root: string, args: string[], extra: Record<string, string> = {}) =
 })
 
 describe.skipIf(process.platform === 'win32' || !hasPython)('publish-pty-payload.sh, as a dry run', () => {
-  it('zips each architecture\'s six files at the root, and writes the pty key with their digests', () => {
+  it('zips each architecture\'s files at the root, and writes the pty key with their digests', () => {
     const root = payloads()
     const result = run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')])
     expect(result.status, result.stderr).toBe(0)
@@ -83,10 +83,10 @@ describe.skipIf(process.platform === 'win32' || !hasPython)('publish-pty-payload
     expect(run(payloads(), ['1.2.3-dev.x', 'a', 'b']).status).toBe(2)
   })
 
-  it('ships the same six files as the installer manifest and install.ps1', () => {
+  it('ships the same files as the installer manifest and install.ps1', () => {
     const sh = readFileSync(script, 'utf8').match(/^FILES=\((.*)\)$/m)?.[1].split(/\s+/)
     const ps1 = readFileSync(join(process.cwd(), 'scripts', 'install.ps1'), 'utf8').match(/\$HarnessPtyFiles = @\((.*)\)/)?.[1].split(',').map((s) => s.trim().replace(/'/g, ''))
-    expect(FILES).toHaveLength(6)
+    expect(FILES).toHaveLength(8)
     expect(sh).toEqual(FILES)
     expect(ps1).toEqual(FILES)
     expect(manifestFiles).toEqual(FILES)

@@ -29,7 +29,7 @@ $HarnessScriptPath = $MyInvocation.MyCommand.Path
 
 $HarnessCliVersionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
 $HarnessPtyVersionPattern = '^\d+(\.\d+)*$'
-$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe')
+$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe', 'harness-tui.exe')
 
 function Get-HarnessPlatform {
   # The platform from the NATIVE architecture, read where Windows keeps it for the whole system. An x64
@@ -423,6 +423,8 @@ function Install-HarnessCommand {
   New-Item -ItemType Directory -Force -Path $bin | Out-Null
   $command = Join-Path $bin 'harness.exe'
   Copy-HarnessFile -Source (Join-Path $PtyFolder 'harness.exe') -Destination $command
+  # The same program as `hn`: by that name it is `harness tui` (pty/src/command.rs).
+  Copy-HarnessFile -Source (Join-Path $PtyFolder 'harness.exe') -Destination (Join-Path $bin 'hn.exe')
   $old = Join-Path $bin 'harness.cmd'
   if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
   Remove-HarnessAside $bin

@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
 import { findGitBash } from './gitBash.js'
+import { payloadFile } from './payloadFile.js'
 
 export const SRT_WIN_EXE = 'srt-win.exe'
 /** The guard answers and Claude Code starts the shell at once: an approval older than this is one nobody used. */
@@ -168,13 +169,8 @@ export async function runBuddyShell(dir: string, line: string, deps: BuddyShellD
   } finally { await sandbox.reset().catch(() => {}) }
 }
 
-/** The helper, in the signed payload (ptyPayload.ts): never one a command names, or that a folder holds. */
-export function srtWinBinary(runtimeDir: string = join(process.env.USERPROFILE ?? '', '.harness', 'runtime')): string | null {
-  let version: string
-  try { version = readFileSync(join(runtimeDir, 'current-pty'), 'utf8').trim() } catch { return null }
-  const file = join(runtimeDir, 'pty', version, SRT_WIN_EXE)
-  return existsSync(file) ? file : null
-}
+/** The helper, in the signed payload. */
+export const srtWinBinary = (runtimeDir?: string): string | null => payloadFile(SRT_WIN_EXE, runtimeDir)
 
 /** What CLAUDE_CODE_SHELL_PREFIX names: a bare path Claude Code quotes, in Git Bash's forward slashes. */
 export const buddyShellPrefix = (dir: string): string => shellFile(dir).replace(/\\/g, '/')
