@@ -407,8 +407,11 @@ export async function superTabCommand(argv: readonly string[], deps: {
         const notes = Array.isArray(value.notes) ? value.notes.map(object) : []
         const coordinator = typeof value.coordinatorName === 'string' && value.coordinatorName ? value.coordinatorName : 'The coordinator'
         const when = (at: unknown) => typeof at === 'number' && Number.isFinite(at) ? new Date(at).toISOString() : String(at)
+        // The coordinator's read carries the Swarm's built-in PM schedule (2026-11-04 PM schedule design): printed after the
+        // document, so a new PM session reads it at launch as its skill will hold it.
+        const builtIn = typeof value.builtIn === 'string' && value.builtIn ? ['', value.builtIn] : []
         print([`Instructions of project ${value.projectId}, revision ${value.revision}${value.template ? ' (the built-in template)' : ''}`, '', value.text,
-          ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
+          ...builtIn, ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
             + `${n.expiresAt ? `, until ${when(n.expiresAt)}` : ''})`)] : [])].join('\n'))
         return 0
       }
