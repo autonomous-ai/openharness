@@ -67,4 +67,15 @@ void main() {
     expect(c.unread(lead), isFalse);
     expect(c.unreadCount(lead), 0);
   });
+
+  testWidgets('reading to the last row drawn reads a terminal\'s prompt after '
+      'it too, so other devices show the chat read', (tester) async {
+    final server = project([row('m1', 1, 'Hello'), _typed(2)]);
+    final c = server.controller();
+    await c.refresh();
+    addTearDown(c.dispose);
+    await c.loadMessages('lead');
+    c.markRead('lead', through: 1);
+    expect(c.readMark('lead'), 2);
+  });
 }
