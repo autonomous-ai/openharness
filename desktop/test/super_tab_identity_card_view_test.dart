@@ -1,6 +1,7 @@
 import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
@@ -163,6 +164,50 @@ void main() {
       expect(_card, findsNothing);
     },
   );
+
+  testWidgets(
+    'Tab from an agent’s name in the chat reaches its task line, and Enter opens the task (Osprey, test step)',
+    (tester) async {
+      final server = _server();
+      _say(server, 'Keyboard, please.', _shrike);
+      final c = await _open(tester, server);
+      // Tab through the chat until the name's card opens.
+      for (var tabs = 0; _card.evaluate().isEmpty && tabs < 80; tabs++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(_card, findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      await tester.pump(SuperTabHoverCard.openDelay);
+      expect(_card, findsOneWidget, reason: 'Tab from the name closed it');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'offline');
+    },
+  );
+
+  testWidgets('Shift-Tab from the task line returns to the name', (
+    tester,
+  ) async {
+    final server = _server();
+    _say(server, 'Keyboard, please.', _shrike);
+    await _open(tester, server);
+    for (var tabs = 0; _card.evaluate().isEmpty && tabs < 80; tabs++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+    }
+    final name = FocusManager.instance.primaryFocus;
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, isNot(name));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, name);
+    expect(_card, findsOneWidget);
+  });
 
   testWidgets('a grouped line has no card', (tester) async {
     final server = _server();
