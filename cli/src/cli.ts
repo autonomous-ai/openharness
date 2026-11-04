@@ -2879,14 +2879,6 @@ switch (cmd) {
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'buddy-shell':
-    // One shell line of a wide Buddy on Windows, from the script Claude Code runs (lib/windows/buddySandbox.ts); people do not run it.
-    import('./lib/windows/buddySandbox.js').then(({ runBuddyShell }) => runBuddyShell(rest[0] ?? '', rest[1] ?? '')).then(code => { process.exitCode = code }).catch(onError)
-    break
-  case 'buddy-sandbox':
-    // This computer's sandbox for those lines; the app's question runs it.
-    import('./lib/windows/buddySandboxCommand.js').then(({ buddySandboxCommand }) => buddySandboxCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
   case 'buddy-read':
     // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
     import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)

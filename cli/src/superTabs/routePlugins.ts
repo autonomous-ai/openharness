@@ -48,7 +48,7 @@ const isPlugin = (p: unknown): p is RoutePlugin => {
 
 /** Every maker's plug-in, in the makers' order whatever order they finish in. A maker that throws, rejects, answers what is not
  *  a plug-in, or has not answered in [ms] is left out and named in `warnings`, with no error text; what it answers later is
- *  dropped, so a route already ranked never changes. */
+ *  dropped, so a route already shown never changes. */
 export async function makePlugins(makers: readonly PluginMaker[], input: PluginInput, ms = MAKER_TIMEOUT_MS): Promise<{ plugins: RoutePlugin[]; warnings: string[] }> {
   const made = await Promise.all(makers.map(async maker => {
     let timer: NodeJS.Timeout | undefined

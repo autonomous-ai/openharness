@@ -8,8 +8,12 @@ import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/status_menu.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/message_link.dart'
+    show swarmMessageLinkInbox;
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/notifications.dart';
+import 'package:harness/super_tabs/reminders.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart'
@@ -151,6 +155,98 @@ SystemNotifications clicks() => SystemNotifications(
   notifier: MacSystemNotifier(),
 );
 
+/// One of everything Activity lists
+/// (task #2914): a due reminder, an agent waiting on the reader, a decision,
+/// an unread tag in a chat held, one answered elsewhere but unread, and one in
+/// a quiet chat the snapshot does not hold.
+void giveEverything(ConversationServer server) {
+  server.state['agents'] = [
+    {
+      'id': 'kestrel',
+      'projectId': 'lead',
+      'name': 'Builder',
+      'displayName': 'Kestrel',
+      'machineId': 'host',
+      'harnessId': 'session',
+      'contributorId': 'owner',
+      'configuration': {'engine': 'codex'},
+    },
+  ];
+  final offline = (server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>()
+      .firstWhere((g) => g['id'] == 'offline');
+  offline
+    ..['agentIds'] = ['kestrel']
+    ..['assignment'] = {
+      'id': 'a1',
+      'agentId': 'kestrel',
+      'status': 'needs_human',
+      'askedOf': 'owner',
+      'result': 'Which port should the preview use?',
+    };
+  server
+    ..append('Look at the preview again')
+    ..remindElsewhere(
+      'message-${server.revision}',
+      DateTime.now().subtract(const Duration(minutes: 1)),
+    )
+    ..ask(['Ship it behind a flag?'])
+    ..append('Please confirm the release.')
+    ..tag(
+      'message-${server.revision}',
+      text: 'Please confirm the release.',
+      createdAt: '2026-10-24T07:00:00Z',
+      messageSequence: server.revision,
+    )
+    ..append('Answered on the phone')
+    ..tag(
+      'message-${server.revision}',
+      text: 'Answered on the phone',
+      createdAt: '2026-10-24T06:00:00Z',
+      messageSequence: server.revision,
+    )
+    ..tag(
+      'message-quiet',
+      conversationId: 'quiet',
+      text: 'In a quiet chat',
+      createdAt: '2026-10-24T05:00:00Z',
+      messageSequence: 3,
+    );
+  // The second tag was answered elsewhere: resolved, still unread here.
+  server.mentions[1]
+    ..['resolvedAt'] = '2026-10-24T06:30:00Z'
+    ..['resolvedBy'] = 'answered';
+  server.state['mentionsWaiting'] = 2;
+}
+
+/// [f]'s app with [giveEverything] in a Swarm tab, its lists read.
+Future<SuperTabActivity> openWithEverything(SuperTabLaunchFixture f) async {
+  f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+  giveEverything(f.connection.server);
+  final c = await f.app.superTabs.open(tabId);
+  await c.refresh();
+  final activity = SuperTabActivity.of(c);
+  await activity.mentions.load();
+  await activity.decisions.load();
+  await SuperTabReminders.of(c).load();
+  return activity;
+}
+
+/// What the menu bar's Swarm section lists, as (kind, id).
+List<(Object?, Object?)> menuRows(SuperTabLaunchFixture f) => [
+  for (final r in statusMenuSwarmEntries(f.app)) (r['kind'], r['id']),
+];
+
+/// Everything [openWithEverything] lists, in Activity's order.
+const everything = [
+  ('reminder', 'reminder-message-1'),
+  ('agent', 'offline'),
+  ('decision', 'decision-1'),
+  ('mention', 'mention-1'),
+  ('mention', 'mention-2'),
+  ('mention', 'mention-3'),
+];
+
 void main() {
   test('the menu bar lists what needs the person in each Swarm: decisions, '
       'then tags, with where they were asked', () async {
@@ -210,13 +306,18 @@ void main() {
       return f;
     }
 
-    test('leaves the menu at once, though its lists still hold it', () async {
+    test('with its lists still holding it, it is in the menu as in '
+        'Activity: both or neither (#2914)', () async {
       final f = await askedInOffline();
       final c = f.app.superTabs.peek(tabId)!;
       await c.refresh();
       expect(c.snapshot!.conversation('offline'), isNull);
-      expect(SuperTabMentions.of(c).waiting, isNotEmpty);
-      expect(statusMenuSwarmEntries(f.app), isEmpty);
+      final activity = SuperTabActivity.of(c);
+      expect(activity.count, 2);
+      expect(menuRows(f), [
+        for (final n in activity.notices) (n.kind.name, n.id),
+      ]);
+      expect(menuRows(f), hasLength(2));
     });
 
     test('stays out while the new lists are slow to come', () async {
@@ -382,6 +483,89 @@ void main() {
       expect(c.noticeRequest, isNull);
       expect(find.byType(SuperTabActivityView), findsNothing);
       expect(find.text('Please confirm the release.'), findsWidgets);
+      await close(tester, view);
+    });
+
+    Future<SuperTabView> showEverything(WidgetTester tester) async {
+      final server = ConversationServer();
+      giveEverything(server);
+      final view = await showView(tester, server);
+      final c = view.controller;
+      await SuperTabMentions.of(c).load();
+      await SuperTabDecisions.of(c).load();
+      await SuperTabReminders.of(c).load();
+      // Away from the tags' chat: reading it would read them.
+      c.select('offline');
+      await tester.pumpAndSettle();
+      return view;
+    }
+
+    testWidgets('a tag answered elsewhere, not read, opens at its message '
+        '(#2914)', (tester) async {
+      final server = ConversationServer();
+      giveEverything(server);
+      final view = await showView(tester, server);
+      final c = view.controller;
+      c.select('offline');
+      await tester.pumpAndSettle();
+      // Answered on the phone while another chat was open here.
+      server
+        ..append('Answered later')
+        ..tag(
+          'message-${server.revision}',
+          text: 'Answered later',
+          messageSequence: server.revision,
+        );
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T08:00:00Z'
+        ..['resolvedBy'] = 'answered';
+      await c.refresh();
+      await SuperTabMentions.of(c).load();
+      await tester.pumpAndSettle();
+      final id = server.mentions.last['id'] as String;
+      expect(SuperTabActivity.of(c).notices.map((n) => n.id), contains(id));
+      c.openNotice('mention', id);
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.noticeRequest, isNull);
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(find.text('Answered later'), findsWidgets);
+      expect(
+        SuperTabActivity.of(c).notices.map((n) => n.id),
+        isNot(contains(id)),
+      );
+      await close(tester, view);
+    });
+
+    testWidgets('a due reminder opens its message, which clears it (#2914)', (
+      tester,
+    ) async {
+      final view = await showEverything(tester);
+      final c = view.controller;
+      c.openNotice('reminder', 'reminder-message-1');
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(
+        SuperTabActivity.of(c).notices.map((n) => n.kind),
+        isNot(contains(SuperTabNoticeKind.reminder)),
+      );
+      await close(tester, view);
+    });
+
+    testWidgets('an agent waiting opens its chat, its terminal beside it '
+        '(#2914)', (tester) async {
+      final view = await showEverything(tester);
+      final c = view.controller;
+      c.select('lead');
+      await tester.pumpAndSettle();
+      c.openNotice('agent', 'offline');
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'offline');
+      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(c.agentTerminalRequest?.agentId, 'kestrel');
+      expect(c.agentTerminalRequest?.conversationId, 'offline');
       await close(tester, view);
     });
 
@@ -554,6 +738,31 @@ void main() {
         expect(f.app.activeSwarmId, swarmTab);
         expect(c.selectedId, 'offline');
         await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    // Task #2745: a reply's notice opens the reply in its thread, as its
+    // message link does (message_link_host.dart opens what waits).
+    testWidgets(
+      'a click on a reply\'s notification hands its message link over',
+      (tester) async {
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
+        await tester.runAsync(() => openWithNotices(f));
+        final click = await clicker(tester, f);
+        final url = 'harness://swarm/$tabId/offline/message-1';
+        addTearDown(() {
+          for (final link in [...swarmMessageLinkInbox.pending]) {
+            swarmMessageLinkInbox.complete(link);
+          }
+        });
+        await click(url, machine: SystemNotifications.messageNoticeMachine);
+        expect(swarmMessageLinkInbox.pending.map((l) => l.url), [url]);
         await tester.pumpWidget(const SizedBox());
         f.dispose();
       },
@@ -800,5 +1009,154 @@ void main() {
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
+  });
+
+  group('the menu bar draws Activity\'s one list (#2914)', () {
+    test('the same rows, in Activity\'s order: Needs you, then every unread '
+        'tag', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      await openWithEverything(f);
+      expect(menuRows(f), everything);
+    });
+
+    test('its count is Activity\'s red number', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = await openWithEverything(f);
+      expect(activity.count, everything.length);
+      expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+    });
+
+    test(
+      'a tag in a quiet chat the snapshot does not hold is in both',
+      () async {
+        final f = SuperTabLaunchFixture(local: true);
+        final activity = await openWithEverything(f);
+        expect(activity.controller.snapshot!.conversation('quiet'), isNull);
+        final listed = [for (final r in activity.mentionRows) ...r.all];
+        expect(listed.map((m) => m.id), contains('mention-3'));
+        expect(menuRows(f), contains(('mention', 'mention-3')));
+      },
+    );
+
+    testWidgets('Activity draws the same list, in the same order, folding '
+        'only neighbouring tags from one author', (tester) async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = (await tester.runAsync(() => openWithEverything(f)))!;
+      await tester.binding.setSurfaceSize(const Size(1000, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabActivityView(
+              activity: activity,
+              onOpenMention: (_) {},
+              onOpenThread: (_, _) {},
+              onOpenConversation: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      List<(String, String)> drawn() => [
+        for (final w in tester.widgetList(
+          find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'super-activity-row-',
+                ),
+          ),
+        ))
+          switch ((w.key! as ValueKey<String>).value
+              .substring('super-activity-row-'.length)
+              .split(':')) {
+            [final kind, final id] => (kind, id),
+            _ => ('?', '?'),
+          },
+      ];
+      final needs = drawn();
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
+      await tester.pumpAndSettle();
+      final tags = drawn();
+      expect(
+        [...needs, ...tags],
+        [
+          ('reminder', 'reminder-message-1'),
+          ('agent', 'offline'),
+          ('decision', 'decision-1'),
+          ('mention', 'mention-1'),
+          ('mention', 'mention-3'),
+        ],
+      );
+      // The folded one is mention-2, right behind mention-1 in the menu.
+      expect(find.text('+1 more from Wren'), findsOneWidget);
+      expect(menuRows(f), everything);
+      await tester.pumpWidget(const SizedBox());
+      f.dispose();
+    });
+
+    test('each row says who asks and what', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      await openWithEverything(f);
+      final rows = statusMenuSwarmEntries(f.app);
+      expect(rows.map((r) => (r['title'], r['message'])).take(4), [
+        ('Reminder', 'Look at the preview again'),
+        ('Kestrel is waiting on you', 'Which port should the preview use?'),
+        ('Wren asks you', 'Ship it behind a flag?'),
+        ('Wren tagged you', 'Please confirm the release.'),
+      ]);
+    });
+  });
+
+  group('either place clears the other at once (#2914)', () {
+    test('Mark read in Activity on a tag answered elsewhere: the app hears, '
+        'and it leaves both', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = await openWithEverything(f);
+      var heard = 0;
+      f.app.addListener(() => heard++);
+      final answered = activity.mentions.earlier.single;
+      expect(answered.id, 'mention-2');
+      activity.markMentionsRead([answered]);
+      expect(heard, greaterThan(0));
+      expect(menuRows(f), isNot(contains(('mention', 'mention-2'))));
+      expect(activity.notices.map((n) => n.id), isNot(contains('mention-2')));
+      expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+    });
+
+    test(
+      'Mark read in Activity on a tag in a quiet chat leaves both',
+      () async {
+        final f = SuperTabLaunchFixture(local: true);
+        final activity = await openWithEverything(f);
+        final quiet = activity.mentions.waiting.firstWhere(
+          (m) => m.id == 'mention-3',
+        );
+        activity.markMentionsRead([quiet]);
+        await activity.mentions.load();
+        expect(menuRows(f), isNot(contains(('mention', 'mention-3'))));
+        expect(activity.notices.map((n) => n.id), isNot(contains('mention-3')));
+        expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+      },
+    );
+
+    test('a reminder coming due reaches the menu at once', () async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = await openWithEverything(f);
+      final server = f.connection.server;
+      server.append('One more look');
+      var heard = 0;
+      f.app.addListener(() => heard++);
+      server.remindElsewhere(
+        'message-${server.revision}',
+        DateTime.now().subtract(const Duration(seconds: 1)),
+      );
+      await SuperTabReminders.of(activity.controller).load();
+      expect(heard, greaterThan(0));
+      expect(menuRows(f).where((r) => r.$1 == 'reminder'), hasLength(2));
+    });
   });
 }

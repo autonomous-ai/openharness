@@ -14,15 +14,13 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 /** The files to copy, from the repository's `pty/` folder: the release host, the launcher, the command, then the
- *  payload for [arch], then harness-serial from `serial/` beside it (sub-project E), then a Buddy's sandbox helper from
- *  the package the CLI pins (cli/src/lib/windows/buddySandbox.ts). */
+ *  payload for [arch], then harness-serial from `serial/` beside it (sub-project E), then hn from `tui/`. */
 export function ptyPayloadSources(ptyDir, arch) {
   const release = join(ptyDir, 'target', 'release')
   const payload = join(ptyDir, 'vendor', 'conpty', arch === 'arm64' ? 'arm64' : 'x64')
   const serial = join(ptyDir, '..', 'serial', 'target', 'release', 'harness-serial.exe')
-  const sandbox = join(ptyDir, '..', 'cli', 'node_modules', '@anthropic-ai', 'sandbox-runtime', 'vendor', 'srt-win', arch === 'arm64' ? 'arm64' : 'x64', 'srt-win.exe')
   const tui = join(ptyDir, '..', 'tui', 'target', 'release', 'harness-tui.exe')
-  return [join(release, 'harness-pty.exe'), join(release, 'harness-launch.exe'), join(release, 'harness.exe'), join(payload, 'conpty.dll'), join(payload, 'OpenConsole.exe'), serial, sandbox, tui]
+  return [join(release, 'harness-pty.exe'), join(release, 'harness-launch.exe'), join(release, 'harness.exe'), join(payload, 'conpty.dll'), join(payload, 'OpenConsole.exe'), serial, tui]
 }
 
 /** Copies what is present into `<outDir>/pty/`, on win32 and when the host itself was built; the names it copied. */

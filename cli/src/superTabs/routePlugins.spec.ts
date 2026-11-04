@@ -7,7 +7,7 @@ const input: PluginInput = { conversationId: 'g1', assessment: { difficulty: 'lo
   read: { tab: {} }, catalog: { models: [], grid: { strength: 1, models: [] } }, history: Promise.resolve(null), request: async () => ({ ok: true }) }
 const plugin = (name: string): RoutePlugin => ({ name, adjust: () => null })
 const maker = (name: string, make: PluginMaker['make']): PluginMaker => ({ name, make })
-const skipped = (name: string, why: string) => `The routing plug-in "${name}" was skipped: ${why}. The route is ranked without it.`
+const skipped = (name: string, why: string) => `The routing plug-in "${name}" was skipped: ${why}. The route is shown without it.`
 
 afterEach(() => { vi.useRealTimers() })
 

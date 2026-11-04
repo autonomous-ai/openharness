@@ -75,9 +75,10 @@ export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Rec
   opencode: { auto: ['--auto'], ask: [] },
 }
 
-/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: a Buddy's, whose
- *  default would let it act with its person's own credentials (security review 1 of #2087). The relaunch is held. */
-const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['readOnlyAsk', 'buddy', 'teamWritten'])
+/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: Team-written work,
+ *  whose default would read the branch's own settings (audit H2). The relaunch is held. A Buddy's were kept too, until a
+ *  Buddy ran in full mode like its owner's own session (task #2832). */
+const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['teamWritten'])
 
 /** The argv of [mode] for [engine], or null when the engine has no such mode. */
 export function permissionModeFlags(engine: AgentEngine, mode: string): readonly string[] | null {

@@ -233,30 +233,11 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
   return null;
 }
 
-/// The engines a Buddy runs on (spec: Buddies, 10-28), as people read them.
+/// The engines a Buddy runs on (spec: Buddies, 10-28), as people read them,
+/// each offered alike, as the desktop's `kBuddyEngines` (desktop_parity_test):
+/// a Buddy runs with its owner's full access on their own machine, Codex as
+/// Claude Code (Ken, 11-04, #2832).
 const swarmBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
-
-/// Engines a Buddy cannot run on yet, and why, in the backend's own words
-/// (`CODEX_BUDDY_REFUSAL`, backend superTabs/buddyContract.ts), as the
-/// desktop's `kBuddyEngineRefusals` has them (desktop_parity_test): Start
-/// your Buddy offers them turned off, with this beside them.
-const swarmBuddyEngineRefusals = {
-  'codex':
-      'A Codex Buddy is not available yet: Codex would run some commands '
-      'outside its sandbox without asking. Choose Claude Code.',
-};
-
-/// The engine Start again asks for: the Buddy's own, or Claude Code in place
-/// of one the server refuses, which it would refuse again (the desktop's
-/// `buddyRestartEngine`).
-String swarmBuddyRestartEngine(String engine) =>
-    swarmBuddyEngineRefusals.containsKey(engine) ? 'claude' : engine;
-
-/// Start again's label: "Start with Claude Code" where it changes the engine.
-String swarmBuddyRestartLabel(String engine) =>
-    swarmBuddyRestartEngine(engine) == engine
-    ? 'Start again'
-    : 'Start with Claude Code';
 
 /// An engine as people read it: "Claude", "Codex".
 String swarmBuddyEngineName(String engine) =>

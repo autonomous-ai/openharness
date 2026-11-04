@@ -437,19 +437,6 @@ describe('harness uninstall, review round 1', () => {
     expect(files.err).toEqual(['✗ Harness is only partly uninstalled:', '  · Harness could not remove its files in ~/.harness (EIO): delete ~/.harness yourself once this command has finished'])
   })
 
-  it('on Windows it removes a Buddy\'s sandbox, says what could not go, and goes on', async () => {
-    const gone = fake({ removeBuddySandbox: async () => true })
-    expect(await uninstallCommand(['--yes'], gone.deps)).toBe(0)
-    expect(gone.out).toContain('✓ removed your Buddy\'s sandbox')
-    const none = fake({ removeBuddySandbox: async () => false })
-    expect(await uninstallCommand(['--yes'], none.deps)).toBe(0)
-    expect(none.out).not.toContain('✓ removed your Buddy\'s sandbox')
-    const stuck = fake({ removeBuddySandbox: async () => { throw new Error('no elevation') } })
-    expect(await uninstallCommand(['--yes'], stuck.deps)).toBe(1)
-    expect(stuck.err.join('\n')).toContain('could not remove your Buddy\'s sandbox (no elevation)')
-    expect(stuck.calls).toContain('path')
-  })
-
   it('says, with --yes too, that a rule of the person\'s that was the same as Harness\'s went from Claude Code\'s settings', async () => {
     const t = fake({ removeHooks: async () => [{ file: '/Users/u/.claude/settings.json', removed: 5, kind: 'settings', claude: true }] })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)

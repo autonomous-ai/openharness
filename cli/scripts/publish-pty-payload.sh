@@ -49,7 +49,7 @@ if [ "$PTY_VERSION" != "$VERSION" ]; then
   fi
 fi
 # The payload, as install.ps1 ($HarnessPtyFiles) checks it.
-FILES=(harness-pty.exe harness-launch.exe harness.exe conpty.dll OpenConsole.exe harness-serial.exe srt-win.exe harness-tui.exe)
+FILES=(harness-pty.exe harness-launch.exe harness.exe conpty.dll OpenConsole.exe harness-serial.exe harness-tui.exe)
 
 for command in node python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "error: $command is required" >&2; exit 1; }

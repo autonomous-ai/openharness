@@ -109,7 +109,11 @@ import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
-    show superTabChatNotice, superTabMentionNotice, superTabReminderNotice;
+    show
+        superTabChatNotice,
+        superTabMentionNotice,
+        superTabReminderNotice,
+        superTabReplyNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -1927,6 +1931,7 @@ class AppNotifier extends ChangeNotifier {
         : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
+    onReply: superTabReplyNotice(systemNotifications),
     onReminder: superTabReminderNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,

@@ -220,6 +220,8 @@ Its own spec first, because it is a security boundary, reusing the Team account'
 
 ### Task 16: Sandbox for a wide Buddy's shell
 
+**Dropped 2026-11-04:** #2832 gave every Buddy its owner's full rights, on a Mac too. There is no wide mode left to sandbox.
+
 Per the spec's W8.
 
 **Files:** Create `cli/src/lib/windows/buddySandbox.ts` and spec. Modify `cli/src/lib/buddyGuard.ts:166` (`buddyLaunchWide`), `cli/src/lib/swarmSkills.ts`, `cli/src/lib/windows/ptyPayload.ts` and `cli/scripts/publish-pty-payload.sh` (one more signed file), `cli/src/lib/uninstall/deps.ts`, `cli/src/team/windowsTeam.ts` (privacy probe).

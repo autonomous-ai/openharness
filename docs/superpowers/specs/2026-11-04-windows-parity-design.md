@@ -54,7 +54,7 @@ Read from the code on 2026-11-04.
 | 12 | OpenCode on Windows on Arm | Refused: its Arm build crashes | `lib/windows/launch.ts:74` | W5 |
 | 13 | `hn` | Refused: 200 compile errors in 19 files | `tui/index.ts:104` | W6 |
 | 14 | Sharing this computer with guests | Refused: "needs macOS or Linux" | `lib/guestHelperInstall.ts:130` | W7 |
-| 15 | Buddy reading beyond its folder | Stays in its own folder | `lib/buddyGuard.ts:166` | W8 |
+| 15 | Buddy reading beyond its folder | No longer a gap: every Buddy runs with its owner's full rights (#2832) | | W8, dropped |
 
 Checked and fine: dial and cable wake (`core/devicesWake.ts:139` has its own Windows path).
 `harness team sign-in` refuses, but signing in from the Harness app works, so it stays.
@@ -191,7 +191,9 @@ own daemon, as the Team account has, and the design changes.
 *Proof: a second person's account joins, runs an agent there, the agent cannot read the owner's home, and
 removing the guest removes the account and its files.*
 
-### W8: A Windows Buddy reads as widely as a Mac's, in a real sandbox
+### W8: Dropped. A Windows Buddy reads as widely as a Mac's, in a real sandbox
+
+**Dropped 2026-11-04.** Ken's decision of 11-04 (task #2832, docs/plans/2026-11-04-buddy-full-access-plan.md) gave every Buddy its owner's full rights on their own machine: no guard, no read-only folder, no sandbox, on a Mac too. Windows gets the same with nothing more to build. The rest of this section is what was designed before that, and is not in the code.
 
 On a Mac, Claude Code's OS sandbox holds a wide Buddy's shell: no writes, a host list, closed folders. Claude Code has none on native Windows, so Harness runs that shell in one itself.
 
@@ -224,7 +226,7 @@ On a Mac, Claude Code's OS sandbox holds a wide Buddy's shell: no writes, a host
 
 ## Order
 
-W0, W1, W2, W3, W4, W5, W8, W6, W7. Quick wins and the most-used features first; W3 is what a new Windows user hits
+W0, W1, W2, W3, W4, W5, W6, W7. Quick wins and the most-used features first; W3 is what a new Windows user hits
 first, and W2 comes before it only because it is small. W7 is last because it is the biggest risk.
 
 ## Design
