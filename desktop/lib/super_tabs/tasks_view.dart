@@ -338,7 +338,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       caption: _caption(entry, now),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
-      titleLines: list ? 1 : 2,
+      titleLines: list ? 1 : 3,
+      tile: !list,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
     );
