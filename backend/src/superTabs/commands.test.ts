@@ -4298,6 +4298,9 @@ describe('archiving unfinished work', () => {
     // Nobody is left to tell: its worker stopped or lost the task already.
     expect(cancelled.messages.filter(m => m.conversationId === t.group)).toEqual([expect.objectContaining({ recipients: [],
       text: 'peer cancelled this task: Nobody can finish it here.' })])
+    // A retry keeps the first reason and says nothing more.
+    expect(t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId: t.assignmentId, reason: 'Again.' }, peer).messages).toEqual([])
+    expect(at(t).assignment!.result).toBe('Nobody can finish it here.')
     expect(archive(t, peer).messages).toEqual([])
     expect(at(t).archived).toBe(true)
   })
