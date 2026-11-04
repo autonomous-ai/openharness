@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, availableSlots, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -707,3 +707,91 @@ describe('a machine added as its person joined', () => {
 })
 
 const commandSchemaOf = (command: unknown) => commandSchema.safeParse(command)
+
+describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")', () => {
+  const GiB = 1024 ** 3
+  /** A Mac with [freeGiB] free of [totalGiB], read just now. */
+  const measured = (f: ReturnType<typeof swarm>, machineId: string, totalGiB: number, freeGiB: number) => {
+    const m = f.machine(machineId)
+    m.observation = { ...m.observation!, resources: { ...m.observation!.resources, memoryTotalBytes: totalGiB * GiB, memoryUsedBytes: (totalGiB - freeGiB) * GiB } }
+  }
+  const twoGiB = { memoryBytes: 2 * GiB, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
+  const start = (f: ReturnType<typeof swarm>, group: string, machineId = 'owner-mac') =>
+    f.run({ type: 'agent.start', request: { ...f.request(group, machineId), requirements: twoGiB } }, owner, f.pooled(machineId))
+  const fill = (f: ReturnType<typeof swarm>, machineId: string, count: number) => {
+    for (let i = 0; i < count; i++) f.member(`running-${machineId}-${i}`, machineId, f.machine(machineId).contributorId)
+  }
+
+  it('joining stores no fixed count: a Mac added with the suggested 16 takes a 17th start while memory allows', () => {
+    const f = swarm(), group = f.group()
+    f.state.machines = f.state.machines!.filter(m => m.machineId !== 'owner-mac')
+    f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 16, agents: 'memory' } as Command,
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
+    f.machine('owner-mac').observation = reading('computer')
+    measured(f, 'owner-mac', 128, 60)
+    expect(f.machine('owner-mac').agents).toBe('memory')
+    fill(f, 'owner-mac', 16)
+    expect(refusal(() => start(f, group))).toBeNull()
+  })
+
+  it('an older row holding the old join suggestion reads as memory allows', () => {
+    const f = swarm(), group = f.group()
+    // Mac 3 (Dee, 11-04): 16 stored when it joined, 16 running, plenty free.
+    Object.assign(f.machine('owner-mac'), { maxAgents: 16 })
+    measured(f, 'owner-mac', 128, 60)
+    fill(f, 'owner-mac', 16)
+    expect(refusal(() => start(f, group))).toBeNull()
+    // A 32 GiB Mac whose join suggested 8 (one per 4 GiB): the same.
+    const g = swarm(), other = g.group()
+    Object.assign(g.machine('owner-mac'), { maxAgents: 8 })
+    measured(g, 'owner-mac', 32, 20)
+    fill(g, 'owner-mac', 8)
+    expect(refusal(() => start(g, other))).toBeNull()
+  })
+
+  it('keeps an owner\'s own At most N, from a new client or an older one', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('owner-mac'), { maxAgents: 16, agents: 'atMost' })
+    measured(f, 'owner-mac', 128, 60)
+    fill(f, 'owner-mac', 16)
+    const full = refusal(() => start(f, group))
+    expect(full?.code).toBe('MACHINE_FULL')
+    expect(full?.message).toBe('Owner Mac is set to run at most 16 agents and runs 16. Its owner can change that in its settings, or try again when one finishes.')
+    // An older client's At most 3 on a 128 GiB Mac (suggestion 16, maximum 64) is the owner's.
+    const g = swarm(), other = g.group()
+    Object.assign(g.machine('owner-mac'), { maxAgents: 3 })
+    measured(g, 'owner-mac', 128, 60)
+    fill(g, 'owner-mac', 3)
+    expect(refusal(() => start(g, other))?.code).toBe('MACHINE_FULL')
+  })
+
+  it('a start refused for memory says so plainly', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('owner-mac'), { maxAgents: 16 })
+    measured(f, 'owner-mac', 128, 1.5)
+    const short = refusal(() => start(f, group))
+    expect(short?.code).toBe('MACHINE_FULL')
+    expect(short?.message).toBe('Owner Mac is out of free memory: 1.5 GB free, and an agent needs 2 GB. Try again when an agent there finishes, or pick another machine.')
+    expect(short?.message).not.toMatch(/limit/)
+  })
+
+  it('the route counts a machine\'s room by its free memory', () => {
+    const f = swarm()
+    Object.assign(f.machine('owner-mac'), { maxAgents: 16 })
+    measured(f, 'owner-mac', 128, 21)
+    fill(f, 'owner-mac', 16)
+    // 16 running and 21 GiB free: ten more of 2 GiB, not the zero a count of 16 left.
+    expect(availableSlots(f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
+    Object.assign(f.machine('owner-mac'), { agents: 'atMost', maxAgents: 18 })
+    expect(availableSlots(f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(2)
+  })
+
+  it('a Team account follows its Mac\'s setting', () => {
+    const f = swarm()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 16, agents: 'atMost' })
+    f.run({ type: 'machine.contribute', machineId: 'mate-mac', name: 'MacBook Pro', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 16, agents: 'memory' } as Command,
+      mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate', machineName: 'MacBook Pro' } } as never)
+    expect(f.machine('mate-mac').agents).toBe('memory')
+    expect(f.machine('mate-team').agents).toBe('memory')
+  })
+})
