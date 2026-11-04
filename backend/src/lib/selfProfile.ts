@@ -4,15 +4,17 @@ import { performance } from 'node:perf_hooks'
 import type { FastifyInstance } from 'fastify'
 import { logger } from '../utils/logger.js'
 import { enterWork } from './queryStats.js'
+import { MEASURE_EVERY_MS, MEASURE_FOR_MS, measureWindows } from './measureWindows.js'
 
 /**
  * Where this process spends its CPU, logged from production without a debugger (#314: five pods with few people).
  * Off unless CPU_SELF_PROFILE=1. Two logs, neither with user data, only code locations and route/frame/job names:
  *
- * - `cpu by kind`, every minute: event-loop busy ms per kind of work, an HTTP route pattern, a web-ws or manager-ws
+ * - `cpu by kind`, for one measured minute in ten (lib/measureWindows.ts): event-loop busy ms per kind of work, an HTTP route pattern, a web-ws or manager-ws
  *   frame type, or a timer's function name for background jobs. A kind is set where the work starts (markCpuKind) and
  *   follows every callback and promise that work creates, as AsyncLocalStorage does, so awaited DB replies count too.
- * - `cpu profile`, 30 s every 15 min: the V8 sampling profiler of this process, top files and functions by self time.
+ * - `cpu profile`, the first 30 s of each measured minute: the V8 sampling profiler of this process, top files and
+ *   functions by self time, by caller and by route, and our functions' call counts.
  *
  * ponytail: the async hook adds overhead to every callback and promise (a few % in the bench); it is a diagnostic flag.
  */
@@ -81,9 +83,11 @@ export function selfProfileFromEnv(app: FastifyInstance, env: NodeJS.ProcessEnv 
 
 export type SelfProfileOptions = { everyMs?: number; profileMs?: number; reportMs?: number; log?: (message: string, context: Record<string, unknown>) => void }
 
-export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, reportMs = 60_000,
+/** Accounts for CPU in measured windows only (lib/measureWindows.ts): `reportMs` (a minute) every `everyMs` (ten), the
+ *  first at once, logging `cpu by kind` as each closes. The hook runs on every callback, so it is off between windows. A
+ *  window long enough for it also runs the `cpu profile` (`profileMs`) from its start. */
+export function startSelfProfile({ everyMs = MEASURE_EVERY_MS, profileMs = 30_000, reportMs = MEASURE_FOR_MS,
   log = (message, context) => logger.info(message, context) }: SelfProfileOptions = {}): () => void {
-  enabled = true
   const hook = createHook({
     init(_id, type, _trigger, resource) {
       const inherited = (executionAsyncResource() as Tagged)?.[KIND]
@@ -93,17 +97,25 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
     },
     before() { account(); switchTo((executionAsyncResource() as Tagged)?.[KIND] ?? 'untagged') },
     after() { account(); switchTo(undefined) },
-  }).enable()
+  })
 
   let cpu = process.cpuUsage(), wall = performance.now()
-  const report = setInterval(() => {
+  const open = () => {
+    busy = new Map(); cpu = process.cpuUsage(); wall = performance.now(); since = wall; current = undefined
+    enabled = true
+    hook.enable()
+    if (profileMs < reportMs) void profile()
+  }
+  const close = () => {
     account()
+    hook.disable()
+    enabled = false
+    current = undefined
     const used = process.cpuUsage(cpu), elapsed = performance.now() - wall
     const kinds = Object.fromEntries([...busy].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, ms]) => [k, Math.round(ms)]))
     log('cpu by kind', { windowMs: Math.round(elapsed), processCpuMs: Math.round((used.user + used.system) / 1000), busyMs: kinds })
-    busy = new Map(); cpu = process.cpuUsage(); wall = performance.now()
-  }, reportMs)
-  report.unref()
+    busy = new Map()
+  }
 
   // One profile at a time: a second would replace the first one's marks (and V8 runs one coverage session per process).
   let profiling = false
@@ -135,9 +147,7 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
       session.disconnect()
     }
   }
-  const first = setTimeout(() => void profile(), Math.min(everyMs, 60_000)).unref()
-  const every = setInterval(() => void profile(), everyMs).unref()
-  return () => { enabled = false; hook.disable(); clearInterval(report); clearTimeout(first); clearInterval(every) }
+  return measureWindows({ everyMs, forMs: reportMs, open, close })
 }
 
 type Frame = { functionName: string; url: string; lineNumber: number }

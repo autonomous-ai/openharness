@@ -149,3 +149,16 @@ it('names a Redis message by its subscriber and channel kind, never the id in th
   expect(busKind('main', 'Weird Channel:1')).toBe('bus main other')
   expect(busKind('main', `${'x'.repeat(40)}:1`)).toBe('bus main other')
 })
+
+it('accounts only inside its measured windows: work between them is not counted', async () => {
+  const logs: Record<string, number>[] = []
+  stop = startSelfProfile({ everyMs: 600, reportMs: 150, log: (_m, c) => logs.push(c.busyMs as Record<string, number>) })
+  const tagged = (kind: string) => new Promise<void>(resolve => setImmediate(() => { markCpuKind(kind); spin(30); resolve() }))
+  await tagged('job inside')
+  await new Promise(resolve => setTimeout(resolve, 250))
+  await tagged('job between')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  expect(logs).toHaveLength(1)
+  expect(logs[0]!['job inside']).toBeGreaterThanOrEqual(25)
+  expect(JSON.stringify(logs)).not.toContain('job between')
+})
