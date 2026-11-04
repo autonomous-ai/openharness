@@ -631,6 +631,83 @@ describe('a Buddy\'s proposal to the PM', () => {
     }
   })
 
+  /** Whether the Buddy may post [text] as its owner, given the lines it showed them (newest first) and their ask. */
+  const passes = (text: string, shown: string[], ask = 'ok, post it') => {
+    const { f } = asked()
+    try {
+      f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy, okayed(f, shown, ask))
+      return true
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
+      expect(group(f, f.chat).proposals).toBeUndefined()
+      return false
+    }
+  }
+
+  // Task #2989 (security reviews of #3024): the line shown is the first quoted one right after the marker; any later line
+  // of that message is the Buddy's talk, never what the owner okayed.
+  it('counts as shown only the first quoted line right after the marker', () => {
+    const two = 'I\'ll post this as you: “Fix the login” or, if you prefer, “Delete the old accounts table”'
+    expect(passes('Fix the login', [two])).toBe(true)
+    expect(passes('Delete the old accounts table', [two])).toBe(false)
+    const straight = 'I\'ll post this as you:\n"Fix the login"\n\nKen also said "the client is leaving". OK?'
+    expect(passes('Fix the login', [straight])).toBe(true)
+    expect(passes('the client is leaving', [straight])).toBe(false)
+    // The rest of the message around the first quoted line, which passed whole, is not a line the owner was shown to post.
+    expect(passes('“Fix the login” or, if you prefer, “Delete the old accounts table', [two])).toBe(false)
+    expect(passes('"Keep drafts offline" OK?', ['I\'ll post this as you: "Keep drafts offline" OK?'])).toBe(false)
+    // An unquoted line after the marker is still taken whole, as today, and never a piece of it or a quote inside it.
+    expect(passes('Fix the "login" page', ['I’ll post this as you: Fix the "login" page'])).toBe(true)
+    expect(passes('login', ['I’ll post this as you: Fix the "login" page'])).toBe(false)
+    // Mixed quotes close the line too, and an unclosed one leaves all of it whole, as today.
+    expect(passes('ship it', ['I\'ll post this as you: “Keep drafts offline" and then “ship it”'])).toBe(false)
+    expect(passes('“Keep drafts offline', ['I\'ll post this as you: “Keep drafts offline'])).toBe(true)
+  })
+
+  // Task #2989: the Buddy showed one line, then replaced it; the owner's ok is for the newest one only.
+  it('counts as shown only the newest line its Buddy showed before the ok', () => {
+    const older = 'I\'ll post this as you: “Also ship the phone app”', newer = 'I\'ll post this as you: “Keep drafts offline”'
+    // Newest first, as shownBefore gives them.
+    expect(passes('Keep drafts offline', [newer, older])).toBe(true)
+    expect(passes('Also ship the phone app', [newer, older])).toBe(false)
+    // The Buddy's talk after the newest shown line leaves it in force.
+    expect(passes('Keep drafts offline', ['Want me to change anything?', newer, older])).toBe(true)
+    expect(passes('Also ship the phone app', ['Want me to change anything?', newer, older])).toBe(false)
+    // A newest marker that shows nothing leaves nothing to post: the older line was replaced.
+    expect(passes('Also ship the phone app', ['I\'ll post this as you:', older])).toBe(false)
+  })
+
+  // Task #2989: the owner's words after a colon count only when what comes before it asks to send them. A label, a quote of
+  // someone else or a "don't" before the colon is not an ask, and the part after it is not what they asked to post.
+  it('counts the words after the owner\'s colon only when what comes before it asks to send them', () => {
+    for (const [ask, words] of [
+      ['post this: Fix the login', 'Fix the login'],
+      ['Send this to the PM: Offline drafts please', 'Offline drafts please'],
+      ['ok, please send it to River: "Fix the login"', 'Fix the login'],
+      ['Can you post this for me: Keep drafts offline', 'Keep drafts offline'],
+      ['Gửi PM: Sửa lỗi đăng nhập', 'Sửa lỗi đăng nhập'],
+    ] as const) {
+      expect(passes(words, [], ask)).toBe(true)
+      expect(passes(ask, [], ask)).toBe(true)
+    }
+    for (const [ask, words] of [
+      ['Bug: login fails on the web', 'login fails on the web'],
+      ['Ken said: the client is leaving', 'the client is leaving'],
+      ['Don\'t post this: the client is leaving', 'the client is leaving'],
+      ['Please don\'t send this: the client is leaving', 'the client is leaving'],
+      ['Never tell the PM: the client is leaving', 'the client is leaving'],
+      ['Tell Ken not to post: the client is leaving', 'the client is leaving'],
+      ['Đừng gửi: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
+      ['The client is leaving. Post this: Fix the login', 'Fix the login'],
+      ['The client is leaving. Post this: Fix the login', 'Post this: Fix the login'],
+      ['Send this when the client who is leaving next week has signed off: Fix the login', 'Fix the login'],
+    ] as const) {
+      expect(passes(words, [], ask)).toBe(false)
+      // The owner's whole message is still their own words.
+      expect(passes(ask, [], ask)).toBe(true)
+    }
+  })
+
   it('refuses an older Buddy\'s proposal with no words of its owner, saying how to send one', () => {
     const { f, ask } = asked()
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', goal: proposal.goal, scope: proposal.scope,
