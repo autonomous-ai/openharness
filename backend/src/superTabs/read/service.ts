@@ -265,7 +265,7 @@ export class SwarmReads {
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
    * a Buddy chat an agent reads only as its Buddy. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
-   * on every agent's project.
+   * on every agent's project; so does an awake group stored without a number, which a whole read numbers after every other.
    */
   private async oneGroup(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
     const answer = await this.read(user, tabId, async (tx, cached): Promise<OneGroup | null> => {
@@ -273,6 +273,10 @@ export class SwarmReads {
       const [access, found] = await Promise.all([readAccess(tx, cached, tabId), parts.loadGroupUnless(tx, tabId, conversationId, this.groupRows.get(row))])
       this.keepGroupRow(row, found)
       if (found?.data?.task?.requires?.machines?.length) return null
+      // An awake group stored without a number (111 on prod, 11-04) is numbered by a whole read after every other one
+      // (model.ts numberConversations, in visibleState): the whole read answers it. A project's chat and Leads have none.
+      if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
+        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
       const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
       const [context, machines] = target ? await Promise.all([
         target.projectId ? Promise.resolve([]) : parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }),

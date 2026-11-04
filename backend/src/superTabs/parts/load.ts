@@ -128,14 +128,17 @@ export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> 
   return assemble(tx, tabId, { member: live, agent: live, group: [], machine: null, start: null, progress: null })
 }
 
-/** One live group by key in one indexed read: whole, or without its data when `held` is it at the same version, and then
- *  `held` itself (read/service.ts oneGroup keeps what it read, task #2875). Every write moves a part's version, so a read
+/** One live group by key in one indexed read: whole, or without its data when `held` is it at the same version and write time,
+ *  and then `held` itself (read/service.ts oneGroup keeps what it read, task #2875). Every write moves a part's version, so a read
  *  never serves an older group. Null when there is no live group by that key. */
 export async function loadGroupUnless(tx: Transaction, tabId: string, key: string, held?: Part<GroupData>): Promise<Part<GroupData> | null> {
+  // The version and the time of its write: a key made again after its tombstone was purged starts at version 1 again
+  // (security review 1 of #3002).
+  const same = held && { $and: [{ $eq: ['$version', held.version] }, { $eq: ['$changedAt', { $date: new Date(held.changedAt).toISOString() }] }] }
   const [row] = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key } },
-    ...held ? [{ $set: { data: { $cond: [{ $eq: ['$version', held.version] }, '$$REMOVE', '$data'] } } }] : []] as Prisma.InputJsonValue[])
+    ...same ? [{ $set: { data: { $cond: [same, '$$REMOVE', '$data'] } } }] : []] as Prisma.InputJsonValue[])
   if (!row) return null
-  if (held && row.data === undefined && Number(row.version) === held.version) return held
+  if (held && row.data === undefined && Number(row.version) === held.version && ms(row.changedAt) === held.changedAt) return held
   return toPart<GroupData>('group', rawGroupRow(row))
 }
 
