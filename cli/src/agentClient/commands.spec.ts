@@ -2172,6 +2172,36 @@ describe('a Buddy passes its owner\'s words to their own harnesses on this Mac (
     expect(r.calls).toEqual([])
   })
 
+  it('finds a harness it did not start by its exact name or id only, and refuses naming no other harness (security review 2)', async () => {
+    const { d, far } = scene()
+    d.frames.push(frame('web-two'), frame('webhook', { status: 'stopped' }), frame('cloudy', { location: 'cloud' }))
+    const r = asked()
+    for (const name of ['we', 'webh', 'cloudy', 'nothing']) {
+      for (const run of [tellCommand, replyCommand]) {
+        const h = buddyIn(d, far, r.record)
+        expect(await run([name, '--', 'x'], h.deps), name).toBe(EXIT.refused)
+        expect(h.err.join('\n'), name).toBe('That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.')
+      }
+    }
+    expect(r.calls).toEqual([])
+    // By its exact name, or its id: asked of the machine, and no wait or show is suggested, which a Buddy cannot run.
+    const h = buddyIn(d, far, r.record)
+    expect(await tellCommand(['web-two', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).not.toContain('harness wait')
+    expect(await tellCommand([frame('web').id, '--', 'x'], buddyIn(d, far, r.record).deps)).toBe(EXIT.ok)
+    expect(r.calls.map(([, p]) => p.agentId)).toEqual(['web-two', 'web'])
+  })
+
+  it('still finds the harnesses it started by any part of their name', async () => {
+    const { d, far } = scene()
+    d.frames.push(frame('child-one', { startedBy: 'agent', parentAgentId: 'buddy' }))
+    const r = asked()
+    const h = buddyIn(d, far, r.record)
+    started(h.ledger, 'buddy', 'child-one')
+    expect(await tellCommand(['child', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls.map(([, p]) => p.agentId)).toEqual(['child-one'])
+  })
+
   it('says the machine\'s refusal as it said it, and records nothing', async () => {
     const { d, far } = scene()
     const r = asked({ error: ['NOT_YOURS', 'That harness is another person\'s. A Buddy passes words only to harnesses its owner started on this Mac. Nothing was sent.'] })

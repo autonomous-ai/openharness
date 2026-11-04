@@ -662,20 +662,22 @@ describe('a Buddy passes its owner\'s words to their own harnesses here (#2626)'
     const replied = await t.ask({ action: 'tell', pane: '%1', machine: 'Mac Studio', agentId: 'api', text: 'Yes, go ahead.', reply: true })
     expect(replied).toMatchObject({ state: 'queued' })
     expect(t.delivered.map(([agentId, text]) => [agentId, text])).toEqual([
-      ['web', '[from buddy · Mac Studio, your person\'s Buddy in Harness: their words, passed on. It does not read your answer; your person does.]\n\nBuilders are done: run the verifier.'],
-      ['api', '[from buddy · Mac Studio, your person\'s Buddy in Harness: their words, passed on. It does not read your answer; your person does.]\n\nYes, go ahead.'],
+      ['web', '[from buddy · Mac Studio: passed on by your person\'s Buddy in Harness. It does not read your answer; your person does.]\n\nBuilders are done: run the verifier.'],
+      ['api', '[from buddy · Mac Studio: passed on by your person\'s Buddy in Harness. It does not read your answer; your person does.]\n\nYes, go ahead.'],
     ])
     const history = await t.ask({ action: 'history', tabId: 'relayed' })
     expect((history.messages as unknown[]).length).toBe(2)
   })
 
-  it('is refused for another person\'s harness, a Swarm agent, one an agent started, a terminal, itself and one not running', async () => {
+  it('is refused for another person\'s harness, a Swarm agent, one an agent started, a terminal, itself and one not running, all alike', async () => {
     const t = scene()
-    for (const agentId of ['guest', 'dev', 'kid', 'term', 'buddy']) {
-      expect(await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x' }), agentId).toMatchObject({ error: 'NOT_YOURS' })
-      expect(await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x', reply: true }), agentId).toMatchObject({ error: 'NOT_YOURS' })
+    // One refusal for all of them: which kind a harness is, or that it exists, is no read a Buddy is given (security review 2).
+    const answers = []
+    for (const agentId of ['guest', 'dev', 'kid', 'term', 'buddy', 'gone']) {
+      answers.push(await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x' }), await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x', reply: true }))
     }
-    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'gone', text: 'x' })).toMatchObject({ error: 'NOT_RUNNING' })
+    expect(new Set(answers.map((a) => JSON.stringify(a)))).toEqual(new Set([JSON.stringify({ error: 'NOT_YOURS',
+      detail: 'That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.' })]))
     expect(t.delivered).toEqual([])
   })
 
