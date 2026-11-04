@@ -1316,7 +1316,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
 export function buildEngineInstallationArgv(engine: AgentEngine, recipe: EngineInstallRecipe,
   environment: Record<string, string>, runtimeNode: string = managedNodePath()): string[] {
   // The installers are POSIX shell lines (`curl … | bash`, npm under a POSIX prelude): there is nothing to run them in.
-  if (process.platform === 'win32') throw new Error(`Harness cannot install ${engine} on Windows yet; install it, then try again.`)
+  if (process.platform === 'win32') throw new Error(`The POSIX installer of ${engine} does not run on Windows (engines/kit/windowsInstall.ts does).`)
   const shell = interactiveEngineShell(environment.SHELL) ?? { path: posixRunner(), args: ['-c'], label: 'shell' }
   if (Object.keys(environment).some(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) throw new Error('Invalid installation environment name')
   const locations = Object.entries(environment).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}\n`).join('')
