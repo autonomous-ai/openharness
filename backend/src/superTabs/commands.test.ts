@@ -4333,6 +4333,22 @@ describe('archiving unfinished work', () => {
     expect(at(lost).assignment!.status).toBe('lost')
   })
 
+  // Security review 2 of #2907: a collaborator who did not ask could name themselves its requester, then cancel it. Among
+  // people only an owner names who asked; agents still name the person they opened it for.
+  it('refuses a collaborator who names themselves requester of a lost task, so they still cannot cancel it', () => {
+    const t = task('lost', { asked: false })
+    expect(() => t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: 'peer' }, peer))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.' }))
+    expect(() => t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: null }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(at(t).requesterId).toBe('owner')
+    expect(() => cancel(t, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(at(t).assignment!.status).toBe('lost')
+    // The owner of the task's project still names them, and then they may close it.
+    t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: 'peer' })
+    cancel(t, peer)
+    expect(at(t).assignment!.status).toBe('cancelled')
+  })
+
   it('names who can cancel when it refuses to archive unfinished work', () => {
     const t = task('lost', { asked: false })
     expect(() => archive(t, peer)).toThrow(expect.objectContaining({ code: 'WORK_UNFINISHED',
