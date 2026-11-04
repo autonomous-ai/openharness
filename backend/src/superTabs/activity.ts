@@ -76,7 +76,8 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  `fanout`); a Swarm notice in a thread (a row with a source) tells only the starter and the author of the message it quotes,
  *  as before; without `fanout` every reply tells only those two. Never the reply's author, nor a person tagged in the reply
  *  itself (the tag tells them, mentions.ts), nor one who unfollowed the thread (readMarks.ts writeThreadFollow) or muted the
- *  chat (chatSettings.ts); with `fanout`, never a person no longer in the Swarm or who cannot read the chat now. A notice for
+ *  chat (chatSettings.ts); with `fanout`, never a person no longer in the Swarm or who cannot read the chat now, and a chat
+ *  its state does not hold tells only those two. A notice for
  *  agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
  *  chat. Each row keeps its message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark
  *  reads it (markActivityThreadRead).
@@ -104,9 +105,10 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     const tagsHere = new Set(m.mentions ?? [])
     const told = replyAudience({ starter, quoted, ...spread }).filter(personId => {
       if (own(m.author, personId) || tagsHere.has(personId)) return false
-      if (!people) return true
+      // A chat the command's state does not hold (a quiet one) tells the starter and the quoted author, as without `fanout`.
+      if (!people || !group) return true
       const person = people.get(personId)
-      return !!person && !!group && canReadGroup(fanout!.state, { kind: 'person', userId: person.id, email: person.email }, group)
+      return !!person && canReadGroup(fanout!.state, { kind: 'person', userId: person.id, email: person.email }, group)
     })
     return { message: m, people: told }
   })
