@@ -15,10 +15,12 @@ export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
  *  mark went reads as far as its conversation's mark, as on a device that never kept one. */
 export const THREAD_MARK_CAP = 500
 
-/** Run by the singleton worker at startup, like the mention expiry. Thread marks need no index option: the hourly sweep
- *  deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
-export async function ensureReadMarkExpiry(db: PrismaClient): Promise<void> {
-  await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry', expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 })
+/** Run by the singleton worker at startup, like the mention expiry; answers whether the expiry is set. Where the database user
+ *  may not set it (production's, no collMod), startReadMarkSweep removes the old marks instead. Thread marks need no index
+ *  option: the hourly sweep deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
+export async function ensureReadMarkExpiry(db: Pick<PrismaClient, '$runCommandRaw'>): Promise<boolean> {
+  return await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry',
+    expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 }) === 'ready'
 }
 
 export interface ReadMarkWrite { tabId: string; personId: string; conversationId: string; sequence: number; now: number }
