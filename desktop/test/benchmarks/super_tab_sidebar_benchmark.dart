@@ -96,7 +96,6 @@ void main() {
                   return ProjectSidebar(
                     controller: controller,
                     onSelect: controller.select,
-                    needsHuman: (_) => 0,
                   );
                 },
               ),
