@@ -36,7 +36,7 @@ import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
-import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
+import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -1664,12 +1664,15 @@ export class SuperTabStore {
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
         // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
+        // With their text, for the lines the Buddy showed its owner before the ask (buddies.ts shownBefore, task #2926).
         const recent = asked ? await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
-          orderBy: { sequence: 'desc' }, take: 50, select: { id: true, author: true, source: true } }) : []
+          orderBy: { sequence: 'desc' }, take: 50, select: { id: true, author: true, source: true, text: true, thread: true, editedAt: true, deletedAt: true } }) : []
         const ownerId = (asked?.author as unknown as Author | undefined)?.id
         const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
+        const shown = actor.kind === 'agent' ? shownBefore(recent.map(m => ({ ...m, author: m.author as unknown as Author })), command.ownerMessageId, actor.agentId) : []
         if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
-          source: !!asked.source, session: !!asked.buddySession, createdAt: asked.createdAt.getTime(), thread: asked.thread, ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
+          source: !!asked.source, session: !!asked.buddySession, createdAt: asked.createdAt.getTime(), thread: asked.thread, ...(newest ? { newestOwnerMessageId: newest.id } : {}),
+          text: asked.text, shown }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },

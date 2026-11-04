@@ -574,7 +574,7 @@ describe('a Buddy\'s proposal to the PM', () => {
   }
   /** The owner's ok and the line their Buddy showed them before it, as the store reads them (store.ts buddy.propose). */
   const okayed = (f: ReturnType<typeof setup>, shown: string[], text = 'ok, post it') => ({ proposalAsk: { id: 'ask', conversationId: f.chat, source: false,
-    createdAt: 900, text, shown, author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
+    createdAt: 900, text, shown, author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
 
   it('posts the owner\'s okayed words in full as the owner, delivered to the PM, with no Buddy reply (anh Dee, task #2926)', () => {
     const { f } = asked()
@@ -628,8 +628,11 @@ describe('a Buddy\'s proposal to the PM', () => {
     const { f, propose } = asked()
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
-    const open = (brief: string) => f.state.conversations.find(c => c.id === f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
-      brief, checks: [], proposalMessageId: root.id }, agentActor(f.pm), context).result.conversationId)!
+    const open = (brief: string) => {
+      const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [], proposalMessageId: root.id },
+        agentActor(f.pm), context).result.conversationId
+      return group(f, id as string)
+    }
     expect(open('').brief).toBe('Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high')
     expect(open('Desktop keeps drafts offline.').brief).toBe('Desktop keeps drafts offline.')
   })

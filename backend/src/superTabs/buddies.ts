@@ -201,14 +201,45 @@ export const PROPOSAL_SENT_KIND = 'buddy-proposal-sent'
 export const proposalSentText = (project: string, proposal: { goal: string; scope: string }): string =>
   `Your Buddy sent this to the ${project} PM for you.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}`
 
-/** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
-/** A proposal's first reply in its thread, from the Buddy: its author says whose Buddy sent it. */
+/** A proposal's goal, scope and priority as the PM reads them: kept in its root's source since task #2926, and the brief of a
+ *  task opened from it. A proposal from before kept them in its Buddy's first reply in the thread instead. */
 export function proposalText(proposal: { goal: string; scope: string; priority: string }): string {
   return `Goal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
 }
 
-/** A short opening message, with the complete goal kept in its thread. */
-export function proposalTitle(proposal: { title?: string; goal: string }): string {
-  const goal = proposal.goal.replace(/^Requested by [^\r\n]+?\.(?:\s+|$)/i, '').trim() || proposal.goal.trim()
-  return (proposal.title?.trim() || (goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).replace(/[.。]$/, '')).slice(0, 80).trim()
+/** The brief a proposal's root gives a task opened from it; '' for a row from before task #2926, which kept none. */
+export function proposalBrief(source: Record<string, unknown> | null | undefined): string {
+  const { goal, scope, priority } = source ?? {}
+  return typeof goal === 'string' && typeof scope === 'string' && typeof priority === 'string' ? proposalText({ goal, scope, priority }) : ''
+}
+
+/** Words as the okayed check compares them: NFKC, each run of whitespace one space. A line the chat shows wrapped or with
+ *  its spaces doubled is the same line; any other change is not. */
+const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+/gu, ' ').trim()
+
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): their own, inside the message that asked, or inside a line
+ *  their Buddy showed them just before it (shownBefore). Nothing else of their private chat may go out as them. */
+export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
+  const wanted = comparable(words)
+  return !!wanted && [ask.text ?? '', ...ask.shown ?? []].some(said => comparable(said).includes(wanted))
+}
+
+/** One row of a Buddy chat as the store reads it for a proposal, newest first. */
+export interface BuddyChatRow { id: string; author: { kind: string; id: string }; text: string; source: unknown; thread: string | null
+  editedAt: Date | null; deletedAt: Date | null }
+
+/** The lines [buddyId] showed its owner just before their message [askId] said ok, from [recent] (newest first): its own plain
+ *  messages in the same lane (the main chat, or the ask's thread), since the owner's previous message there. A system row, an
+ *  edited or deleted one, another lane's and anyone else's never count, so the owner saw each line as it stands. */
+export function shownBefore(recent: readonly BuddyChatRow[], askId: string, buddyId: string): string[] {
+  const at = recent.findIndex(row => row.id === askId)
+  if (at < 0) return []
+  const lane = (row: BuddyChatRow) => row.thread && row.thread !== row.id ? row.thread : null
+  const ask = recent[at]!, shown: string[] = []
+  for (const row of recent.slice(at + 1)) {
+    if (lane(row) !== lane(ask)) continue
+    if (row.author.kind === 'person' && row.author.id === ask.author.id && !row.source) break
+    if (row.author.kind === 'agent' && row.author.id === buddyId && !row.source && !row.editedAt && !row.deletedAt) shown.push(row.text)
+  }
+  return shown
 }
