@@ -87,48 +87,48 @@ void main() {
       await r.refresh();
       await r.refresh();
 
-      expect(swarm.paths.last, '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1');
+      expect(
+        swarm.paths.last,
+        '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1',
+      );
       expect(r.snapshot!.mentionsWaiting, 2);
       expect(r.error, isNull);
     },
   );
 
-  test(
-    'a refused etag (a backend rolled back) reads in full once, then polls without it',
-    () async {
-      var loads = 0;
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
-        ...firstLoad(cursor: 'c${++loads}'),
-        if (loads == 1) 'derivedEtag': 'e1',
-      };
-      swarm.routes['/api/super-tabs/$tab/changes'] = (_) {
-        if (swarm.paths.last.contains('derivedEtag')) {
-          throw SuperTabFailure(
-            'VALIDATION_ERROR',
-            "Unrecognized key(s) in object: 'derivedEtag'",
-            statusCode: 400,
-          );
-        }
-        return changes(cursor: 'c9');
-      };
-      final r = reader(swarm);
-      addTearDown(r.dispose);
+  test('a refused etag (a backend rolled back) reads in full once, then polls without it', () async {
+    var loads = 0;
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(cursor: 'c${++loads}'),
+      if (loads == 1) 'derivedEtag': 'e1',
+    };
+    swarm.routes['/api/super-tabs/$tab/changes'] = (_) {
+      if (swarm.paths.last.contains('derivedEtag')) {
+        throw SuperTabFailure(
+          'VALIDATION_ERROR',
+          "Unrecognized key(s) in object: 'derivedEtag'",
+          statusCode: 400,
+        );
+      }
+      return changes(cursor: 'c9');
+    };
+    final r = reader(swarm);
+    addTearDown(r.dispose);
 
-      await r.refresh();
-      await r.refresh();
-      await r.refresh();
+    await r.refresh();
+    await r.refresh();
+    await r.refresh();
 
-      expect(swarm.paths, [
-        '/api/super-tabs/$tab/parts',
-        '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1',
-        '/api/super-tabs/$tab/parts',
-        '/api/super-tabs/$tab/changes?cursor=c2',
-      ]);
-      expect(r.error, isNull);
-      expect(r.accessRevoked, isFalse);
-    },
-  );
+    expect(swarm.paths, [
+      '/api/super-tabs/$tab/parts',
+      '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1',
+      '/api/super-tabs/$tab/parts',
+      '/api/super-tabs/$tab/changes?cursor=c2',
+    ]);
+    expect(r.error, isNull);
+    expect(r.accessRevoked, isFalse);
+  });
 
   test('a reload answer starts again from a first load', () async {
     var loads = 0;

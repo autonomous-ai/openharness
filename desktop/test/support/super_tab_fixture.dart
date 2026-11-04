@@ -295,7 +295,9 @@ class SwarmPartsBackend {
         'derived': _derived(state, reader),
       };
       if (stampsDerived) {
-        answer['derivedEtag'] = _etag(answer['derived'] as Map<String, dynamic>);
+        answer['derivedEtag'] = _etag(
+          answer['derived'] as Map<String, dynamic>,
+        );
       }
       for (final entry in _ordered()) {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));

@@ -149,26 +149,26 @@ void main() {
     },
   );
 
-  test(
-    'a refused etag (a backend rolled back) reads in full once, then polls without it',
-    () async {
-      final c = open();
-      await c.refresh();
-      await c.refresh();
-      expect(Uri.parse(reads.last).queryParameters['derivedEtag'], isNotNull);
-      server.parts.stampsDerived = false;
-      await c.refresh();
-      await c.refresh();
-      expect(reads.skip(2).map((p) => Uri.parse(p).path), [
-        '/api/super-tabs/tab/changes',
-        '/api/super-tabs/tab/parts',
-        '/api/super-tabs/tab/changes',
-      ]);
-      expect(Uri.parse(reads.last).queryParameters, isNot(contains('derivedEtag')));
-      expect(c.error, isNull);
-      expect(c.accessRevoked, isFalse);
-    },
-  );
+  test('a refused etag (a backend rolled back) reads in full once, then polls without it', () async {
+    final c = open();
+    await c.refresh();
+    await c.refresh();
+    expect(Uri.parse(reads.last).queryParameters['derivedEtag'], isNotNull);
+    server.parts.stampsDerived = false;
+    await c.refresh();
+    await c.refresh();
+    expect(reads.skip(2).map((p) => Uri.parse(p).path), [
+      '/api/super-tabs/tab/changes',
+      '/api/super-tabs/tab/parts',
+      '/api/super-tabs/tab/changes',
+    ]);
+    expect(
+      Uri.parse(reads.last).queryParameters,
+      isNot(contains('derivedEtag')),
+    );
+    expect(c.error, isNull);
+    expect(c.accessRevoked, isFalse);
+  });
 
   test('a backend without the etag is polled as before', () async {
     server.parts.stampsDerived = false;

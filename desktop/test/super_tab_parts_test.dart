@@ -289,27 +289,39 @@ void main() {
 
   // #2906: a change read leaves out the summary the reader holds while its etag still matches.
   {
-    Map<String, dynamic> load() =>
-        {...recorded('first_load'), 'derivedEtag': 'e1'};
+    Map<String, dynamic> load() => {
+      ...recorded('first_load'),
+      'derivedEtag': 'e1',
+    };
     // Nothing else moved either: no head, no parts.
     Map<String, dynamic> unchanged(String etag, [Map? marks]) => {
       ...recorded('changes'),
       'head': null,
-      for (final kind in ['members', 'agents', 'groups', 'machines', 'starts', 'progress'])
+      for (final kind in [
+        'members',
+        'agents',
+        'groups',
+        'machines',
+        'starts',
+        'progress',
+      ])
         kind: <dynamic>[],
       'derivedEtag': etag,
       'derivedUnchanged': true,
-      'derived': {if (marks != null) 'readMarks': marks},
+      'derived': {'readMarks': ?marks},
     };
 
-    test('summary etag: is held from a first load and sent back with the cursor', () {
-      final parts = SuperTabParts.firstLoad(load());
-      expect(parts.derivedEtag, 'e1');
-      expect(
-        Uri.splitQueryString(parts.changesQuery),
-        {'cursor': parts.cursor, 'derivedEtag': 'e1'},
-      );
-    });
+    test(
+      'summary etag: is held from a first load and sent back with the cursor',
+      () {
+        final parts = SuperTabParts.firstLoad(load());
+        expect(parts.derivedEtag, 'e1');
+        expect(Uri.splitQueryString(parts.changesQuery), {
+          'cursor': parts.cursor,
+          'derivedEtag': 'e1',
+        });
+      },
+    );
 
     test('summary etag: an unchanged reply keeps the summary held and takes its marks', () {
       final parts = SuperTabParts.firstLoad(load());
@@ -326,7 +338,11 @@ void main() {
       parts.apply({
         ...recorded('changes'),
         'derivedEtag': 'e2',
-        'derived': {'agents': <String, dynamic>{}, 'machines': <String, dynamic>{}, 'mentionsWaiting': 4},
+        'derived': {
+          'agents': <String, dynamic>{},
+          'machines': <String, dynamic>{},
+          'mentionsWaiting': 4,
+        },
       });
       expect(parts.derivedEtag, 'e2');
       expect(parts.derived['mentionsWaiting'], 4);
@@ -340,13 +356,19 @@ void main() {
       expect(() => older.apply(unchanged('e1')), throwsFormatException);
     });
 
-    test('summary etag: an older backend sends none, and none is sent back', () {
-      final parts = SuperTabParts.firstLoad(recorded('first_load'));
-      expect(parts.derivedEtag, isNull);
-      expect(Uri.splitQueryString(parts.changesQuery), {'cursor': parts.cursor});
-      final rolledBack = SuperTabParts.firstLoad(load())..apply(recorded('changes'));
-      expect(rolledBack.derivedEtag, isNull);
-    });
+    test(
+      'summary etag: an older backend sends none, and none is sent back',
+      () {
+        final parts = SuperTabParts.firstLoad(recorded('first_load'));
+        expect(parts.derivedEtag, isNull);
+        expect(Uri.splitQueryString(parts.changesQuery), {
+          'cursor': parts.cursor,
+        });
+        final rolledBack = SuperTabParts.firstLoad(load())
+          ..apply(recorded('changes'));
+        expect(rolledBack.derivedEtag, isNull);
+      },
+    );
 
     test('summary etag: a saved store keeps its etag', () {
       final parts = SuperTabParts.firstLoad(load());
