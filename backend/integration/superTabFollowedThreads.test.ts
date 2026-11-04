@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -607,8 +608,9 @@ describe('a person\'s followed threads (GET /threads)', () => {
       expect(summaries.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(Math.min(2 * n, candidates))
       expect(messages.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(candidates)
       expect(reply.body.data.read).toHaveLength(Math.min(n, candidates))
-      console.log(`threads read=${n}:`, JSON.stringify(rows.map(r => ({ ns: r.ns.split('.').at(-1), op: r.op, plan: r.planSummary,
-        examined: r.docsExamined, keys: r.keysExamined, returned: r.nreturned }))))
+      // What each page read, for the pull request: THREADS_COST_OUT=<file> writes it there.
+      if (process.env.THREADS_COST_OUT) appendFileSync(process.env.THREADS_COST_OUT, `read=${n} ${JSON.stringify(rows.map(r => ({
+        collection: r.ns.split('.').at(-1), op: r.op, plan: r.planSummary, docs: r.docsExamined, keys: r.keysExamined, returned: r.nreturned })))}\n`)
     }
   }, 120_000)
 
