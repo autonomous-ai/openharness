@@ -4,7 +4,7 @@ import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
-import { attachmentsFromEnv, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
@@ -596,21 +596,30 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // Super Tab route's body handling changes.
   await app.register(async scope => {
     // One byte over the limit, so the store sees an oversized file and refuses it rather than keeping a cut one.
-    await scope.register(multipart, { limits: { fileSize: MAX_FORM_ATTACHMENT_BYTES + 1, files: 1, fields: 1, parts: 2 } })
+    // The file may come gzipped, said by `contentEncoding: gzip` between the two (attachments.ts formFileBody): the limit
+    // here is on what arrives, and the store's cap on what it unpacks to.
+    await scope.register(multipart, { limits: { fileSize: MAX_FORM_ATTACHMENT_BYTES + 1, files: 1, fields: 2, parts: 3 } })
     scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments',
       { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
-        let conversationId: string | null = null, uploaded: unknown = null, stored: unknown = null
+        let conversationId: string | null = null, encoding: 'gzip' | null | undefined, uploaded: unknown = null, stored: unknown = null
         try {
           for await (const part of req.parts()) {
             if (part.type === 'field') {
-              if (part.fieldname !== 'conversationId' || conversationId !== null || uploaded) fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400)
-              conversationId = id.safeParse(part.value).data ?? fail('INVALID_ATTACHMENT', 'Name the conversation to attach the file to.', 400)
+              if (part.fieldname === 'conversationId' && conversationId === null && encoding === undefined && !uploaded) {
+                conversationId = id.safeParse(part.value).data ?? fail('INVALID_ATTACHMENT', 'Name the conversation to attach the file to.', 400)
+              } else if (part.fieldname === 'contentEncoding' && conversationId !== null && encoding === undefined && !uploaded) {
+                encoding = part.value === 'gzip' ? 'gzip' : fail('INVALID_ATTACHMENT', 'Send the file gzipped or as it is.', 400)
+              } else fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400)
             } else {
               if (!conversationId || uploaded) { part.file.resume(); fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400) }
+              const body = formFileBody(part.file, encoding ?? null)
               try {
                 uploaded = await store.upload(req.user!, req.params.tabId, conversationId,
-                  { name: part.filename, mime: part.mimetype, body: part.file }, req.query.asAgentId)
-              } catch (error) { stored = error; throw error } finally { part.file.resume() }
+                  { name: part.filename, mime: part.mimetype, body }, req.query.asAgentId)
+              } catch (error) {
+                stored = unpackFailed(body) ? new SuperTabError('INVALID_ATTACHMENT', 'The file was not valid gzip.', 400) : error
+                throw stored
+              } finally { stopUnpacking(part.file, body); part.file.resume() }
             }
           }
         } catch (error) {
