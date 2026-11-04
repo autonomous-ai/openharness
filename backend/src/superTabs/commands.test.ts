@@ -102,7 +102,7 @@ describe('five-part tasks', () => {
     const delivery = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages[0]!
     // The worker runs on another person's machine (host-owner's): the task names whom its pull requests are for (projects.ts
     // requestedByLine, security review 2 of #2492).
-    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner@example.com through Harness.`)
+    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner through Harness.`)
     expect(delivery.recipients).toEqual([worker])
   })
 
@@ -4608,12 +4608,12 @@ describe('checks are information', () => {
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
-    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
     const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
-      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
   it('keeps a failed check as a finding', () => {

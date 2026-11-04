@@ -4,8 +4,8 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { MAX_NAME_LENGTH, shownNameOf, writtenNameOf } from './personNames.js'
-import { usernameOf } from './usernames.js'
+import { authorForAgent, MAX_NAME_LENGTH, shownNameOf, writtenNameOf } from './personNames.js'
+import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
 const NOW = Date.parse('2026-11-03T10:00:00.000Z')
@@ -174,5 +174,31 @@ describe('member.name', () => {
     expect(writtenNameOf(f.state, 'relay')).toBe('1\\. Minh')
     // A username is written as it is today.
     expect(writtenNameOf(f.state, 'peer')).toBe('dee')
+  })
+})
+
+// Task #2954 (Ken, 11-04): a person's message is stored with their email as its author's name, and agents copied it into
+// commands and pull request bodies until a machine's privacy hook stopped their sessions. An agent reads names instead.
+describe('a person author as an agent reads it', () => {
+  const stored = (id: string, email: string) => ({ kind: 'person' as const, id, name: email, membershipGeneration: 'g' })
+
+  it('names them by username and the name they show, never by email', () => {
+    const f = fixture()
+    f.setName('Minh Nguyen')
+    const names = swarmUsernames(f.state)
+    expect(authorForAgent(f.state, stored('relay', relay.email), names))
+      .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'Minh Nguyen', membershipGeneration: 'g' })
+    expect(authorForAgent(f.state, stored('peer', peer.email), names))
+      .toEqual({ kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' })
+  })
+
+  it('names someone who left as a person, and leaves an agent author as it is', () => {
+    const f = fixture()
+    const names = swarmUsernames(f.state)
+    const gone = authorForAgent(f.state, stored('gone', 'gone@example.com'), names)
+    expect(gone).toEqual({ kind: 'person', id: 'gone', name: 'a person', displayName: 'a person', membershipGeneration: 'g' })
+    expect(JSON.stringify(gone)).not.toContain('@')
+    const agent = { kind: 'agent' as const, id: 'a1', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
+    expect(authorForAgent(f.state, agent, names)).toBe(agent)
   })
 })
