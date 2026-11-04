@@ -166,7 +166,8 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       readerId: readerId,
       now: now,
       mentions: mentions?.call(task) ?? 0,
-      needsHuman: needsHuman?.call(task) ?? 0,
+      // A closed task's agent asks nothing: only open ones are asked.
+      needsHuman: task.closed ? 0 : needsHuman?.call(task) ?? 0,
       personName: personName,
     );
     if (place == null) continue;
