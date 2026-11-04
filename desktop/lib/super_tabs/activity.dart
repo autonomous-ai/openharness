@@ -376,7 +376,7 @@ class SuperTabChatNotices {
       _seen[group.id] = top;
       if (before == null || top <= before) continue;
       if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
-      if (controller.selectedId == group.id && _openChatRead) continue;
+      if (controller.selectedId == group.id && openChatRead) continue;
       if (top <= controller.readMark(group.id)) continue;
       unawaited(_tell(group, before, top));
     }
@@ -394,7 +394,7 @@ class SuperTabChatNotices {
 
   /// Whether the open chat is being read now. The view on screen knows; with none up, this falls
   /// back to the Swarm showing and the app in front.
-  bool get _openChatRead {
+  bool get openChatRead {
     if (chatShown case final shown?) return shown();
     final state = WidgetsBinding.instance.lifecycleState;
     return !controller.away &&
