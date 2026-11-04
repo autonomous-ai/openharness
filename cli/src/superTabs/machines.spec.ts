@@ -920,6 +920,62 @@ describe('contributed machine executor', () => {
       expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
     })
 
+    // Issue #2989 and River on task #2890: a start dispatched here that never got an agent, failed by the Swarm ("did not
+    // start it within 3 minutes"), held its memory on this machine until the ledger's launch deadline. Its host reads the
+    // verdict once the start leaves its pending list, and ends the reservation at once.
+    describe('that the backend fails before any agent joins', () => {
+      const startPath = '/api/super-tabs/hosts/host/starts/tab/start'
+      const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+      function failedEarly(status: () => unknown, ended: () => Promise<Record<string, unknown>> = async () => ({ ok: true, reservationId: 'creation', returned: true })) {
+        const f = fixture()
+        f.start.mockResolvedValue({ ...pendingCreation, state: 'unconfirmed' } as never)
+        const original = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path === startPath ? status() : original(core, method, path, body))
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'super_tabs' && (rest[0] as Record<string, unknown>)?.action === 'endCapacity'
+          ? ended() : usage(type, ...rest as []))
+        const ends = () => f.request.mock.calls.filter(c => c[0] === 'super_tabs' && (c[1] as Record<string, unknown>)?.action === 'endCapacity')
+        return { f, ends, fail: () => { f.pool.starts = [] } }
+      }
+
+      it('ends its reservation on this machine once, as soon as the Swarm says it failed', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(0)
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toEqual([['super_tabs', { action: 'endCapacity', creationId: 'creation' }, 10_000]]))
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Freed the memory of start start, which the Swarm failed: Mac Auto did not start it within 3 minutes')
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+      })
+
+      it('leaves one that settled or got its agent to the ledger, and asks a few times when it cannot tell', async () => {
+        for (const status of [{ harnessId: 'joined' }, { error: null }]) {
+          const { f, ends, fail } = failedEarly(() => status)
+          await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+          f.advance(); await f.machine.tick(); await settle()
+          expect(ends()).toHaveLength(0)
+          expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(1)
+        }
+        const { f, ends, fail } = failedEarly(() => { throw new Error('backend down') })
+        await f.machine.tick(); fail()
+        for (let pass = 0; pass < 7; pass++) { f.advance(); await f.machine.tick(); await settle() }
+        expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(5)
+        expect(ends()).toHaveLength(0)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: backend down')
+      })
+
+      it('lets an older daemon that cannot end it keep the row for its launch deadline', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }), async () => ({ error: 'UNKNOWN_ACTION' }))
+        await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toHaveLength(1))
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: UNKNOWN_ACTION')
+      })
+    })
+
     // Mac Auto's Harness Team account, 2026-10-29: the backend failed each start at 3 minutes while its Codex never recorded
     // its session, and the agent the machine launched for it stayed, idle, with no Swarm agent behind it.
     describe('that the backend then fails', () => {

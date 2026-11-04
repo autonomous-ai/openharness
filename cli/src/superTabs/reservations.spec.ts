@@ -432,6 +432,27 @@ it('clears every stuck row on the first start after an update and restart, and s
     detail: expect.stringMatching(/^Not enough free memory: 0 GiB free, 2 GiB needed\. 8 GiB more is set aside for 4 agents still starting/) })
 })
 
+// River on task #2890: a start the Swarm failed at 3 minutes held its memory for the whole launch deadline. Its host reads that
+// verdict (machines.ts) and ends the reservation at once; the deadline stays the backstop for a verdict it never reads.
+it('ends the reservation of a start the Swarm failed at once, whatever its creation reads, unless an agent launched', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  f.native.set(id(1), { creationId: id(1), state: 'unconfirmed' })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  expect(await book.ended(id(1))).toEqual({ ok: true, reservationId: id(1), returned: true })
+  expect(f.deps.log).toHaveBeenCalledWith(expect.stringContaining(`start receipt ${id(1)}: the Swarm failed its start`))
+  expect(await book.ended(id(1))).toEqual({ ok: true, reservationId: id(1), returned: false })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+  // One whose agent launched keeps its row and identity: its host stops that agent, and the stop releases it.
+  free(f, 5 * GiB)
+  expect(await book.reserve(agentInput(3))).toMatchObject({ ok: true })
+  f.launch(3)
+  expect(await book.ended(id(3))).toEqual({ ok: true, reservationId: id(3), returned: false })
+  expect(await book.observe(id(3))).toMatchObject({ ok: true, harnessId: 'agent-3', released: false })
+  expect(await book.ended('not a creation id')).toEqual({ error: 'INVALID_REQUEST' })
+})
+
 it('keeps a creation that launched after the launch deadline, with the identity it learns', async () => {
   const f = setup(), book = f.open()
   free(f, 3 * GiB)
