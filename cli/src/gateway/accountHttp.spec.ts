@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayAccount } from '../core/api.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { createAccountHttp, retryAfterMs } from './accountHttp.js'
+import { VERSION } from '../version.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -39,7 +40,8 @@ describe('account HTTP in the gateway', () => {
     expect(await api.backend('PATCH', '/api/machines/local', { name: 'Renamed' })).toEqual({ status: 409, body: { error: { code: 'CONFLICT' } } })
     expect(request).toHaveBeenCalledWith('https://backend.invalid/api/machines/local', expect.objectContaining({
       method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }),
-      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
+      // The CLI and its version, so a refusal the backend logs names its sender (#2675; backend superTabs/refusalLog.ts).
+      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'x-harness-client': `cli/${VERSION}`, 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
     }))
     await api.backend('GET', '/api/auth/me')
     expect(request.mock.calls[1][1]?.headers).not.toHaveProperty('content-type')
