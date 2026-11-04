@@ -22,6 +22,15 @@ enum SuperTabBacklogGroup {
 /// reshape of Scholes's ask, task #2551).
 const superTabBacklogShippedWindow = Duration(days: 7);
 
+/// Whether [task] has shipped (task #2558): a recorded merge of any of its pull
+/// requests (a batch's counts, its own closed), or Done with none to merge. Its
+/// `shippedAt` alone cannot say: the server sets that at the first Done.
+bool _shipped(SuperTabConversation task, Object? status) =>
+    task.cards.pullRequests.any((card) => card.merged) ||
+    (status == 'done' &&
+        task.cards.pullRequests.isEmpty &&
+        task.pullRequestUrls.isEmpty);
+
 /// Which group [task] is listed in at [now]; null for one that is not listed:
 /// cancelled, closed without shipping, or shipped before the window. A wait on
 /// a person is "Waiting on someone", as the sidebar's groups read it
@@ -30,14 +39,22 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(
   SuperTabConversation task,
   DateTime now,
 ) {
-  if (task.shippedAt case final shipped?) {
-    return now.difference(shipped) > superTabBacklogShippedWindow
-        ? null
-        : SuperTabBacklogGroup.shipped;
+  final status = task.assignment?['status'];
+  final at = task.shippedAt;
+  final inWindow =
+      at != null && now.difference(at) <= superTabBacklogShippedWindow;
+  if (at != null && _shipped(task, status)) {
+    if (inWindow) return SuperTabBacklogGroup.shipped;
+    // Past the window, unless it is back at work.
+    if (task.closed || status == 'done') return null;
   }
-  if (task.closed) return null;
+  // Quiet for a day is still waiting for its merge; archived is over.
+  if (task.closed) {
+    return !task.archived && status == 'done' && inWindow
+        ? SuperTabBacklogGroup.readyToMerge
+        : null;
+  }
   final assignment = task.assignment;
-  final status = assignment?['status'];
   final liveness = task.liveness;
   final wait = liveness?['state'] == 'waiting' ? liveness!['why'] : null;
   if (status == 'cancelled') return null;
