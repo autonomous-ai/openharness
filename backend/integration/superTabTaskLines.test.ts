@@ -99,11 +99,39 @@ describe('a task\'s one message in its project chat', () => {
     await s.as(P)({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [], requestMessageId: asked })
     expect((await s.page('lead')).lines).toEqual([])
     expect((await store.messages(owner, s.tab, 'lead', { thread: asked })).messages.map(m => m.text))
-      .toEqual(['Can the phone show who answered?', 'Phone shows who answered', expect.stringMatching(/^On it: \S+ is building it\.$/),
-        'Desktop shows who answered'])
+      .toEqual(['Can the phone show who answered?', 'Phone shows who answered', 'Desktop shows who answered'])
     const inTask = String((await run(s.tab, { type: 'message.send', conversationId: T, text: 'Also Desktop?', replyTo: null, recipientIds: [] })).result.messageId)
     await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: inTask })).rejects.toThrow('own message')
     await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: 'missing' })).rejects.toThrow('own message')
+  })
+
+  // In place of the On it / Shipped label (anh Dee, 11-04, 'bot messages'): the task's agent reacts on the message that asked.
+  it('reacts 👀 as the agent when its work starts and ✅ once when it merges, on the asking message, with its author told', async () => {
+    const s = await swarm()
+    const P = await s.add('Coordinator', 'lead', true)
+    const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can drafts survive a restart?', replyTo: null,
+      recipientIds: [] }, peer)).result.messageId)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: asked }))
+      .result.conversationId)
+    const E = await s.add('Engineer', T)
+    const reactions = async () => {
+      const page = await store.messages(peer, s.tab, 'lead', {}) as unknown as { messages: Array<{ id: string; reactions: unknown }>; reactionSeq: number }
+      return { on: page.messages.find(m => m.id === asked)!.reactions, seq: page.reactionSeq }
+    }
+    const before = await reactions()
+    expect(before.on).toEqual([])
+    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
+    const started = await reactions()
+    expect(started.on).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: E }] }])
+    expect(started.seq).toBeGreaterThan(before.seq)
+    const pr = 'https://github.com/example/app/pull/7'
+    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
+    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
+    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
+    expect((await reactions()).on).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: E }] }, { emoji: 'check', count: 1, by: [{ kind: 'agent', id: E }] }])
+    // Its author hears each as any reaction to their message (activity.ts).
+    expect((await db.superTabActivity.findMany({ where: { tabId: s.tab, personId: peer.sub, kind: 'reaction', messageId: asked } }))
+      .map(row => [row.actorId, row.emoji]).sort()).toEqual([[E, 'check'], [E, 'eyes']])
   })
 
   // Diego, 2026-11-04 (task #2693): a stop its host confirms is no command, so its thread kept saying On it.
