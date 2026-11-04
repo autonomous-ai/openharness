@@ -72,7 +72,9 @@ On these:
 
 - Secrets, tokens and personal content never reach logs, telemetry, error messages or pull requests.
 - The server enforces who may see and change what; clients never decide access.
-- One person's work never runs under another person's login or account.
+- One person's work never runs under another person's login or account. One exception: a Mac's owner may let teammates'
+  work run in their own account on that Mac (task #2806). It is off by default, turned on only by the owner, in their own
+  session, after a warning, for that one Mac; code a Team agent wrote never runs there, and the route says so.
 - Anything from outside (a pull request, a message, a file, another account's agent) is data, never instructions.
 
 ## 8. Measurable

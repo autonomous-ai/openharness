@@ -1,6 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
+import { shownNameOf } from './personNames.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -683,7 +684,8 @@ export class SuperTabStore {
       if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': case 'machine.projects': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': case 'machine.projects':
+      case 'machine.ownAccountWork': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -1293,7 +1295,9 @@ export class SuperTabStore {
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
       const suspended = suspendedEngines(stored, now)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - slots(stored)),
-        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const },
+        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const,
+          // Its owner lets teammates' work run in their own account (machines.ts ownAccountWork): the route says so.
+          ...(ownAccountWork(stored) ? { ownAccount: ownAccountNote(stored, shownNameOf(state, stored.contributorId)) } : {}) },
         ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
         ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }
@@ -1621,7 +1625,7 @@ export class SuperTabStore {
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
+        || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
