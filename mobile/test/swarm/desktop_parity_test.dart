@@ -56,22 +56,21 @@ void main() {
     expect(desktop.difference(fields(_model.$1)), isEmpty);
   });
 
-  test(
-    'a Buddy engine the server refuses is refused in the desktop\'s words',
-    () {
-      // The backend checks the desktop's words against its own refusal
-      // (buddies.test.ts); the phone shows the same beside a turned-off engine.
-      final desktop = File('../desktop/lib/super_tabs/buddies.dart')
-          .readAsStringSync();
-      final refusals = RegExp(
-        r"kBuddyEngineRefusals = \{\s*((?:'\w+':\s*'[^']*',\s*)*)\}",
-      ).firstMatch(desktop)!.group(1)!;
-      expect(swarmBuddyEngineRefusals, {
-        for (final m in RegExp(r"'(\w+)':\s*'([^']*)'").allMatches(refusals))
-          m.group(1)!: m.group(2)!,
-      });
-    },
-  );
+  test('the phone offers a Buddy the desktop\'s engines, none turned off', () {
+    // Codex is offered as Claude is since #2832 (Ken, 11-04): neither side
+    // keeps a list of refused engines.
+    final desktop = File(
+      '../desktop/lib/super_tabs/buddies.dart',
+    ).readAsStringSync();
+    final engines = RegExp(
+      r"kBuddyEngines = \{((?:\s*'\w+':\s*'[^']*',?)*)\s*\}",
+    ).firstMatch(desktop)!.group(1)!;
+    expect(swarmBuddyEngines, {
+      for (final m in RegExp(r"'(\w+)':\s*'([^']*)'").allMatches(engines))
+        m.group(1)!: m.group(2)!,
+    });
+    expect(desktop, isNot(contains('kBuddyEngineRefusals')));
+  });
 
   test('the phone names a sent message as the desktop does', () {
     // The phone matches a post to its row by this id (swarm_outbox.dart); a

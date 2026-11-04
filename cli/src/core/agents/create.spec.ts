@@ -32,6 +32,8 @@ import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
+// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -273,16 +275,15 @@ describe('creating an agent', () => {
     expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(calls)
   })
 
-  // A Buddy starts no MCP server (docs/swarms.md, Buddies): a thread session started on a shared model carries none of the
-  // grid's web tools either (task #2354). Another Swarm session on the same grid keeps them.
-  it('builds a Buddy\'s grid launch without the grid\'s web MCP', async () => {
+  // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
+  // as every other Swarm session does.
+  it('builds a Buddy\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
     const grid = { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm', mcpUrl: 'https://grid.example/v1/grid/web-mcp' }
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy', grid }))).toMatchObject({ ok: true })
-    expect(buildGridLaunch.mock.calls.at(-1)![0].override).not.toHaveProperty('mcpUrl')
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent', grid }))).toMatchObject({ ok: true })
-    expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
+    for (const role of ['buddy', 'agent'] as const) {
+      vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+      expect(await setup().create(request({ dsh: 'blender', swarmRole: role, grid }))).toMatchObject({ ok: true })
+      expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
+    }
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
@@ -983,7 +984,7 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
-    it('gives a Buddy none of the machine MCP servers: it starts no MCP server at all (review 3 of #2092)', async () => {
+    it('gives a Buddy the machine MCP servers, as its owner\'s own session has them (task #2832)', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')
       const { env } = await import('../../config/env.js')
@@ -996,7 +997,7 @@ describe('creating an agent', () => {
           return JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])
         }
         expect(await launched('agent')).toContain('lamp-mcp')
-        expect(await launched('buddy')).not.toContain('lamp-mcp')
+        expect(await launched('buddy')).toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
