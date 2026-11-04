@@ -632,12 +632,11 @@ class _SuperTabViewState extends State<SuperTabView>
       final view = scroll.position.viewportDimension;
       away = top == null || top < 0 || top > view;
       if (!away) _unread.saw(c.selectedId);
-      // A line not laid out is told by its place in the list; once seen, no
-      // pill needs its direction.
+      // A line not laid out is told by its place in the list, seen or not:
+      // the bar shows whenever it is above.
       below = top != null
           ? top > view
-          : !_unread.seen(c.selectedId) &&
-                _below(c.selectedId, lineAt, scroll.position);
+          : _below(c.selectedId, lineAt, scroll.position);
     }
     final id = c.selectedId;
     final awayFromEnd =
@@ -666,6 +665,15 @@ class _SuperTabViewState extends State<SuperTabView>
         _awayFromEnd.remove(id);
       }
     });
+  }
+
+  /// The bar's count: [id]'s messages from others in the main stream, from
+  /// its New messages line on.
+  int _newFromLine(String id) {
+    final shown = _shownMessages(id);
+    final at = shown.indexWhere((m) => m.id == _unread.lineAt(id));
+    if (at < 0) return 0;
+    return shown.skip(at).where((m) => m.inMainStream && !c.isOwn(m)).length;
   }
 
   /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
@@ -753,6 +761,14 @@ class _SuperTabViewState extends State<SuperTabView>
         keys.isShiftPressed &&
         !keys.isAltPressed) {
       _markAllRead();
+      return KeyEventResult.handled;
+    }
+    // Esc dismisses the bar from anywhere in the chat, as from its box.
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        !keys.isShiftPressed &&
+        !keys.isAltPressed &&
+        _unread.offersBar(c.selectedId) &&
+        _readAll()) {
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -3740,7 +3756,13 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _unread.offersJump(c.selectedId)
+                      child: _unread.offersBar(c.selectedId)
+                          ? SuperTabUnreadBar(
+                              count: _newFromLine(c.selectedId),
+                              more: c.hasNewer(c.selectedId),
+                              onPressed: () => _revealUnreadLine(c.selectedId),
+                            )
+                          : _unread.offersDown(c.selectedId)
                           ? Padding(
                               padding: const EdgeInsets.fromLTRB(
                                 grid.AppDesktop.panelPadding,
@@ -3750,7 +3772,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               ),
                               child: Center(
                                 child: SuperTabJumpToUnread(
-                                  down: _unread.below,
                                   onPressed: () =>
                                       _revealUnreadLine(c.selectedId),
                                 ),
