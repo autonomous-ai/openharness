@@ -53,6 +53,33 @@ void main() {
     );
   });
 
+  test('a quote of a voice message says its length; any other, its text', () {
+    Map<String, dynamic> row(String text, {bool voice = false}) => {
+      'id': 'm1',
+      'conversationId': 'g1',
+      'text': text,
+      'sequence': 1,
+      'author': {'kind': 'person', 'id': 'dee', 'name': 'dee'},
+      'attachments': [
+        if (voice)
+          file(
+            voice: {
+              'durationMs': 81000,
+              'waveform': [3],
+              'transcribed': true,
+            },
+          ),
+      ],
+      'reactions': <Object>[],
+      'createdAt': DateTime.utc(2026, 11, 4).toIso8601String(),
+    };
+    expect(
+      swarmQuoteText(SuperTabMessage.fromJson(row('hello team', voice: true))),
+      'Voice message (1:21)',
+    );
+    expect(swarmQuoteText(SuperTabMessage.fromJson(row('Typed'))), 'Typed');
+  });
+
   test('sends a .wav as audio/wav', () {
     expect(swarmMimeForName('Voice message.wav'), 'audio/wav');
   });

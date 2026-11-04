@@ -194,6 +194,47 @@ void main() {
     expect(fake.commands, isEmpty);
   });
 
+  testWidgets('a voice message draws its bubble, its words behind →A', (
+    tester,
+  ) async {
+    fake.routes[messages] = (_) => {
+      'messages': [
+        {
+          'id': 'm1',
+          'conversationId': 'g1',
+          'text': 'Ship the parser today.',
+          'sequence': 1,
+          'author': {'kind': 'person', 'id': 'dee', 'name': 'dee'},
+          'attachments': [
+            {
+              'id': 'clip',
+              'name': 'Voice message.wav',
+              'mime': 'audio/wav',
+              'size': 2592044,
+              'url': 'https://cdn.example.test/super-tabs/$tab/a/clip.wav',
+              'voice': {
+                'durationMs': 81000,
+                'waveform': List.filled(48, 9),
+                'transcribed': true,
+              },
+            },
+          ],
+          'reactions': <Object>[],
+          'createdAt': DateTime.utc(2026, 11, 4, 2).toIso8601String(),
+        },
+      ],
+      'next': null,
+    };
+    await pump(tester);
+    expect(key('swarm-voice-bubble-clip'), findsOneWidget);
+    expect(find.text('1:21'), findsOneWidget);
+    expect(find.text('Ship the parser today.'), findsNothing);
+    expect(find.text('Voice message.wav'), findsNothing, reason: 'no chip');
+    await tester.tap(key('swarm-voice-words-toggle'));
+    await tester.pump();
+    expect(find.text('Ship the parser today.'), findsOneWidget);
+  });
+
   testWidgets('no mic where none can be heard', (tester) async {
     await pump(tester, voice: false);
     expect(key('swarm-mic'), findsNothing);
