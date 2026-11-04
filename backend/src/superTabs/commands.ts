@@ -3466,9 +3466,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
       // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
-      // it (Diego, 2026-11-04, #2656). A live checker's failure stands whoever passes.
-      const owners = [state.ownerId, groupProject(state, group).ownerId]
-      const accountable = actor.kind === 'agent' ? actor.agentId === group.leadId : owners.includes(actor.userId)
+      // it (Diego, 2026-11-04, #2656). A live checker's failure stands whoever passes. The PM is the project's coordinator
+      // now, not the task's lead: a replaced PM's removal clears its lead on every task it led (review of #2916).
+      const project = groupProject(state, group)
+      const accountable = actor.kind === 'agent' ? ledProject(state, actor.agentId)?.id === project.id
+        : [state.ownerId, project.ownerId].includes(actor.userId)
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now },
