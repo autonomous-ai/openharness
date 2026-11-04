@@ -39,6 +39,12 @@ export interface ContributedMachine {
    *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
    *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
   teamAccountOnly?: true
+  /** Its owner's choice whether teammates' work may also run in their own account here (commands.ts machine.ownAccountWork,
+   *  Scholes 11-04): who chose (the owner, whose word it is) and when. `allowed` lets a teammate's start run on this entry,
+   *  as its owner, instead of moving to its Harness Team account (ownAccountWork); only the owner's own session turns it on.
+   *  `askedIn`: the owner's message a Lead passed on to turn it off. Kept when the contribution is saved again;
+   *  gone with the machine, so a Mac removed and added again starts Team-account-only. Never on a Team account's own entry. */
+  ownAccountChoice?: { allowed: boolean; by: string; at: string; askedIn?: { conversationId: string; messageId: string } }
   /** One of its person's own machines that is not in the Swarm, recorded only so its host starts and watches their Buddies
    *  there (Dee, 10-29: "I don't want to add my machine to the swarm"). It takes no other start, is no route or Product
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
@@ -323,6 +329,9 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
   // named it (local Team account run, 2026-10-28).
   if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
+  // Its owner let teammates' work run in their own account here: their explicit choice wins over the Swarm-wide rule, for
+  // this machine only (River, 11-04).
+  if (ownAccountWork(pool)) return null
   if (!teamRow && reading?.sessionKind !== 'team' && !required && !pool.teamAccountOnly) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
@@ -436,7 +445,9 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
   otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  const team = !pool.hostMachineId ? teamPoolOf(state, pool, teamMachines) : undefined
+  // Its owner lets teammates' work run in their own account: starts stay on the Mac, so the Mac itself is what routing reads
+  // (security review 2 of #2981).
+  const team = !pool.hostMachineId && !ownAccountWork(pool) ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
 }
@@ -461,14 +472,30 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
 }
 
 
+/** Whether [pool]'s owner lets teammates' work run in their own account there (machine.ownAccountWork): a Mac's own entry
+ *  only, never its Team account's. */
+export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice' | 'hostMachineId' | 'buddyOnly' | 'contributorId'> | undefined): boolean =>
+  !!pool && pool.ownAccountChoice?.allowed === true && pool.ownAccountChoice.by === pool.contributorId && !pool.hostMachineId && !pool.buddyOnly
+
+/** What the route and an agent's row say of a machine whose owner lets teammates' work run in their own account there, so
+ *  whoever routes a teammate's task to it does so knowingly (River, 11-04). */
+export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
+  `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
+
+/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). */
+export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>): string =>
+  `${pool.name} runs teammates' work in its Harness Team account. Its owner can change that in Manage > Machines.`
+
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
- *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
+ *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
+ *  work run in their own account there (ownAccountWork), unless a Team agent wrote the code. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
   if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
   if (!pool || (!teamWritten && project.ownerId === pool.contributorId)) return machineId
+  if (!teamWritten && ownAccountWork(pool)) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 

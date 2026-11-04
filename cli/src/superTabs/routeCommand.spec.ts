@@ -1522,6 +1522,18 @@ describe('routing contributed capacity', () => {
     const silent = await runPool(offline, false, {}, owners)
     expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
   })
+  // Task #2806 (River, 11-04): a machine whose owner lets teammates' work run in their own account (backend machines.ts
+  // ownAccountWork). The teammate whose task lands there did not choose it, so the route says so, for new agents and members.
+  it('says a machine runs a teammate\'s work in its owner\'s own account, and says nothing for the owner\'s own project', async () => {
+    const said = 'Contributed laptop runs teammates\' work in Mate\'s own account.'
+    const pool = { ...healthy(), contributorId: 'mate', teamWork: { allowed: true, ownAccount: said } }
+    const teammate = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'owner' })).answer
+    const rows = [teammate.pick, ...teammate.alternatives as unknown[]] as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain(said)
+    const own = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'mate' })).answer
+    expect(JSON.stringify(own)).not.toContain(said)
+  })
   // Task #2390 (Tony, 11-03): a machine its owner keeps for some projects (backend machines.ts machine.projects) is left out of
   // every other project's route, new agents and members alike, with why. The backend refuses it too.
   it('leaves out a machine its owner keeps for other projects, new agents and members alike, and offers it to those projects', async () => {

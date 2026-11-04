@@ -10,6 +10,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
+import 'composer_newline.dart';
 import 'identity.dart';
 import 'identity_card.dart';
 import 'machine_status.dart' show superTabAgo;
@@ -98,6 +99,8 @@ class SuperTabMessageRow extends StatefulWidget {
     this.identity,
     this.onMarkUnread,
     this.onRemind,
+    this.onEdit,
+    this.onDelete,
   });
 
   final SuperTabMessage message;
@@ -189,6 +192,19 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The More menu's Remind me, with when. Null where it is not offered.
   final ValueChanged<SuperTabRemindIn>? onRemind;
 
+  /// The More menu's Edit message: the text turns into a field here, and
+  /// this sends what it says once changed. Null where it is not offered (it
+  /// is only the author's, on their own plain message).
+  final Future<void> Function(String text)? onEdit;
+
+  /// The More menu's Delete message, which asks first. Null where it is not
+  /// offered.
+  final VoidCallback? onDelete;
+
+  /// What a deleted message that keeps its thread reads as (backend
+  /// messageEdits.ts `DELETED_TEXT`).
+  static const deletedText = 'This message was deleted.';
+
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
   static const avatarSize = grid.AppDesktop.messageAvatarSize;
@@ -271,13 +287,145 @@ class SuperTabMessageRow extends StatefulWidget {
 
 class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   final _focus = FocusNode(debugLabel: 'Swarm message actions');
+  final _editFocus = FocusNode(debugLabel: 'Swarm message edit');
   bool _hovered = false, _focused = false;
+
+  /// The text being edited, while Edit message is open; [_saving] while it
+  /// is on its way.
+  TextEditingController? _editing;
+  bool _saving = false;
 
   @override
   void dispose() {
     _focus.dispose();
+    _editFocus.dispose();
+    _editing?.dispose();
     super.dispose();
   }
+
+  void _startEdit() {
+    _editing?.dispose();
+    final text = widget.message.text;
+    setState(
+      () =>
+          _editing = TextEditingController(text: text)
+            ..selection = TextSelection.collapsed(offset: text.length),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _editFocus.requestFocus();
+    });
+  }
+
+  void _stopEdit() {
+    final editing = _editing;
+    if (editing == null) return;
+    setState(() {
+      _editing = null;
+      _saving = false;
+    });
+    // Disposed after the frame that drops its field.
+    WidgetsBinding.instance.addPostFrameCallback((_) => editing.dispose());
+    widget.onReturnToComposer();
+  }
+
+  /// Saves the field: unchanged text only closes it. A refusal is told by
+  /// [SuperTabMessageRow.onEdit]'s caller; the row shows the text it has.
+  Future<void> _saveEdit() async {
+    final editing = _editing, save = widget.onEdit;
+    if (editing == null || save == null || _saving || !_canSave) return;
+    final text = editing.text.trim();
+    if (text == widget.message.text) return _stopEdit();
+    setState(() => _saving = true);
+    await save(text);
+    if (mounted && identical(_editing, editing)) _stopEdit();
+  }
+
+  /// Text, or files to stand without it (backend messageEdits.ts).
+  bool get _canSave =>
+      (_editing?.text.trim().isNotEmpty ?? false) ||
+      widget.message.attachments.isNotEmpty;
+
+  /// The in-place editor: the text in a field, Cancel and Save. Enter saves
+  /// and Shift+Enter writes another line, as in the composer; Esc cancels.
+  Widget _editor(BuildContext context, TextEditingController editing) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      DecoratedBox(
+        decoration: BoxDecoration(
+          color: DesktopChrome.field,
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+          border: Border.all(color: DesktopChrome.rim),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
+          child: Focus(
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.escape) {
+                _stopEdit();
+                return KeyEventResult.handled;
+              }
+              switch (composerEnter(
+                event,
+                focused: _editFocus.hasFocus,
+                value: editing.value,
+              )) {
+                case ComposerEnter.ignore:
+                  return KeyEventResult.ignored;
+                case ComposerEnter.newline:
+                  insertComposerNewline(editing, (_) => setState(() {}));
+                  return KeyEventResult.handled;
+                case ComposerEnter.send:
+                  unawaited(_saveEdit());
+                  return KeyEventResult.handled;
+              }
+            },
+            child: TextField(
+              key: ValueKey('super-message-edit-${widget.message.id}'),
+              controller: editing,
+              focusNode: _editFocus,
+              enabled: !_saving,
+              minLines: 1,
+              maxLines: 12,
+              maxLength: kComposerMaxLength,
+              keyboardType: TextInputType.multiline,
+              style: SwarmType.composer(context),
+              decoration: const InputDecoration(
+                isCollapsed: true,
+                constraints: BoxConstraints(),
+                contentPadding: EdgeInsets.zero,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                filled: false,
+                counterText: '',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: grid.AppDesktop.controlGap),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          TextButton(
+            onPressed: _saving ? null : _stopEdit,
+            child: const Text('Cancel'),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          FilledButton(
+            key: ValueKey('super-message-edit-save-${widget.message.id}'),
+            onPressed: _saving || !_canSave
+                ? null
+                : () => unawaited(_saveEdit()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ],
+  );
 
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.message.text));
@@ -315,6 +463,24 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
           for (final when in SuperTabRemindIn.values)
             (label: when.label, onPressed: () => remind(when)),
         ],
+      ),
+  ];
+
+  /// The author's own changes, under the menu's rule.
+  List<SuperTabMoreChange> get _changes => [
+    if (widget.onEdit != null)
+      (
+        label: 'Edit message',
+        icon: AppIcons.pencil,
+        onPressed: _startEdit,
+        danger: false,
+      ),
+    if (widget.onDelete case final delete?)
+      (
+        label: 'Delete message',
+        icon: AppIcons.trash2,
+        onPressed: delete,
+        danger: true,
       ),
   ];
 
@@ -638,9 +804,27 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
+                              if (message.deleted)
+                                Text(
+                                  SuperTabMessageRow.deletedText,
+                                  key: ValueKey(
+                                    'super-message-deleted-${message.id}',
+                                  ),
+                                  style: SwarmType.body(
+                                    context,
+                                    color: DesktopChrome.muted,
+                                  ).copyWith(fontStyle: FontStyle.italic),
+                                )
+                              else if (_editing case final editing?)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 960,
+                                  ),
+                                  child: _editor(context, editing),
+                                )
                               // A voice message's text is its words, shown
                               // under its bubble from →A.
-                              if (message.text.isNotEmpty && !voiceMessage)
+                              else if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: ConstrainedBox(
@@ -658,7 +842,18 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     ),
                                   ),
                                 ),
-                              if (message.attachments.isNotEmpty)
+                              if (message.editedAt != null &&
+                                  !message.deleted &&
+                                  _editing == null)
+                                Text(
+                                  '(edited)',
+                                  key: ValueKey(
+                                    'super-message-edited-${message.id}',
+                                  ),
+                                  style: SwarmType.time(context),
+                                ),
+                              if (message.attachments.isNotEmpty &&
+                                  !message.deleted)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: Padding(
@@ -675,21 +870,23 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     ),
                                   ),
                                 ),
-                              widget.card ??
-                                  SuperTabPullRequestLinks(message.text),
-                              if (widget.linkTarget case final resolve?)
-                                if (widget.onOpenLink case final open?)
-                                  SuperTabMessageLinkPreviews(
-                                    message.text,
-                                    resolve: resolve,
-                                    onOpen: open,
-                                  ),
-                              SuperTabReactionBar(
-                                message: message,
-                                readerId: widget.readerId,
-                                nameOf: widget.reactorName ?? (_, id) => id,
-                                onReact: widget.onReact,
-                              ),
+                              if (!message.deleted) ...[
+                                widget.card ??
+                                    SuperTabPullRequestLinks(message.text),
+                                if (widget.linkTarget case final resolve?)
+                                  if (widget.onOpenLink case final open?)
+                                    SuperTabMessageLinkPreviews(
+                                      message.text,
+                                      resolve: resolve,
+                                      onOpen: open,
+                                    ),
+                                SuperTabReactionBar(
+                                  message: message,
+                                  readerId: widget.readerId,
+                                  nameOf: widget.reactorName ?? (_, id) => id,
+                                  onReact: widget.onReact,
+                                ),
+                              ],
                               if ((widget.thread, widget.onOpenThread) case (
                                 final thread?,
                                 final open?,
@@ -713,59 +910,64 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                       ],
                     ),
                   ),
-                  Positioned(
-                    top: 0,
-                    right: 12,
-                    child: Opacity(
-                      opacity: active ? 1 : 0,
-                      alwaysIncludeSemantics: true,
-                      child: Material(
-                        color: DesktopChrome.surface,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            DesktopChrome.controlRadius,
+                  // A deleted message has nothing left to act on, and one
+                  // being edited has its own buttons.
+                  if (!message.deleted && _editing == null)
+                    Positioned(
+                      top: 0,
+                      right: 12,
+                      child: Opacity(
+                        opacity: active ? 1 : 0,
+                        alwaysIncludeSemantics: true,
+                        child: Material(
+                          color: DesktopChrome.surface,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              DesktopChrome.controlRadius,
+                            ),
+                            side: BorderSide(color: DesktopChrome.rim),
                           ),
-                          side: BorderSide(color: DesktopChrome.rim),
-                        ),
-                        // A phone's actions are a finger's size each.
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (widget.onReact case final react?)
-                              SuperTabReactionPicker(onReact: react),
-                            if (widget.onReply != null)
+                          // A phone's actions are a finger's size each.
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (widget.onReact case final react?)
+                                SuperTabReactionPicker(onReact: react),
+                              if (widget.onReply != null)
+                                fingerTarget(
+                                  enabled: phone,
+                                  AppIconButton(
+                                    icon: AppIcons.reply,
+                                    tooltip: 'Reply',
+                                    onPressed: widget.onReply,
+                                  ),
+                                ),
                               fingerTarget(
                                 enabled: phone,
                                 AppIconButton(
-                                  icon: AppIcons.reply,
-                                  tooltip: 'Reply',
-                                  onPressed: widget.onReply,
+                                  icon: AppIcons.copy,
+                                  tooltip: 'Copy message',
+                                  onPressed: _copy,
                                 ),
                               ),
-                            fingerTarget(
-                              enabled: phone,
-                              AppIconButton(
-                                icon: AppIcons.copy,
-                                tooltip: 'Copy message',
-                                onPressed: _copy,
-                              ),
-                            ),
-                            if (_moreActions case final actions
-                                when actions.isNotEmpty)
-                              fingerTarget(
-                                enabled: phone,
-                                SuperTabMessageMoreMenu(
-                                  key: ValueKey(
-                                    'super-message-more-${message.id}',
+                              if ((_moreActions, _changes)
+                                  case (final actions, final changes)
+                                  when actions.isNotEmpty || changes.isNotEmpty)
+                                fingerTarget(
+                                  enabled: phone,
+                                  SuperTabMessageMoreMenu(
+                                    key: ValueKey(
+                                      'super-message-more-${message.id}',
+                                    ),
+                                    actions: actions,
+                                    changes: changes,
                                   ),
-                                  actions: actions,
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   if (taggedYou)
                     Positioned(
                       left: 0,
