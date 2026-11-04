@@ -25,14 +25,21 @@ import '../widgets/desktop_chrome.dart';
 /// dialog read the same state, so a pairing shows up in the list the moment the CLI confirms it.
 /// The CLI keeps the trust and the connection; nothing here holds a code longer than one request.
 class WifiRobotsController extends ChangeNotifier {
-  WifiRobotsController({AutonomousDeviceCli? cli, this.onLocalNetworkBlocked})
-    : _injected = cli,
-      // Tests may inject a fake; without one under test nothing may reach a real CLI.
-      _inert = kUnderTest && cli == null;
+  WifiRobotsController({
+    AutonomousDeviceCli? cli,
+    this.onLocalNetworkBlocked,
+    Duration? refreshEvery,
+  }) : _injected = cli,
+       // Tests may inject a fake; without one under test nothing may reach a real CLI.
+       _inert = kUnderTest && cli == null,
+       // Under test no background clock runs unless the test asks for one (with its fake).
+       _every =
+           refreshEvery ?? (kUnderTest ? null : const Duration(seconds: 60));
 
   final AutonomousDeviceCli? _injected;
   late final AutonomousDeviceCli _cli = _injected ?? AutonomousDeviceCli();
   final bool _inert;
+  final Duration? _every;
 
   /// Discovery found the local network refused: the app restarts a daemon it did not launch so it
   /// gets the app's permission (AppNotifier.localNetworkBlocked).
@@ -81,10 +88,9 @@ class WifiRobotsController extends ChangeNotifier {
 
   void _scheduleRefresh() {
     _timer?.cancel();
-    // Tests may inject a fake for the initial fetch and user actions, but must
-    // never start a background clock or invoke a real CLI.
-    if (_disposed || kUnderTest || unsupported || busy) return;
-    _timer = Timer(const Duration(seconds: 60), () => unawaited(refresh()));
+    final every = _every;
+    if (_disposed || every == null || unsupported || busy) return;
+    _timer = Timer(every, () => unawaited(refresh()));
   }
 
   String _message(Object error) => error is AutonomousDeviceCliException

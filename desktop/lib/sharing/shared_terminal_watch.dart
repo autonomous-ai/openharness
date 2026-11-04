@@ -41,6 +41,9 @@ class SharedTerminalWatch {
 
   bool get stopped => _stopped;
 
+  /// Whether the pane can be seen: its owner sets this from its [VisibleTick].
+  bool seen = true;
+
   void _update() {
     if (session.status == TerminalSessionStatus.controlling) {
       _set(false);

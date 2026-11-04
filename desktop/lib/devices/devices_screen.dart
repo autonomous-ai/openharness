@@ -26,8 +26,13 @@ final harnessDeviceShopUrl = Uri.parse(
 );
 
 class DevicesTab extends StatefulWidget {
-  const DevicesTab({super.key, required this.notifier});
+  const DevicesTab({super.key, required this.notifier, this.refreshEvery});
   final AppNotifier notifier;
+
+  /// How often the machines' devices are read again while the tab is seen. Null: every 10
+  /// seconds, and never under test (where a test passes its own).
+  @visibleForTesting
+  final Duration? refreshEvery;
   @override
   State<DevicesTab> createState() => _DevicesTabState();
 }
@@ -50,9 +55,12 @@ class _DevicesTabState extends State<DevicesTab> {
   void initState() {
     super.initState();
     unawaited(widget.notifier.refreshDevices());
-    if (!kUnderTest) {
+    final every =
+        widget.refreshEvery ??
+        (kUnderTest ? null : const Duration(seconds: 10));
+    if (every != null) {
       _refresh = Timer.periodic(
-        const Duration(seconds: 10),
+        every,
         (_) => unawaited(widget.notifier.refreshDevices()),
       );
     }
