@@ -296,6 +296,23 @@ void main() {
     },
   );
 
+  testWidgets('a Swarm at its limit fails the row and says why', (
+    tester,
+  ) async {
+    final (:f, :c) = await swarm((_) {});
+    await openBox(tester, c, f.app);
+    const full =
+        'This Swarm is at its limit of 128 machines. One has to be rem'
+        'oved before another can be added.';
+    f.connection.server.refuseContributions['m'] = full;
+    await tester.tap(find.text('Add 1'));
+    await settle(tester);
+
+    expect(inRow('m', 'failed'), findsOneWidget);
+    expect(find.byTooltip(full), findsOneWidget);
+    await close(tester, f, c);
+  });
+
   testWidgets(
     'a computer that fails keeps its reason and its tick, and the others are still added',
     (tester) async {

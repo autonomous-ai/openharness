@@ -209,13 +209,16 @@ void main() {
     daemon = _Daemon();
     server.refuse = {
       'code': 'MACHINES_FULL',
-      'message': 'A Super Tab can have up to 32 contributed machines.',
+      'message':
+          'This Swarm is at its limit of 128 machines. One has to be rem'
+          'oved before another can be added.',
     };
     final refused = await attempt();
     expect(refused?.added, isFalse);
     expect(
       refused?.problem,
-      'A Super Tab can have up to 32 contributed machines.',
+      'This Swarm is at its limit of 128 machines. One has to be rem'
+      'oved before another can be added.',
     );
     expect(daemon.woken, isEmpty);
   });
@@ -472,6 +475,29 @@ void noteTests() {
     );
     expect(find.byKey(const Key('swarm-joined-machine-pause')), findsNothing);
     expect(find.byKey(const Key('swarm-joined-machine-remove')), findsNothing);
+    c.dispose();
+  });
+
+  testWidgets('a Swarm at its limit says so after joining', (tester) async {
+    final c = await mount(
+      tester,
+      const SwarmJoinedMachine(
+        tabId: 'tab',
+        swarmName: 'Pilot',
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        problem:
+            'This Swarm is at its limit of 128 machines. One has to be rem'
+            'oved before another can be added.',
+      ),
+    );
+    expect(
+      find.text(
+        'This Mac was not added to Pilot. This Swarm is at its limit of 128 machin'
+        'es. One has to be removed before another can be added.',
+      ),
+      findsOneWidget,
+    );
     c.dispose();
   });
 }
