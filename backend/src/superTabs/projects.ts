@@ -43,6 +43,8 @@ export interface SwarmProject {
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
   /** A person turned the digest off (project.digest with time null), so the default is not filled in again. */
   digestOff?: true
+  /** The last 30-minute slot of the built-in PM schedule its coordinator's poll handled (pmSchedule.ts), woken or not. */
+  schedule?: { lastSlot: number }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null

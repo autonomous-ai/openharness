@@ -600,6 +600,8 @@ export const NOTICE_READERS = {
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // The coordinator's wake for its built-in schedule (pmSchedule.ts).
+  'schedule-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).

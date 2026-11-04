@@ -1,0 +1,81 @@
+import { author, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { workOver } from './decisions.js'
+import { digestOf, localNow } from './digest.js'
+import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
+import { taskLiveness } from './liveness.js'
+import { ARCHIVE_QUIET_MS } from './tidy.js'
+
+// Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
+// own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
+// lost one. A line in the project's own instructions about the same job wins; the coordinator, which reads both, judges that.
+
+/** The heading of the built-in section, which no saved document may hold (commands.ts instructions.save). */
+export const BUILT_IN_HEADING = '## Built-in PM schedule (from the Swarm)'
+
+/** What the coordinator reads after its project's instructions (store.ts instructions, cli swarmInstructionsSkill.ts). */
+export const PM_SCHEDULE_TEXT = `${BUILT_IN_HEADING}
+
+The Swarm wakes you for these jobs with a message that names them. Set no timer of your own for them, and delete one you set
+before. A line in this project's instructions above about the same job wins: follow it, and skip that job when the Swarm's
+message names it. This section is not part of the project's document: never save it into the document.
+
+- Every 30 minutes, the open-task sweep: every open task, the unassigned and "To do" ones included, ends it with an owner
+  working on it, a question to a person by name with a default and a time, or a close with its reason. A task waiting on a
+  person gets that person asked by name, with a default and a time. Ask no agent whether it is stalled: \`mine\` and the
+  task's thread show it. Then archive every finished group the Swarm left open: one with no pull request linked, which the
+  auto-archive never takes.
+- When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
+  stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
+  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.`
+
+/** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
+export const SCHEDULE_SLOT_MS = 30 * 60_000
+export const scheduleSlot = (now: number): number => Math.floor(now / SCHEDULE_SLOT_MS)
+export const scheduleMessageId = (tabId: string, projectId: string, slot: number): string => stableId('schedule', tabId, projectId, String(slot))
+
+const isLead = (state: SuperTabState, group: Conversation) => projectsOf(state).some(p => p.leadConversationId === group.id)
+const inProject = (group: Conversation, projectId: string) => (group.projectId ?? 'lead') === projectId
+
+/** Whether the sweep has anything to do among the loaded groups: a task no agent is moving (none assigned, its agent lost, or
+ *  it waits on a person or is stuck), or a finished group the auto-archive never takes (no pull request linked, its task's
+ *  either for a step). A task an agent is working on is the stalled and lost notices' (liveness.ts). Steps belong to their
+ *  task's Engineer. */
+export function sweepDue(state: SuperTabState, projectId: string, now: number): boolean {
+  return state.conversations.some(group => {
+    if (group.kind || group.audience || group.archived || !inProject(group, projectId) || isLead(state, group)) return false
+    if (workOver(state, group)) {
+      const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      const linked = [...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? []]
+      const last = group.lastActivityAt ? Date.parse(group.lastActivityAt) : undefined
+      return !linked.length && last !== undefined && now - last >= ARCHIVE_QUIET_MS
+    }
+    if (group.reviewOf) return false
+    if (!group.assignment) return true
+    const liveness = taskLiveness(state, group, now)
+    return liveness?.state === 'orphaned' || (liveness?.state === 'waiting' && (liveness.why === 'person' || liveness.why === 'blocked'))
+  })
+}
+
+/** The wake's words: the slot's local time, the job due, and that the project's own schedule wins. */
+export function scheduleText(project: SwarmProject, slot: number): string {
+  const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
+  return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
+    '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
+      + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
+    'Skip a job your project\'s instructions schedule on their own clock.'].join('\n')
+}
+
+/** The coordinator's slot when one is due, with its wake when the sweep has something to do (null draft: record the slot,
+ *  send nothing). Null in a paused Swarm, which stays due until it resumes, or for an agent that leads no project. The
+ *  caller records the slot in the poll's own write, and sends nothing while its last wake is still unread (store.ts). */
+export function scheduleRequest(state: SuperTabState, target: Agent, now: number): { slot: number; draft: MessageDraft | null } | null {
+  if (state.paused) return null
+  const project = ledProject(state, target.id)
+  const slot = scheduleSlot(now)
+  if (!project || slot <= (project.schedule?.lastSlot ?? -1)) return null
+  if (!sweepDue(state, project.id, now)) return { slot, draft: null }
+  return { slot, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
+    author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot),
+    replyTo: null, recipients: [target.id], source: { kind: 'schedule-request', projectId: project.id, slot } } }
+}
