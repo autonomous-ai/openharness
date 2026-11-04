@@ -230,20 +230,25 @@ const ownerLines = (said: string): string[] => {
 /** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
 const SHOWN_MARKER = /post this as you\s*:/giu
 
-/** The lines a Buddy's message showed to post: only what follows its last marker, whole or each quoted line in it (security
- *  review 2 of #3024). What comes before the marker is the Buddy's own talk, which may quote any project. */
-const shownLines = (said: string): string[] => {
+/** The line a Buddy's message showed to post, or null with no marker. Only what follows its last marker counts (security
+ *  review 2 of #3024): what comes before is the Buddy's own talk, which may quote any project. If it opens with a quote, only
+ *  that first quoted line counts (task #2989): after the closing quote comes the Buddy's talk again ("OK?", another quote).
+ *  Otherwise all of it counts, whole. */
+const shownLine = (said: string): string | null => {
   const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
-  if (!marker) return []
+  if (!marker) return null
   const after = said.slice(marker.index! + marker[0].length)
-  return [unquoted(after), ...quotedIn(after)].map(comparable).filter(Boolean)
+  const quoted = /^\s*["“]([^"”]*)["”]/u.exec(after)
+  return comparable(quoted ? quoted[1]! : unquoted(after))
 }
 
-/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or of the line
- *  their Buddy showed them just before it (shownBefore) after its marker. Nothing else of their private chat goes out as them. */
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or the line
+ *  their Buddy showed them just before it (shownBefore, newest first). Only the newest shown line counts (task #2989): once
+ *  the Buddy shows a new line, the older one is replaced. Nothing else of their private chat goes out as them. */
 export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
   const wanted = comparable(words)
-  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || (ask.shown ?? []).some(said => shownLines(said).includes(wanted)))
+  const newest = (ask.shown ?? []).map(shownLine).find(line => line !== null)
+  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || newest === wanted)
 }
 
 /** One row of a Buddy chat as the store reads it for a proposal, newest first. */
