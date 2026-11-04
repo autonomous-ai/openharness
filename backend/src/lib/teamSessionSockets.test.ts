@@ -37,6 +37,7 @@ vi.mock('./dailyTracking.js', async original => ({ ...await original<typeof impo
   recordTurnStarted: m.recordTurn }))
 
 import { handleAdapterUpgrade } from './adapterWs.js'
+import { touchMachineOnlineDay } from './dailyTracking.js'
 import { handleWebUpgrade } from './webWs.js'
 import { handleDeviceUpgrade } from './deviceWs.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
@@ -48,6 +49,8 @@ const owner: AuthUser = { sub: 'owner', email: 'owner@example.com', role: 'user'
 const team: AuthUser = { ...owner, harnessSessionId: 'team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER }
 const teamMac = { machineId: 'team-mac', userId: 'owner', name: 'MacBook Pro · Team', billingStatus: 'not_required', sessionKind: 'team' }
 const ownerMac = { machineId: 'owner-mac', userId: 'owner', name: 'MacBook Pro', billingStatus: 'not_required', sessionKind: null }
+/** What the connect's one update of the machine row carries beside its stamp (lib/dailyTracking.ts). */
+const connectChanges = () => vi.mocked(touchMachineOnlineDay).mock.calls.find(c => c[3].isNewConnection)?.[3].changes
 const flush = async () => { for (let i = 0; i < 400; i++) await Promise.resolve() }
 
 class Socket extends EventEmitter {
@@ -156,10 +159,16 @@ describe('the machine socket and a team session', () => {
       handleAdapterUpgrade(adapter(computer) as never, raw() as never, Buffer.alloc(0)); await flush()
     }
 
+    it('a computer\'s row from before the kind was kept is marked a computer in the connect\'s one update', async () => {
+      await attach(owner, OWNER_COMPUTER)
+      expect(connectChanges()).toMatchObject({ sessionKind: 'computer' })
+    })
+
     it('a team machine hears only its device-key pushes, never the account\'s grid name', async () => {
       await attach(team, TEAM_COMPUTER)
       expect(m.pushes).toHaveBeenCalledWith('owner', expect.any(Function), expect.objectContaining({ team: true }))
-      expect(m.machineUpdate).toHaveBeenCalledWith({ where: { machineId: 'team-mac' }, data: expect.objectContaining({ sessionKind: 'team' }) })
+      // Its row is already marked team (resolveForTeamComputer refuses any other): the connect does not write that again.
+      expect(connectChanges()).not.toHaveProperty('sessionKind')
       const meta = ws.sent().find(f => f.frame?.type === 'machine_meta')
       expect(meta.frame.payload).toEqual({ name: 'MacBook Pro · Team', gridName: null })
     })
@@ -193,7 +202,7 @@ describe('the machine socket and a team session', () => {
       m.machineFindUnique.mockResolvedValue({ name: 'MacBook Pro' })
       await attach(owner, OWNER_COMPUTER)
       expect(m.pushes).toHaveBeenCalledWith('owner', expect.any(Function), expect.objectContaining({ team: false }))
-      expect(m.machineUpdate).toHaveBeenCalledWith({ where: { machineId: 'owner-mac' }, data: expect.objectContaining({ sessionKind: 'computer' }) })
+      expect(connectChanges()).not.toHaveProperty('sessionKind')
       expect(ws.sent().find(f => f.frame?.type === 'machine_meta').frame.payload.gridName).toBe('grid-of-the-account')
       ws.frame({ t: 'up', frame: { type: 'devlog_append', payload: { requestId: 'r1', entry: { op: 'add' } } } })
       ws.frame({ t: 'up', userEligible: true, webEligible: false, frame: { type: 'device_e2ee_pair_pending', payload: { pairId: 'p1', label: 'Dial' } } })
