@@ -148,8 +148,8 @@ void main() {
     expect(find.byType(SwarmTags), findsNothing);
   });
 
-  testWidgets('something new: bold in the main ink, heard as unread, with no '
-      'dot at its end', (tester) async {
+  testWidgets('something new: bold in the main ink, heard as unread, with a '
+      "dot at its end (anh Dee's mockup, 2026-11-04)", (tester) async {
     final semantics = tester.ensureSemantics();
     await pump(tester, news: (bold: true, tags: 0, hasWaitingTag: false));
 
@@ -157,8 +157,29 @@ void main() {
     expect(style.color, AppPalette.textPrimary);
     expect(style.fontWeight, FontWeight.w600);
     expect(find.bySemanticsLabel(RegExp('Unread messages')), findsOneWidget);
-    expect(dots(), findsNothing, reason: 'no unread dot at its end either');
+    final unread = find.byKey(const ValueKey('swarm-project-unread'));
+    expect(unread, findsOneWidget);
+    final rowBox = tester.getRect(find.byKey(row));
+    expect(
+      tester.getRect(unread).right,
+      greaterThan(rowBox.right - 40),
+      reason: "at the row's end",
+    );
     semantics.dispose();
+  });
+
+  testWidgets('quiet, or with tags that say it, no unread dot', (tester) async {
+    for (final news in [
+      swarmNoProjectNews,
+      (bold: true, tags: 2, hasWaitingTag: true),
+    ]) {
+      await pump(tester, news: news);
+      expect(
+        find.byKey(const ValueKey('swarm-project-unread')),
+        findsNothing,
+        reason: '$news',
+      );
+    }
   });
 
   testWidgets('tags waiting: @N filled at its end, the name bright', (

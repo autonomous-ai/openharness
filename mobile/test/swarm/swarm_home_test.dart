@@ -961,6 +961,7 @@ void main() {
 
       const webRow = 'swarm-project-$tab-$web';
       expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
+      expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
     });
