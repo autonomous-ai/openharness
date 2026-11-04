@@ -1064,6 +1064,9 @@ void main() {
       (tester) async {
         final f = await fixture(tester);
         await tester.binding.setSurfaceSize(const Size(560, 420));
+        final previous = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = previous);
         await f.show(tester, brightness: brightness);
         const reason =
             'Not in a task or chat now. Give it work or add it to a chat to open its terminal.';
@@ -1098,9 +1101,7 @@ void main() {
         await tester.pumpAndSettle();
 
         // Once a task holds Finn, Open terminal opens it, with no reason.
-        (f.server.state['conversations'] as List)[1]['agentIds'] = [
-          'agent-3',
-        ];
+        (f.server.state['conversations'] as List)[1]['agentIds'] = ['agent-3'];
         await f.controller.refresh();
         await tester.pumpAndSettle();
         await f.card(tester, 3);
@@ -1446,6 +1447,10 @@ void main() {
       tester.getTopLeft(f.row(1)).dy,
       lessThan(tester.getTopLeft(f.row(3)).dy),
     );
+    // A terminal opens in a conversation that holds the agent (#2738).
+    (f.server.state['conversations'] as List)[1]['agentIds'] = ['agent-1'];
+    await f.controller.refresh();
+    await tester.pumpAndSettle();
     await f.details(tester, 1);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);

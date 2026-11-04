@@ -8,6 +8,35 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
 
+/// The open conversations that hold [agentId]: where its terminal can open.
+/// The backend opens a terminal only in a conversation that holds the agent,
+/// and a dormant one is not in the Swarm's snapshot (#2738).
+List<SuperTabConversation> superTabAgentTerminalGroups(
+  SuperTabController controller,
+  String agentId,
+) {
+  final snapshot = controller.snapshot;
+  if (controller.accessRevoked || snapshot?.agent(agentId) == null) {
+    return const [];
+  }
+  return snapshot!.conversations
+      .where((g) => !g.closed && g.agentIds.contains(agentId))
+      .toList();
+}
+
+/// Why Open terminal cannot open [agentId]'s terminal, and how to let it,
+/// or null when it can: the card and Details say it under their buttons
+/// rather than close on nothing (thaibao56, #2738).
+String? superTabOpenTerminalBlocked(
+  SuperTabController controller,
+  String agentId,
+) =>
+    controller.accessRevoked ||
+        controller.snapshot?.agent(agentId) == null ||
+        superTabAgentTerminalGroups(controller, agentId).isNotEmpty
+    ? null
+    : 'Not in a task or chat now. Give it work or add it to a chat to open its terminal.';
+
 /// Chooses a conversation context before opening an agent's existing terminal.
 /// Selection is local to this dialog; only Open or a double-click navigates.
 class SuperTabAgentGroupPicker extends StatefulWidget {
@@ -31,16 +60,8 @@ class _SuperTabAgentGroupPickerState extends State<SuperTabAgentGroupPicker> {
   final _rows = <String, GlobalKey>{};
   String? _selectedId;
 
-  List<SuperTabConversation> get _groups {
-    final snapshot = widget.controller.snapshot;
-    if (widget.controller.accessRevoked ||
-        snapshot?.agent(widget.agentId) == null) {
-      return const [];
-    }
-    return snapshot!.conversations
-        .where((g) => !g.closed && g.agentIds.contains(widget.agentId))
-        .toList();
-  }
+  List<SuperTabConversation> get _groups =>
+      superTabAgentTerminalGroups(widget.controller, widget.agentId);
 
   @override
   void initState() {

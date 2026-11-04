@@ -502,6 +502,8 @@ void main() {
       };
       (f.server.state['conversations'] as List).add({
         ...conversationFixture('build', 'Windows credential fix'),
+        // The backend adds a task's assignee to its conversation.
+        'agentIds': ['agent-1'],
         'assignment': {'agentId': 'agent-1', 'status': 'working'},
       });
       await f.controller.refresh();
