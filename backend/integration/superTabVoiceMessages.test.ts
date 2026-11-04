@@ -104,7 +104,7 @@ describe('reading a voice file', () => {
     const file = await f.upload(wav(2))
     const first = f.store.readVoice(owner, f.tab, file.id, 'en')
     await vi.waitFor(() => expect(f.voice.calls.transcribe).toBe(1))
-    await expect(f.store.readVoice(owner, f.tab, file.id, 'en')).rejects.toMatchObject({ code: 'VOICE_TRANSCRIBING', statusCode: 409 })
+    await expect(f.store.readVoice(owner, f.tab, file.id, 'en')).rejects.toMatchObject({ code: 'VOICE_TRANSCRIBING', status: 409 })
     finish('Hello.')
     expect((await first).voice.transcribed).toBe(true)
     expect(f.voice.calls.transcribe).toBe(1)
@@ -122,12 +122,13 @@ describe('reading a voice file', () => {
 
   it('refuses another actor\'s file, a sent one, an agent caller, a file that is not WAV and a clip over 10:05', async () => {
     const f = await swarm()
-    await f.execute({ type: 'member.add', email: peer.email, role: 'member' }).catch(() => undefined)
     const file = await f.upload(wav(2))
-    await expect(f.store.readVoice(peer, f.tab, file.id, 'en')).rejects.toMatchObject({ code: expect.stringMatching(/ATTACHMENT_UNAVAILABLE|NOT_FOUND|FORBIDDEN/) })
+    await expect(f.store.readVoice(peer, f.tab, file.id, 'en')).rejects.toMatchObject({ status: 403 })
+    const agents = (await f.store.upload(owner, f.tab, 'lead', { name: 'Voice message.wav', mime: 'audio/wav', body: Readable.from([wav(2)]) }, f.lead)).attachment
+    await expect(f.store.readVoice(owner, f.tab, agents.id, 'en')).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     await expect(f.store.readVoice(owner, f.tab, file.id, 'en', f.lead)).rejects.toMatchObject({ code: 'VOICE_PEOPLE_ONLY' })
     const text = await f.upload(Buffer.from('hello, this is not audio at all, only some text that is long enough'), 'notes.wav')
-    await expect(f.store.readVoice(owner, f.tab, text.id, 'en')).rejects.toMatchObject({ code: 'UNSUPPORTED_AUDIO', statusCode: 415 })
+    await expect(f.store.readVoice(owner, f.tab, text.id, 'en')).rejects.toMatchObject({ code: 'UNSUPPORTED_AUDIO', status: 415 })
     const png = await f.upload(wav(2), 'shot.png', 'image/png')
     await expect(f.store.readVoice(owner, f.tab, png.id, 'en')).rejects.toMatchObject({ code: 'UNSUPPORTED_AUDIO' })
     await f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })
@@ -138,7 +139,7 @@ describe('reading a voice file', () => {
     const big = wav(606)
     f.files.objects.set(row.objectKey, { ...f.files.objects.get(row.objectKey)!, bytes: big })
     await db.superTabAttachment.update({ where: { id: long.id }, data: { size: big.length } })
-    await expect(f.store.readVoice(owner, f.tab, long.id, 'en')).rejects.toMatchObject({ code: 'VOICE_TOO_LONG', statusCode: 413 })
+    await expect(f.store.readVoice(owner, f.tab, long.id, 'en')).rejects.toMatchObject({ code: 'VOICE_TOO_LONG', status: 413 })
     expect(f.voice.calls.transcribe).toBe(0)
   })
 

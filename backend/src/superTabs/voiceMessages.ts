@@ -39,3 +39,28 @@ export function voiceWaveform(wav: Buffer, bars = VOICE_BARS): number[] {
 
 const QUIET_DB = -55
 const LOUD_DB = -10
+
+/** The types a voice message's file may be uploaded as: the phone's recorder makes PCM WAV (mobile/lib/phone/voice_wav.dart). */
+export const VOICE_TYPES: ReadonlySet<string> = new Set(['audio/wav', 'audio/x-wav', 'audio/wave'])
+/** A bound on the bytes read for one clip, as the voice route's (routes/voice.ts MAX_AUDIO_BYTES): 10:05 of 16 kHz mono is 19.4 MB. */
+export const MAX_VOICE_BYTES = 25 * 1024 * 1024
+/** How long a call that claimed a file to transcribe it holds it before another may take over. */
+export const VOICE_CLAIM_MS = 2 * 60_000
+
+/** What a client and a message are told about a voice message's file. Why it has no words, when it has none: the sender's daily
+ *  voice limit was used, or the transcription service failed. Either is final for that file. */
+export interface VoiceFacts { durationMs: number; waveform: number[]; transcribed: boolean; failure?: 'limit' | 'failed' }
+/** As the file's row keeps it: with its words, which only message.send reads, to make them the message's text. */
+export interface StoredVoice extends VoiceFacts { transcript: string | null }
+
+/** The facts a row keeps, without its words; null for a row that is not a voice message's. */
+export function voiceFacts(stored: unknown): VoiceFacts | null {
+  if (!stored || typeof stored !== 'object') return null
+  const { durationMs, waveform, transcribed, failure } = stored as Partial<StoredVoice>
+  if (typeof durationMs !== 'number' || !Array.isArray(waveform) || typeof transcribed !== 'boolean') return null
+  return { durationMs, waveform, transcribed, ...failure ? { failure } : {} }
+}
+
+/** The words a row keeps, or '' when it has none. */
+export const voiceTranscript = (stored: unknown): string =>
+  stored && typeof stored === 'object' && typeof (stored as StoredVoice).transcript === 'string' ? (stored as StoredVoice).transcript! : ''

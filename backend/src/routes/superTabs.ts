@@ -57,6 +57,8 @@ const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
+const voiceParams = z.object({ tabId: id, attachmentId: id })
+const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
 // The store checks the name, type and size; this only bounds what reaches it.
 const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000), mime: z.string().max(1000), size: z.number().int() }).strict()
 const emptyBody = z.object({}).strict().optional()
@@ -227,9 +229,10 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+  const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers },
+    { VoiceQuotaExceededError, voiceQuotaService }, { pickWavLang, transcribeWavWithDeepgram }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
-    import('./harnessLinks.js')])
+    import('./harnessLinks.js'), import('../lib/voiceQuota.js'), import('../lib/deepgramWav.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -254,7 +257,16 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
       // Its observer sockets may be on any instance.
       accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) },
-      sessionsConfidential: sessions => { void tellSessionViewers(sessions) } })
+      sessionsConfidential: sessions => { void tellSessionViewers(sessions) },
+      // Chat voice messages are transcribed as the dial's and the phone's voice input are (routes/voice.ts), on the same daily
+      // quota of the person's account.
+      voice: {
+        reserve: (user, id, durationMs) => voiceQuotaService.reserveForUser(user.sub, user.autonomousEnv ?? 'prod', id, durationMs)
+          .then(() => 'ok' as const, error => { if (error instanceof VoiceQuotaExceededError) return 'limit' as const; throw error }),
+        transcribe: (wav, lang) => transcribeWavWithDeepgram(wav, 'audio/wav', pickWavLang(lang)),
+        commit: id => voiceQuotaService.commit(id),
+        release: id => voiceQuotaService.release(id).then(() => undefined),
+      } })
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
@@ -594,6 +606,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof uploadParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete',
     { bodyLimit: 1024, preHandler: [validateParams(uploadParams), validateQuery(agentQuery), validateBody(emptyBody)] },
     (req, reply) => respond(reply, () => store.completeUpload(req.user!, req.params.tabId, req.params.uploadId, req.query.asAgentId)))
+  // A voice message's file, uploaded either way above, is read once before it is sent: its length, waveform and words (store.ts
+  // readVoice). Its answer carries no words; message.send makes them the message's text.
+  app.post<{ Params: z.infer<typeof voiceParams>; Querystring: z.infer<typeof voiceQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/:attachmentId/voice',
+    { bodyLimit: 1024, preHandler: [validateParams(voiceParams), validateQuery(voiceQuery), validateBody(emptyBody)] },
+    (req, reply) => respond(reply, () => store.readVoice(req.user!, req.params.tabId, req.params.attachmentId, req.query.lang ?? 'en', req.query.asAgentId)))
   // An avatar picture (superTabs/profile.ts) comes the same way, alone in its form; the command that sets it names whose it is.
   await app.register(async scope => {
     await scope.register(multipart, { limits: { fileSize: MAX_AVATAR_BYTES + 1, files: 1, fields: 0, parts: 1 } })
