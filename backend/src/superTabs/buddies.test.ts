@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
-import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
+import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
@@ -611,13 +611,19 @@ describe('a Buddy\'s proposal to the PM', () => {
       expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: 'Offline drafts' }, buddy,
         okayed(f, [], 'Send this to the PM: Offline drafts please'))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' })) }
     expect(send('Keep drafts\noffline', ['I\'ll post this as you: “Keep drafts offline”'])).toBe('Keep drafts\noffline')
+    expect(send('Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I’ll post this as you: Fix the jump-to freeze'])).toBe('Fix the jump-to freeze')
     // Words the owner never saw: not in their ask, not in a line shown before it.
     // A shown line or the ask whole, never a piece cut from it (security review 1 of #3024): every word seen, not that line.
     const both = 'I\'ll post this as you: “Fix the login. Don\'t delete the old accounts table.” OK?'
     expect(send('Fix the login. Don\'t delete the old accounts table.', [both])).toBe('Fix the login. Don\'t delete the old accounts table.')
     for (const [text, shown] of [['Also ship the phone app', ['I\'ll post this as you: “Keep drafts offline”']], ['Keep drafts offline', []],
       ['Keep drafts offline!', ['I\'ll post this as you: “Keep drafts offline”']], ['delete the old accounts table', [both]], ['Fix', [both]],
-      ['Keep drafts', ['I\'ll post this as you: “Keep drafts offline”']]] as const) {
+      ['Keep drafts', ['I\'ll post this as you: “Keep drafts offline”']],
+      // A shown line counts only after its marker (security review 2 of #3024): what comes before is the Buddy's talk.
+      ['In Secret, Ken said the client is leaving.', ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze']],
+      ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I\'ll post this as you: Fix the jump-to freeze']],
+      ['the client is leaving', ['Ken said “the client is leaving”. I\'ll post this as you: “Fix the jump-to freeze”']],
+      ['Fix the jump-to freeze', ['Fix the jump-to freeze?']]] as const) {
       const { f } = asked()
       expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy, okayed(f, [...shown])))
         .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' }))
@@ -668,6 +674,17 @@ describe('a Buddy\'s proposal to the PM', () => {
     const threaded = [row('ask', owner, 'ok', { thread: 'root' }), row('main', me, 'Main chat line'), row('in', me, 'Thread line', { thread: 'root' }),
       row('root', owner, 'Start', { thread: 'root' })]
     expect(shownBefore(threaded, 'ask', 'buddy')).toEqual(['Thread line'])
+    // The ok replying in the thread of the shown line itself (as Desktop's reply does): that line is the thread's root.
+    const onShown = [row('ask', owner, 'ok', { thread: 'shown' }), row('other', me, 'Main chat line'), row('shown', me, 'I\'ll post this as you: “Keep drafts offline”')]
+    expect(shownBefore(onShown, 'ask', 'buddy')).toEqual(['I\'ll post this as you: “Keep drafts offline”'])
+    expect(shownBefore([row('ask', owner, 'ok', { thread: 'root' }), row('root', owner, 'Start')], 'ask', 'buddy')).toEqual([])
+  })
+
+  // Security review 2 of #3024: the Buddy writes the goal and scope, and picks the words, so the PM's delivery is fenced by the
+  // Buddy's account, not its owner's, as its details reply was (audit M3).
+  it('is the Buddy\'s words for the mark of another account, and unknown without its Buddy', () => {
+    expect(wordsOf({ kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy' })).toEqual({ agentId: 'buddy' })
+    expect(wordsOf({ kind: 'buddy-proposal', personId: 'peer' })).toBe('unknown')
   })
 
   // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
@@ -683,6 +700,8 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
     const webPm = group(f, f.web.conversationId).leadId!
     for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()
+    f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'private', memberIds: [] })
+    expect(() => close(peer)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => close(agentActor(f.pm), 'talk', { proposal: { id: 'talk', conversationId: f.app.conversationId, author: root.author, source: null } }))
       .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
     expect(() => close(agentActor(f.pm), 'missing', {})).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
