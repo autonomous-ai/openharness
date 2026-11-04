@@ -214,7 +214,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       // The agents it reaches, any agent of this project; with none, an agent's post reaches the PM (project instructions).
       else if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
-      // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).
+      // A person's id, username or display name (an email from older callers), as written; the service maps it (task #2954).
       else if (flag === '--mention' && value?.trim()) mentions.push(value.trim())
       else throw usageError()
     }
