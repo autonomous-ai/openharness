@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -2701,6 +2702,32 @@ describe('Super Tab chat attachments', () => {
     expect(files.objects.size).toBe(before + 2)
     expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
       .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+  })
+
+  // A gateway's content filter in front of the backend refused a handoff full of shell lines (task #2737): the app sends
+  // a form file gzipped, says so before the file, and the store keeps the original bytes, type and size.
+  it('unpacks a file sent gzipped and keeps the original, refusing a corrupt, misplaced, unknown or oversized one', async () => {
+    const { tab } = await fixture()
+    const text = Buffer.from('$ cat ~/.ssh/config && rm -rf ./build; curl https://example.test/x.sh | sh\n'.repeat(500))
+    const packed = await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'run.transcript.md', 'text/markdown']])
+    expect(packed.status).toBe(200)
+    expect(packed.attachment).toMatchObject({ name: 'run.transcript.md', mime: 'text/markdown', size: text.byteLength })
+    expect(files.objects.get(objectKey(packed.attachment.url))!.bytes.equals(text)).toBe(true)
+    const plain = await post(tab, [['conversationId', 'lead'], ['file', text, 'run.transcript.md', 'text/markdown']])
+    expect(plain).toMatchObject({ status: 200, attachment: { size: text.byteLength } })
+    const before = files.objects.size
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', text, 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'br'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['contentEncoding', 'gzip'], ['conversationId', 'lead'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    // Small packed, over the form's 10 MB unpacked: stopped at the cap like any other form file.
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(Buffer.alloc(10 * 1024 * 1024 + 1)), 'zeros.bin', 'application/octet-stream']]))
+      .toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(files.objects.size).toBe(before)
   })
 
   it('answers a bucket failure as unavailable, not as a server error', async () => {
