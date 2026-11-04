@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/personal_lead.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -27,7 +28,11 @@ class ReceiptFixture {
   Map<String, dynamic> get delivery =>
       (message['deliveries'] as List).single as Map<String, dynamic>;
 
-  Future<void> show({AppNotifier? app, void Function()? prepare}) async {
+  Future<void> show({
+    AppNotifier? app,
+    void Function()? prepare,
+    Brightness brightness = Brightness.light,
+  }) async {
     server.state['agents'] = [
       {
         'id': 'lead-agent',
@@ -71,7 +76,8 @@ class ReceiptFixture {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
@@ -302,6 +308,81 @@ void main() {
     expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
     await tester.tap(find.text('Add a Lead'));
     expect(f.addedLead, isTrue);
+    await f.close();
+  });
+
+  // Huy, 11-04 (task #2633): in a Personal Swarm the message waits for the
+  // Lead Desktop starts, which the line says, or why it could not start.
+  testWidgets('receipt: no Lead in a Personal project says its Lead starts', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final f = ReceiptFixture(tester, status: null);
+    await f.show(
+      app: app,
+      prepare: () =>
+          (f.server.state['conversations'] as List).first['leadId'] = null,
+    );
+    PersonalLeadStarter.of(app).setStatusForTest(
+      f.controller,
+      'lead',
+      PersonalLeadStatus.starting(clock.now()),
+    );
+    await tester.pump();
+    expect(find.text('Starting a Lead…'), findsOneWidget);
+    expect(find.textContaining('Not sent'), findsNothing);
+    expect(find.text('Add a Lead'), findsNothing);
+    await f.close();
+  });
+
+  testWidgets(
+    'receipt: a Personal project\'s Lead that could not start says why and '
+    'offers Add a Lead',
+    (tester) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        app: app,
+        prepare: () =>
+            (f.server.state['conversations'] as List).first['leadId'] = null,
+      );
+      PersonalLeadStarter.of(app).setStatusForTest(
+        f.controller,
+        'lead',
+        const PersonalLeadStatus.failed(
+          'Claude Code and Codex aren’t signed in on Studio',
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.text(
+          'Couldn’t start a Lead: Claude Code and Codex aren’t signed in on '
+          'Studio',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Not sent'), findsNothing);
+      await tester.tap(find.text('Add a Lead'));
+      expect(f.addedLead, isTrue);
+      await f.close();
+    },
+  );
+
+  testWidgets('receipt: no Lead and no start, with an app, is still not sent', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final f = ReceiptFixture(tester, status: null);
+    await f.show(
+      app: app,
+      prepare: () =>
+          (f.server.state['conversations'] as List).first['leadId'] = null,
+    );
+    expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
+    expect(find.text('Add a Lead'), findsOneWidget);
     await f.close();
   });
 

@@ -8,6 +8,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_link.dart';
+import 'package:harness/super_tabs/unread_line.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -35,6 +36,19 @@ void _fromLead(
     'id': 'lead-agent',
     'name': 'Lead',
   };
+  _spread(server);
+}
+
+/// [server]'s messages a minute apart, with six more before every third: the
+/// long chat of three-message groups these tests were measured on, now that
+/// one sender's messages within five minutes share one header (#2419).
+void _spread(ConversationServer server) {
+  for (final row in server.messages) {
+    final sequence = row['sequence'] as int;
+    row['createdAt'] = DateTime.utc(2026, 10, 18)
+        .add(Duration(minutes: sequence + 6 * ((sequence - 1) ~/ 3)))
+        .toIso8601String();
+  }
 }
 
 void main() {
@@ -42,6 +56,7 @@ void main() {
     WidgetTester tester,
     ConversationServer server,
   ) async {
+    _spread(server);
     final c = server.controller();
     await c.refresh();
     await tester.pumpWidget(
@@ -208,6 +223,55 @@ void main() {
     expect(c.messages('lead').any((m) => m.id == 'message-100'), isFalse);
     expect(c.hasNewer('lead'), isTrue);
     expect(c.readMark('lead'), 5);
+  });
+
+  testWidgets('with newer pages not read yet, the bar\'s count is a floor', (
+    tester,
+  ) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    expect(c.hasNewer('lead'), isTrue);
+    // Down past the line in wheel steps, as a reader scrolls.
+    final list = tester.getCenter(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+    );
+    for (var step = 0; step < 4; step++) {
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(position: list, scrollDelta: const Offset(0, 100)),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isFalse);
+    expect(c.hasNewer('lead'), isTrue);
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.textContaining(RegExp(r'^\d+\+ new messages · Jump$')),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  // Review of #2896, item 1.
+  testWidgets('once the line\'s message is no longer held (Jump to latest '
+      'read the newest page in its place), no bar leads to it', (tester) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    expect(c.hasNewer('lead'), isTrue);
+    final latest = find.byWidgetPredicate(
+      (w) =>
+          w.key == const ValueKey('super-jump-latest') ||
+          w.key == const ValueKey('super-new-messages'),
+    );
+    expect(latest, findsOneWidget);
+    await tester.tap(latest);
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').any((m) => m.id == 'message-6'), isFalse);
+    expect(find.byKey(_jump), findsNothing);
+    expect(find.textContaining('0 new messages'), findsNothing);
   });
 
   // Review of #2131, item 2.
@@ -405,16 +469,98 @@ void main() {
     );
   });
 
-  testWidgets('once the line has been seen, reading on to the end offers no '
-      'way back to it', (tester) async {
+  testWidgets('scrolled past the line, the bar says how many are new and '
+      'jumps back to it', (tester) async {
     final server = _server(60)..markReadElsewhere('lead', 20);
     await show(tester, server);
+    // Seen as the chat opened at it: the bar shows only once it is above.
     expect(onScreen(tester, find.byKey(_line)), isTrue);
+    expect(find.byKey(_jump), findsNothing);
     final position = scroll(tester);
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isFalse);
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.text('40 new messages · Jump'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.byIcon(AppIcons.arrowUp),
+      ),
+      findsOneWidget,
+    );
+    // A row across the top, above the list: it covers no message.
+    final list = tester.getRect(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+    );
+    final bar = tester.getRect(find.byKey(_jump));
+    expect(bar.bottom, lessThanOrEqualTo(list.top));
+    expect(bar.width, moreOrLessEquals(list.width, epsilon: 1));
+    await tester.tap(find.byKey(_jump));
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
     expect(find.byKey(_jump), findsNothing);
+    // Read to the end: the mark's save runs out.
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('with the message list focused, Esc dismisses the bar and '
+      'reads the chat', (tester) async {
+    final server = _server(60)..markReadElsewhere('lead', 20);
+    final c = await show(tester, server);
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsOneWidget);
+    // Focus leaves the composer for the messages.
+    await tester.tap(find.text('Update 59'));
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.context?.widget.key,
+      isNot(const ValueKey('super-message-composer')),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    expect(find.byKey(_line), findsNothing);
+    expect(c.unread(c.selected!), isFalse);
+  });
+
+  // Tern's test of #2896: a click on the bar left focus nowhere in the chat, so
+  // a later Esc never reached it.
+  testWidgets('after a click on the bar, Esc still dismisses it once the line '
+      'is above again', (tester) async {
+    final server = _server(60)..markReadElsewhere('lead', 20);
+    final c = await show(tester, server);
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: tester.getCenter(find.byKey(_jump)));
+    await mouse.down(tester.getCenter(find.byKey(_jump)));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    expect(c.unread(c.selected!), isFalse);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  test('the bar counts its messages, and says when there are more', () {
+    expect(SuperTabUnreadBar.label(1, false), '1 new message · Jump');
+    expect(SuperTabUnreadBar.label(2, false), '2 new messages · Jump');
+    expect(SuperTabUnreadBar.label(12, true), '12+ new messages · Jump');
   });
 
   /// The offline chat's 60 messages from the Lead, read up to [mark].
@@ -428,17 +574,17 @@ void main() {
   }
 
   testWidgets('in a long chat, the line on screen as it opens offers no way '
-      'back to it', (tester) async {
+      'back to it until it is above the screen', (tester) async {
     final server = _server(150)..markReadElsewhere('lead', 20);
     await show(tester, server);
     expect(onScreen(tester, find.byKey(_line)), isTrue);
     expect(find.byKey(_jump), findsNothing);
-    // Seen, so reading on does not bring it back either.
+    // Seen, and still the bar comes once the line is above the screen.
     final position = scroll(tester);
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isFalse);
-    expect(find.byKey(_jump), findsNothing);
+    expect(find.byKey(_jump), findsOneWidget);
   });
 
   testWidgets('a long chat opening at its line never shows the pill on the '
@@ -532,8 +678,9 @@ void main() {
     expect(find.byKey(_jump), findsOneWidget);
   });
 
-  testWidgets('opened at a linked message below the line, a pill above the '
-      'list takes the reader back to it, then goes', (tester) async {
+  testWidgets('opened at a linked message below the line, a bar above the '
+      'list takes the reader back to it, then goes until the line is above '
+      'again', (tester) async {
     final server = _server(2);
     for (var i = 1; i <= 60; i++) {
       _fromLead(server, 'Offline $i', conversationId: 'offline');
@@ -579,7 +726,9 @@ void main() {
         .position;
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
-    expect(find.byKey(_jump), findsNothing);
+    // Read on past it, the line is above: the bar takes the pill's place.
+    expect(find.byKey(_jump), findsOneWidget);
+    expect(find.textContaining('new messages · Jump'), findsOneWidget);
   });
 
   testWidgets('opened at a linked message above the line, the pill points '
@@ -648,7 +797,8 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
     final unread = await linkedTop(tester, offlineChat(22));
     expect(find.byKey(_jump), findsOneWidget);
-    expect(unread, read);
+    // Layout arithmetic differs in the last bits with the rows above.
+    expect(unread, moreOrLessEquals(read, epsilon: .5));
   });
 
   testWidgets('the band going as the reader scrolls up to the line moves the '
@@ -709,32 +859,32 @@ void main() {
     tester,
   ) async {
     final server = _server(2);
-    server.append('Elsewhere', conversationId: 'offline');
-    server.messages.last['author'] = {
-      'kind': 'agent',
-      'id': 'worker',
-      'name': 'Worker',
-    };
     final c = await show(tester, server);
+    // A project's row is bold for its own chat (task #2638): its news, read
+    // on another device, clears it here.
+    final name = c.snapshot!.projects.single.name;
     FontWeight? weight() => tester
         .widget<RichText>(
           find.descendant(
-            of: find.byKey(const ValueKey('super-group-offline')),
+            of: find.byKey(const ValueKey('super-group-lead')),
             matching: find.byWidgetPredicate(
               (widget) =>
-                  widget is RichText &&
-                  widget.text.toPlainText() == 'Offline editing',
+                  widget is RichText && widget.text.toPlainText() == name,
             ),
           ),
         )
         .text
         .style
         ?.fontWeight;
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    server.append('Elsewhere', conversationId: 'lead');
+    final sequence = server.messages.last['sequence'] as int;
+    await c.refresh();
     await tester.pumpAndSettle();
     expect(weight(), grid.AppFont.semibold);
     // Read on another device.
-    server.markReadElsewhere('offline', 3);
+    server.markReadElsewhere('lead', sequence);
     await c.refresh();
     await tester.pumpAndSettle();
     expect(weight(), isNot(grid.AppFont.semibold));

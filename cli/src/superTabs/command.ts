@@ -255,7 +255,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, second === '--yes'
       ? { action: 'backend', method: 'POST', path: `/api/super-tabs/${tabId}/commands`,
         body: { operationId: `machine-remove-${randomUUID()}`, command: { type: 'machine.remove', machineId: first } } }
-      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal` })
+      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal/v2` })
   } else if (action === 'set-agents' && identifier(first) && /^[1-9][0-9]{0,3}$/.test(second ?? '') && positional.length === 3) {
     // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
     Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })
@@ -407,8 +407,11 @@ export async function superTabCommand(argv: readonly string[], deps: {
         const notes = Array.isArray(value.notes) ? value.notes.map(object) : []
         const coordinator = typeof value.coordinatorName === 'string' && value.coordinatorName ? value.coordinatorName : 'The coordinator'
         const when = (at: unknown) => typeof at === 'number' && Number.isFinite(at) ? new Date(at).toISOString() : String(at)
+        // The coordinator's read carries the Swarm's built-in PM schedule (2026-11-04 PM schedule design): printed after the
+        // document, so a new PM session reads it at launch as its skill will hold it.
+        const builtIn = typeof value.builtIn === 'string' && value.builtIn ? ['', value.builtIn] : []
         print([`Instructions of project ${value.projectId}, revision ${value.revision}${value.template ? ' (the built-in template)' : ''}`, '', value.text,
-          ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
+          ...builtIn, ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
             + `${n.expiresAt ? `, until ${when(n.expiresAt)}` : ''})`)] : [])].join('\n'))
         return 0
       }

@@ -201,7 +201,10 @@ void main() {
     c.openThread('message-1');
     await tester.pumpAndSettle();
 
-    await tester.drag(inPanel(find.byType(LaidOutListView)), const Offset(0, 400));
+    await tester.drag(
+      inPanel(find.byType(LaidOutListView)),
+      const Offset(0, 400),
+    );
     await tester.pumpAndSettle();
     final read = threadScroll(tester).pixels;
     expect(threadScroll(tester).extentAfter, greaterThan(40));
@@ -287,7 +290,9 @@ void main() {
     addTearDown(c.dispose);
     c.openThread('message-1');
     await c.loadThread();
-    await tester.binding.setSurfaceSize(const Size(500, 575));
+    // Just tall enough for all of it, Also send's line under the box included
+    // (#2662).
+    await tester.binding.setSurfaceSize(const Size(500, 592));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(

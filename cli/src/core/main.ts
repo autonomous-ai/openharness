@@ -1371,6 +1371,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     shortTurns,
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
+    answersQuestion: deliveries.answersQuestion,
+    // Built further down: read when a person's message meets an open question, never now.
+    pendingQuestion: (sessionId) => asking.pendingQuestion(sessionId),
     readScreen: screens.read,
     submission: submissions,
     resolve: (id) => registry.resolve(id),
@@ -2187,6 +2190,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
+    onAuthMeUpdate: (body) => proxyBackend('PATCH', '/api/auth/me', body),
     onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
     ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => daemonBoot.stopHere('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the

@@ -11,7 +11,9 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../widgets/pane_menu.dart' show showContextMenuAt;
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
@@ -26,6 +28,8 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'import_agent_dialog.dart';
+import 'project_add_people.dart';
 import 'leaderboard/format.dart';
 import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
@@ -410,28 +414,23 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             BrowserMenuGuard.hold(hold);
             final String? choice;
             try {
-              choice = await showMenu<String>(
+              choice = await showContextMenuAt<String>(
                 context: context,
-                position: RelativeRect.fromLTRB(
-                  event.globalPosition.dx,
-                  event.globalPosition.dy,
-                  event.globalPosition.dx,
-                  event.globalPosition.dy,
-                ),
-                items: [
-                  const PopupMenuItem(value: 'details', child: Text('Details')),
+                at: event.globalPosition,
+                children: (close) => [
+                  AppMenuItem(
+                    label: 'Details',
+                    leadingSlot: false,
+                    onPressed: () => close('details'),
+                  ),
                   if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-                    PopupMenuItem(
-                      value: 'remove',
-                      enabled: _removeReason(agent) == null,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Remove from Swarm'),
-                          if (_removeReason(agent) case final reason?)
-                            Text(reason),
-                        ],
-                      ),
+                    AppMenuItem(
+                      label: 'Remove from Swarm',
+                      detail: _removeReason(agent),
+                      leadingSlot: false,
+                      onPressed: _removeReason(agent) == null
+                          ? () => close('remove')
+                          : null,
                     ),
                 ],
               );
@@ -512,6 +511,13 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         _choice.scope == SuperTabRosterScope.project && projectId != null
         ? state?.projectById(projectId)
         : null;
+    // In a private project its owner brings Swarm people in from the People +, instead of inviting to the Swarm
+    // (Diego, 2026-11-04).
+    final addsToProject =
+        scoped != null &&
+        scoped.isPrivate &&
+        scoped.ownerId == c.accountId &&
+        c.canWrite;
     final members = state?.teamAgents ?? const <SuperTabAgent>[];
     bool inScope(SuperTabAgent a) =>
         scoped == null ||
@@ -600,6 +606,9 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     final openProject = projectId == null
         ? null
         : state?.projectById(projectId);
+    final adds = c.canWrite && c.selected != null && audience == null;
+    // On this Mac, Add agent also imports one of its agents.
+    final imports = widget.app != null && superTabImportOffered;
     return [
       _heading(openProject == null ? null : scoped != null),
       if (_board.error case final error?)
@@ -615,8 +624,14 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       // People and Agents: the two roles in one team (Quiet Swarm, screen 4).
       SuperTabSectionHeading(
         'People',
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
+        onAdd: addsToProject
+            ? () => unawaited(showProjectAddPeople(context, c, scoped))
+            : c.isOwner
+            ? widget.onInvite
+            : null,
+        addTooltip: addsToProject
+            ? 'Add people to this project'
+            : 'Invite people',
       ),
       // Points are the last 7 days, the period on hover; who waits on whom is
       // Activity's Needs you (Quiet Swarm, 2026-11-02).
@@ -637,10 +652,17 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       SuperTabSectionHeading(
         'Agents',
         // A private conversation holds only the project's Lead.
-        onAdd: c.canWrite && c.selected != null && audience == null
-            ? () => widget.onAddAgent(c.selected!)
-            : null,
+        onAdd: adds && !imports ? () => widget.onAddAgent(c.selected!) : null,
         addTooltip: 'Add agent',
+        actions: [
+          if (adds && imports)
+            _AddAgentMenu(
+              onImport: () => unawaited(
+                showImportAgent(context, widget.app!, c, c.selected!),
+              ),
+              onStart: () => widget.onAddAgent(c.selected!),
+            ),
+        ],
       ),
       for (final agent in listed)
         if (!superTabFoldsIdle(states[agent.id]!))
@@ -670,6 +692,10 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     score: scores[person.id],
     columns: columns,
     own: person.id == c.accountId,
+    // Any machine of theirs in this Swarm, offline ones too (task #2699).
+    noMachine:
+        !(c.snapshot?.machines.any((m) => m['contributorId'] == person.id) ??
+            true),
     onTap: () => _person(person, scores[person.id]),
   );
 
@@ -678,13 +704,20 @@ class _SuperTabRosterState extends State<SuperTabRoster>
   /// and its close at the right as a thread's has.
   Widget _heading(bool? narrowed) {
     final style = DesktopChrome.heading();
-    return Padding(
+    // The conversation header's height with its rule, so the pill and the close
+    // sit on the same line as the title beside them.
+    return Container(
       key: const ValueKey('super-members-heading'),
+      constraints: const BoxConstraints(minHeight: 52),
+      margin: const EdgeInsets.only(bottom: DesktopChrome.controlGap),
       padding: const EdgeInsets.fromLTRB(
         DesktopChrome.groupGap,
         0,
         DesktopChrome.controlGap,
-        DesktopChrome.controlGap,
+        0,
+      ),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
       ),
       child: Row(
         children: [
@@ -739,7 +772,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return Material(
-      color: DesktopChrome.surface,
+      color: grid.AppPalette.swarmWelcome,
       child: ListenableBuilder(
         listenable: Listenable.merge([
           c,
@@ -751,7 +784,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         ]),
         builder: (context, _) => LaidOutListView(
           key: PageStorageKey('super-tab-resources-${c.tabId}'),
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.only(bottom: 12),
           children: _members(),
         ),
       ),
@@ -779,3 +812,50 @@ bool superTabFoldsIdle(SuperTabAgentState state) =>
       HarnessActivity.paused,
       HarnessActivity.offline,
     }.contains(state.mark);
+
+/// The Agents heading's +, on this Mac: Import an agent running here first,
+/// then Start a new agent, today's picker.
+class _AddAgentMenu extends StatefulWidget {
+  const _AddAgentMenu({required this.onImport, required this.onStart});
+  final VoidCallback onImport, onStart;
+
+  @override
+  State<_AddAgentMenu> createState() => _AddAgentMenuState();
+}
+
+class _AddAgentMenuState extends State<_AddAgentMenu> {
+  final _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return AppDropdown(
+      controller: _menu,
+      // Fits the longer label on one line.
+      width: 300,
+      children: [
+        for (final (label, icon, run) in [
+          (
+            'Import an agent running on this Mac',
+            AppIcons.download,
+            widget.onImport,
+          ),
+          ('Start a new agent', AppIcons.plus, widget.onStart),
+        ])
+          AppMenuItem(
+            label: label,
+            icon: icon,
+            onPressed: () {
+              _menu.close();
+              run();
+            },
+          ),
+      ],
+      builder: (context, menu, _) => AppIconButton(
+        icon: AppIcons.plus,
+        tooltip: 'Add agent',
+        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+      ),
+    );
+  }
+}

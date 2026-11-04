@@ -6,6 +6,7 @@ import '../core/machine_resources.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
@@ -17,7 +18,9 @@ import 'leaderboard/reader.dart';
 import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
+import 'backlog_view.dart';
 import 'model.dart';
+import 'pull_request_facts.dart';
 import 'sharing.dart';
 import 'swarm_delete.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
@@ -25,9 +28,9 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// What Manage shows (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10,
 /// 10b, 10c): what used to stand in the sidebar and the Swarm dropdown, one
 /// click away. Devices is the devices pane the view already holds.
-enum SuperTabManageTab { machines, models, devices, swarm }
+enum SuperTabManageTab { machines, models, devices, swarm, backlog }
 
-/// Machines, Models, Devices, Swarm, under Manage's heading.
+/// Machines, Models, Devices, Swarm, Backlog, under Manage's heading.
 class SuperTabManageTabs extends StatelessWidget {
   const SuperTabManageTabs({
     super.key,
@@ -44,39 +47,15 @@ class SuperTabManageTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget tab(SuperTabManageTab value, String label) {
-      final on = selected == value;
-      return Padding(
-        padding: const EdgeInsets.only(right: grid.AppDesktop.menuInset),
-        child: Material(
-          color: on ? grid.AppSurface.selectedFill : Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            key: ValueKey('super-manage-tab-${value.name}'),
-            onTap: () => onChoose(value),
-            hoverColor: grid.AppSurface.hoverFill,
-            child: Semantics(
-              selected: on,
-              button: true,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: grid.AppDesktop.controlGap,
-                  vertical: grid.AppDesktop.menuInset,
-                ),
-                child: Text(
-                  label,
-                  style: DesktopChrome.control(
-                    medium: on,
-                    color: on ? null : DesktopChrome.muted,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
+    Widget tab(SuperTabManageTab value, String label) => Padding(
+      padding: const EdgeInsets.only(right: grid.AppDesktop.menuInset),
+      child: AppTabPill(
+        tapKey: ValueKey('super-manage-tab-${value.name}'),
+        label: label,
+        selected: selected == value,
+        onTap: () => onChoose(value),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -89,14 +68,16 @@ class SuperTabManageTabs extends StatelessWidget {
           tab(SuperTabManageTab.models, 'Models'),
           if (devices) tab(SuperTabManageTab.devices, 'Devices'),
           tab(SuperTabManageTab.swarm, 'Swarm'),
+          tab(SuperTabManageTab.backlog, 'Backlog'),
         ],
       ),
     );
   }
 }
 
-/// Manage's Machines, Models or Swarm. Each is built only while it shows, so
-/// what it runs (the machines' clock) stops when it does not.
+/// Manage's Machines, Models, Swarm or Backlog. Each is built only while it
+/// shows, so what it runs (the machines' clock, the Backlog's pull request
+/// watch) stops when it does not.
 class SuperTabManagePage extends StatelessWidget {
   const SuperTabManagePage({
     super.key,
@@ -106,6 +87,8 @@ class SuperTabManagePage extends StatelessWidget {
     this.app,
     this.board,
     this.onOpenAgent,
+    this.onOpenConversation,
+    this.facts,
     this.readLocal,
     this.now = DateTime.now,
   });
@@ -116,6 +99,10 @@ class SuperTabManagePage extends StatelessWidget {
   final SuperTabLeaderboardReader? board;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
+
+  /// Opens a task's chat from the Backlog; [facts] gives its rows' checks.
+  final bool Function(String id)? onOpenConversation;
+  final SuperTabPullRequestFacts? facts;
 
   /// Forwarded to [SuperTabMachines], for a test without a real machine.
   final Future<MachineResources?> Function(String machineId)? readLocal;
@@ -153,6 +140,12 @@ class SuperTabManagePage extends StatelessWidget {
         SuperTabManageTab.swarm => _ManageSwarm(
           controller: controller,
           app: app,
+        ),
+        SuperTabManageTab.backlog => SuperTabBacklogView(
+          controller: controller,
+          facts: facts,
+          now: now,
+          onOpenConversation: (id) => onOpenConversation?.call(id),
         ),
       },
     ),
@@ -345,7 +338,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
       ),
       children: [
         _fact('Name', _value(snapshot.name)),
-        if (owner != null) _fact('Owner', _value(owner.username)),
+        if (owner != null) _fact('Owner', _value(owner.shownName)),
         _fact(
           'People',
           _value('${snapshot.people.length}'),

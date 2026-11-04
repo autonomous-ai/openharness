@@ -21,7 +21,7 @@ import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { READ_MARK_EXPIRY_MS, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
+import { READ_MARK_EXPIRY_MS, sweepReadMarks, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { listNamedIndexes, NAMED_INDEX } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -169,6 +169,91 @@ describe('read marks (one per person and conversation)', () => {
     await mark(s.tabId, s.web, 25)
     expect(await changes(NOW + 63_000)).toEqual({ [s.web]: 25 })
     clock = NOW
+  })
+})
+
+describe('Mark unread (the one write that moves a mark back)', () => {
+  const unread = (tabId: string, conversationId: string, sequence: number, as: AuthUser = owner, query = '') =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/unread${query}`, as, { sequence })
+  const changed = async (tabId: string, cursor: string, as: AuthUser = owner) =>
+    (await call('GET', `/api/super-tabs/${tabId}/changes?cursor=${cursor}`, as)).body.data.derived as { readMarks?: Record<string, number>; unreadMarks?: Record<string, number> }
+
+  it('mark unread restores the unread line: the mark goes to just before the message, and the person\'s other device takes it', async () => {
+    const s = await scene()
+    clock = NOW
+    await mark(s.tabId, s.web, 60)
+    // The other device's last read, a minute later (the cursor overlaps the last 30 s, read/cursor.ts).
+    clock = NOW + 60_000
+    const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+    clock = NOW + 62_000
+    expect(await unread(s.tabId, s.web, 41)).toMatchObject({ status: 200, body: { data: { sequence: 40 } } })
+    clock = NOW + 63_000
+    // That device holds 60: `unreadMarks` tells it to take the lower mark instead of keeping the higher one.
+    expect(await changed(s.tabId, cursor)).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    // Another person's read never carries it.
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toBeUndefined()
+    clock = NOW
+  })
+
+  it('never moves a mark forward: a chat already unread from earlier stays as it is', async () => {
+    const s = await scene()
+    await mark(s.tabId, s.web, 40)
+    expect((await unread(s.tabId, s.web, 70)).body.data).toEqual({ sequence: 40 })
+    expect(await marksOf(s.tabId, owner)).toEqual({ [s.web]: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+  })
+
+  it('gives a chat never marked read a mark before the message: without one the chat counts as read', async () => {
+    const s = await scene()
+    expect((await unread(s.tabId, s.web, 41)).body.data).toEqual({ sequence: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(1)
+  })
+
+  it('is undone by a later read alone: an older read arriving after it changes nothing, a newer one raises it', async () => {
+    const s = await scene()
+    clock = NOW
+    await mark(s.tabId, s.web, 60)
+    await unread(s.tabId, s.web, 41)
+    expect((await mark(s.tabId, s.web, 30)).body.data).toEqual({ sequence: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toEqual({ [s.web]: 40 })
+    clock = NOW + 60_000
+    const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+    clock = NOW + 62_000
+    expect((await mark(s.tabId, s.web, 60)).body.data).toEqual({ sequence: 60 })
+    clock = NOW + 63_000
+    const derived = await changed(s.tabId, cursor)
+    expect(derived.readMarks).toEqual({ [s.web]: 60 })
+    expect(derived.unreadMarks).toBeUndefined()
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+    // Even a read in the same millisecond as the Mark unread ends it.
+    await unread(s.tabId, s.web, 51)
+    await mark(s.tabId, s.web, 55)
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 55 } })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+    clock = NOW
+  })
+
+  it('refuses a chat the person cannot read, a Team session and an agent, storing nothing', async () => {
+    const s = await scene()
+    expect((await unread(s.tabId, s.secretGroup, 10, outsider)).status).toBe(404)
+    expect((await unread(s.tabId, 'no-such-group', 10, outsider)).status).toBe(404)
+    expect((await unread(s.tabId, s.web, 10, ownerTeam)).status).toBe(403)
+    expect((await unread(s.tabId, s.web, 10, owner, '?asAgentId=some-agent')).status).toBe(400)
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(0)
+  })
+
+  it('stops sending an unread mark once the person can no longer read its chat', async () => {
+    const s = await scene()
+    await unread(s.tabId, s.web, 31, peer)
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toEqual({ [s.web]: 30 })
+    await swarmTransaction(db, async tx => {
+      const current = (await parts.loadActive(tx, s.tabId, { groupIds: [s.web] })).groups.find(g => g.key === s.web)!
+      const data = { ...structuredClone(current.data!), audience: { people: [{ id: owner.sub, generation: 0 }] } } as Conversation
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'group', key: s.web, seen: current.version, data }, clock)
+    })
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toBeUndefined()
   })
 })
 
@@ -509,5 +594,33 @@ describe('thread marks (one per person and thread)', () => {
     expect(rows.length).toBeGreaterThanOrEqual(2)
     expect(new Set(hints)).toEqual(new Set([JSON.stringify(NAMED_INDEX.SuperTabThreadMark.person)]))
     expect(rows.every(row => row.planSummary?.startsWith('IXSCAN') && !row.fromMultiPlanner), JSON.stringify(rows.map(r => r.planSummary))).toBe(true)
+  })
+})
+
+describe('read marks past 180 days, where the database refuses their expiry (Ken\'s prod scan 11-04)', () => {
+  const DAY = 86_400_000
+  // Long before every other test's marks, so the cutoff below passes only the marks seeded here.
+  const base = NOW - 400 * DAY
+  const now = new Date(base + READ_MARK_EXPIRY_MS)
+  /** One mark of a conversation per [name, last moved] in a new Swarm; answers the Swarm. */
+  const seed = async (marks: Array<[string, number]>) => {
+    const tabId = `tab-${randomUUID()}`
+    await db.superTabReadMark.createMany({ data: marks.map(([conversationId, at]) =>
+      ({ id: stableId(tabId, conversationId, owner.sub), tabId, personId: owner.sub, conversationId, sequence: 1, updatedAt: new Date(at) })) })
+    return tabId
+  }
+  const left = async (tabId: string) =>
+    (await db.superTabReadMark.findMany({ where: { tabId }, select: { conversationId: true } })).map(mark => mark.conversationId).sort()
+
+  it('removes only the marks untouched for more than 180 days', async () => {
+    const tabId = await seed([['older', base - DAY], ['just-older', base - 1], ['exactly', base], ['younger', base + DAY]])
+    expect(await sweepReadMarks(db, now)).toBe(2)
+    expect(await left(tabId)).toEqual(['exactly', 'younger'])
+  })
+
+  it('removes one bounded chunk a pass, oldest first', async () => {
+    const tabId = await seed(['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6'].map((name, i) => [name, base - (7 - i) * DAY]))
+    expect(await sweepReadMarks(db, now, 3)).toBe(3)
+    expect(await left(tabId)).toEqual(['m3', 'm4', 'm5', 'm6'])
   })
 })

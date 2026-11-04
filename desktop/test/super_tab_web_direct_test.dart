@@ -245,7 +245,8 @@ void main() {
 
       backend.forbidden = true;
       await c.refresh();
-      expect(c.accessRevoked, isTrue);
+      // The refusal is final once the list, read again, no longer has it.
+      await _until(() => c.accessRevoked, what: 'the Swarm taken away');
       expect(c.snapshot, isNull);
       expect(c.messages('lead'), isEmpty);
     });

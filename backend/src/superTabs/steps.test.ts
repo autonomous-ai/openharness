@@ -4,38 +4,14 @@
  * readers show it inside its task. No step name means anything to the server.
  */
 import { describe, expect, it } from 'vitest'
-import { applyCommand, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
-import { agent, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { PAIR_CHAIN_LIMIT, type Command } from './commands.js'
+import { agent, type Actor } from './model.js'
 import { extracted } from './parts/write.js'
+import { owner, stepsFixture } from './steps.test-support.js'
 import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
-import { QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
-
-const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
-const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-
-export function stepsFixture() {
-  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
-  let sequence = 0, now = 1000
-  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
-    state = effects.state
-    return effects
-  }
-  const add = (harnessId: string, group = 'lead', lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
-    name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-  const lead = add('pm', 'lead', true)
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.',
-    checks: [{ description: 'Signs in offline', independent: true }] }, as(lead)).result.conversationId as string
-  const dev = add('dev', task)
-  run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
-  const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>
-    run({ type: 'conversation.create', title: name, brief: `${name} it.`, reviewOf: on, step: name, checks } as Command, actor).result.conversationId as string
-  const group = (id: string) => state.conversations.find(c => c.id === id)!
-  return { run, add, as, lead, task, dev, step, group, tick: (ms: number) => { now += ms }, get now() { return now }, get state() { return state } }
-}
+import { QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
 
 describe('opening a step', () => {
   it('opens on a task of its project, numbered, its opener in the task', () => {
@@ -221,6 +197,29 @@ describe('assigning a step', () => {
     expect(f.group(id).assignment!.changesRequestedAt).toBeDefined()
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
     expect(f.group(id).assignment).toMatchObject({ status: 'working' })
+    expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+  })
+
+  // Ken, 2026-11-04: ~18 of 51 steps moved after 30 quiet minutes in two days were a Reviewer or Tester waiting on the
+  // Engineer's fix. A Tester's verdict has no set form, and a step agent's failed check on its own step counted as the
+  // assignee's, so nothing marked the wait.
+  it('waits for the fix after a failed check on its own step, as after a failed check on the task', () => {
+    const f = stepsFixture()
+    const id = f.step('Test', f.as(f.dev), f.task, [{ description: 'Works offline on a Mac', independent: false }])
+    const tester = f.add('tester', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: tester }, f.as(f.dev))
+    const check = (passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId: f.group(id).assignment!.id,
+      checkId: f.group(id).checks[0]!.id, passed, evidence: passed ? 'Signs in offline' : 'Sign-in fails offline, steps below' } as Command, f.as(tester))
+    check(true)
+    expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+    check(false)
+    expect(f.group(id).assignment!.changesRequestedAt).toBe(f.now)
+    // The Engineer works on the fix (its own status renews only its own task), while the step stays quiet past 30 minutes.
+    f.tick(QUIET_RUNNING_MS + 5 * 60_000)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing the offline sign-in' } as Command, f.as(f.dev))
+    sweepLiveness(f.state, f.now)
+    expect(f.group(id).assignment).toMatchObject({ status: 'working' })
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
     expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
   })
 })
@@ -576,8 +575,8 @@ describe('checks with several checkers', () => {
     check(reviewer, true, 'Diff reads right')
     expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline\nlog' })
     expect(read().verdicts).toEqual([
-      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000 },
-      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now },
+      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000, name: expect.any(String) },
+      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now, name: expect.any(String) },
     ])
   })
 
@@ -619,6 +618,96 @@ describe('checks with several checkers', () => {
       [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
   })
 
+  // Diego, 2026-11-04 (#2656): a check failed by a checker who then left the Swarm could never pass again in that attempt.
+  // A later pass by the task's PM or an owner clears departed checkers' failures; nobody else's does.
+  describe('a failure by a checker who left the Swarm', () => {
+    const departed = () => {
+      const c = checkers()
+      c.check(c.reviewer, false, 'Drops the session')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const second = c.f.add('reviewer-2', c.f.task)
+      c.check(second, true, 'Session kept')
+      return { ...c, second }
+    }
+
+    it('stays failed after another checker passes it', () => {
+      const { f, check, read } = departed()
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      check(f.dev, true, 'Fixed it')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+    })
+
+    it('is cleared by the owner\'s pass, which then names the check\'s passer and evidence', () => {
+      const { f, second, read } = departed()
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Reviewer left; Reviewer 2 passed it' } as Command)
+      expect(read()).toMatchObject({ passedBy: 'person:owner', evidence: 'Reviewer left; Reviewer 2 passed it' })
+      expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${second}`, true], ['person:owner', true]])
+    })
+
+    it('is cleared by the task\'s PM\'s pass', () => {
+      const { f, check, read } = departed()
+      check(f.lead, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${f.lead}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
+    // Review of #2916 (Alder2878): removing a PM clears its lead on every task it led, so "the task's PM" is the project's
+    // coordinator now, not the task's lead.
+    it('is cleared by a new PM\'s pass after the PM who opened the task was replaced', () => {
+      const { f, check, read } = departed()
+      // As a PM switch lands (commands.ts, leadFor.switchId): the new agent leads the project chat, then the old one goes.
+      const pm = f.add('pm-2')
+      f.group('lead').leadId = pm
+      f.run({ type: 'agent.remove', agentId: f.lead } as Command)
+      expect(f.group(f.task).leadId).toBeNull()
+      f.run({ type: 'conversation.agent', conversationId: f.task, agentId: pm, present: true, lead: false } as Command)
+      check(pm, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${pm}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
+    // Security reviews 1 and 2 of #2916 (Heron2639, Grebe2639): a cleared failure must stay on the record, and only an owner
+    // among people clears.
+    const ownerCheck = (f: ReturnType<typeof departed>['f'], actor: Actor, evidence: string) => f.run({ type: 'work.check',
+      conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence } as Command, actor)
+
+    it('leaves a line in the task naming the departed checker, its evidence and who cleared it', () => {
+      const c = checkers()
+      const name = c.f.state.agents.find(a => a.id === c.reviewer)!
+      c.check(c.reviewer, false, 'Drops the session\nfull log')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const effects = ownerCheck(c.f, owner, 'Reviewer left; passed on the second review')
+      expect(effects.messages).toContainEqual(expect.objectContaining({ conversationId: c.f.task, recipients: [],
+        text: `owner@example.com cleared ${name.displayName ?? name.name}'s failure of “Signs in offline”, as they left the Swarm: Drops the session` }))
+    })
+
+    it('stays failed after a collaborator\'s pass: only an owner among people clears it', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      const effects = ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Looks fine')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      expect(effects.messages.filter(m => m.text.includes('cleared'))).toEqual([])
+    })
+
+    it('is cleared by the project\'s owner who doesn\'t own the Swarm', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      f.state.projects = [{ id: 'lead', name: 'Pilot', ownerId: 'peer', leadConversationId: 'lead', visibility: 'public', members: [], updateMinutes: 5 }]
+      ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Reviewer left; I own this project')
+      expect(read()).toMatchObject({ passedBy: 'person:peer', evidence: 'Reviewer left; I own this project' })
+    })
+
+    it('leaves a live checker\'s failure standing, whoever passes', () => {
+      const { f, tester, check, read } = departed()
+      check(tester, false, 'Crashes offline')
+      check(f.lead, true, 'Looks fine')
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Looks fine' } as Command)
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+      expect(read().verdicts!.map(v => v.by)).toEqual(expect.arrayContaining([`agent:${tester}`]))
+    })
+  })
+
   it('a new attempt starts with no verdicts', () => {
     const { f, tester, check, read } = checkers()
     check(tester, false, 'Crashes offline')
@@ -626,5 +715,100 @@ describe('checks with several checkers', () => {
     f.run({ type: 'work.assign', conversationId: f.task, agentId: f.dev }, f.as(f.lead))
     expect(read()).toMatchObject({ passedBy: null, evidence: null })
     expect(read()).not.toHaveProperty('verdicts')
+  })
+})
+
+// Diego, 2026-11-03 (#2323): liveness read waiting only from a task's own status. An Engineer that stayed working while its
+// Review and Test steps ran lost its task 35 minutes in, and a step in Ready, itself the review, woke the PM as a review
+// nobody had opened.
+describe('an Engineer waiting on its own steps', () => {
+  const MIN = 60_000
+  const reviewing = () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    const stepStatus = (status: string) =>
+      f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status, result: `Review ${status}` } as Command, f.as(rev))
+    // The Reviewer keeps reporting while it reviews; the Engineer's screen stays still.
+    const reviewFor = (minutes: number) => { for (let m = 0; m < minutes; m += 4) { f.tick(4 * MIN); stepStatus('working') } }
+    return { f, id, rev, stepStatus, reviewFor, task: () => f.group(f.task).assignment! }
+  }
+
+  it('keeps its task while a step is working, and is lost 30 minutes after the last step ends', () => {
+    const { f, stepStatus, reviewFor, task } = reviewing()
+    reviewFor(36)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    stepStatus('done')
+    f.tick(QUIET_RUNNING_MS - MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
+
+  it('gets its 30 minutes from a step\'s Ready, its turn to act on the verdict', () => {
+    const { f, stepStatus, reviewFor, task } = reviewing()
+    reviewFor(36)
+    stepStatus('review')
+    f.tick(QUIET_RUNNING_MS - MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
+
+  // Review of #2744 (Wren2): a Reviewer stays working through the fix round its verdict asked for, waiting on the Engineer's
+  // new revision; counting that step held the two on each other, so a hung Engineer was never found.
+  for (const via of ['a post', 'a failed check'] as const) {
+    it(`gets its 30 minutes from a verdict asking for changes by ${via}, while its Reviewer waits on it`, () => {
+      const { f, id, rev, reviewFor, task } = reviewing()
+      reviewFor(8)
+      if (via === 'a post') {
+        f.run({ type: 'message.send', conversationId: id, text: 'Ready to merge: With fixes. One Important.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(rev))
+      } else {
+        f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
+          evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
+      }
+      f.tick(QUIET_RUNNING_MS - MIN)
+      sweepLiveness(f.state, f.now)
+      expect(task()).toMatchObject({ status: 'working' })
+      f.tick(2 * MIN)
+      sweepLiveness(f.state, f.now)
+      expect(task()).toMatchObject({ status: 'lost' })
+    })
+  }
+
+  // Diego, 2026-11-04 (#2578): a step lost inside the PM's poll left its task recorded as waiting on it, so the same poll woke
+  // the PM with a false stall and the Engineer lost its task 30 seconds later instead of after its 30 minutes.
+  it('gets its 30 minutes when its Reviewer goes quiet and the step is lost in the PM\'s poll, with no stall woken', () => {
+    const { f, id, reviewFor, task } = reviewing()
+    reviewFor(36)
+    f.tick(QUIET_RUNNING_MS + 5 * MIN)
+    const rows = sweepForLead(f.state, f.now)
+    expect(f.group(id).assignment).toMatchObject({ status: 'lost' })
+    expect(rows.filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(30_000)
+    expect(sweepForLead(f.state, f.now).filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(QUIET_RUNNING_MS - 30_000 - MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
+
+  it('a step in Ready waits on its task owner and never wakes the PM as a stalled review', () => {
+    const { f, id, stepStatus } = reviewing()
+    stepStatus('review')
+    f.tick(31 * MIN)
+    const rows = sweepForLead(f.state, f.now)
+    expect(rows.filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(f.group(id).liveness).toMatchObject({ state: 'waiting', why: 'review' })
   })
 })

@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js'
 import { errorCode, trimPrefix, type Attachment, type AttachmentStore } from './attachments.js'
+import { voiceFacts } from './voiceMessages.js'
 
 /**
  * Chat files are opened only through short-lived signed links, made on each read for whoever can read the message now
@@ -53,8 +54,9 @@ export class FileLinks {
     const links = await this.signAll([...keys], expiresAt)
     return rows.map(row => !Array.isArray(row.attachments) ? row : { ...row, attachments: files(row).map(file => {
       const key = this.keyOf(tabId, file.url), url = key ? links.get(key) : undefined
+      const voice = voiceFacts(file.voice)
       return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: typeof file.url === 'string' ? file.url : '',
-        ...url ? { link: url, expiresAt } : { unlinked: true as const } } satisfies Attachment
+        ...url ? { link: url, expiresAt } : { unlinked: true as const }, ...voice ? { voice } : {} } satisfies Attachment
     }) })
   }
 

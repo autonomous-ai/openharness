@@ -104,6 +104,17 @@ dependencies:
   # Dart, no native plugin, so the macOS SPM package list is unchanged.
   re_editor: ^0.10.0
   re_highlight: ^0.0.3
+  # The Dart team's IANA zone table: the local time on a person's card in the
+  # Swarm chat (super_tabs/zone_time.dart), daylight saving included. Pure
+  # Dart; its 10-year data is a deferred import, out of the web's first load.
+  timezone: ^0.11.2
+  # Plays a chat's voice messages (`super_tabs/voice_bubble.dart`), from a
+  # local copy of the file. A native plugin, first-party Flutter: AVPlayer on
+  # macOS, through its Swift package, so it lands in the macOS SPM package list
+  # and GeneratedPluginRegistrant; the browser's own media element on the web.
+  # It has no Linux or Windows implementation, so there the bubble's play
+  # opens the file as a file chip does. See CLAUDE.md on what a plugin costs.
+  video_player: ^2.14.0
 
 dev_dependencies:
   flutter_test:

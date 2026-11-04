@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
@@ -144,6 +144,87 @@ describe('installation tokens', () => {
     await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
   })
 
+  // Scholes, task #2755 (Ken approved): an agent's token also pushes workflow files and writes issues, where the
+  // installation has granted them. Asking for one it has not granted would refuse every token on it.
+  const today = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+  const minted = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+
+  it('asks for workflows and issues on an agent\'s token, for its one repository, where the installation granted them', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+  })
+
+  it('asks for no more than each granted level, and only what is granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, issues: 'read', administration: 'write' })
+    await app.createToken(77, repo)
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, issues: 'read' } }])
+  })
+
+  it('asks for today\'s set where workflows and issues are not granted, and still gets its token', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('asks for today\'s set when GitHub does not say what the installation granted', async () => {
+    const { app, github } = setup()
+    // The fake answers 404 for an installation it lists no grants for.
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('remembers an installation\'s grant ten minutes', async () => {
+    const { app, github, time } = setup()
+    github.grants.set(77, { ...today, workflows: 'write' })
+    await app.createToken(77, repo)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    time.advance(10 * 60_000 + 1)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    expect(minted(github).at(-1)).toEqual({ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } })
+  })
+
+  it('reads the grant again after a permission refusal, and asks once more with what is granted now', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo)
+    // An owner takes workflows away inside the ten minutes: the remembered grant is wrong.
+    github.grants.set(77, { ...today, issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_2')
+    expect(minted(github).slice(1)).toEqual([
+      { repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } },
+      { repositories: ['app'], permissions: { ...today, issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    // The fresh grant is remembered.
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('still refuses, asking once, when even today\'s set is not granted and the fresh grant changes nothing', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { contents: 'read', metadata: 'read' })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
+    expect(minted(github)).toHaveLength(1)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('never widens a narrow token, whatever the installation granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    await app.createToken(77, repo, ACTIONS_READ_PERMISSIONS)
+    expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, ACTIONS_READ_PERMISSIONS])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(0)
+  })
+
   it('leaves the install link out when no app name is configured', async () => {
     const { app } = setup({ slug: null })
     expect(app.installUrl()).toBeNull()
@@ -231,11 +312,20 @@ describe('default branch protection', () => {
     expect(github.calls.at(-1)).toMatchObject({ method: 'GET', path: '/repos/acme/app/pulls/3', auth: `Bearer ${token}` })
   })
 
+  // #2602: another repository's number read here is no pull request of this one, and must not hold its task open forever.
+  it('answers missing for a pull request GitHub does not know in that repository', async () => {
+    const { app } = setup()
+    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    expect(await app.pullRequestState(repo, 9, token)).toBe('missing')
+  })
+
   it('answers null, never a guess, when GitHub cannot say', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
-    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
     github.pulls.set('acme/app#9', { state: 'open', merged_at: null })
+    github.control.pullsStatus = 502
+    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
+    github.control.pullsStatus = 200
     expect(await app.pullRequestState(repo, 9, 'ghs_not_issued')).toBeNull()
     github.control.down = true
     expect(await app.pullRequestState(repo, 9, token)).toBeNull()
@@ -457,5 +547,73 @@ describe('who pushed a pull request, through the app', () => {
     f.pass(3_600_000)
     expect(await f.app.pushOrigin(repository, 7)).toBe('clean')
     expect(logReads()).toBe(settled)
+  })
+})
+
+// Dee, #1891: a task's pull request is watched for its Engineer (superTabs/pullRequestEvents.ts), with what the app holds.
+describe('watching a pull request', () => {
+  const HEAD = 'abc1234def5678'
+  const seed = (github: ReturnType<typeof fakeGitHub>) => {
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main' }, mergeable: false,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    github.checkRuns.set(`acme/app@${HEAD}`, [{ name: 'build', status: 'completed', conclusion: 'failure', completed_at: '2026-10-24T11:59:00Z' },
+      { name: 'lint', status: 'in_progress', conclusion: null, completed_at: null }])
+    github.checkSuites.set(`acme/app@${HEAD}`, [{ status: 'in_progress', latest_check_runs_count: 2 }])
+    github.reviews.set('acme/app#12', [{ id: 7, user: { login: 'huy' }, author_association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', html_url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }])
+    github.comments.set('acme/app#12', [{ id: 9, user: { login: 'dee' }, author_association: 'NONE', body: 'Looks good', html_url: 'https://github.com/acme/app/pull/12#issuecomment-9' }])
+  }
+
+  it('reads the pull, its head\'s check runs and suites, its reviews and comments, with a read-only token', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    expect(github.calls.at(-1)!.body).toMatchObject({ permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' } })
+    expect(Object.keys(PULL_WATCH_PERMISSIONS).sort()).toEqual(['checks', 'metadata', 'pull_requests'])
+    for (const name of Object.keys(PULL_WATCH_PERMISSIONS)) expect(TOKEN_PERMISSIONS[name as keyof typeof TOKEN_PERMISSIONS]).toBeDefined()
+    seed(github)
+    expect(await app.watchPullRequest(repo, 12, token)).toEqual({ url: 'https://github.com/acme/app/pull/12', number: 12, state: 'open', draft: false,
+      head: HEAD, base: 'main', mergeable: false,
+      checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: Date.parse('2026-10-24T11:59:00Z') },
+        { name: 'lint', status: 'in_progress', conclusion: null, completedAt: null }],
+      checkSuites: [{ status: 'in_progress', runs: 2 }],
+      reviews: [{ id: 7, login: 'huy', association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }],
+      comments: [{ id: 9, login: 'dee', association: 'NONE', body: 'Looks good', url: 'https://github.com/acme/app/pull/12#issuecomment-9' }] })
+    expect(github.calls.slice(-5).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/commits/${HEAD}/check-runs`,
+      `/repos/acme/app/commits/${HEAD}/check-suites`, '/repos/acme/app/pulls/12/reviews', '/repos/acme/app/issues/12/comments'])
+  })
+
+  it('asks again with If-None-Match and reuses the body of a 304', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    const first = await app.watchPullRequest(repo, 12, token)
+    const again = await app.watchPullRequest(repo, 12, token)
+    expect(again).toEqual(first)
+    expect(github.calls.slice(-5).every(c => c.ifNoneMatch)).toBe(true)
+    github.comments.set('acme/app#12', [])
+    expect((await app.watchPullRequest(repo, 12, token))!.comments).toEqual([])
+  })
+
+  // Review of #2750, Important 2: GitHub lists reviews and comments oldest first, so the newest are on the last page.
+  it('reads the newest reviews and comments from the last page', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    github.comments.set('acme/app#12', Array.from({ length: 250 }, (_, i) => ({ id: i + 1, user: { login: 'dee' }, author_association: 'MEMBER', body: `note ${i + 1}`,
+      html_url: `https://github.com/acme/app/pull/12#issuecomment-${i + 1}` })))
+    const ids = (await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)
+    expect(ids).toContain(250)
+    expect(ids).toContain(201)
+    // A new comment shows on the next read, even though the first page is unchanged.
+    github.comments.get('acme/app#12')!.push({ id: 251, user: { login: 'dee' }, author_association: 'MEMBER', body: 'note 251', html_url: 'x' })
+    expect((await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)).toContain(251)
+  })
+
+  it('answers null when GitHub cannot say', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
+    seed(github)
+    github.control.down = true
+    expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
   })
 })

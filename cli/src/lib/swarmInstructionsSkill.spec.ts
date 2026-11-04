@@ -253,3 +253,33 @@ describe('the project instructions skill', () => {
     expect(() => recordProjectSkillsNotice(join(fixture(), 'removed-worktree'), saved, { version: 'any', change: 1 })).not.toThrow()
   })
 })
+
+// The Swarm's built-in PM schedule, read beside the document by the coordinator alone (2026-11-04 PM schedule design).
+describe('the built-in PM schedule', () => {
+  const BUILT_IN = '## Built-in PM schedule (from the Swarm)\n\nThe Swarm wakes you for these jobs.'
+
+  it('appends the built-in schedule for the coordinator only', () => {
+    const coordinator = instructionsSkillText(doc({ roleName: 'PM', coordinator: true, builtIn: BUILT_IN }))
+    expect(coordinator.endsWith(`Instructions revision 1:\n\n${TEXT}\n\n${BUILT_IN}`)).toBe(true)
+    expect(instructionsSkillText(doc({ builtIn: BUILT_IN }))).not.toContain('Built-in PM schedule')
+    expect(instructionsSkillText(doc({ roleName: 'PM', coordinator: true, builtIn: null }))).toBe(instructionsSkillText(doc({ roleName: 'PM', coordinator: true })))
+  })
+
+  it('a changed built-in schedule owes one notice', () => {
+    const { workspace, saved } = launched()
+    const pm = (builtIn: string) => doc({ roleName: 'PM', coordinator: true, builtIn, savedAt: LAUNCHED_AT })
+    const first = refreshProjectSkills(workspace, saved, pm(BUILT_IN))!
+    recordProjectSkillsNotice(workspace, saved, first)
+    const changed = refreshProjectSkills(workspace, saved, pm(`${BUILT_IN} Every 30 minutes.`))!
+    expect(changed.owed).toBe(true)
+    recordProjectSkillsNotice(workspace, saved, changed)
+    expect(refreshProjectSkills(workspace, saved, pm(`${BUILT_IN} Every 30 minutes.`))).toMatchObject({ owed: false })
+  })
+
+  it('a launch that printed it owes nothing extra', () => {
+    const { workspace, saved, instructions } = launched()
+    const refresh = refreshProjectSkills(workspace, saved, doc({ roleName: 'PM', coordinator: true, builtIn: BUILT_IN }))!
+    expect(refresh).toMatchObject({ owed: false, change: 0 })
+    expect(readFileSync(instructions, 'utf8')).toContain(BUILT_IN)
+  })
+})

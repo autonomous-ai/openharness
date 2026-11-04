@@ -1191,6 +1191,46 @@ void main() {
     expect(app.swarms.first.name, 'My workspace');
   });
 
+  test('a Swarm tab never takes its agents\' folder, project or names as its '
+      'name, even one not marked as named by hand (task #2647)', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    // A Lead with no repository works in the Swarm's own folder.
+    app.stateOf('m')!.agents = const [
+      Agent(
+        id: 'lead',
+        name: 'Lead',
+        engine: 'claude',
+        project: AgentProject(
+          name: 'swarms',
+          cwd: '/Users/dee/harnesses/swarms',
+        ),
+      ),
+    ];
+    app.swarms.clear();
+    final tab =
+        Swarm(
+            id: 't',
+            name: 'autonomous.ai',
+            kind: 'superTab',
+            nameIsCustom: false,
+          )
+          ..superTabId = 'c51479bd73b59e58176ad9e4'
+          ..titleMachineId = 'm'
+          ..titleAgentId = 'lead'
+          ..panes.add(TerminalPane(id: 1, machineId: 'm', agentId: 'lead'));
+    app.swarms.add(tab);
+    expect(workspaceTabNames(app)['t'], 'autonomous.ai');
+    // Its agent renamed (as a restarted daemon announces every agent) leaves
+    // the Swarm's name alone.
+    await app.handleEventForTest('m', {
+      'type': 'agent_renamed',
+      'payload': {'agentId': 'lead', 'name': 'River'},
+    });
+    expect(tab.name, 'autonomous.ai');
+    expect(workspaceTabNames(app)['t'], 'autonomous.ai');
+  });
+
   test('machine names distinguish the same project on different machines', () {
     final app = createApp();
     addTearDown(app.dispose);

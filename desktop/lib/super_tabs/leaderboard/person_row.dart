@@ -2,6 +2,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../identity.dart';
@@ -27,10 +28,11 @@ TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-/// A person as the leaderboard names them: their username, as everywhere in
-/// the Swarm (the board's account display name was a long one).
+/// A person as the leaderboard names them: as everywhere in the Swarm, the
+/// name they set, else their username (the board's account display name was
+/// a long one).
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
-    person.username;
+    person.shownName;
 
 /// Whether a person wears the crown: first on the board, with points. At the
 /// start of a week everyone ties at 0, and no one has taken #1 yet.
@@ -95,6 +97,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     required this.onTap,
     this.columns,
     this.own = false,
+    this.noMachine = false,
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
@@ -105,6 +108,10 @@ class LeaderboardPersonRow extends StatelessWidget {
 
   /// Whether this is the viewer's own row.
   final bool own;
+
+  /// Whether they have no machine in this Swarm: a quiet mark after the name
+  /// (Scholes, task #2699). One only offline still counts.
+  final bool noMachine;
 
   @override
   Widget build(BuildContext context) {
@@ -147,32 +154,69 @@ class LeaderboardPersonRow extends StatelessWidget {
   /// system).
   Widget _name() => SuperTabUntil(
     until: person.status?.until,
-    builder: (context) => Tooltip(
-      message: [
-        leaderboardName(person, score),
-        person.email,
-        ?person.statusAt(clock.now())?.text,
-      ].join('\n'),
-      child: Text.rich(
-        TextSpan(
-          text: leaderboardName(person, score),
-          children: [
-            if (leaderboardCrowned(score))
-              WidgetSpan(
-                alignment: PlaceholderAlignment.middle,
-                child: LeaderboardCrown(
-                  id: person.id,
-                  weekName: score!.spanName,
-                ),
+    builder: (context) => Row(
+      children: [
+        Flexible(
+          child: Tooltip(
+            message: [
+              leaderboardName(person, score),
+              if (person.name != null) '@${person.username}',
+              person.email,
+              ?person.statusAt(clock.now())?.text,
+            ].join('\n'),
+            child: Text.rich(
+              TextSpan(
+                text: leaderboardName(person, score),
+                children: [
+                  if (leaderboardCrowned(score))
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: LeaderboardCrown(
+                        id: person.id,
+                        weekName: score!.spanName,
+                      ),
+                    ),
+                ],
               ),
-          ],
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(),
+            ),
+          ),
         ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: DesktopChrome.control(),
-      ),
+        // After the name, which gives way first (task #2699).
+        if (noMachine) _NoMachineMark(id: person.id),
+      ],
     ),
   );
+}
+
+/// After the name of someone with no machine in this Swarm: the crossed-out
+/// monitor, muted and at the metadata size so the row keeps its height, with
+/// why on hover (Scholes, task #2699).
+class _NoMachineMark extends StatelessWidget {
+  const _NoMachineMark({required this.id});
+  final String id;
+
+  static const _why = 'No machine shared yet';
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.metadata();
+    return Padding(
+      padding: const EdgeInsets.only(left: _halfGap),
+      child: Tooltip(
+        message: _why,
+        child: Icon(
+          AppIcons.monitorOff,
+          key: ValueKey('super-person-no-machine-$id'),
+          size: style.fontSize,
+          color: style.color,
+          semanticLabel: _why,
+        ),
+      ),
+    );
+  }
 }
 
 /// Number one's crown beside their name: content artwork, said in words, at
@@ -369,6 +413,9 @@ class _LeaderboardPersonDetails extends StatefulWidget {
       _LeaderboardPersonDetailsState();
 }
 
+/// How Brought names a subscription's engine, as the Swarm's other lines do.
+const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
 class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
   /// The newest a list shows before Show all.
   static const _shown = 5;
@@ -493,13 +540,57 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
               'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
             ),
         ]),
-        section('Lent', 'No machines lent yet', [
-          for (final lent in details.lent)
-            item(
-              line(superTabMachineName(lent.machineName)),
-              '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
-            ),
-        ]),
+        // What each machine the person brought did (contributor view, #2444);
+        // a server before it says only Lent.
+        if (details.brought case final brought?)
+          section('Brought', 'No machines brought yet', [
+            for (final machine in brought)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  item(
+                    line(superTabMachineName(machine.machineName)),
+                    '${machine.shipped} shipped · '
+                    '${broughtHours(machine.busyHours)} for others',
+                  ),
+                  for (final sub in machine.subscriptions)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        start: _gap * 2,
+                      ),
+                      child: item(
+                        line(
+                          _engineNames[sub.engine] ?? capitalized(sub.engine),
+                          style: quiet,
+                        ),
+                        switch (sub) {
+                          (
+                            usedPercent: final used?,
+                            resetsAt: final at?,
+                            engine: _,
+                          ) =>
+                            '$used% used · resets in ${resetsIn(DateTime.fromMillisecondsSinceEpoch(at), clock.now())}',
+                          (
+                            usedPercent: final used?,
+                            resetsAt: null,
+                            engine: _,
+                          ) =>
+                            '$used% used',
+                          _ => 'not read yet',
+                        },
+                      ),
+                    ),
+                ],
+              ),
+          ])
+        else
+          section('Lent', 'No machines lent yet', [
+            for (final lent in details.lent)
+              item(
+                line(superTabMachineName(lent.machineName)),
+                '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
+              ),
+          ]),
       ],
     );
   }

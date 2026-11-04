@@ -103,7 +103,10 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     sequences.set(message.id, sequence)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
-    if (!message.thread || message.alsoInChat) group.lastMainSequence = sequence
+    if (!message.thread || message.alsoInChat) {
+      group.lastMainSequence = sequence
+      if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
+    }
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }
@@ -137,6 +140,20 @@ const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
   return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
 }
+
+/** What a reading moves all the time, measured on production (2026-11-04: of 128 parts moved in 40 s, `resources` in all of them): a
+ *  client that asks gets a line for these, and reads them on demand (read/changes.ts, read/service.ts machineReadings). */
+const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'privacy', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
+const steadyPart = (data: unknown) => {
+  const machine = data as MachineData | undefined
+  const observation = machine?.contribution?.observation
+  if (!machine?.contribution) return machine
+  const steady: Record<string, unknown> | undefined = observation && { ...observation }
+  for (const field of VOLATILE_READING) if (steady) delete steady[field]
+  return { ...machine, contribution: { ...machine.contribution, observation: steady, lent: undefined, lentDays: undefined } }
+}
+/** Whether a machine's write changes anything beyond those fields: running sessions, tools, readiness and all the rest. */
+export const machineContentChanged = (before: unknown, after: unknown): boolean => !sameData(steadyPart(before), steadyPart(after))
 
 /**
  * What a part write tells host reads (read/host.ts, review round 1), from the part's data before and after (undefined for
@@ -248,7 +265,8 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
         writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
         if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
       } else if (!sameData(prior.data, part.data)) {
-        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data) })
+        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data),
+          ...kind === 'machine' && machineContentChanged(prior.data, part.data) ? { content: true as const } : {} })
       }
     }
     for (const [key, prior] of before) {

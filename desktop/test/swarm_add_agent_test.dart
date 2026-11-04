@@ -3,6 +3,7 @@ import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
@@ -13,6 +14,15 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  // These pin exact rectangles after a split, with Autobalance splits off.
+  setUp(() {
+    final previous = appearancePrefsStore.value;
+    addTearDown(() => appearancePrefsStore.value = previous);
+    appearancePrefsStore.value = previous.copyWith(
+      panes: previous.panes.copyWith(autobalanceSplits: false),
+    );
+  });
+
   testWidgets('New Pane shortcut reuses the chosen session in this workspace', (
     tester,
   ) async {

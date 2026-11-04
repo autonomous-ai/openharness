@@ -57,20 +57,21 @@ static void audio_notify_done(void) { beeps++; }
 static char got_ids[HT_SUPERTABS_MAX][ID_MAX]; static int got_id_n;
 static ht_supertab_t got_card;
 static char got_tab[ID_MAX], got_lead[ID_MAX], got_text[2048], got_agent[ID_MAX], got_request[80], got_swarm[80];
-static char got_chat_id[ID_MAX]; static ht_chat_kind_t got_chat;
+static char got_chat_id[ID_MAX], got_thread[ID_MAX]; static ht_chat_kind_t got_chat;
 static uint32_t got_at; static bool got_none, got_stuck, got_text_null;
 static void ui_supertabs_ids(const char ids[][ID_MAX],int n) {
     ids_calls++;got_id_n=n;memcpy(got_ids,ids,(size_t)n*ID_MAX);
 }
 static bool ui_supertab(const ht_supertab_t *in) { card_calls++;got_card=*in;return beep_next; }
-static void ui_supertab_recap(const char *tab,const char *lead,const char *chat_id,const char *text,uint32_t at,bool none) {
+static void ui_supertab_recap(const char *tab,const char *lead,const char *chat_id,const char *thread,const char *text,uint32_t at,bool none) {
     recap_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
-    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_thread,sizeof got_thread,"%s",thread);
     snprintf(got_text,sizeof got_text,"%s",text?text:"");got_at=at;got_none=none;
 }
-static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *text,uint32_t at) {
+static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *thread,const char *text,uint32_t at) {
     notice_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);got_chat=chat;
-    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_thread,sizeof got_thread,"%s",thread);
+    snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
 }
 static void ui_supertab_notice_read(const char *tab,const char *lead,const char *chat_id) {
     read_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
@@ -95,7 +96,7 @@ static void ui_question_close(const char *a,const char *r) { (void)a;(void)r;qcl
 for name in ['str_of', 'msg', 'msg_check', 'msg_string', 'msg_number', 'msg_array', 'send_hello', 'id_fits',
              'handle_supertabs', 'handle_supertab', 'handle_supertab_recap', 'handle_supertab_focus',
              'handle_supertab_notice', 'handle_supertab_notice_read',
-             'handle_question', 'handle_question_close', 'cable_client_supertab_send', 'cable_client_supertab_side']:
+             'handle_question', 'handle_question_close', 'cable_client_supertab_send', 'cable_client_supertab_thread_leave', 'cable_client_supertab_side']:
     code += function(name)
 code += r'''
 static cJSON *parse(const char *json) { cJSON *p=cJSON_Parse(json);assert(p);return p; }
@@ -117,6 +118,8 @@ int main(void) {
     assert(!strcmp(field(wire[0],"swarmChat"),"v1"));
     // and swarmBuddy v1: each Lead's Buddy block, a Buddy face and the Buddy's quiet notice.
     assert(!strcmp(field(wire[0],"swarmBuddy"),"v1"));
+    // and swarmThread v1: each Lead's thread fields, a recap naming its thread, and supertab.thread.leave back.
+    assert(!strcmp(field(wire[0],"swarmThread"),"v1"));
     // and no swarmReview: words for a Swarm chat are sent as any harness's are, reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed.
     assert(!strcmp(field(wire[0],"swarmReview"),"<absent>"));
@@ -208,7 +211,16 @@ int main(void) {
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m9\",\"text\":\"Ready to ship.\",\"at\":1792560000}");
     beep_next=false;
     assert(notice_calls==1 && beeps==beeps_before+1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && got_chat==HT_CHAT_PM);
-    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u);
+    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u && !strcmp(got_thread,""));
+    // A reply inside a thread (#2463) names its root. One whose root cannot be held is still a thread's: no face shows it, so
+    // it beeps rather than reading as the main chat's; an empty one is the main stream.
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m12\",\"text\":\"Fixed.\",\"at\":7,\"thread\":\"m9\"}");
+    assert(notice_calls==2 && !strcmp(got_thread,"m9") && !strcmp(got_text,"Fixed."));
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m13\",\"text\":\"x\",\"at\":7,\"thread\":\"0123456789012345678901234567890123456789012345678901234567890123\"}");
+    assert(notice_calls==3 && got_thread[0]);
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m14\",\"text\":\"x\",\"at\":7,\"thread\":\"\"}");
+    assert(notice_calls==4 && !strcmp(got_thread,""));
+    notice_calls=1;
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"lead-web\",\"id\":\"m10\",\"text\":\"Done.\",\"at\":5}");
     assert(notice_calls==2 && got_chat==HT_CHAT_LEAD && beeps==beeps_before+1);
     // The Buddy's word: chat "buddy" reaches the UI as HT_CHAT_BUDDY; the UI says it is quiet.
@@ -232,6 +244,16 @@ int main(void) {
     assert(read_calls==1);
     beeps=beeps_before;   // the waits below count from here
 
+    // A Lead in a thread: its root, title and reply count; a Lead without them is the main chat (replies unknown).
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"openharness\",\"leads\":["
+        "{\"id\":\"L1\",\"state\":\"work\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"thread\":\"m9\",\"threadTitle\":\"Fix the login bug\",\"threadReplies\":2},"
+        "{\"id\":\"L2\",\"state\":\"work\",\"thread\":\"m8\",\"threadReplies\":-1},"
+        "{\"id\":\"L3\",\"state\":\"work\",\"thread\":7,\"threadTitle\":\"x\",\"threadReplies\":\"3\"},"
+        "{\"id\":\"L4\",\"state\":\"done\"}]}");
+    assert(got_card.lead_n==4 && !strcmp(got_card.leads[0].thread_root,"m9") && !strcmp(got_card.leads[0].thread_title,"Fix the login bug") && got_card.leads[0].thread_replies==2);
+    assert(!strcmp(got_card.leads[1].thread_root,"m8") && !got_card.leads[1].thread_title[0] && got_card.leads[1].thread_replies==-1);
+    assert(!got_card.leads[2].thread_root[0] && got_card.leads[2].thread_replies==-1);   // a non-string root is no thread
+    assert(!got_card.leads[3].thread_root[0] && got_card.leads[3].thread_replies==-1);
     // supertab.recap and supertab.focus.
     feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"Shipped.\",\"at\":1792560000,\"none\":false}");
     assert(recap_calls==1 && !strcmp(got_text,"Shipped.") && got_at==1792560000u && !got_none && !strcmp(got_lead,"L1"));
@@ -247,6 +269,14 @@ int main(void) {
     snprintf(bad,sizeof bad,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"x\",\"at\":3,\"chatId\":\"%s\"}",longer_id);
     feed(handle_supertab_recap,bad);
     assert(recap_calls==3);
+    // A thread's recap names its root; the main chat's names none; a root that cannot be held is dropped.
+    assert(!got_thread[0]);
+    feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"Taken.\",\"at\":4,\"none\":false,\"chatId\":\"pm1\",\"thread\":\"m9\"}");
+    assert(recap_calls==4 && !strcmp(got_thread,"m9") && !strcmp(got_text,"Taken."));
+    feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"Main.\",\"at\":5,\"none\":false,\"chatId\":\"pm1\"}");
+    assert(recap_calls==5 && !got_thread[0]);
+    { char wide[256]; snprintf(wide,sizeof wide,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"x\",\"thread\":\"%0*d\"}",ID_MAX+1,7);
+      feed(handle_supertab_recap,wide); assert(recap_calls==5); }
     feed(handle_supertab_focus,"{\"tab\":\"s1\",\"lead\":\"L2\"}");
     assert(focus_calls==1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2"));
     feed(handle_supertab_focus,"{\"tab\":\"s1\"}");
@@ -308,6 +338,17 @@ int main(void) {
     cable_client_supertab_side("",true);
     cable_client_supertab_side(NULL,false);
     assert(sends==2);
+    // supertab.thread.leave: exactly {t, tab, lead}, for a Swarm and a Lead the dial can hold; no Lead is nothing to leave.
+    sends=0;
+    cable_client_supertab_thread_leave("t1","L1");
+    assert(sends==1 && !strcmp(wire[0],"{\"t\":\"supertab.thread.leave\",\"tab\":\"t1\",\"lead\":\"L1\"}"));
+    cable_client_supertab_thread_leave("","L1");
+    cable_client_supertab_thread_leave("t1","");
+    cable_client_supertab_thread_leave(NULL,"L1");
+    cable_client_supertab_thread_leave("t1",NULL);
+    cable_client_supertab_thread_leave(longer,"L1");
+    cable_client_supertab_thread_leave("t1",longer);
+    assert(sends==1);
     puts("Swarm frames: hello capabilities, supertabs/supertab/recap/focus parsing, chats, Buddies and Lead/PM/Buddy notices, supertab.side, malformed Leads skipped, Super Tab waits kept off the question screen, exact requests PASS");
 }
 '''

@@ -70,7 +70,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
-    case 'member.username':
+    case 'member.username': case 'member.name':
       // Unique in the Swarm: a concurrent choice of the same name writes another person's part, and a join writes the head.
       for (const person of before.people) member(person.id)
       head()
@@ -118,6 +118,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)
+      break
+    // A move reads that the task it goes after is still open in the project: archiving it meets the move here.
+    case 'work.queue':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      group(command.after ?? undefined)
       break
     case 'message.send': {
       // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts

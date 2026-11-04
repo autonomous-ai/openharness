@@ -179,6 +179,10 @@ Avoid repeatedly drawing cards inside a dialog.
 
 The terminal's chosen color palette remains independent from UI focus blue.
 All modal veils share one 95% token: black in dark appearance, white in light.
+The chat's picture viewer is the one exception: `AppDesktop.mediaVeil`, a
+see-through black in both appearances, with its own white ink and control fills
+(`mediaInk`, `mediaInkMuted`, `mediaControl`, `mediaControlHover`), because a
+picture reads best on dark.
 Cmd-N and Cmd-P must have exactly the same backdrop darkness, including coverage
 of the native footer. Popovers have no independent full-window veil.
 
@@ -244,6 +248,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Standard / compact control minimum height | 32 / 28 |
 | Standard field minimum height | 36 |
 | Inline icon / search identity mark | 16 / 28 |
+| Chat and thread message avatar (rounded square) / corner | 36 / 8 |
+| Above a new sender in the chat / above its name | 16 / 8 (group / control gap) |
 | Small form / destination chooser width | 460 |
 | Creation composer maximum width | 680 |
 | Search maximum width / height | 1120 / 680 |

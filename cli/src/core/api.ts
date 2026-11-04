@@ -234,7 +234,7 @@ export interface CoreApi {
     /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, Agent
      *  Messages and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
      *  `onDelivery`, under the same id. */
-    deliver(agentId: string, text: string, deliveryId: string): void
+    deliver(agentId: string, text: string, deliveryId: string, options?: DeliveryOptions): void
     /** Take back a delivery not yet being written: true when it was, and it never will be; false for one
      *  the agent's pane is already taking. Answered at once, as the orchestrator reads it in
      *  line: in a service's own process the core is asked and the answer cannot wait, so it is false there,
@@ -566,6 +566,11 @@ export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
 export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '', autonomousEnv: 'prod' }
+
+/** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
+ *  in a Claude pane (core/input.ts `beforeTeamWrite`);
+ *  `writtenAt` is when it was written (ms), as only a question open since then is its to close. */
+export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -1256,7 +1261,9 @@ export interface SwarmLead {
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy' }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true
+  /** The root of the thread this recap is of, when the face was in one: a dial never takes it for the main chat's. */
+  thread?: string }
 /** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
  *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
  *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
@@ -1264,10 +1271,14 @@ export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
 /** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
  *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
  *  turn here. */
-export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number
+  /** While the face is in a thread (the app's, or the one the dial's words started): its root, its title (first line, 80 bytes)
+   *  and, when the read gives it, its reply count. Sent only to a dial that speaks swarmThread. */
+  thread?: { root: string; title: string; replies?: number } }
 /** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline (the
- *  dial's alert), or the reader's Buddy wrote in its chat (`buddy`, the quiet one). */
-export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number }
+ *  dial's alert), or the reader's Buddy wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it
+ *  replies in, when it is in that thread only; such a notice is read only where that thread is open. */
+export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string }
 /** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
  *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
 export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean
@@ -1281,7 +1292,11 @@ export type CardSide = 'pm' | 'buddy'
 export type CardChat = boolean | 'buddy'
 /** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
-export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
+/** `thread`: set when the post started the dial's thread (spec 2026-11-03-dial-thread-face), so the window opens it. */
+export type SaidOnCard = { said: true; thread?: { tabId: string; conversationId: string; root: string } } | { said: false; refused?: { code: string; message: string } }
+/** How words for a Lead relate to the dial's thread (a swarmThread dial only): `thread` is the root of the thread on its face when
+ *  they were spoken, null for none, and the post is held to it; `threaded`: they were spoken from the face, so they may start one. */
+export interface SayOptions { thread?: string | null; threaded?: boolean }
 /** The conversation the window has open in a Swarm tab. */
 /** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
  *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */

@@ -15,6 +15,7 @@ import '../state/app_state.dart';
 import '../terminal/terminal_snapshot.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_find.dart';
+import '../terminal/terminal_look.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
@@ -1867,13 +1868,13 @@ class _TerminalPanelState extends State<TerminalPanel>
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
-    final colors = terminalThemeFor(
-      grid.AppTheme.palette.value,
-      terminalThemeStore.value,
-    );
+    // On the terminal's palette, which stays dark in a light app while Settings'
+    // Theme is chosen ([TerminalLook]); the app's anywhere else.
+    final palette = TerminalLook.paletteOf(context);
+    final colors = terminalThemeFor(palette, terminalThemeStore.value);
     final foreground = colors.foreground;
     return ColoredBox(
-      color: grid.AppPalette.windowBg,
+      color: TerminalLook.read(context, () => grid.AppPalette.windowBg),
       child: Column(
         children: [
           Expanded(
@@ -1921,7 +1922,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                         // shows nothing. See xterm's `TerminalView.predictsEcho`.
                         predictsEcho: true,
                         theme: terminalScreenThemeFor(
-                          grid.AppTheme.palette.value,
+                          palette,
                           terminalThemeStore.value,
                         ),
                         // ⚠️ **Nothing top or bottom, and that is the whole

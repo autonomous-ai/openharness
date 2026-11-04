@@ -64,6 +64,33 @@ describe('status line', () => {
   })
 })
 
+describe('time zone', () => {
+  it('sets and clears the person’s own zone, read by members', () => {
+    const f = fixture()
+    f.invite()
+    f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' })
+    expect(f.member('owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
+    expect(visibleState(f.state, peer).people.find(p => p.id === 'owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
+    f.run({ type: 'member.timeZone', timeZone: null })
+    expect(f.member('owner')!.timeZone).toBeUndefined()
+  })
+
+  it('refuses an unknown zone and an agent', () => {
+    const f = fixture()
+    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Mars/Base' })).toThrow(expect.objectContaining({ code: 'TIME_ZONE' }))
+    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' }, { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' }))
+      .toThrow()
+    expect(f.member('owner')!.timeZone).toBeUndefined()
+  })
+
+  it('a viewer may set their own', () => {
+    const f = fixture()
+    f.invite('viewer')
+    f.run({ type: 'member.timeZone', timeZone: 'Europe/Berlin' }, peer)
+    expect(f.member('peer')!.timeZone).toBe('Europe/Berlin')
+  })
+})
+
 describe('avatars', () => {
   const upload = { id: 'u1', key: 'avatars/tab/0123abcd/avatar' }
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }

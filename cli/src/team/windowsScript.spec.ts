@@ -169,7 +169,7 @@ describe('the Windows setup script', () => {
       if (/TEAM_HOME/.test(line) && /Copy|Set-Content|WriteAll|Move-Item|New-Item|CreateDirectory/.test(line)) throw new Error(`writes in the team home: ${line}`)
     }
     expect(script).toContain("$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15")
-    expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 30")
+    expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 10 ")
     // What it says goes to a file in the stage folder, which this script made and the team account may only write.
     expect(script).toContain('& $ICACLS $out /grant "*$($teamSid):(R,W)" /L /q')
   })
@@ -208,6 +208,27 @@ describe('the Windows setup script', () => {
   })
 
   it.skipIf(!pwsh)('parses', () => parses(buildWindowsSetupScript(input())))
+})
+
+describe('the Windows setup script\'s steps and engines (task #2686)', () => {
+  it('says each step before it runs, writing a fresh file and renaming it over the step file, never through what is there', () => {
+    const script = buildWindowsSetupScript(input())
+    expect(script).toContain('function Step([string]$name) {')
+    expect(script).toContain("$next = Join-Path $STAGE ('progress.' + [guid]::NewGuid().ToString('N'))")
+    expect(script).toContain("Move-Item -LiteralPath $next -Destination (Join-Path $STAGE 'progress') -Force")
+    const order = ['account', 'home', 'privacy', 'runtime', 'engines'].map((name) => script.indexOf(`\nStep '${name}'\n`))
+    for (const at of order) expect(at).toBeGreaterThan(0)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    expect(order[0]).toBeLessThan(script.indexOf('# 2. The account'))
+    expect(order[4]).toBeLessThan(script.indexOf("$installed = As-Team 'engines'"))
+  })
+
+  it('gives the engines 10 minutes, inside User Account Control\'s 15, and goes on without them when they are late', () => {
+    const script = buildWindowsSetupScript(input())
+    expect(script).toContain('function As-Team([string]$what, [string]$line, [int]$minutes, [string]$lateSay = \'\') {')
+    expect(script).toContain('  if ($late -and $lateSay) { return @(-1, @($lateSay)) }')
+    expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 10 'harness: Claude Code and Codex did not finish installing in 10 minutes; the Harness Team account works without them, and harness team setup installs them'")
+  })
 })
 
 describe('the scripts the team account runs itself', () => {
@@ -260,7 +281,24 @@ describe('the scripts the team account runs itself', () => {
   it('installs Claude Code and Codex with its own npm under its own home, and never fails setup', () => {
     const script = windowsTeamEnginesScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', packages: ['@anthropic-ai/claude-code', '@openai/codex'] })
     expect(script).toContain("$Packages = @('@anthropic-ai/claude-code', '@openai/codex')")
-    expect(script).toContain('install --global --prefix $prefix --no-fund --no-audit --loglevel=error $pkg')
+    expect(script).toContain('install --global --prefix `"$prefix`" --no-fund --no-audit --loglevel=error $($pkgs -join')
+    expect(script).toContain('exit 0')
+  })
+
+  // Task #2686: the Mac's limit on Windows (#2921). A new Mac waited ~7 minutes on ~320 MB from npm; here the engines
+  // had 30 minutes, past User Account Control's 15, and a late run failed setup instead of finishing the account.
+  it('installs both in one npm run, then each alone, within 8 minutes in all, and stops the whole tree at the limit', () => {
+    const script = windowsTeamEnginesScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', packages: ['@anthropic-ai/claude-code', '@openai/codex'] })
+    expect(script).toContain('$limit = 480')
+    expect(script).toContain('$deadline = (Get-Date).AddSeconds($limit)')
+    // npm.cmd through cmd, its output on NUL: nothing it leaves running writes into what the elevated setup prints.
+    expect(script).toContain('>NUL 2>&1')
+    expect(script).toContain('$p.WaitForExit($left)')
+    expect(script).toContain('taskkill.exe /T /F /PID $p.Id')
+    expect(script).toContain('$got = Install $Packages')
+    expect(script).toContain('foreach ($pkg in $Packages) {')
+    expect(script).toContain("harness: Claude Code and Codex did not finish installing in $limit seconds; the Harness Team account works without them, and harness team setup installs them")
+    expect(script.indexOf('$got = Install $Packages')).toBeLessThan(script.indexOf('foreach ($pkg in $Packages) {'))
     expect(script).toContain('exit 0')
   })
 

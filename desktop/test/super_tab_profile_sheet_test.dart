@@ -169,10 +169,7 @@ void main() {
       final server = ConversationServer();
       final c = await openSheet(tester, server);
       expect(text(tester), 'owner');
-      expect(
-        find.text('How people see and tag you in this Swarm.'),
-        findsOneWidget,
-      );
+      expect(find.text('How people tag you in this Swarm.'), findsOneWidget);
       // Nothing to save until it changes.
       expect(enabled(tester), isFalse);
       await tester.enterText(field, 'River');
@@ -260,6 +257,96 @@ void main() {
       ];
       await openSheet(tester, server, agentId: 'agent-1');
       expect(field, findsNothing);
+      expect(find.byKey(const ValueKey('super-name-field')), findsNothing);
+    });
+  });
+
+  // The name the Swarm shows for the reader (backend personNames.ts).
+  group('name', () {
+    final field = find.byKey(const ValueKey('super-name-field'));
+    final save = find.byKey(const ValueKey('super-name-save'));
+    String text(WidgetTester tester) =>
+        tester.widget<TextField>(field).controller!.text;
+    bool enabled(WidgetTester tester) =>
+        tester.widget<ButtonStyleButton>(save).onPressed != null;
+
+    testWidgets('sits above the username and saves a name, trimmed', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      final c = await openSheet(tester, server);
+      expect(text(tester), '');
+      expect(
+        tester.getTopLeft(field).dy,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('super-username-field')))
+              .dy,
+        ),
+      );
+      expect(
+        find.text('What teammates see. Leave empty to show your username.'),
+        findsOneWidget,
+      );
+      expect(enabled(tester), isFalse);
+      await tester.enterText(field, '  Minh Nguyen ');
+      await tester.pump();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server), {
+        'type': 'member.name',
+        'name': 'Minh Nguyen',
+      });
+      expect(c.snapshot!.people.single.name, 'Minh Nguyen');
+      expect(c.snapshot!.people.single.shownName, 'Minh Nguyen');
+      expect(text(tester), 'Minh Nguyen');
+      expect(enabled(tester), isFalse);
+    });
+
+    testWidgets('an emptied name clears it, back to the username', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      ((server.state['people'] as List).single as Map)['name'] = 'Minh';
+      final c = await openSheet(tester, server);
+      expect(text(tester), 'Minh');
+      await tester.enterText(field, '  ');
+      await tester.pump();
+      expect(enabled(tester), isTrue);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server), {'type': 'member.name', 'name': null});
+      expect(c.snapshot!.people.single.name, isNull);
+      expect(c.snapshot!.people.single.shownName, 'owner');
+    });
+
+    testWidgets('a refused name says why under the field', (tester) async {
+      final server = ConversationServer();
+      await openSheet(tester, server);
+      server.refuse = {
+        'code': 'NAME_TAKEN',
+        'message': 'Someone here already goes by that name.',
+      };
+      await tester.enterText(field, 'Dee');
+      await tester.pump();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      final why = find.text('Someone here already goes by that name.');
+      expect(why, findsOneWidget);
+      expect(text(tester), 'Dee');
+      expect(
+        tester.getTopLeft(why).dy,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('super-username-field')))
+              .dy,
+        ),
+      );
+    });
+
+    testWidgets('takes at most 40 characters', (tester) async {
+      await openSheet(tester, ConversationServer());
+      expect(tester.widget<TextField>(field).maxLength, 40);
     });
   });
 

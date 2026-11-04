@@ -87,10 +87,19 @@ export interface Derived {
   /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
    *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
   activityDigest?: string
+  /** A person only: a digest of their reminders and when each is due (reminders.ts), moving when one is set, replaced or
+   *  cleared. No count and no chat: the client reads its reminders again when it moves, and at the `next` time that read
+   *  gave it. Absent from an older backend. */
+  remindersDigest?: string
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
+  /** A person only: those of their `readMarks` whose last move was their own Mark unread (readMarks.ts lowerReadMark), which
+   *  a client takes in place of a higher mark it holds, where it keeps the higher of the two for every other mark. Like
+   *  `readMarks`: a first load has every one of the conversations it holds, a changes read those moved since its cursor; a read
+   *  that raises the mark again ends it. Absent when there are none, and from an older backend. Never another person's. */
+  unreadMarks?: Record<string, number>
   /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
    *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
    *  Absent when there are none, and from an older backend. Never another person's. */
@@ -150,6 +159,11 @@ export interface FirstLoad extends ReadMeta {
 export type Changes = ChangesReload | ChangesDelta
 /** Drop the store and do a first load: bad or old cursor, another epoch, or older than tombstones are kept. */
 export interface ChangesReload { reload: true }
+/** A machine's own reading, as one line, for a client that asked (`machines=light`): when it last reported, from which it works out
+ *  online or offline as it does from a part. The rest of the reading is read on demand (MachineReadings). */
+export interface MachineReading { key: string; version: number; receivedAt: number }
+/** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
+export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
   reload: false
   head: LivePart<HeadView> | null
@@ -157,6 +171,8 @@ export interface ChangesDelta extends ReadMeta {
   agents: PartChange<AgentView>[]
   groups: GroupChange[]
   machines: PartChange<MachineView>[]
+  /** Only for a client that asked: machines whose reading alone moved, which `machines` then leaves out. */
+  machineReadings?: MachineReading[]
   starts: PartChange<StartView>[]
   progress: PartChange<ProgressView>[]
   derived: Derived
@@ -258,7 +274,10 @@ export interface HostAgentRow {
   roleName: string
   /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
    *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string
+    /** The coordinator's alone: the built-in PM schedule's hash (pmSchedule.ts), which its read carries beside the text. The host
+     *  reads again when it moves, as it does for `revision`. */
+    builtInHash?: string } | null
   lead: boolean
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null

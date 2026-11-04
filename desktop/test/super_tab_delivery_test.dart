@@ -211,10 +211,16 @@ void main() {
         }
         await shot('delivery');
         expect(server.posts, isEmpty);
+        // In the small, large-text window the card is taller than the list
+        // above the composer's two rows: the reader scrolls to its actions.
+        await tester.ensureVisible(find.text('Open terminal'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Open terminal'));
         await tester.pumpAndSettle();
         expect(opened, 'lead-agent');
         expect(server.posts, isEmpty);
+        await tester.ensureVisible(find.text('It arrived'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('It arrived'));
         await tester.pumpAndSettle();
         expect((server.posts.single['command'] as Map), {

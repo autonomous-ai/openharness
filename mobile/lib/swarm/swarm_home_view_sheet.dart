@@ -3,6 +3,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_home_list.dart';
 import 'swarm_home_prefs.dart';
@@ -28,23 +29,43 @@ String swarmHomeFilterLabel(SwarmHomeFilter filter) => switch (filter) {
 
 /// Sort by and Filter, from Home's top bar: each says what is on, and opens to
 /// its options with a tick on the one chosen. A choice applies at once and the
-/// menu stays. It holds nothing of a Swarm; signed out, another account, or no
-/// Swarm left to sort, it closes, and a tap changes nothing.
+/// menu stays. Under them, Mark all read ([onMarkAllRead], greyed while
+/// [unread] says nothing is) and Refresh ([onRefresh]), moved here from the
+/// top bar and the pull (Tony, 2026-11-03): each closes the menu, then runs.
+/// It holds nothing of a Swarm; signed out, another account, or no Swarm left
+/// to sort, it closes, and a tap changes nothing.
 Future<void> showSwarmHomeViewSheet(
   BuildContext context,
-  SwarmSession session,
-) => showModalBottomSheet<void>(
+  SwarmSession session, {
+  bool Function()? unread,
+  VoidCallback? onMarkAllRead,
+  VoidCallback? onRefresh,
+}) => showModalBottomSheet<void>(
   context: context,
   backgroundColor: AppGlass.rowFill,
   shape: AppControl.sheetShape,
   isScrollControlled: true,
-  builder: (_) => _ViewSheet(session: session),
+  builder: (_) => _ViewSheet(
+    session: session,
+    unread: unread,
+    onMarkAllRead: onMarkAllRead,
+    onRefresh: onRefresh,
+  ),
 );
 
 class _ViewSheet extends StatefulWidget {
-  const _ViewSheet({required this.session});
+  const _ViewSheet({
+    required this.session,
+    this.unread,
+    this.onMarkAllRead,
+    this.onRefresh,
+  });
 
   final SwarmSession session;
+
+  /// Whether anything Home shows is unread: Mark all read is greyed without.
+  final bool Function()? unread;
+  final VoidCallback? onMarkAllRead, onRefresh;
 
   @override
   State<_ViewSheet> createState() => _ViewSheetState();
@@ -72,6 +93,14 @@ class _ViewSheetState extends State<_ViewSheet> {
         Navigator.of(context).removeRoute(route);
       }
     });
+  }
+
+  /// Closes the menu, then does [action], unless the menu is going already.
+  void _closeThen(VoidCallback action) {
+    if (!_live) return;
+    _closing = true;
+    Navigator.of(context).pop();
+    action();
   }
 
   Widget _heading({
@@ -217,11 +246,90 @@ class _ViewSheetState extends State<_ViewSheet> {
                       on: home.filter == filter,
                       choose: () => home.setFilter(filter),
                     ),
+                if (widget.onMarkAllRead != null || widget.onRefresh != null)
+                  Divider(
+                    height: AppSpace.l,
+                    thickness: 1,
+                    indent: AppSpace.l,
+                    endIndent: AppSpace.l,
+                    color: AppGlass.hair,
+                  ),
+                if (widget.onMarkAllRead case final mark?)
+                  SwarmHomeViewAction(
+                    key: const ValueKey('swarm-mark-all-read'),
+                    icon: LucideIcons.checkCheck300,
+                    title: 'Mark all read',
+                    onTap: widget.unread?.call() ?? false
+                        ? () => _closeThen(mark)
+                        : null,
+                  ),
+                if (widget.onRefresh case final refresh?)
+                  SwarmHomeViewAction(
+                    key: const ValueKey('swarm-home-refresh'),
+                    icon: LucideIcons.refreshCw300,
+                    title: 'Refresh',
+                    onTap: () => _closeThen(refresh),
+                  ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// A thing Sort and filter does, not a way Home is shown — Mark all read,
+/// Refresh: its glyph and its name, greyed and heard as off with nothing to
+/// do ([onTap] null).
+class SwarmHomeViewAction extends StatelessWidget {
+  const SwarmHomeViewAction({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = onTap == null ? AppPalette.textFaint : AppPalette.textPrimary;
+    return Semantics(
+      button: true,
+      enabled: onTap != null,
+      label: title,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppCard.radius),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: SwarmRow.height),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
+              child: Row(
+                children: [
+                  Icon(icon, size: 20, color: ink),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.label(color: ink, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

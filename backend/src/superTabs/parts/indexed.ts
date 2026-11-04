@@ -54,8 +54,9 @@ export const NAMED_INDEX = {
   SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
   SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
   SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 } },
-  /** `expiry`: live starts by finish time (the hourly sweep). */
-  SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 } },
+  /** `expiry`: live starts by finish time (the hourly sweep). `agents`: a Swarm's starts of some agents (agentTombstones.ts):
+   *  unnamed, Mongo planned that read on `expiry` and read every live start of every Swarm. */
+  SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 }, agents: { tabId: 1, agentId: 1 } },
   SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
   SuperTabMessage: {
     /** A conversation's page in (sequence, id) order. */
@@ -75,6 +76,8 @@ export const NAMED_INDEX = {
     /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on
      *  `compaction` and sorted, reading far more than a page. */
     settle: { status: 1, _id: 1 },
+    /** A message's deliveries in its Swarm. */
+    byMessage: { tabId: 1, messageId: 1 },
   },
   /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
   SuperTabReceipt: {
@@ -93,6 +96,12 @@ export const NAMED_INDEX = {
   SuperTabActivity: { age: { createdAt: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
+  /** A person's reminders (reminders.ts): `person`, the due list, the next one, the digest and the cap's count; `due`, the
+   *  sweep's reminders due more than 30 days ago. */
+  SuperTabReminder: {
+    person: { tabId: 1, personId: 1, dueAt: 1 },
+    due: { dueAt: 1 },
+  },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

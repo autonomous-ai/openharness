@@ -21,7 +21,7 @@ enum { POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_EDGE_SWIPE = 80, POD_BOTTOM_Y = 6
 
 typedef struct { const char *id, *name, *engine, *machine; } pod_roster_row_t;
 // One frame for the daemon about the Swarm cards: `t` is "supertab.select", "supertab.open" or "supertab.recap.get" (a literal), lead "" closes the open recap.
-typedef struct { const char *t; char tab[ID_MAX], lead[ID_MAX]; } pod_supertab_out_t;
+typedef struct { const char *t; char tab[ID_MAX], lead[ID_MAX], side[8]; } pod_supertab_out_t;   // side: only "supertab.side" ("pm" / "buddy")
 enum { POD_SUPERTAB_OUT_MAX = 8, POD_SUPERTAB_RETRIES = 5, POD_SUPERTAB_RETRY_MS = 3000 };
 
 typedef struct {
@@ -85,6 +85,7 @@ typedef struct {
     uint32_t down_ms;
     // Tap to talk: armed at a DOWN that may talk, fired by its lift if the finger stayed within POD_TAP_SLOP (pod_ui_touch, on the touch task).
     bool talk_armed, bar, edge;   // bar: the contact began in the top edge (y < POD_BAR_H) of a non-Talk screen: a swipe down opens the Inbox; edge: the contact began in the bottom zone (y >= POD_BOTTOM_Y) of a room or a recap: a swipe up goes Home, and it scrolls nothing
+    bool swarm_remote; // the daemon routes a voice turn named with a Lead's Swarm id (welcome `swarm.remote`): a remote Lead talks. Cleared with the link
     bool hands_free;   // a tap started a recording; the next new tap sends it (cleared by END, ABORT, talk_over)
     uint8_t talk_depth;
     pod_view_t talk_view;            // the screen (nav depth and view) and agent the tap was armed on: it fires only there
@@ -160,6 +161,10 @@ pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
 int pod_ui_take_supertab(pod_ui_t *, pod_supertab_out_t out[], int max);
 // A frame taken by pod_ui_take_supertab that could not be sent (the link was busy): open / recap.get count as not sent, so the retry comes again (a failed retry is not counted);
 // the closing open (no lead) is owed until it is sent, unless a Lead opened since.
+// The person picked a side of that Swarm: queue `supertab.side`. False when the queue is full or `side` is NONE. A frame that could not be sent is dropped, not
+// retried (pod_ui_supertab_unsent ignores it): the next supertab frame shows the side the desktop really holds.
+bool pod_ui_supertab_side(pod_ui_t *, const char *tab, pod_side_t side);
+void pod_ui_side_unsent(pod_ui_t *, const char *tab);
 void pod_ui_supertab_unsent(pod_ui_t *, const pod_supertab_out_t *frame);
 
 // The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the
@@ -218,7 +223,7 @@ bool pod_ui_notify(pod_ui_t *, const char *agent_id, pod_tier_t tier, bool awake
 // or on its Notices row opens that Lead (and selects it on the desktop) instead of Notices. Returns true when the caller must wake the glass and beep. Nothing
 // is filed for a Swarm or Lead the model does not hold. If that Lead's own view is on screen and the glass is lit, it is read at once: no entry, no toast, false.
 // The read (supertab.notice.read) drops the entry of that chat only, and ends its toast if that is the one showing.
-bool pod_ui_swarm_notice(pod_ui_t *, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms);
+bool pod_ui_swarm_notice(pod_ui_t *, const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text, bool awake, uint32_t now_ms);
 void pod_ui_swarm_notice_read(pod_ui_t *, const char *tab, const char *lead, const char *chat_id);
 // notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);
@@ -240,9 +245,13 @@ pod_out_t pod_ui_touch_cancel(pod_ui_t *);   // the contact is dropped; an open 
 
 // ---- voice and clock ---------------------------------------------------------------------------------------
 bool pod_ui_talking(const pod_ui_t *);
+// The welcome's `swarm.remote` (pro_app_features): a Lead with no harness here, or its Buddy, is talked to by the Lead's Swarm id. pod_ui_link(false) clears it.
+void pod_ui_set_swarm_remote(pod_ui_t *, bool on);
 // Leave a TALK frame whose recording is already over (refused start, link loss, the 600 s cap): back to the Agent
 // or Recap screen it came from, same stack, no effect to perform.
 void pod_ui_talk_over(pod_ui_t *);
+// TALK opened from a Lead view: the words go to that Swarm chat (the daemon's swarmSay), so no terminal turn follows to end "sending".
+bool pod_ui_talking_to_swarm(const pod_ui_t *);
 // SEND was tapped but the recorder had not started, so nothing is sent: forget the send (no send scene), say
 // "Not sent" for a moment. The frame is already back on the Agent screen.
 void pod_ui_unsend(pod_ui_t *, uint32_t now_ms);

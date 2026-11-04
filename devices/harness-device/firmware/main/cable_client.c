@@ -327,6 +327,9 @@ static void send_hello(void)
     // A PM and a Buddy side per Swarm (spec 2026-10-29-round-dial-pm-buddy): each Lead's `buddies` and the reader's
     // Buddy, a face that may be the Buddy chat, its quiet notice, and `supertab.side` back. Older daemons ignore it.
     msg_string(&root, "swarmBuddy", "v1");
+    // A face in a thread (spec 2026-11-03-dial-thread-face): each Lead's `thread`, `threadTitle`, `threadReplies`, a recap
+    // that names its thread, and `supertab.thread.leave` back. Older daemons ignore it and send none.
+    msg_string(&root, "swarmThread", "v1");
     // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
@@ -393,6 +396,16 @@ void cable_client_supertab_send(const char *t, const char *tab, const char *lead
     if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || strlen(lead) >= ID_MAX ||
         (!lead[0] && strcmp(t, "supertab.open"))) return;
     cJSON *root = msg(t);
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "lead", lead);
+    send_json(root);
+}
+
+// The dial's face leaves its thread (spec 2026-11-03-dial-thread-face); a daemon without swarmThread ignores it.
+void cable_client_supertab_thread_leave(const char *tab, const char *lead)
+{
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || !lead[0] || strlen(lead) >= ID_MAX) return;
+    cJSON *root = msg("supertab.thread.leave");
     msg_string(&root, "tab", tab);
     msg_string(&root, "lead", lead);
     send_json(root);
@@ -981,7 +994,7 @@ static void handle_supertab(const cJSON *p)
         if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
         if (!cJSON_IsObject(l)) continue;
         const cJSON *order = cJSON_GetObjectItemCaseSensitive(l, "order"), *since = cJSON_GetObjectItemCaseSensitive(l, "since");
-        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy");
+        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy"), *replies = cJSON_GetObjectItemCaseSensitive(l, "threadReplies");
         const cJSON *cells = cJSON_IsObject(buddy) ? cJSON_GetObjectItemCaseSensitive(buddy, "cells") : NULL;
         ht_lead_in_t in = {
             .id = str_of(l, "id"), .project_id = str_of(l, "projectId"), .project = str_of(l, "project"),
@@ -991,6 +1004,9 @@ static void handle_supertab(const cJSON *p)
             .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
             // The chat on the face; absent from a daemon without swarmChat, which reads as the Lead chat.
             .chat = str_of(l, "chat"), .chat_id = str_of(l, "chatId"), .chat_name = str_of(l, "chatName"),
+            // The thread on the face, from a swarmThread daemon; absent reads as the main chat, and replies as unknown.
+            .thread = str_of(l, "thread"), .thread_title = str_of(l, "threadTitle"),
+            .thread_replies = cJSON_IsNumber(replies) && replies->valuedouble >= 0 ? (replies->valuedouble > 2147483647.0 ? 2147483647L : (long)replies->valuedouble) : -1,
             // The reader's Buddy, from a swarmBuddy daemon while Buddies are on; supertab.c drops a block it cannot draw.
             .buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies")),
             .buddy = {.present = cJSON_IsObject(buddy), .chat_id = str_of(buddy, "chatId"), .name = str_of(buddy, "name"),
@@ -1013,10 +1029,13 @@ static void handle_supertab_recap(const cJSON *p)
     if (!id_fits(tab) || !id_fits(lead)) return;
     // A chat's recap names its chat; one whose chat cannot be held is not one (never shown for another).
     if (chat_id && !id_fits(chat_id)) return;
+    // And a thread's names its root; one whose root cannot be held is not one (never taken for the main chat's).
+    const char *thread = str_of(p, "thread");
+    if (thread && !id_fits(thread)) return;
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
-    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
+    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", thread ? thread : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
 }
 // `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the Lead's new message in its Lead conversation or Chat with
 // PM, the one thing that alerts with a swarmChat daemon, or the Buddy's in its chat (chat "buddy", a quiet one). The daemon
@@ -1030,7 +1049,10 @@ static void handle_supertab_notice(const cJSON *p)
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY : HT_CHAT_LEAD;
-    if (ui_supertab_notice(tab, lead, kind, chat_id, text,
+    // A reply inside a thread names its root (#2463): read on the face only in that thread. A root too long to hold is
+    // passed as it is: no face's root matches it, so it beeps, never read as the main chat's.
+    const char *thread = str_of(p, "thread");
+    if (ui_supertab_notice(tab, lead, kind, chat_id, thread ? thread : "", text,
                            secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
         audio_notify_done();
 }

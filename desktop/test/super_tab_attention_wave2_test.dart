@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
@@ -11,9 +12,13 @@ import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_host.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'keymap_host_test.dart' show MemoryKeymap;
 import 'swarm_state_test.dart' show createApp;
 
 /// Set to a folder to write the PR's wave 2 pictures there.
@@ -190,6 +195,8 @@ Future<(SuperTabController, GlobalKey)> _show(
   WidgetTester tester,
   Brightness brightness, {
   String selected = 'web-lead',
+  bool keymap = false,
+  ConversationServer? server,
 }) async {
   final previous = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
@@ -199,7 +206,7 @@ Future<(SuperTabController, GlobalKey)> _show(
   addTearDown(tester.view.reset);
   final app = createApp(connected: true);
   addTearDown(app.dispose);
-  final server = _wave2();
+  server ??= _wave2();
   final c = server.controller(
     initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
   );
@@ -209,7 +216,6 @@ Future<(SuperTabController, GlobalKey)> _show(
   await attention.decisions.load();
   await attention.load();
   await c.select(selected);
-  if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();
   await tester.pumpWidget(
     MaterialApp(
@@ -218,14 +224,17 @@ Future<(SuperTabController, GlobalKey)> _show(
       home: RepaintBoundary(
         key: picture,
         child: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            app: app,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onNewProject: () {},
-            machineName: (_) => 'Team Mac',
+          body: _keymapped(
+            keymap,
+            SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewProject: () {},
+              machineName: (_) => 'Team Mac',
+            ),
           ),
         ),
       ),
@@ -233,6 +242,27 @@ Future<(SuperTabController, GlobalKey)> _show(
   );
   await tester.pumpAndSettle();
   return (c, picture);
+}
+
+/// [view] under the keymap as the Swarm screen mounts it: its host, then the
+/// quick switcher's Swarm chat region.
+Widget _keymapped(bool keymap, Widget view) {
+  if (!keymap) return view;
+  final map = MemoryKeymap();
+  addTearDown(map.dispose);
+  return KeymapProvider(
+    keymap: map,
+    child: KeymapHost(
+      keymap: map,
+      enabled: () => true,
+      actions: const {},
+      child: KeymapRegion(
+        contextKind: KeymapContext.swarmChat,
+        actions: const {},
+        child: view,
+      ),
+    ),
+  );
 }
 
 Future<void> _done(WidgetTester tester, SuperTabController c) async {
@@ -264,37 +294,41 @@ void main() {
       'Option+Shift+Down opens the next unread chat in sidebar order, '
       'skipping the muted one; Up goes back',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
-        // Sidebar order: openharness (lead, offline 1600, routing 1598, roster
-        // 1597 muted), then website (web-lead).
-        final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
-            if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
-        ];
-        expect(order, isNot(contains('roster')));
+        // A third project between the two, its chat unread and muted.
+        final server = _wave2();
+        (server.state['projects'] as List).add(
+          projectFixture('road', 'roadmap', 'road-lead'),
+        );
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('road-lead', 'Lead'),
+          'projectId': 'road',
+        });
+        _fromLead(server, 'Muted plans.', 'road-lead');
+        (server.state['chatSettings'] as Map)['owner']['road-lead'] = 'muted';
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+          server: server,
+        );
+        // Sidebar order: openharness (lead), roadmap (road-lead, muted), then
+        // website (web-lead). Tasks are in the Tasks view, not here.
+        expect(c.unreadShown(c.snapshot!.conversation('offline')!), isTrue);
+        expect(c.unreadShown(c.snapshot!.conversation('road-lead')!), isFalse);
         await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
           LogicalKeyboardKey.shiftLeft,
         ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'offline');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'routing');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        // The muted Desktop roster is passed over.
+        // The unread tasks and the muted roadmap chat are passed over.
         expect(c.selectedId, 'web-lead');
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
           LogicalKeyboardKey.shiftLeft,
         ], LogicalKeyboardKey.arrowUp);
-        expect(c.selectedId, 'routing');
+        expect(c.selectedId, 'lead');
         await _done(tester, c);
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
@@ -304,9 +338,14 @@ void main() {
       'Option+Shift+Down and Up stop at the ends: nothing moves past the '
       'last unread chat or before the first',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
         final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
+          for (final id in ['lead', 'web-lead'])
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order.length, greaterThan(1));
@@ -337,6 +376,36 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
 
+    testWidgets(
+      'on Linux, where Alt is the workspace key as on the web, Alt+Shift+Down '
+      'and Up in the Swarm chat open the next and previous unread chat, not '
+      'Move pane',
+      (tester) async {
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+        await tester.pumpAndSettle();
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowDown);
+        // Tasks are in the Tasks view, not the sidebar: the next unread chat is
+        // website's.
+        expect(c.selectedId, 'web-lead');
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowUp);
+        expect(c.selectedId, 'lead');
+        await _done(tester, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
     testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '
         'them back', (tester) async {
       final (c, _) = await _show(tester, Brightness.dark);
@@ -361,20 +430,21 @@ void main() {
     testWidgets(
       'the chat menu\'s Notifications sets Muted, and the row greys',
       (tester) async {
+        // A project's chat: the sidebar lists no tasks (task #2569).
         final (c, _) = await _show(
           tester,
           Brightness.dark,
-          selected: 'offline',
+          selected: 'web-lead',
         );
-        await tester.tap(find.byKey(const ValueKey('super-group-options')));
+        await tester.tap(find.byKey(const ValueKey('super-project-menu')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('super-notify-menu')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('super-notify-muted')));
         await tester.pumpAndSettle();
-        expect(c.notifyOf('offline'), SuperTabNotify.muted);
+        expect(c.notifyOf('web-lead'), SuperTabNotify.muted);
         expect(
-          find.byKey(const ValueKey('super-muted-offline')),
+          find.byKey(const ValueKey('super-muted-web-lead')),
           findsOneWidget,
         );
         await _done(tester, c);
@@ -401,20 +471,12 @@ void main() {
         final other = find
             .ancestor(
               of: find.text(neighbour),
-              matching: find.byType(MenuItemButton),
+              matching: find.byType(AppMenuItem),
             )
             .first;
-        Material material(Finder row) => tester.widget<Material>(
-          find.descendant(of: row, matching: find.byType(Material)).first,
-        );
-        InkWell ink(Finder row) => tester.widget<InkWell>(
-          find.descendant(of: row, matching: find.byType(InkWell)).first,
-        );
         double inset(Finder row, String label) =>
             tester.getTopLeft(find.text(label)).dx - tester.getTopLeft(row).dx;
 
-        expect(material(notify).shape, material(other).shape);
-        expect(material(notify).color, material(other).color);
         expect(tester.getSize(notify), tester.getSize(other));
         expect(inset(notify, 'Notifications'), inset(other, neighbour));
         expect(
@@ -424,27 +486,19 @@ void main() {
           ),
           findsOneWidget,
         );
-        const hovered = {WidgetState.hovered};
-        expect(
-          ink(notify).overlayColor?.resolve(hovered),
-          ink(other).overlayColor?.resolve(hovered),
-        );
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: tester.getCenter(other));
         await tester.pump();
-        final otherHovered = material(other).shape;
         await mouse.moveTo(tester.getCenter(notify));
         await tester.pump();
         if (shotsOn) {
           await tester.pumpAndSettle();
           await captureWindow(tester, shots, 'notify-row-$menu-hover');
         }
-        expect(material(notify).shape, otherHovered);
         // Its submenu's rows are rows of the same kind (they had the border too).
         await tester.pumpAndSettle();
         for (final level in SuperTabNotify.values) {
           final row = find.byKey(ValueKey('super-notify-${level.name}'));
-          expect(material(row).shape, material(other).shape);
           expect(tester.getSize(row).height, tester.getSize(other).height);
         }
         await mouse.removePointer();

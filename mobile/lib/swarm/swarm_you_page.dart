@@ -10,6 +10,7 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -23,10 +24,111 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 
-/// You, the person's own tab, as Tony's prototype C4 draws it (2026-10-30):
+/// Where You's Settings row goes: the shell's, handed down by Swarm's tabs to
+/// whatever opens You from under them ([openSwarmYou]); and the tabs told of
+/// each You opened over them ([onOpened]), to take it with them when they go.
+class SwarmYouSettings extends InheritedWidget {
+  const SwarmYouSettings({
+    super.key,
+    required this.onSettings,
+    this.onOpened,
+    required super.child,
+  });
+
+  final void Function(BuildContext context)? onSettings;
+
+  /// A You opened over the tabs: it goes with them.
+  final ValueChanged<Route<void>>? onOpened;
+
+  @override
+  bool updateShouldNotify(SwarmYouSettings oldWidget) =>
+      onSettings != oldWidget.onSettings || onOpened != oldWidget.onOpened;
+}
+
+/// Opens You over [context]'s page, its Settings the tabs' ([SwarmYouSettings]),
+/// and tells the tabs, which take it with them when they go.
+void openSwarmYou(BuildContext context) {
+  final scope = context.getInheritedWidgetOfExactType<SwarmYouSettings>();
+  final route = phoneRoute(
+    (_) => SwarmYouPage(onSettings: scope?.onSettings),
+    listensForItself: true,
+  );
+  scope?.onOpened?.call(route);
+  unawaited(Navigator.of(context).push(route));
+}
+
+/// Who the person is on You and on its avatar: in the Swarm Home shows alone,
+/// else the first; nothing of them before that Swarm is read, or once the
+/// read is taken away.
+({SuperTabPerson? me, SwarmListing? swarm}) swarmYouOf(SwarmSession? session) {
+  final inbox = session?.inbox;
+  final swarms = inbox?.swarms ?? const <SwarmListing>[];
+  final you =
+      swarms.where((swarm) => swarm.id == session?.home.swarmId).firstOrNull ??
+      swarms.firstOrNull;
+  final reader = you == null ? null : inbox!.reader(you.id);
+  final me = reader == null || reader.accessRevoked
+      ? null
+      : reader.snapshot?.person(reader.accountId);
+  return (me: me, swarm: you);
+}
+
+/// The person's avatar at the end of Home's and Activity's top bars (Slack's
+/// You, Tony 2026-11-03): their face with their status, "You" in their
+/// initial before they are read. A tap opens You ([openSwarmYou]).
+class SwarmYouButton extends StatelessWidget {
+  const SwarmYouButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final session = SwarmScope.of(context);
+    Widget face() {
+      final me = swarmYouOf(session).me;
+      final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
+      final status = me?.statusAt(clock.now())?.label;
+      return Semantics(
+        button: true,
+        label: status == null ? 'You' : 'You, $status',
+        excludeSemantics: true,
+        onTap: () => openSwarmYou(context),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => openSwarmYou(context),
+          child: SizedBox.square(
+            dimension: minTouchTarget,
+            child: Center(
+              child: SwarmAvatar(
+                id: me?.id ?? 'you',
+                name: name,
+                picture: me?.avatar,
+                size: 30,
+                status: me?.status,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return KeyedSubtree(
+      key: const ValueKey('swarm-you-button'),
+      child: session == null
+          ? face()
+          : ListenWhileInSight(
+              listenable: Listenable.merge([session.inbox, session.home]),
+              builder: (context) => face(),
+            ),
+    );
+  }
+}
+
+/// You, as Tony's prototype C4 draws it (2026-10-30), opened from the avatar
+/// on Home and Activity since it stopped being a tab (2026-11-03):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — then their status and their username, each with Change for their
-/// profile, where it is set ([showSwarmProfile]); Your models, with how many of their own machines'
+/// Swarm — then their name with their status under it in one row ([_Profile]),
+/// and their username, each with Change for their profile, where it is set
+/// ([showSwarmProfile]); Your models, with how many of their own machines'
 /// models the Swarms can use now, and Your devices, with how many of their
 /// own computers are online; and Settings. Only what is theirs counts: not a
 /// teammate's, not one shared with them, not a Harness Team account's (#2253's
@@ -46,6 +148,8 @@ class SwarmYouPage extends StatelessWidget {
     AppTheme.watch(context);
     final session = SwarmScope.of(context);
     final computers = SwarmScope.computersOf(context);
+    // Opened over a page, as the avatar opens it: back to it.
+    final pushed = ModalRoute.isFirstOf(context) == false;
     return Scaffold(
       backgroundColor: Tty.of(context).ground,
       body: SafeArea(
@@ -53,7 +157,15 @@ class SwarmYouPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SwarmTabHeader('You'),
+            if (pushed)
+              SwarmTopBar(
+                leading: SwarmBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+                title: 'You',
+              )
+            else
+              const SwarmTabHeader('You'),
             Expanded(
               child: ListenWhileInSight(
                 listenable: Listenable.merge([
@@ -86,17 +198,9 @@ class SwarmYouPage extends StatelessWidget {
   ) {
     final inbox = session?.inbox;
     final swarms = inbox?.swarms ?? const <SwarmListing>[];
-    // Who you are: in the Swarm Home shows alone, else the first.
-    final you =
-        swarms
-            .where((swarm) => swarm.id == session?.home.swarmId)
-            .firstOrNull ??
-        swarms.firstOrNull;
-    final reader = you == null ? null : inbox!.reader(you.id);
-    // A read taken away keeps nothing of the person or the Swarm.
-    final me = reader == null || reader.accessRevoked
-        ? null
-        : reader.snapshot?.person(reader.accountId);
+    // Who you are: in the Swarm Home shows alone, else the first. A read
+    // taken away keeps nothing of the person or the Swarm.
+    final (:me, swarm: you) = swarmYouOf(session);
     final navigator = Navigator.of(context);
     void open(Widget page) => unawaited(
       navigator.push(phoneRoute((_) => page, listensForItself: true)),
@@ -110,11 +214,11 @@ class SwarmYouPage extends StatelessWidget {
         me: me,
         swarm: me == null ? null : you!.name,
       ),
-      const SwarmCaption('Status'),
+      const SwarmCaption('Profile'),
       SwarmGroup(
         children: [
-          _Status(
-            key: const ValueKey('swarm-you-status'),
+          _Profile(
+            key: const ValueKey('swarm-you-profile'),
             me: me,
             onTap: profile,
           ),
@@ -125,7 +229,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-username'),
-            leading: const _Glyph(LucideIcons.atSign300),
+            leading: const SwarmRowGlyph(LucideIcons.atSign300),
             // How the Swarm tags them, as the server keeps it; nothing of a
             // Swarm before it is read, or once it is taken away.
             title: me?.username ?? 'Username',
@@ -139,7 +243,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-models'),
-            leading: const _Glyph(LucideIcons.cpu300),
+            leading: const SwarmRowGlyph(LucideIcons.cpu300),
             title: 'Your models',
             detail: switch (_models(inbox, swarms)) {
               null => null,
@@ -150,7 +254,7 @@ class SwarmYouPage extends StatelessWidget {
           ),
           SwarmRow(
             key: const ValueKey('swarm-you-devices'),
-            leading: const _Glyph(LucideIcons.laptop300),
+            leading: const SwarmRowGlyph(LucideIcons.laptop300),
             title: 'Your devices',
             detail: switch (_devices(computers)) {
               null => null,
@@ -165,7 +269,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-settings'),
-            leading: const _Glyph(LucideIcons.settings300),
+            leading: const SwarmRowGlyph(LucideIcons.settings300),
             title: 'Settings',
             onTap: switch (onSettings) {
               final settings? => () => settings(context),
@@ -231,7 +335,7 @@ class _Me extends StatelessWidget {
     AppTheme.watch(context);
     final me = this.me;
     // A Home kept for a cold start holds no email.
-    final name = me == null || me.email.isEmpty ? 'You' : me.username;
+    final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -278,10 +382,13 @@ class _Me extends StatelessWidget {
   }
 }
 
-/// The person's status, Active while none is set, and Change for their
-/// profile; "Set a status" and no way in before they are read.
-class _Status extends StatelessWidget {
-  const _Status({super.key, required this.me, required this.onTap});
+/// The person's name and status in one row, both set in their profile
+/// (Tony 2026-11-04: a Status row and a Name row opened the same sheet). The
+/// name the Swarm shows them by, "Add your name" until they set one; under it
+/// their status after a dot, Active while none is set; Change for their
+/// profile. "Name" and "Set a status", with no way in, before they are read.
+class _Profile extends StatelessWidget {
+  const _Profile({super.key, required this.me, required this.onTap});
 
   final SuperTabPerson? me;
   final VoidCallback? onTap;
@@ -290,21 +397,25 @@ class _Status extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final me = this.me;
-    Widget row(String title, {required bool known}) => SwarmRow(
-      leading: SizedBox(
-        width: _Glyph.width,
-        child: Center(
-          child: Container(
-            width: 10,
-            height: 10,
+    Widget row(String status, {required bool known}) => SwarmRow(
+      leading: const SwarmRowGlyph(LucideIcons.user300),
+      // Nothing of a Swarm before it is read, or once it is taken away.
+      title: me == null ? 'Name' : me.name ?? 'Add your name',
+      detail: Row(
+        key: const ValueKey('swarm-you-status'),
+        children: [
+          Container(
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: known ? AppColors.success : AppPalette.textFaint,
             ),
           ),
-        ),
+          const SizedBox(width: AppSpace.s),
+          Flexible(child: SwarmRow.line(status)),
+        ],
       ),
-      title: title,
       trailing: onTap == null ? null : const _Change(),
       onTap: onTap,
     );
@@ -337,19 +448,4 @@ class _Change extends StatelessWidget {
       ],
     );
   }
-}
-
-/// A row's glyph, in a 32-point box so the titles line up.
-class _Glyph extends StatelessWidget {
-  const _Glyph(this.icon);
-
-  static const double width = 32;
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: width,
-    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
-  );
 }

@@ -25,12 +25,29 @@ enum HarnessControlSymbols {
 
 /// Real AppKit controls in the title bar, beside the system traffic lights.
 /// https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/layoutattribute
+/// One point of the workspace's color. Takes no clicks, so the title bar under
+/// it still drags the window.
+private final class SwarmRuleLead: NSView {
+  var color: NSColor = .clear {
+    didSet { needsDisplay = true }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    color.setFill()
+    bounds.fill()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private weak var window: NSWindow?
   private let channel: FlutterMethodChannel
   private let appMenuChannel: FlutterMethodChannel
   private let accessory = NSTitlebarAccessoryViewController()
   private let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
+  /// The strip's bottom rule, carried on under the traffic lights.
+  private let ruleLead = SwarmRuleLead()
   private var statusMenu: HarnessStatusMenu?
   private var statusBarHeight: NSLayoutConstraint?
   private var observers: [NSObjectProtocol] = []
@@ -252,6 +269,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     if let palette {
       strip.updatePalette(palette)
       window?.backgroundColor = strip.palette.tabBar
+      ruleLead.color = strip.palette.workspace
     }
     guard let window, !configured else { return }
     configured = true
@@ -274,6 +292,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     accessory.layoutAttribute = .right
     accessory.view = strip
     window.addTitlebarAccessoryViewController(accessory)
+    ruleLead.color = strip.palette.workspace
+    window.contentView?.superview?.addSubview(ruleLead)
     if let content = window.contentView {
       let footer = strip.statusBar
       footer.translatesAutoresizingMaskIntoConstraints = false
@@ -310,6 +330,17 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     let leading = max(76, trafficLightEdge + 10)
     strip.setFrameSize(NSSize(width: max(200, window.frame.width - leading), height: strip.frame.height))
     strip.needsLayout = true
+    // The accessory starts after the traffic lights, and the strip's rule with
+    // it. Left alone, the title bar's own gray shows in that last point under
+    // the lights, a notch where the rule begins. Just above the content.
+    if let frame = ruleLead.superview {
+      let content = window.contentLayoutRect
+      ruleLead.frame = frame.convert(
+        NSRect(x: 0, y: content.maxY, width: leading, height: 1),
+        from: nil
+      )
+      ruleLead.autoresizingMask = frame.isFlipped ? [.maxYMargin] : [.minYMargin]
+    }
   }
 
   private func installWorkspaceMenus() {

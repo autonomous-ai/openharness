@@ -140,7 +140,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        y(tester, 'swarm-you-status'),
+        y(tester, 'swarm-you-profile'),
         lessThan(y(tester, 'swarm-you-models')),
       );
       expect(

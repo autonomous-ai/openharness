@@ -16,6 +16,8 @@ export interface Part<T = unknown> {
   changedAt: number
   /** A machine part's last write of its own reading alone, when there was one (change reads only). */
   readAt?: number
+  /** A machine part's last reading that changed more than its volatile fields, when there was one (change reads only). */
+  contentAt?: number
   deleted?: true
   dormant?: true
   ordinal: number

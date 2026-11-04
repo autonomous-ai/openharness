@@ -5,7 +5,7 @@
  * the new session with that id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -40,7 +40,8 @@ export interface SwitchRow {
   /** The conversation the PM leads and the name of its role, as the host row has them (backend read/hostRows.ts). */
   ledConversationId?: unknown
   roleName?: unknown
-  agent: { id: string; harnessId: string; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown } }
+  agent: { id: string; harnessId: string; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown; targetMachineId?: unknown };
+    switchLanded?: { id?: unknown; candidateAgentId?: unknown } }
 }
 export interface LeadSwitchDeps {
   now: () => number
@@ -53,9 +54,11 @@ export interface LeadSwitchDeps {
   signedIn: (engine: string, home: string) => Promise<boolean>
   /** Where the default [signedIn] reads from (the Keychain on macOS, the folder's files elsewhere); injected by specs. */
   credentials?: CredentialReadDeps
+  /** Reads only the daemon-prepared handoff file, with a strict byte limit; injected by host specs. */
+  readHandoff: (cwd: string, file: string, maxBytes: number) => string | null
   log: (message: string) => void
 }
-interface Run { switchId: string; harnessId: string; changeId: string; busy: boolean; closed: boolean; retryAt?: number; outcome?: { ok: boolean; error?: string; down?: boolean }
+interface Run { switchId: string; harnessId: string; changeId: string; busy: boolean; closed: boolean; crossMachine?: boolean; retryAt?: number; outcome?: { ok: boolean; error?: string; down?: boolean }
   /** Why the new session did not start. Reported only once the old PM is back: a late start can still land the switch. */
   failed?: string }
 
@@ -95,7 +98,15 @@ export class LeadSwitchRequests {
   private readonly deps: LeadSwitchDeps
   constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<LeadSwitchDeps> = {}) {
     this.deps = { now: Date.now, open: openDaemon, profiles: profileHome, team: () => false, home: homedir, log: () => {},
-      signedIn: (engine, home) => profileSignedIn(engine, home, this.deps.now(), this.deps.credentials), ...deps }
+      signedIn: (engine, home) => profileSignedIn(engine, home, this.deps.now(), this.deps.credentials),
+      readHandoff: (cwd, relativeFile, maxBytes) => {
+        try {
+          const file = join(cwd, relativeFile), stats = lstatSync(file)
+          if (!stats.isFile() || stats.isSymbolicLink() || stats.size > maxBytes) return null
+          const text = readFileSync(file, 'utf8')
+          return Buffer.byteLength(text, 'utf8') <= maxBytes ? text : null
+        } catch { return null }
+      }, ...deps }
   }
 
   /** One poll of one PM row: starts its request, or follows the one this host is carrying out. */
@@ -103,6 +114,13 @@ export class LeadSwitchRequests {
     const { agent, tabId } = row
     const run = this.runs.get(agent.id)
     if (run) { if (!run.busy) await this.follow(tabId, agent, run); return }
+    const landed = agent.switchLanded
+    if (identifier(landed?.id) && identifier(landed.candidateAgentId)) {
+      const adopted: Run = { switchId: landed.id, harnessId: agent.harnessId, changeId: switchChangeId(landed.id), busy: false, closed: false, crossMachine: true }
+      this.runs.set(agent.id, adopted)
+      await this.follow(tabId, agent, adopted)
+      return
+    }
     const request = agent.switchRequest
     if (!request || !identifier(request.id) || this.done.has(request.id)) return
     const switchId = request.id, now = this.deps.now()
@@ -119,7 +137,8 @@ export class LeadSwitchRequests {
     }
     if (leadSwitching(this.core.dataDir, agent.harnessId, changeId, now)) return
     // Held before the claim is awaited, so a poll that comes while it is in flight starts nothing.
-    const created: Run = { switchId, harnessId: agent.harnessId, changeId, busy: true, closed: false }
+    const created: Run = { switchId, harnessId: agent.harnessId, changeId, busy: true, closed: false,
+      crossMachine: identifier(request.targetMachineId) && request.targetMachineId !== this.machineId }
     this.runs.set(agent.id, created)
     try {
       await this.post(tabId, agent.id, operationId('claim', switchId), { type: 'agent.switchClaim', agentId: agent.id, switchId })
@@ -152,6 +171,19 @@ export class LeadSwitchRequests {
       const prepared = await daemon.request('agent_handoff_prepare', { agentId, changeId, targetEngine: engine }, 30_000)
       const handoff = promptOf(prepared, agentId, changeId, old.cwd, LABELS[old.engine] ?? old.engine)
       if (handoff === false) return { ok: false, error: NO_HANDOFF }
+      if (run.crossMachine) {
+        let note = ''
+        if (prepared.file !== null) {
+          const expected = `.harness/handoff/${handoffBaseName(agentId, changeId)}.md`
+          if (prepared.file !== expected) return { ok: false, error: NO_HANDOFF }
+          const read = this.deps.readHandoff(old.cwd, expected, 32_000)
+          if (read === null) return { ok: false, error: NO_HANDOFF }
+          note = read
+        }
+        await this.post(row.tabId, row.agent.id, operationId('handoff', run.switchId), { type: 'agent.switchHandoff', agentId: row.agent.id,
+          switchId: run.switchId, handoffChangeId: changeId, note })
+        return undefined
+      }
       const closed = await daemon.request('agent_close', { agentId, mode: 'now', changeId }, 60_000)
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
@@ -193,8 +225,28 @@ export class LeadSwitchRequests {
   private async follow(tabId: string, agent: SwitchRow['agent'], run: Run): Promise<void> {
     const now = this.deps.now()
     if (run.retryAt && now < run.retryAt) return
+    if (run.crossMachine && agent.switchLanded?.id === run.switchId && identifier(agent.switchLanded.candidateAgentId) && !run.closed) {
+      const old = this.core.agents.byAgent(run.harnessId)
+      if (old) {
+        try {
+          const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
+          try {
+            const closed = await daemon.request('agent_close', { agentId: run.harnessId, mode: 'now', changeId: run.changeId }, 60_000)
+            if (closed.error || closed.closed !== true) { run.retryAt = now + RETRY_MS; return }
+          } finally { daemon.close() }
+        } catch { run.retryAt = now + RETRY_MS; return }
+      }
+      run.closed = true
+      run.outcome = { ok: true }
+    }
     if (!run.outcome) {
       const record = leadSwitchOf(this.core.dataDir, run.harnessId)
+      if (run.crossMachine && !agent.switchRequest && agent.switchLanded?.id !== run.switchId) {
+        // The server already refused or expired the candidate and told the chat. The source PM is still the process to keep.
+        this.runs.delete(agent.id)
+        this.done.add(run.switchId)
+        return
+      }
       if (agent.harnessId !== run.harnessId || !agent.switchRequest) run.outcome = { ok: true }
       else if (!switchWithin(record, now)) {
         const error = run.failed ?? LATE

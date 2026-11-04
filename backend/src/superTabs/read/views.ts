@@ -50,6 +50,8 @@ export interface ReadExtras {
   decisionsDigest?: string
   /** Which of their Activity rows are unread, as a digest (activity.ts). */
   activityDigest?: string
+  /** Which reminders they have and when each is due, as a digest (reminders.ts). */
+  remindersDigest?: string
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -91,8 +93,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts).
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
+  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -151,6 +154,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
+    ...(actor.kind === 'person' && extras.remindersDigest !== undefined ? { remindersDigest: extras.remindersDigest } : {}),
     threadSessions: true as const,
     sessionsFromChat: true as const,
     // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.

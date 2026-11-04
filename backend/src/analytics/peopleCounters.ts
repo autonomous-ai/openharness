@@ -2,12 +2,12 @@ import { ACTIVITY_DAYS, ACTIVITY_SURFACES } from '../types/productUsageActivity.
 
 const DAY = 86_400_000
 export const PEOPLE_RETURN_DAYS = [1, 2, 3, 7] as const
-export interface ActivityMark { subject: string; dayUtc: Date; surfaces: string[]; worked: boolean; signupDay: Date; staff: boolean }
+export interface ActivityMark { subject: string; dayUtc: Date; surfaces: string[]; worked: boolean; hosting?: boolean | null; signupDay: Date; staff: boolean }
 type Counter = { day: string; metric: string; value: number }
 
 const KINDS = ['active', 'working', 'new', ...ACTIVITY_SURFACES.map(s => `active_${s}`)] as const
 export const PEOPLE_METRICS: readonly string[] = [
-  'people_active', 'people_working', 'people_new', 'people_staff_active',
+  'people_active', 'people_working', 'people_hosting', 'people_new', 'people_staff_active',
   ...ACTIVITY_SURFACES.map(s => `people_active_${s}`),
   ...KINDS.flatMap(kind => PEOPLE_RETURN_DAYS.map(n => `people_${kind}_d${n}_returned`)),
 ]
@@ -17,16 +17,17 @@ const dayKey = (d: Date) => d.toISOString().slice(0, 10)
 /** Distinct people per ended UTC day and their D1/D2/D3/D7 returns. Staff count only as staff. */
 export function peopleCounters(marks: ActivityMark[], now: Date): Counter[] {
   const today = Math.floor(now.getTime() / DAY) * DAY
-  type Person = { surfaces: Set<string>; worked: boolean; isNew: boolean }
+  type Person = { surfaces: Set<string>; worked: boolean; hosting: boolean; isNew: boolean }
   const byDay = new Map<number, Map<string, Person>>()
   const staffByDay = new Map<number, Set<string>>()
   for (const mark of marks) {
     const day = Math.floor(mark.dayUtc.getTime() / DAY) * DAY
     if (mark.staff) { (staffByDay.get(day) ?? staffByDay.set(day, new Set()).get(day)!).add(mark.subject); continue }
     const people = byDay.get(day) ?? byDay.set(day, new Map()).get(day)!
-    const person = people.get(mark.subject) ?? { surfaces: new Set<string>(), worked: false, isNew: false }
+    const person = people.get(mark.subject) ?? { surfaces: new Set<string>(), worked: false, hosting: false, isNew: false }
     for (const s of mark.surfaces) person.surfaces.add(s)
     person.worked ||= mark.worked
+    person.hosting ||= mark.hosting === true
     person.isNew ||= Math.floor(mark.signupDay.getTime() / DAY) * DAY === day
     people.set(mark.subject, person)
   }
@@ -43,6 +44,8 @@ export function peopleCounters(marks: ActivityMark[], now: Date): Counter[] {
     const count = (kind: string) => [...people.values()].filter(p => inKind(p, kind)).length
     out.push({ day: key, metric: 'people_active', value: people.size })
     out.push({ day: key, metric: 'people_working', value: count('working') })
+    // One daily count, with no returns: hosting says a Mac ran Swarm agents, not that a person came back.
+    out.push({ day: key, metric: 'people_hosting', value: [...people.values()].filter(p => p.hosting).length })
     out.push({ day: key, metric: 'people_new', value: count('new') })
     out.push({ day: key, metric: 'people_staff_active', value: staffByDay.get(day)?.size ?? 0 })
     for (const s of ACTIVITY_SURFACES) out.push({ day: key, metric: `people_active_${s}`, value: count(`active_${s}`) })

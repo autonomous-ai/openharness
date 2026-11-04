@@ -771,7 +771,8 @@ void main() {
         expect(_query.hitTestable(), findsOneWidget);
         expect(_machine, findsNothing);
         final menu = tester.getRect(_chooser);
-        expect(menu.width, greaterThanOrEqualTo(400));
+        // As wide as the app's other dropdowns, unless a name needs more.
+        expect(menu.width, greaterThanOrEqualTo(240));
         final hint = find.descendant(
           of: _query,
           matching: find.text('Search repos'),

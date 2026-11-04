@@ -19,7 +19,7 @@ function db(collMod: () => unknown) {
 describe('ensureIndex', () => {
   it('sets a missing expiry with collMod and builds nothing', async () => {
     const { db: fake, calls } = db(() => ({ ok: 1 }))
-    await ensureIndex(fake, 'SuperTabReadMark', SPEC)
+    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).resolves.toBe('ready')
     expect(calls.map(call => Object.keys(call)[0])).toEqual(['listIndexes', 'collMod'])
   })
 
@@ -28,7 +28,8 @@ describe('ensureIndex', () => {
     const { db: fake, calls } = db(() => {
       throw new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "SuperTabReadMark" }`')
     })
-    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).resolves.toBeUndefined()
+    // The caller hears it, so it can remove what the expiry would have (superTabs/readMarks.ts startReadMarkSweep).
+    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).resolves.toBe('expiry-refused')
     expect(calls.map(call => Object.keys(call)[0])).toEqual(['listIndexes', 'collMod'])
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('collMod'), expect.objectContaining({ collection: 'SuperTabReadMark', index: 'read_mark_expiry' }))
     warn.mockRestore()

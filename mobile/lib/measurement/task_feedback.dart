@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../shared/widgets/product_feedback.dart';
+import '../terminal/terminal_look.dart';
 
 Future<void> showTaskFeedback(
   BuildContext context, {
@@ -9,7 +10,8 @@ Future<void> showTaskFeedback(
 }) async {
   final permitted = choice();
   await showDialog<void>(
-    context: context,
+    // The app's dialog even from a terminal's menu — see [TerminalLook.outside].
+    context: TerminalLook.outside(context),
     builder: (context) => AlertDialog(
       title: const Text('Rate task outcome'),
       content: SingleChildScrollView(

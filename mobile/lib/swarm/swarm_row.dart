@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
@@ -27,6 +28,7 @@ class SwarmRow extends StatelessWidget {
     this.chevron = LucideIcons.chevronRight300,
     this.news = swarmNoNews,
     required this.onTap,
+    this.onLongPress,
   });
 
   final Widget? leading;
@@ -47,6 +49,10 @@ class SwarmRow extends StatelessWidget {
   /// What is new in it: unread or tagged ([swarmChatNews]).
   final SwarmRowNews news;
   final VoidCallback? onTap;
+
+  /// The row held, with a thump a thumb can feel: its menu. Null leaves a
+  /// held row a slow tap.
+  final VoidCallback? onLongPress;
 
   /// Every row clears this, for a thumb.
   static const double height = 56;
@@ -137,9 +143,19 @@ class SwarmRow extends StatelessWidget {
       ),
     );
     if (onTap == null) return row;
+    final held = onLongPress;
     return Material(
       color: Colors.transparent,
-      child: InkWell(onTap: onTap, child: row),
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: held == null
+            ? null
+            : () {
+                HapticFeedback.mediumImpact();
+                held();
+              },
+        child: row,
+      ),
     );
   }
 }

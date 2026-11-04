@@ -10,6 +10,7 @@ import { isBuddy, isSwarmBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
+import { broughtMachines, contributorsIn } from './brought.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
 
@@ -72,8 +73,8 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const score = (personId: string, span: Span) => {
     const shippedHere = (landedBy.get(personId) ?? []).filter(g => within(g.ledger!.shippedAt!, span))
     const answers = (answersBy.get(personId) ?? []).filter(u => within(u.at, span))
-    const machines = (machinesBy.get(personId) ?? [])
-      .map(m => ({ name: m.name, busyMs: lentIn(m, span, now, { projects: projectIds, unsplit: sharesBoard(personId) }) })).filter(m => m.busyMs > 0)
+    const lentOf = (m: ContributedMachine) => lentIn(m, span, now, { projects: projectIds, unsplit: sharesBoard(personId) })
+    const machines = (machinesBy.get(personId) ?? []).map(m => ({ name: m.name, busyMs: lentOf(m) })).filter(m => m.busyMs > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
     const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
     const details: PersonDetails = {
@@ -83,6 +84,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
         .map(u => ({ title: u.group.title, conversationId: u.group.id, kind: u.kind ?? 'needs_human', waitedMinutes: Math.round(u.waitedMs / 60_000) })),
       lent: [...machines].sort((a, b) => b.busyMs - a.busyMs).slice(0, DETAILS_LIMIT)
         .map(m => ({ machineName: m.name, busyHours: Math.round(m.busyMs / HOUR_MS * 10) / 10 })),
+      brought: broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
     }
     return {
       points,
@@ -106,6 +108,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null, details }
   })
   const shippedNow = shippedRequests.filter(g => within(g.ledger!.shippedAt!, current))
+  const ranNow = contributorsIn(state, shared, visibleMachines, current), ranBefore = previous && contributorsIn(state, shared, visibleMachines, previous)
   return {
     projectId, week,
     ...period ? { period: { name: period, start: current.start, end: now } } : {},
@@ -117,6 +120,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     agents: agentScores(state, projectIds, shippedNow, visibleMachines),
     byModel: modelScores(requests, shippedNow, current),
     recentModels: recentModels(requests.filter(g => (g.projectId ?? 'lead') === projectId), now),
+    contributors: { thisWeek: ranNow.size, lastWeek: ranBefore?.size ?? null, kept: ranBefore ? [...ranBefore].filter(id => ranNow.has(id)).length : null },
   }
 }
 

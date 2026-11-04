@@ -27,8 +27,7 @@ class SuperTabShipRow extends StatefulWidget {
   @visibleForTesting
   static void resetPlayed() => _played.clear();
 
-  static bool shows(SuperTabMessage message) =>
-      message.source['kind'] == 'ship';
+  static bool shows(SuperTabMessage message) => message.shipLine;
 
   @override
   State<SuperTabShipRow> createState() => _SuperTabShipRowState();
@@ -98,14 +97,21 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
                 _Credit('Requested by', [
                   (
                     SuperTabAvatar.person(requester, size: 20),
-                    requester.username,
+                    requester.shownName,
                   ),
                 ]),
               agents('Built by', _ids('builderIds')),
               agents('Reviewed by', _ids('reviewerIds')),
             ],
           ),
-          SuperTabPullRequestLinks(_ids('pullRequests').join(' ')),
+          SuperTabPullRequestLinks(
+            _ids('pullRequests').join(' '),
+            repositoryUrl:
+                snapshot
+                        ?.projectFor(message.conversationId)
+                        ?.repository?['repositoryUrl']
+                    as String?,
+          ),
         ],
       ),
     );

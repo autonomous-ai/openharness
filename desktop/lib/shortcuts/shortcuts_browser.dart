@@ -271,12 +271,12 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                       decoration: InputDecoration(
                         hintText: 'Search actions or keys',
                         hintStyle: DesktopChrome.control(
-                          color: DesktopChrome.muted,
+                          color: DesktopChrome.hint,
                         ),
                         prefixIcon: Icon(
                           AppIcons.search,
                           size: 18 * scale,
-                          color: DesktopChrome.muted,
+                          color: DesktopChrome.hint,
                         ),
                         suffixIcon: _query.text.isEmpty
                             ? null
@@ -304,10 +304,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                           borderRadius: BorderRadius.circular(
                             DesktopChrome.controlRadius,
                           ),
-                          borderSide: BorderSide(
-                            color: DesktopChrome.accent,
-                            width: 1.5,
-                          ),
+                          borderSide: BorderSide(color: DesktopChrome.rim),
                         ),
                         fillColor: DesktopChrome.field,
                         filled: true,
@@ -523,12 +520,7 @@ class _ShortcutBrowserRow extends StatelessWidget {
                 splashFactory: NoSplash.splashFactory,
               ).copyWith(
                 side: WidgetStateProperty.resolveWith(
-                  (states) => BorderSide(
-                    width: 1.5,
-                    color: states.contains(WidgetState.focused)
-                        ? DesktopChrome.accent
-                        : Colors.transparent,
-                  ),
+                  (states) => BorderSide(width: 1.5, color: Colors.transparent),
                 ),
                 overlayColor: WidgetStateProperty.resolveWith(
                   (states) => DesktopChrome.foreground.withValues(

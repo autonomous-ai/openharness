@@ -21,7 +21,7 @@ import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversatio
 import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
-import { usernameOf } from './usernames.js'
+import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
 type Tx = Prisma.TransactionClient
@@ -122,23 +122,47 @@ export async function listActivity(db: PrismaClient, tabId: string, state: Super
   const rows = await db.superTabActivity.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) } },
     orderBy: { createdAt: 'desc' }, take: ACTIVITY_LIST + 1 })
   const more = rows.length > ACTIVITY_LIST
-  const listed = rows.slice(0, ACTIVITY_LIST)
-  if (!listed.length) return { items: [], more }
+  const present = (kind: string, id: string) => kind === 'person' ? state.people.some(p => p.id === id) : state.agents.some(a => a.id === id)
+  // A reaction by someone no longer here drops out, as its count does (reactions.ts reactionCounts).
+  const kept = rows.slice(0, ACTIVITY_LIST).filter(r => r.kind !== 'reaction' || present(r.actorKind, r.actorId))
+  if (!kept.length) return { items: [], more }
+  const shown = await readableMessages(db, tabId, state, actor, kept)
+  const items = kept.flatMap(r => {
+    const seen = shown(r)
+    // A reaction's message must still be theirs.
+    if (!seen || (r.kind === 'reaction' && !own(seen.message.author, actor.userId))) return []
+    const { group, message } = seen
+    return [{ id: r.id, kind: r.kind as ActivityKind, conversationId: r.conversationId, conversationTitle: group.title,
+      projectName: projectOf(state, group.projectId ?? 'lead').name, messageId: r.messageId, messageSequence: message.sequence,
+      threadId: threadOf(message), actor: { kind: r.actorKind as 'person' | 'agent', id: r.actorId,
+        name: actorName(state, r.actorKind, r.actorId, r.kind === 'reply' ? message.author : undefined) },
+      emoji: r.emoji ?? null, text: message.text, createdAt: r.createdAt.toISOString(), read: !!r.readAt }]
+  })
+  return { items, more }
+}
+
+/** A row naming one message of one chat, as Activity's and reminders' (reminders.ts) do. */
+export interface MessageRef { conversationId: string; messageId: string }
+
+/** What the person reads now of the messages `rows` name (the file's comment): a lookup giving a row its chat and message, or
+ *  null for a chat they cannot read (a quiet one is read by id, as tags read theirs, mentions.ts readable), a message a page
+ *  would not show them, or one no longer in the chat the row names. The messages by id in one read. */
+export async function readableMessages(db: PrismaClient, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>,
+  rows: MessageRef[]): Promise<(row: MessageRef) => { group: Conversation; message: Row } | null> {
   const groups = new Map(state.conversations.map(c => [c.id, c]))
-  const missing = [...new Set(listed.map(r => r.conversationId))].filter(id => !groups.has(id))
+  const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
-    // A quiet chat by id through its index (parts/indexed.ts), as tags read theirs (mentions.ts readable).
+    // A quiet chat by id through its index (parts/indexed.ts).
     for (const row of await groupsBy(db, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } }, { $project: { _id: 0, key: 1, data: 1 } }])) {
       groups.set(row.key as string, row.data as unknown as Conversation)
     }
   }
-  const present = (kind: string, id: string) => kind === 'person' ? state.people.some(p => p.id === id) : state.agents.some(a => a.id === id)
-  const kept = listed.filter(r => {
-    const group = groups.get(r.conversationId)
-    // A reaction by someone no longer here drops out, as its count does (reactions.ts reactionCounts).
-    return group && !isLeads(group) && canReadGroup(state, actor, group) && (r.kind !== 'reaction' || present(r.actorKind, r.actorId))
-  })
-  if (!kept.length) return { items: [], more }
+  const readableGroup = (id: string) => {
+    const group = groups.get(id)
+    return group && !isLeads(group) && canReadGroup(state, actor, group) ? group : null
+  }
+  const kept = rows.filter(r => readableGroup(r.conversationId))
+  if (!kept.length) return () => null
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(kept.map(r => r.messageId))] }, tabId } },
     { $project: { ...FIELDS, conversationId: 1 } }])).map(messageRow)
   // As a page filters rows (read/inbox.ts readable), Buddy-session rows included: against the state with the quiet chats read
@@ -146,28 +170,22 @@ export async function listActivity(db: PrismaClient, tabId: string, state: Super
   const held = new Set(state.conversations.map(c => c.id))
   const withQuiet: SuperTabState = { ...state, conversations: [...state.conversations, ...[...groups.values()].filter(g => !held.has(g.id))] }
   const messages = new Map((await readable(db, tabId, found, withQuiet)).map(m => [m.id, m]))
-  const items = kept.flatMap(r => {
-    const message = messages.get(r.messageId)
-    // The message must still be in the chat the row names, and be one the person reads; a reaction's must still be theirs.
-    if (!message || message.conversationId !== r.conversationId || (r.kind === 'reaction' && !own(message.author, actor.userId))) return []
-    const group = groups.get(r.conversationId)!
-    return [{ id: r.id, kind: r.kind as ActivityKind, conversationId: r.conversationId, conversationTitle: group.title,
-      projectName: projectOf(state, group.projectId ?? 'lead').name, messageId: r.messageId, messageSequence: message.sequence,
-      threadId: threadOf(message), actor: { kind: r.actorKind as 'person' | 'agent', id: r.actorId, name: actorName(state, r.actorKind, r.actorId, message, r.kind) },
-      emoji: r.emoji ?? null, text: message.text, createdAt: r.createdAt.toISOString(), read: !!r.readAt }]
-  })
-  return { items, more }
+  return row => {
+    const group = readableGroup(row.conversationId), message = messages.get(row.messageId)
+    return group && message && message.conversationId === row.conversationId ? { group, message } : null
+  }
 }
 
 /** A reply that lives only in its thread names its root; a top-level message or one also sent to the chat names none. */
-const threadOf = (m: Row) => m.thread && m.thread !== m.id && !m.alsoInChat ? m.thread : null
+export const threadOf = (m: Row) => m.thread && m.thread !== m.id && !m.alsoInChat ? m.thread : null
 
-/** A person by their username, as everywhere in the Swarm; an agent by its name, or the reply's author name when it left. */
-function actorName(state: SuperTabState, kind: string, id: string, message: Row, rowKind: string): string {
-  if (kind === 'person') return usernameOf(state, id) ?? 'Someone'
+/** A person by the name the Swarm shows for them (personNames.ts); an agent by its name, or by `author`'s (the message it
+ *  wrote) when it left. */
+export function actorName(state: SuperTabState, kind: string, id: string, author?: Author): string {
+  if (kind === 'person') return shownNameOf(state, id) ?? 'Someone'
   const agent = state.agents.find(a => a.id === id) as { displayName?: string | null; name?: string } | undefined
-  const author = rowKind === 'reply' ? message.author as Author & { displayName?: string } : undefined
-  return agent?.displayName ?? agent?.name ?? author?.displayName ?? author?.name ?? 'An agent'
+  const wrote = author as Author & { displayName?: string } | undefined
+  return agent?.displayName ?? agent?.name ?? wrote?.displayName ?? wrote?.name ?? 'An agent'
 }
 
 /** Marks the person's rows made at or before `through` read, on every device. Only their own. */

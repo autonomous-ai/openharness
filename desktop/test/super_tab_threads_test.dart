@@ -101,6 +101,27 @@ void main() {
     expect(line('message-4'), findsNothing);
   });
 
+  testWidgets('a thread line says @ you when an unread reply tags the reader', (
+    tester,
+  ) async {
+    final server = threaded();
+    server.tag(
+      'message-2',
+      threadId: 'message-1',
+      messageSequence: server.revision,
+    );
+    final c = await show(tester, server);
+    final tag = find.descendant(
+      of: line('message-1'),
+      matching: find.text('@ you'),
+    );
+    expect(tag, findsOneWidget);
+    c.markThreadRead('lead', 'message-1', server.revision);
+    await tester.pumpAndSettle();
+    expect(tag, findsNothing);
+    await c.flush();
+  });
+
   testWidgets('a reply also sent to the chat shows in both, marked as a '
       'thread reply', (tester) async {
     await show(tester, threaded(alsoSend: true));
@@ -508,7 +529,7 @@ void main() {
   });
 
   testWidgets('a reply from the thread composer goes to the root, and '
-      '"Also post to #Pilot" sends it to both', (tester) async {
+      '"Also send to #Pilot" sends it to both', (tester) async {
     final server = threaded();
     final c = await show(tester, server);
     // The test platform's touch handles sit under a typed reply's end:
@@ -519,7 +540,7 @@ void main() {
     // The label shortens where the test font leaves no room; its hint keeps
     // the full wording (super_tab_reply_box_test.dart covers the label).
     expect(
-      inPanel(find.byTooltip('Also post to #Pilot as well as this thread')),
+      inPanel(find.byTooltip('Also send to #Pilot as well as this thread')),
       findsOneWidget,
     );
     await tester.enterText(
@@ -1046,17 +1067,31 @@ void main() {
       expect(opened, ['m1']);
     });
 
-    testWidgets('it is as wide as its content, within its maximum', (
-      tester,
-    ) async {
-      await pump(tester);
-      expect(tester.getSize(bar).width, lessThan(600));
+    // Huy, 2026-11-03 (#2373): as wide as Slack's, about 600 points, or the
+    // message column when the chat is narrower; its arrow at the right end.
+    testWidgets(
+      'it is 600 wide, or the column\'s width, its arrow at the end',
+      (tester) async {
+        final opened = await pump(tester);
+        final wide = tester.getRect(bar);
+        expect(wide.width, 600);
+        expect(wide.right - tester.getRect(chevron).right, lessThan(12));
+        // Its right end, far past the words, is still the bar.
+        await tester.tapAt(wide.centerRight - const Offset(3, 0));
+        await tester.pump();
+        expect(opened, ['m1']);
 
-      // Many repliers in a narrow chat: a few faces, and nothing overflows.
-      await pump(tester, width: 300, authors: 12);
-      expect(tester.takeException(), isNull);
-      expect(tester.getSize(bar).width, lessThanOrEqualTo(300));
-      expect(find.byType(SuperTabAvatar), findsNWidgets(5));
-    });
+        // Many repliers in a narrow chat: the column's width, a few faces, and
+        // nothing overflows.
+        await pump(tester, width: 300, authors: 12);
+        expect(tester.takeException(), isNull);
+        expect(tester.getSize(bar).width, 300);
+        expect(
+          tester.getRect(bar).right - tester.getRect(chevron).right,
+          lessThan(12),
+        );
+        expect(find.byType(SuperTabAvatar), findsNWidgets(5));
+      },
+    );
   });
 }

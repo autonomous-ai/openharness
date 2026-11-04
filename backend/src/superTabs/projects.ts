@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 import { buddyReads, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat } from './buddies.js'
 
@@ -43,6 +43,10 @@ export interface SwarmProject {
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
   /** A person turned the digest off (project.digest with time null), so the default is not filled in again. */
   digestOff?: true
+  /** The last 30-minute slot of the built-in PM schedule in which its coordinator's poll found something to sweep
+   *  (pmSchedule.ts), woken or held back, and the message that last carried a wake (its own, an update request or a notice
+   *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it. */
+  schedule?: { lastSlot: number; wakeId?: string }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
@@ -57,6 +61,11 @@ export interface SwarmProject {
   roles?: ProjectRole[]
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
+  /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
+   *  (leadStart.ts leadWaits). Ids and times only, at most MAX_LEAD_WAITING; cleared when a Lead joins. */
+  leadWaiting?: Array<{ id: string; at: number }>
+  /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
+  leadClaim?: { id: string; machineId: string; at: number }
   /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
    *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
   reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>
@@ -119,6 +128,10 @@ export function groupProject(state: SuperTabState, group: Conversation): SwarmPr
   if (isSwarmBuddyChat(group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return projectOf(state, group.projectId ?? 'lead')
 }
+
+/** The repository address of the project [group] belongs to (null when it has none or the group has no project); never throws. */
+export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null =>
+  projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.repository?.repositoryUrl ?? null
 
 /** The project a start works in: a project session's own, none for a Swarm-wide Buddy's (Dee, 10-31), else its conversation's. */
 export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {
@@ -366,7 +379,7 @@ export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, on
 
 /** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
  *  titles and names aside. */
-const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice'])
+const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice', 'others-work-notice'])
 /** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
  *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
  *  failed findings name no reviewer: they count as unknown, which is marked. */
@@ -465,18 +478,42 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
   return projectOf(state, projectId)
 }
 
+/** How long a start may stay pending before a project delete treats it as stuck: well past the 15 minutes the sweep gives a
+ *  dispatched start to prepare (liveness.ts START_PREPARE_MS). */
+export const STUCK_START_MS = 60 * 60_000
+
 /** Removes coordination only; the command removes the project's agents first.
- * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
-export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
+ * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. [orphaned] names the
+ * contributed starts still settling whose agent was already removed before this delete: only their machine settles one,
+ * and it closed that agent's session when it was removed, so none of them ever settles (2026-11-04: 17 such starts on four
+ * Macs, from agents stopped while a project was cleaned up, kept its owner from deleting it). */
+export function deleteProject(state: SuperTabState, actor: Actor, projectId: string, orphaned: ReadonlySet<string> = new Set(), now?: number): void {
   const project = manageProject(state, actor, projectId)
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
-  if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
-    (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
-    fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
+  // A queued start in an archived conversation can never be dispatched (commands.ts open() refuses it), so it no longer
+  // blocks the delete; it goes with the project's other starts below. On 2026-11-03 one queued two days earlier kept an
+  // owner from deleting a cleaned-up project, and no command could settle it.
+  const archived = new Set(groups.filter(c => c.archived).map(c => c.id))
+  // A start still pending an hour after it was last asked for is stuck, not starting: the sweep fails a dispatched one
+  // within 15 minutes (liveness.ts), so nothing is mid-start there. It goes with the project. On 2026-11-04 the owner was
+  // still refused after both fixes above, by starts no read showed them.
+  const stuck = (s: AgentStart) => now !== undefined && now - (s.dispatchedAt ?? s.requestedAt ?? 0) > STUCK_START_MS
+  const pending = (state.starts ?? []).filter(s => groupIds.has(s.request.conversationId) && !s.error && !stuck(s) &&
+    !(!s.dispatched && !s.harnessId && archived.has(s.request.conversationId)) &&
+    (!s.harnessId || s.poolGeneration && !s.poolSettled && !orphaned.has(s.id)))
+  // Each refusal names what holds it, so its owner can act on it: the ones before named nothing, and no read showed them.
+  const titled = (id: string) => groups.find(c => c.id === id)?.title || 'the project chat'
+  if (pending.length) {
+    fail('STARTS_PENDING', `Resolve this project’s pending agent starts before deleting it: ${pending.slice(0, 3)
+      .map(s => `${s.request.name} in “${titled(s.request.conversationId)}”`).join(', ')}${pending.length > 3 ? ` and ${pending.length - 3} more` : ''}.`)
   }
-  if (groups.some(activeWork)) fail('WORK_ACTIVE', 'Resolve this project’s active work before deleting it.')
+  const active = groups.filter(activeWork)
+  if (active.length) {
+    fail('WORK_ACTIVE', `Resolve this project’s active work before deleting it: ${active.slice(0, 3).map(c => `“${titled(c.id)}”`).join(', ')}${
+      active.length > 3 ? ` and ${active.length - 3} more` : ''}.`)
+  }
   state.retiredConversationNumber = nextConversationNumber(state) - 1
   state.projects = state.projects!.filter(p => p.id !== project.id)
   state.rules = state.rules?.filter(r => r.projectId !== project.id)

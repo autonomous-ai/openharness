@@ -129,6 +129,14 @@ describe('when a request ships', () => {
     expect(f.group(id).ledger?.shippedAt).toBe(9_000)
   })
 
+  it('records the machine each attempt ran on, and the attempt it shipped on keeps it (contributor view, #2444)', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Merged https://github.com/o/r/pull/7')
+    expect(f.group(id).ledger?.runs?.at(-1)?.machineId).toBe('host')
+    expect(f.group(id).ledger?.shippedBy?.machineId).toBe('host')
+  })
+
   it('keeps the first ship time when the same group finishes again', () => {
     const f = fixture(), id = f.create()
     const first = f.assign(id)
@@ -166,7 +174,7 @@ describe('when the Lead records a merge', () => {
     const effects = f.run(merged(id), lead)
     expect(f.group(id).ledger?.shippedAt).toBe(NOW)
     expect(f.group(id).pullRequestUrls).toEqual([PR])
-    expect(effects.messages.map(m => [m.conversationId, m.text])).toEqual([[id, `Merged ${PR}`]])
+    expect(effects.messages.filter(m => m.conversationId === id).map(m => [m.conversationId, m.text])).toEqual([[id, `Merged ${PR}`]])
     expect(shippedFor(f, 'owner')).toMatchObject({ points: 3, shipped: { count: 1 } })
   })
 
@@ -262,7 +270,7 @@ describe('when the Lead records a merge', () => {
       expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
       expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
       expect(f.group(fix).pullRequestUrls).toEqual([FIX])
-      expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      expect(effects.messages.filter(m => m.conversationId === fix).map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
       // The line is the fix's card (cards.ts: a main-chat line's links become cards, the original's too).
       expect(f.group(fix).cards?.pullRequests?.[0]).toMatchObject({ url: FIX, messageId: effects.messages[0]!.id, mergedAt: NOW + 3 * DAY_MS })
       // Recorded again, or by a second fix later: the first fix stays the one counted.
@@ -629,7 +637,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const id = f.create(owner, { checks: independent })
     const { assignmentId, worker } = f.assign(id)
     const harnessId = f.state.agents.find(a => a.id === worker)!.harnessId
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId, machineId: 'host' }])
   })
 
   it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
@@ -659,7 +667,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     report(worker, 'gpt-6.1-sol')
     report(earlier, 'gpt-6.1-sol')
     expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000,
-      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId, machineId: 'host' }])
     // A task finished before its agent's first report still takes it (Scholes, 2026-10-30): the agent ran that model all along.
     expect(f.group(done).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
     // A model on record is never rewritten by a later report.
@@ -753,7 +761,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
         requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
     const { assignmentId } = f.assign(id, worker)
     expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000,
-      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId, machineId: 'host' }])
   })
 
   // Checks are information (project instructions, phase 4): every check is a review's, whatever `independent` says.
@@ -962,7 +970,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     f.at(6_000)
     f.passChecks(id, assignmentId)
     f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
-    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high' }
+    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high', machineId: 'host' }
     expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
     // Reopened and worked again on another model: the ship stays the first attempt's.
     const other = f.add('other', id)

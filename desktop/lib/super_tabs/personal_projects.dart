@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:flutter/foundation.dart';
 
+import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
@@ -15,8 +16,9 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// A person's panes as projects of their Personal Swarm (Dee, 10-30 design;
 /// "build the rest, but leave the tabs", 10-31): every pane of theirs joins
 /// the project of its repo, whatever tab it is in, the same repo on each of
-/// their computers being one project, and a pane with no repo joins
-/// # scratch. A project's [term] shows those very panes: the tab keeps them,
+/// their computers being one project, and a pane with no repo joins its tab's
+/// project, named after the tab (Huy, 11-03: his tabs' panes all landed in one
+/// # scratch). A project's [term] shows those very panes: the tab keeps them,
 /// and nothing about a tab changes.
 ///
 /// Which pane belongs where is worked out here, on the person's own Desktop,
@@ -27,17 +29,16 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// Not yet: a repo that already has a team project joining that one. It
 /// crosses Swarms and needs its own security review.
 
-/// The key of the project for panes with no repo.
-const kScratchRepo = 'scratch';
-const kScratchProjectName = 'scratch';
-
 /// The form an agent reports its project's remote in: `host[:port]/owner/repo`
 /// with no scheme, user or `.git` (the CLI's `canonicalRepository`, and
 /// `canonicalGitRemote` for this computer's own reading). Every real remote
-/// arrives so; a host needs a dot and a letter-only last label, which a folder
-/// path (`/srv/api`, `./api`, `C:\api`) never has.
+/// arrives so, a clone through an SSH host alias too: its host is the alias,
+/// often with no dot (`gh-work/acme/api`, `Host gh-work`, task #2476). A host
+/// is two or more letters, digits, dots, hyphens or underscores, starting and
+/// ending with a letter or digit (the CLI's `safeSshAlias`), so a folder path
+/// (`/srv/api`, `./api`, `C:\api`, `C:/api`) never is one.
 final _canonicalRemote = RegExp(
-  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?/\S+$',
+  r'^[a-z0-9][a-z0-9._-]*[a-z0-9](?::\d+)?/\S+$',
   caseSensitive: false,
 );
 
@@ -81,6 +82,24 @@ String? normalizedRemote(String? remote) {
   return [host, ...parts].join('/').toLowerCase();
 }
 
+/// The project key of a tab's panes with no repo: the desk's tab id, the same
+/// on each of the person's computers and through a rename (task #2376).
+String personalTabKey(String tabId) => 'tab:$tabId';
+
+/// The name a tab's project is made with on every computer, so that request is
+/// one request wherever it is sent (the server refuses a request id reused for
+/// another name: review of #2753). It is then renamed to its tab's name, and a
+/// tab with no usable name keeps it.
+const kTabProjectName = 'Tab';
+
+/// [name] as a project name the server takes: trimmed, at most 160
+/// characters (backend `project.create`), [kTabProjectName] for none.
+String tabProjectName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return kTabProjectName;
+  return trimmed.length > 160 ? trimmed.substring(0, 160).trimRight() : trimmed;
+}
+
 /// The repo's own name: `github.com/owner/api` is `api`.
 String repoName(String repo) => repo.split('/').last;
 
@@ -98,14 +117,18 @@ String _hash(String text) => const DartSha256()
     .join()
     .substring(0, 24);
 
-/// The request id a repo's project is created with: the same on every
-/// computer of the person's, so the server answers each with the one project
-/// (backend commands.ts `project.create`: the project's id comes from it).
-String personalProjectOperation(String repo) =>
-    repo == kScratchRepo ? 'personal-scratch' : 'personal-repo-${_hash(repo)}';
+/// The request id a repo's or a tab's project is created with: the same on
+/// every computer of the person's, so the server answers each with the one
+/// project (backend commands.ts `project.create`: the project's id comes from
+/// it). Neither the URL nor the tab's id is in it.
+String personalProjectOperation(String key) => _isTab(key)
+    ? 'personal-tab-${_hash(key.substring(4))}'
+    : 'personal-repo-${_hash(key)}';
 
-/// One of the person's panes, the tab it is first in, and its repo
-/// ([kScratchRepo] for none).
+bool _isTab(String key) => key.startsWith('tab:');
+
+/// One of the person's panes, the tab it is first in, and its project's key:
+/// its repo, or [personalTabKey] of its tab for none.
 typedef PersonalPane = ({Swarm tab, TerminalPane pane, String repo});
 
 /// The person's own panes in their tabs, in tab order then each tab's reading
@@ -126,11 +149,19 @@ List<PersonalPane> personalPanes(AppNotifier app) {
         continue;
       }
       if (!seen.add((pane.machineId, agentId))) continue;
-      final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+      final project = machine.agents
+          .where((a) => a.id == agentId)
+          .firstOrNull
+          ?.project;
       out.add((
         tab: tab,
         pane: pane,
-        repo: normalizedRemote(agent?.project?.remote) ?? kScratchRepo,
+        // The repo an SSH alias stands for first, so a clone through
+        // `Host gh-work` and one straight from GitHub are one (task #2476).
+        repo:
+            normalizedRemote(project?.repository) ??
+            normalizedRemote(project?.remote) ??
+            personalTabKey(tab.id),
       ));
     }
   }
@@ -306,13 +337,25 @@ class PersonalProjects extends ChangeNotifier {
         _again.remove(scope);
         if (!eligible(c)) return;
         final projects = _projects(account, swarm);
-        final wanted = {for (final p in personalPanes(app)) p.repo};
+        // Each project's name: the repo's own, or its tab's name, given once its
+        // project is made (a later rename of the tab keeps the project, and its
+        // name).
+        final wanted = <String, String>{
+          for (final p in personalPanes(app))
+            p.repo: _isTab(p.repo)
+                ? tabProjectName(p.tab.name)
+                : repoName(p.repo),
+        };
         var made = false;
-        for (final repo in wanted) {
+        for (final MapEntry(key: repo, value: name) in wanted.entries) {
           if (projects.containsKey(repo)) continue;
           final retryAt = _retryAt['$scope/$repo'];
           if (retryAt != null && clock.now().isBefore(retryAt)) continue;
-          final answer = await _create(c, repo);
+          final answer = await _create(
+            c,
+            repo,
+            _isTab(repo) ? kTabProjectName : name,
+          );
           if (!eligible(c)) return;
           if (answer case (:final id)) {
             projects[repo] = id;
@@ -323,6 +366,8 @@ class PersonalProjects extends ChangeNotifier {
         }
         // The new projects read before two of one name are told apart.
         if (made && !await _reread(c)) return;
+        if (!eligible(c)) return;
+        if (await _nameTabs(c, wanted) && eligible(c)) await _reread(c);
         if (!eligible(c)) return;
         if (await _tellApart(c) && eligible(c)) await _reread(c);
       } while (_again.contains(scope));
@@ -344,7 +389,11 @@ class PersonalProjects extends ChangeNotifier {
   /// Creates (or finds again) [repo]'s project: its id, null once the person
   /// deleted it, or nothing on a failure, asked again after a wait that
   /// doubles up to [maxRetryWait] when the Swarm next changes.
-  Future<({String? id})?> _create(SuperTabController c, String repo) async {
+  Future<({String? id})?> _create(
+    SuperTabController c,
+    String repo,
+    String name,
+  ) async {
     final key = '${c.accountId}/${c.tabId}/$repo';
     try {
       final answer = await c.request(
@@ -355,8 +404,9 @@ class PersonalProjects extends ChangeNotifier {
           'command': {
             'type': 'project.create',
             // Every computer sends the same request, so the name is the repo's
-            // own; two of one name are told apart after ([_tellApart]).
-            'name': repo == kScratchRepo ? kScratchProjectName : repoName(repo),
+            // own, or the tab's (the desk names a tab alike on each); two repos
+            // of one name are told apart after ([_tellApart]).
+            'name': name,
             'visibility': 'private',
             'brief': '',
           },
@@ -375,17 +425,70 @@ class PersonalProjects extends ChangeNotifier {
           eligible(c)) {
         return (id: null);
       }
-      _failed(key);
-    } catch (_) {
-      _failed(key);
+      _failed(key, 'create', failure);
+    } catch (error) {
+      _failed(key, 'create', error);
     }
     return null;
   }
 
-  void _failed(String key) {
+  /// What a failure is called in the log: its code, or its kind.
+  static String _codeOf(Object error) =>
+      error is SuperTabFailure ? error.code : '${error.runtimeType}';
+
+  /// Waits before [key] is asked again, and says why in the log: the
+  /// failure's code, never the repo's or the tab's name (ENGINEERING.md 6, 7).
+  void _failed(String key, String what, Object error) {
     final count = _failures[key] = (_failures[key] ?? 0) + 1;
     final wait = Duration(seconds: 5 << count.clamp(1, 6));
-    _retryAt[key] = clock.now().add(wait < maxRetryWait ? wait : maxRetryWait);
+    final next = wait < maxRetryWait ? wait : maxRetryWait;
+    _retryAt[key] = clock.now().add(next);
+    appLog.warn(
+      'super-tabs',
+      'Personal project $what refused (${_codeOf(error)}); asked again in ${next.inSeconds} s',
+    );
+  }
+
+  /// A tab's project still under the name every computer makes it with takes
+  /// its tab's name. Asked again on the next sync when it fails. A name the
+  /// person chose stays.
+  Future<bool> _nameTabs(
+    SuperTabController c,
+    Map<String, String> wanted,
+  ) async {
+    final projects = _projects(c.accountId, c.tabId);
+    var changed = false;
+    for (final MapEntry(key: repo, value: name) in wanted.entries) {
+      final id = projects[repo];
+      if (!_isTab(repo) || id == null || name == kTabProjectName) continue;
+      if (c.snapshot?.projectById(id)?.name != kTabProjectName) continue;
+      // A refused rename waits as a refused create does ([_failed]).
+      final key = '${c.accountId}/${c.tabId}/$repo/name';
+      final retryAt = _retryAt[key];
+      if (retryAt != null && clock.now().isBefore(retryAt)) continue;
+      try {
+        await c.request(
+          'POST',
+          '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
+          body: {
+            'operationId': 'personal-tab-name-${_hash('$repo\n$name')}',
+            'command': {
+              'type': 'project.rename',
+              'projectId': id,
+              'name': name,
+            },
+          },
+        );
+      } catch (error) {
+        _failed(key, 'rename', error);
+        continue;
+      }
+      _failures.remove(key);
+      _retryAt.remove(key);
+      if (!eligible(c)) return changed;
+      changed = true;
+    }
+    return changed;
   }
 
   /// Two repos of one name, both still under it: each is renamed to its long
@@ -396,7 +499,7 @@ class PersonalProjects extends ChangeNotifier {
     final renamed = (_renamed[account] ??= {})[swarm] ??= {};
     final byName = <String, List<String>>{};
     for (final MapEntry(key: repo, value: id) in projects.entries) {
-      if (id == null || repo == kScratchRepo) continue;
+      if (id == null || _isTab(repo)) continue;
       (byName[repoName(repo)] ??= []).add(repo);
     }
     var changed = false;
@@ -419,7 +522,12 @@ class PersonalProjects extends ChangeNotifier {
               },
             },
           );
-        } catch (_) {
+        } catch (error) {
+          // Asked again on the next sync; said in the log by its code alone.
+          appLog.warn(
+            'super-tabs',
+            'Personal project rename refused (${_codeOf(error)})',
+          );
           continue;
         }
         if (!eligible(c)) return changed;

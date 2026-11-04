@@ -3,6 +3,7 @@ import type { AgentStart, Assignment, SuperTabState } from './model.js'
 import { changesRequested, LEASE_MS, loseTasks, nextLossAt, QUIET_RUNNING_MS, renewOwnTask, revisionReady, sweepForLead, sweepLiveness, waitingForReview } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
+import { stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
 const assignment = (patch: Partial<Assignment> = {}): Assignment => ({ id: 'a1', agentId: 'w', status: 'working', result: null,
@@ -663,5 +664,39 @@ describe('the next time a machine\'s worker can lose its task (DB 2.5)', () => {
     const idle = reported(progress)
     idle.conversations[1]!.assignment = null
     expect(nextLossAt(idle, 'm')).toBeUndefined()
+  })
+})
+
+// Diego, 2026-11-04 (task #2693): the project chat's thread replies are the only task state the chat shows (#2704), but a task
+// lost outside any command (the sweep, a machine's report, its Lead's poll) never said Stuck there: the thread kept saying On it.
+describe('a task lost outside any command says Stuck in its project-chat thread', () => {
+  const lost = () => {
+    const f = stepsFixture()
+    const root = f.group(f.task).cards!.line!.messageId
+    const worker = f.state.agents.find(a => a.id === f.dev)!
+    const text = `Stuck: ${worker.displayName ?? worker.name} stopped. Next: another engineer takes it over.`
+    const replies = (rows: ReturnType<typeof sweepLiveness>) => rows.filter(r => r.conversationId === f.group(f.task).cards!.line!.conversationId)
+    f.tick(120 * MINUTE)
+    return { f, root, text, replies }
+  }
+
+  it('through the sweep: exactly one reply, in the task\'s thread, as its coordinator', () => {
+    const { f, root, text, replies } = lost()
+    const rows = sweepLiveness(f.state, f.now)
+    expect(f.group(f.task).assignment!.status).toBe('lost')
+    expect(replies(rows)).toEqual([expect.objectContaining({ text, replyTo: root, thread: root, recipients: [],
+      author: expect.objectContaining({ kind: 'agent', id: f.lead }), source: expect.objectContaining({ kind: 'system' }) })])
+  })
+
+  it('through the Lead\'s poll', () => {
+    const { f, root, text, replies } = lost()
+    expect(replies(sweepForLead(f.state, f.now))).toEqual([expect.objectContaining({ text, replyTo: root, thread: root })])
+  })
+
+  it('once when an alert loses it inside a command', () => {
+    const { f, root, text } = lost()
+    const rows = f.run({ type: 'agent.alert', agentId: f.dev, alert: 'limit', active: true }, f.as(f.dev)).messages
+    expect(f.group(f.task).assignment!.status).toBe('lost')
+    expect(rows.filter(r => r.thread === root && r.text.startsWith('Stuck:'))).toEqual([expect.objectContaining({ text })])
   })
 })

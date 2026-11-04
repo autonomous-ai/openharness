@@ -244,7 +244,7 @@ void main() {
           DefaultSelectionStyle.of(tester.element(setupInput)).selectionColor,
         );
         expect(field.style!.fontFamily, grid.AppType.body().fontFamily);
-        expect(field.style!.fontSize, 14);
+        expect(field.style!.fontSize, 13);
         expect(box.selected?.id, selectedOption);
         expect(field.controller, same(setupController));
         expect(setupController.value, setupEditing);

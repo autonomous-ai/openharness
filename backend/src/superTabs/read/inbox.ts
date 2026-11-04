@@ -28,6 +28,7 @@ import { deliveredCopies, type ThreadReply } from '../pageReads.js'
 import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
 import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
+import { voiceLabel } from '../voiceMessages.js'
 import { readBy } from '../parts/indexed.js'
 import { logger } from '../../utils/logger.js'
 import { ms } from '../parts/light.js'
@@ -74,11 +75,13 @@ export interface Row { id: string; conversationId: string; sequence: number; aut
 
 /** A preview's fields, its text cut by the database so a long message never leaves it whole. */
 export const FIELDS = { sequence: 1, author: 1, text: { $substrCP: [{ $ifNull: ['$text', ''] }, 0, PREVIEW_CHARS] }, createdAt: 1, attachments: { $size: { $ifNull: ['$attachments', []] } },
+  // A voice message's length: its preview names it rather than quoting its words (voiceMessages.ts voiceLabel).
+  voiceMs: { $arrayElemAt: [{ $ifNull: ['$attachments.voice.durationMs', []] }, 0] },
   thread: 1, alsoInChat: 1, mentions: 1, source: 1, recipientIds: 1, buddyProject: 1 }
 /** A scan for unread replies: what a reply is counted, named and placed by, never its text. */
 export const SCAN_FIELDS = { sequence: 1, author: 1, createdAt: 1, thread: 1, mentions: 1, source: 1, recipientIds: 1, buddyProject: 1 }
 export const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, conversationId: raw.conversationId as string, sequence: raw.sequence as number, author: raw.author as Author,
-  text: (raw.text ?? '') as string, createdAt: new Date(ms(raw.createdAt)), attachments: typeof raw.attachments === 'number' ? raw.attachments : 0,
+  text: typeof raw.voiceMs === 'number' ? voiceLabel(raw.voiceMs) : (raw.text ?? '') as string, createdAt: new Date(ms(raw.createdAt)), attachments: typeof raw.attachments === 'number' ? raw.attachments : 0,
   thread: (raw.thread ?? null) as string | null, alsoInChat: raw.alsoInChat === true, mentions: (raw.mentions ?? []) as string[], source: raw.source ?? null,
   recipientIds: (raw.recipientIds ?? []) as string[], buddyProject: typeof raw.buddyProject === 'string' ? raw.buddyProject : null })
 export const preview = (m: Row): InboxMessage => ({ id: m.id, sequence: m.sequence, author: m.author, text: m.text,

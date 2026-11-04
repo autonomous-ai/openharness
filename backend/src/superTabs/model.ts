@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -19,10 +20,15 @@ export interface Person {
   generation: string
   /** Their own short status (profile.ts); only Swarm members read it. */
   status?: import('./profile.js').PersonStatus
+  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
+   *  Only Swarm members read it, for the local time on a person's card. */
+  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Only members read it. */
+  name?: string
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
 }
@@ -70,8 +76,18 @@ export interface Agent {
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
    *  it still tells the machine owner who asked. */
-  switchLanded?: { id: string; requestedBy: string }
-  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  switchLanded?: { id: string; requestedBy: string; candidateAgentId?: string }
+  switchRequest?: { id: string; engine: string; profileId: string; targetMachineId?: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
+   *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
+   *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
+  modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
+    /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
+    reason?: 'limit' | 'failing' | 'gone' }
+  /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
+  gridModelUnservedSince?: number
+  /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */
+  gridModelName?: string
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
@@ -164,12 +180,18 @@ export interface AgentStartRequest {
   /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
    *  machine (spec: Folder). Ids, names and folders only. */
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
+  /** The offered account selected for a destination PM switch. */
+  profileId?: string
+  /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
+  handoffNote?: string
+  handoffSourceAgentId?: string
+  handoffChangeId?: string
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
-  leadFor?: { projectId: string; personId: string; generation: string }
+  leadFor?: { projectId: string; personId: string; generation: string; switchId?: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -216,7 +238,10 @@ export interface Check {
   verdicts?: CheckVerdict[]
 }
 /** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
-export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
+  /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
+   *  (#2656). Absent on verdicts given before. */
+  name?: string }
 export interface Assignment {
   id: string
   agentId: string
@@ -327,8 +352,13 @@ export interface Conversation {
   /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
    *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
   lastMainSequence?: number
+  /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
+   *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
+  lastPersonSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
+  pullRequestEvents?: Record<string, string[]>
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -368,6 +398,10 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
+  queueRank?: number
+  /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
+  notBefore?: string
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -386,13 +420,27 @@ export interface TaskLiveness {
   personId?: string
 }
 
-/** The GitHub pull request links in [text], each once, in order. */
-export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
-  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+/** [url] as the project's own pull request, in the project's spelling of owner and repository (GitHub names are not case
+ *  sensitive); null when it belongs to any other repository, whatever its name, since an owner is never guessed. Without a
+ *  known GitHub repository nothing can be judged. */
+export function projectPullRequestUrl(url: string, repositoryUrl: string | null | undefined): string | null {
+  const own = githubRepository(repositoryUrl)
+  if (!own) return url
+  const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
+  if (!match) return null
+  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.name.toLowerCase()
+    ? `https://github.com/${own.fullName}/pull/${match[3]}` : null
+}
 
-export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
-  const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
+/** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
+ *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
+export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
+
+/** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
+export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
+  const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -555,6 +603,8 @@ export const NOTICE_READERS = {
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // The coordinator's wake for its built-in schedule (pmSchedule.ts).
+  'schedule-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
@@ -586,6 +636,8 @@ export const NOTICE_READERS = {
   switch: 'people',
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
+  // The machine owner's line, once a week, when someone else's work starts on their machine (othersWork.ts).
+  'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -617,8 +669,11 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
  *  person's, so it goes too (delta review 1 of #2258), and so does its host grant, which under an older share policy names
  *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
 export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant' | 'teamAccount'
-  | 'replacement' | 'lostTask'>>(target: T, buddyId: string): T => {
-  const bare = agentWithoutMachine(target)
+  | 'replacement' | 'lostTask' | 'modelRequest'>>(target: T, buddyId: string): T => {
+  // A pending model switch names the machines serving the model (buddyModel.ts); its host reads it from its own rows, never here
+  // (security review 1 of #2787).
+  const { modelRequest: _switching, ...unswitched } = target
+  const bare = agentWithoutMachine(unswitched as T)
   if (target.id === buddyId) return bare
   const { teamAccount: _team, ...rest } = bare
   return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
@@ -650,13 +705,12 @@ export interface CommandEffects {
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
-  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string } }>
+  /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
+  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
-  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
-  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -825,6 +879,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
+  // ordinary people and agent syncs must never receive the note or its correlation fields.
+  for (const start of visible.starts ?? []) {
+    delete start.request.handoffNote
+    delete start.request.handoffSourceAgentId
+    delete start.request.handoffChangeId
+  }
   if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
@@ -835,6 +896,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
+  // project's id is not another member's to see.
+  for (const pool of visible.machines ?? []) {
+    if (pool.projects) pool.projects = pool.projects.filter(id => projectsOf(state).some(p => p.id === id && canReadProject(state, actor, p)))
+  }
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -902,6 +968,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens
+      // What the server refused this machine's host is for the sweep alone (liveness.ts failRefusedStarts), never a reader.
+      delete pool.observation.refusedStarts
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
       if (pool.observation.preparingStartIds) pool.observation.preparingStartIds = pool.observation.preparingStartIds.filter(id => visible.starts?.some(s => s.id === id))
     }
@@ -942,6 +1010,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const project of visible.projects ?? []) {
       const lead = project.lead
       if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+      // Which of its person's machines starts the Lead of a Personal project (leadStart.ts) is a machine too.
+      delete project.leadClaim
     }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules

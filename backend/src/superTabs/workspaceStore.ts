@@ -85,6 +85,14 @@ export async function autoJoinDeclinedBy(tx: Transaction, workspaceId: string, u
   return !!workspace?.autoJoinDeclined.includes(userId)
 }
 
+/** Whether this Workspace removed `userId` and nothing brought them back: their member row says so until it is purged, and the
+ *  Workspace's decline after that (autoJoinDeclinedBy, never purged). Such a person comes back only by an invitation, never by
+ *  a link or an email domain (design, Roles; task #2510). */
+export async function removedFromWorkspace(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
+  const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(workspaceId, userId) } })
+  return !!prior?.removedAt || (!prior && await autoJoinDeclinedBy(tx, workspaceId, userId))
+}
+
 async function clearAutoJoinDecline(tx: Transaction, workspaceId: string, userId: string): Promise<void> {
   const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
   if (workspace?.autoJoinDeclined.includes(userId)) {
@@ -221,6 +229,7 @@ export class SwarmWorkspaces {
   /** Invitations waiting for the signed-in person. */
   async invitationsFor(user: AuthUser) {
     const rows = await this.db.swarmWorkspaceInvitation.findMany({ where: { email: user.email.trim().toLowerCase(), expiresAt: { gt: new Date(this.deps.now()) } }, take: 100 })
+    if (!rows.length) return { invitations: [] }
     const workspaces = await this.db.swarmWorkspace.findMany({ where: { id: { in: rows.map(r => r.workspaceId) }, autonomousEnv: user.autonomousEnv } })
     return { invitations: rows.flatMap(row => {
       const workspace = workspaces.find(o => o.id === row.workspaceId && !o.deletedAt)

@@ -87,6 +87,23 @@ describe('a machine the backend refuses', () => {
     expect(b.dials()).toBe(1)
   })
 
+  // Prod, 2026-11-04: ~3,600 refused opens an hour, mostly CLI 0.5.33, whose offline machines were asked every 30 s.
+  it('refused as offline is asked again after 30 s, then 1, 2, 4 minutes, at most every 5', async () => {
+    const b = await refusingBackend({ error: 'MACHINE_OFFLINE', retryAfterMs: 30_000 })
+    const offline = { message: 'MACHINE_OFFLINE' }
+    const expected: number[] = []
+    for (const wait of [30, 60, 120, 240, 300, 300]) {
+      await expect(b.window()).rejects.toMatchObject(offline)
+      expected.push(b.dials())
+      b.advance(wait * 1_000 - 1)
+      await expect(b.window()).rejects.toMatchObject(offline)
+      await expect(b.background()).rejects.toMatchObject(offline)
+      expect(b.dials(), `${wait} s`).toBe(expected.length)
+      b.advance(1)
+    }
+    expect(expected).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
   it('without a retry-after is asked again after 1, 2, 4 … seconds, at most every 30', async () => {
     const b = await refusingBackend({ error: 'NOT_YOUR_MACHINE' })
     const refused = { message: 'NOT_YOUR_MACHINE' }

@@ -313,7 +313,6 @@ void main() {
         addTearDown(() => grid.AppTheme.brightness.value = previous);
         final server = polishFixture(), c = server.controller();
         await c.refresh();
-        c.toggleProject('lead');
         var opened = '';
         final boundary = GlobalKey();
         await tester.pumpWidget(
@@ -411,7 +410,6 @@ void main() {
         await mouse.addPointer(location: Offset.zero);
         for (final target in [
           ('project-hover', const ValueKey('super-group-lead')),
-          ('workgroup-hover', const ValueKey('super-group-offline')),
         ]) {
           await mouse.moveTo(tester.getCenter(find.byKey(target.$2)));
           await tester.pump();
