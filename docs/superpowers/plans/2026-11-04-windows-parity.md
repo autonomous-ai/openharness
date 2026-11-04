@@ -38,8 +38,7 @@ The person is using Harness, not Windows administration. So:
 | Picks an engine that isn't installed | Launch stops: "Installing engines is not supported on Windows yet: install it, then try again." | Same as a Mac: the row says it will install and shows the exact line, then "Installing Grok. The harness starts once it is installed." and the agent starts by itself |
 | The install fails | Nothing to retry | "Grok could not be installed: <the installer's own last line>." with **Try again** |
 | Windows blocks the program | A pane that closes, or a generic failure | "Windows blocked Grok: Smart App Control does not trust it. Choose another engine." |
-| No Git for Windows | Buddy and setup scripts refuse with a URL | Setup shows **Install Git**, one click, Harness runs it. Only if that fails: **Download Git** |
-| Buddy on a PC without Git | Refused at launch | The machine picker says "Install Git on this PC to run a Buddy on it" with **Install Git** when it is this PC |
+| No Git for Windows | Buddy and setup scripts refuse with a URL | Harness installs it in the background, asking nothing. If that can't work, whatever needs Git says so with the link |
 | Plays a voice message | Opens another program | Plays in the chat with the waveform, as on a Mac |
 | Opens a web pane | Shows only a URL | The page, beside its terminal. Menus and dialogs show over it normally |
 | Web pane without WebView2 | Shows only a URL | The URL, **Open in browser**, and "Install Microsoft Edge WebView2 to see pages here." with **Install** |
@@ -129,20 +128,9 @@ Each vendor's own Windows installer, checked 2026-11-04:
 - [ ] **Step 6: Run the tests and `npx tsc --noEmit -p .`; all pass.**
 - [ ] **Step 7: Commit.**
 
-### Task 6: Git for Windows, in one click
+### Task 6: Git for Windows, with no click at all (done)
 
-**Files:**
-- Create: `cli/src/lib/windows/gitInstall.ts` and spec; `desktop/lib/widgets/windows_git_card.dart` and test
-- Modify: `cli/src/superTabs/machines.ts` (`CAPABILITIES`), `backend/src/superTabs/machines.ts`, `backend/src/superTabs/buddyMachines.test.ts`, `desktop/lib/super_tabs/buddy_machines.dart`, `desktop/lib/bootstrap/environment_provisioner.dart`
-
-**Interfaces:**
-- CLI: `harness setup git --json`, running `winget install --id Git.Git -e --silent --accept-source-agreements --accept-package-agreements`, answering `{ ok }` or `{ ok: false, reason: 'NO_WINGET' | 'FAILED' | 'CANCELLED', message }`.
-- Capability `windowsGit`, reported when `findGitBash()` finds one.
-- Backend: `BUDDY_WINDOWS_NO_GIT = 'Install Git on this PC to run a Buddy on it.'`, used when a host reports `windowsBuddy` and not `windowsGit`.
-
-- [ ] Test, then build: setup on a PC without Git shows the card with **Install Git**; a success re-checks and the card goes; `NO_WINGET` or `FAILED` shows **Download Git**, opening the vendor's page; `CANCELLED` leaves **Install Git** and no error. The card never blocks setup: "Later" closes it.
-- [ ] Test, then build: the Buddy picker shows the backend's sentence on that machine's row, with **Install Git** when the machine is this PC.
-- [ ] Run the specs; commit.
+`desktop/lib/bootstrap/windows_git_setup.dart`: where Git is missing, the app installs it once with `winget ... --scope user --silent`, in the background, which asks nothing. Without winget, or if it fails, Harness goes on, and a Buddy's launch says what it needs.
 
 ### Task 7: Windows words, everywhere
 
