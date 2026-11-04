@@ -140,8 +140,164 @@ void main() {
       ),
       ('cancelled', task(assignment: working('cancelled')), null),
     ]) {
-      test(name, () => expect(superTabBacklogGroupOf(built), expected));
+      test(
+        name,
+        () => expect(
+          superTabBacklogGroupOf(
+            built,
+            DateTime.fromMillisecondsSinceEpoch(now),
+          ),
+          expected,
+        ),
+      );
     }
+  });
+
+  group('Shipped means merged, as the server tells it (task #2558)', () {
+    final at = DateTime.fromMillisecondsSinceEpoch(now);
+    const day = 86400000;
+    const own = 'https://github.com/acme/app/pull/7';
+    const batch = 'https://github.com/acme/app/pull/8';
+
+    /// A task as the read path answers it (backend superTabRead.test.ts): the
+    /// first Done sets shippedAt; only a recorded merge sets a card's mergedAt.
+    SuperTabBacklogGroup? placed(
+      String status, {
+      int? shippedAt = now,
+      List<String> urls = const [own],
+      List<Map<String, dynamic>>? cards,
+      bool archived = false,
+      bool dormant = false,
+    }) => superTabBacklogGroupOf(
+      SuperTabConversation.fromJson({
+        ...conversationFixture('work', 'A task'),
+        'assignment': working(status),
+        'shippedAt': ?shippedAt,
+        'pullRequestUrls': urls,
+        'cards': {
+          'pullRequests':
+              cards ??
+              [
+                for (final url in urls) {'url': url, 'messageId': 'm-$url'},
+              ],
+        },
+        if (archived) 'archived': true,
+        if (dormant) 'dormant': true,
+      }),
+      at,
+    );
+    Map<String, dynamic> merged(String url, {int at = now}) => {
+      'url': url,
+      'messageId': 'm-$url',
+      'mergedAt': at,
+    };
+
+    test('a Done task with an open pull request is Ready to merge', () {
+      expect(placed('done'), SuperTabBacklogGroup.readyToMerge);
+    });
+
+    test('a Done task whose link has no card yet is Ready to merge', () {
+      expect(
+        placed('done', cards: const []),
+        SuperTabBacklogGroup.readyToMerge,
+      );
+    });
+
+    test('a task whose pull request merged is Shipped', () {
+      expect(
+        placed('done', cards: [merged(own)]),
+        SuperTabBacklogGroup.shipped,
+      );
+    });
+
+    test('a merge recorded on a batch pull request counts, its own closed', () {
+      expect(
+        placed(
+          'done',
+          urls: const [own, batch],
+          cards: [
+            {'url': own, 'messageId': 'm1'},
+            merged(batch),
+          ],
+        ),
+        SuperTabBacklogGroup.shipped,
+      );
+    });
+
+    test('a Done task with no pull request has nothing to merge: Shipped', () {
+      expect(placed('done', urls: const []), SuperTabBacklogGroup.shipped);
+    });
+
+    test('Ready to merge stays after a day quiet, while its window lasts', () {
+      expect(placed('done', dormant: true), SuperTabBacklogGroup.readyToMerge);
+      expect(placed('done', dormant: true, shippedAt: now - 8 * day), isNull);
+    });
+
+    test('an archived task whose pull request never merged is not listed', () {
+      expect(placed('done', archived: true), isNull);
+    });
+
+    test('work back on after its first Done goes by its state', () {
+      expect(placed('working'), SuperTabBacklogGroup.working);
+      expect(placed('working', urls: const []), SuperTabBacklogGroup.working);
+    });
+
+    test('merged long ago and back at work is listed as Working', () {
+      expect(
+        placed(
+          'working',
+          shippedAt: now - 8 * day,
+          cards: [merged(own, at: now - 8 * day)],
+        ),
+        SuperTabBacklogGroup.working,
+      );
+    });
+  });
+
+  group('Shipped looks back 7 days, and a closed task only counts shipped', () {
+    final at = DateTime.fromMillisecondsSinceEpoch(now);
+    const day = 86400000;
+
+    test('a task shipped within 7 days is listed, an older one is not', () {
+      expect(
+        superTabBacklogGroupOf(
+          task(assignment: working('done'), shippedAt: now - 7 * day),
+          at,
+        ),
+        SuperTabBacklogGroup.shipped,
+      );
+      expect(
+        superTabBacklogGroupOf(
+          task(assignment: working('done'), shippedAt: now - 7 * day - 1),
+          at,
+        ),
+        isNull,
+      );
+    });
+
+    test('a task closed without shipping is on its way nowhere', () {
+      for (final closed in const [
+        {'archived': true},
+        {'dormant': true},
+      ]) {
+        final group = SuperTabConversation.fromJson({
+          ...conversationFixture('work', 'A task'),
+          'assignment': working('stopped'),
+          ...closed,
+        });
+        expect(superTabBacklogGroupOf(group, at), isNull);
+      }
+    });
+
+    test('an archived task that shipped stays in Shipped', () {
+      final group = SuperTabConversation.fromJson({
+        ...conversationFixture('work', 'A task'),
+        'assignment': working('done'),
+        'archived': true,
+        'shippedAt': now,
+      });
+      expect(superTabBacklogGroupOf(group, at), SuperTabBacklogGroup.shipped);
+    });
   });
 
   test('the groups read in order, as the mockup Scholes accepted', () {
@@ -271,6 +427,12 @@ void main() {
         'liveness': ?liveness,
         'shippedAt': ?shippedAt,
         if (pr != null) 'pullRequestUrls': [pr],
+        if (pr != null && shippedAt != null)
+          'cards': {
+            'pullRequests': [
+              {'url': pr, 'messageId': 'card-$id', 'mergedAt': shippedAt},
+            ],
+          },
       };
       conversations.addAll(<Map<String, dynamic>>[
         {...conversationFixture('api-chat', 'api'), 'projectId': 'api'},
@@ -325,11 +487,17 @@ void main() {
       WidgetTester tester,
       ConversationServer server, {
       SuperTabPullRequestFacts? facts,
+      DateTime? today,
+      VoidCallback? beforeBuild,
+      SuperTabController? held,
     }) async {
       opened.clear();
-      final c = shown = server.controller();
-      addTearDown(c.dispose);
-      await c.refresh();
+      final c = shown = held ?? server.controller();
+      if (held == null) {
+        addTearDown(c.dispose);
+        await c.refresh();
+      }
+      beforeBuild?.call();
       await tester.binding.setSurfaceSize(const Size(1100, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -344,9 +512,11 @@ void main() {
                 onOpenConversation: opened.add,
                 // Five minutes after #11 last changed (the fixture's own
                 // clock), for its row's age.
-                now: () => (c.groupChangedAt('working') ?? at).add(
-                  const Duration(minutes: 5),
-                ),
+                now: () =>
+                    today ??
+                    (c.groupChangedAt('working') ?? at).add(
+                      const Duration(minutes: 5),
+                    ),
               ),
             ),
           ),
@@ -564,8 +734,414 @@ void main() {
       await show(tester, other);
       await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
       await tester.pumpAndSettle();
-      expect(find.text('No tasks you asked for'), findsOneWidget);
+      expect(find.text('No open tasks of yours'), findsOneWidget);
       expect(find.text('0 tasks'), findsOneWidget);
+    });
+
+    group('closed tasks the app does not hold', () {
+      const day = 86400000;
+
+      /// A task of the project that shipped [daysAgo] days ago and was archived
+      /// since, so a first read leaves it out as the backend does.
+      Map<String, dynamic> archived(
+        String id,
+        int number, {
+        double daysAgo = 2,
+        String requester = 'owner',
+        String status = 'done',
+        bool shipped = true,
+      }) => {
+        ...conversationFixture(id, 'Archived $id'),
+        'projectId': 'lead',
+        'number': number,
+        'requesterId': requester,
+        'archived': true,
+        'assignment': {'id': 'a-$id', 'agentId': 'kestrel', 'status': status},
+        if (shipped) 'shippedAt': now - (daysAgo * day).round(),
+      };
+
+      /// [swarm] with nothing open: every task of it asked for by someone else.
+      ConversationServer nothingOpen() {
+        final server = swarm();
+        for (final g in (server.state['conversations'] as List)) {
+          (g as Map)['requesterId'] = 'pilot';
+        }
+        return server;
+      }
+
+      void add(
+        ConversationServer server,
+        Iterable<Map<String, dynamic>> tasks,
+      ) {
+        (server.state['conversations'] as List).addAll(tasks);
+      }
+
+      testWidgets('Shipped lists archived tasks from the last 7 days, not '
+          'older ones, and they stay out of what the app holds', (
+        tester,
+      ) async {
+        final server = swarm();
+        // Time runs as the app does: what is read counts as changed just now.
+        server.parts.clock = now;
+        add(server, [
+          archived('recent', 30),
+          archived('week-old', 31, daysAgo: 6.9),
+          archived('too-old', 32, daysAgo: 8),
+          archived('gave-up', 33, status: 'stopped', shipped: false),
+        ]);
+        final c = await show(tester, server, today: at);
+        expect(row('recent'), findsOneWidget);
+        expect(row('week-old'), findsOneWidget);
+        expect(row('too-old'), findsNothing);
+        expect(row('gave-up'), findsNothing);
+        expect(
+          tester.getTopLeft(row('recent')).dy,
+          greaterThan(
+            tester.getTopLeft(header(SuperTabBacklogGroup.shipped)).dy,
+          ),
+        );
+        expect(find.text('Shipped · 3'), findsOneWidget);
+        // The snapshot is built again on every change: these never join it.
+        expect(c.snapshot!.conversation('recent'), isNull);
+      });
+
+      testWidgets('a quiet Done task with an open pull request is Ready to '
+          'merge, read as the closed list answers it', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          {
+            ...archived('waiting', 90),
+            'archived': false,
+            'dormant': true,
+            'pullRequestUrls': ['https://github.com/acme/app/pull/90'],
+            'cards': {
+              'pullRequests': [
+                {
+                  'url': 'https://github.com/acme/app/pull/90',
+                  'messageId': 'card-90',
+                },
+              ],
+            },
+          },
+        ]);
+        await show(tester, server, today: at);
+        expect(row('waiting'), findsOneWidget);
+        expect(
+          tester.getTopLeft(row('waiting')).dy,
+          lessThan(tester.getTopLeft(header(SuperTabBacklogGroup.shipped)).dy),
+        );
+        expect(
+          tester.getTopLeft(row('waiting')).dy,
+          greaterThan(
+            tester.getTopLeft(header(SuperTabBacklogGroup.readyToMerge)).dy,
+          ),
+        );
+      });
+
+      testWidgets('it reads on through every page of the last 7 days', (
+        tester,
+      ) async {
+        final server = swarm()..parts.dormantPage = 2;
+        server.parts.clock = now;
+        add(server, [for (var i = 0; i < 5; i++) archived('page$i', 40 + i)]);
+        await show(tester, server, today: at);
+        for (var i = 0; i < 5; i++) {
+          expect(row('page$i'), findsOneWidget);
+        }
+      });
+
+      testWidgets('it reads each project through that project\'s index, never '
+          'the whole Swarm\'s list, which no index can sort', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(tester, server, today: at);
+        expect(row('here'), findsOneWidget);
+        expect(row('there'), findsOneWidget);
+        final pages = server.parts.reads.where((p) => p.contains('dormant=1'));
+        expect(pages, isNotEmpty);
+        expect(pages.where((p) => !p.contains('projectId=')), isEmpty);
+      });
+
+      testWidgets('a project that cannot be read does not stop the others', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () => server.failReadsOf = 'projectId=lead',
+        );
+        expect(row('here'), findsNothing);
+        expect(row('there'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-backlog-shipped-retry')),
+          findsOneWidget,
+        );
+      });
+
+      Iterable<String> closedReads(ConversationServer server) =>
+          server.parts.reads.where((p) => p.contains('dormant=1'));
+
+      testWidgets('opening the tab again reads nothing again and keeps the '
+          'rows', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30)]);
+        final c = await show(tester, server, today: at);
+        expect(row('recent'), findsOneWidget);
+        final reads = closedReads(server).length;
+        await tester.pumpWidget(const SizedBox());
+        await show(tester, server, today: at, held: c);
+        expect(row('recent'), findsOneWidget);
+        expect(closedReads(server), hasLength(reads));
+      });
+
+      testWidgets('a task that closes while the app is open stays listed '
+          'after the tab opens again', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        final c = await show(tester, server, today: at);
+        await tester.pumpWidget(const SizedBox());
+        (server.state['conversations'] as List).cast<Map>().firstWhere(
+          (g) => g['id'] == 'shipped',
+        )['archived'] = true;
+        await c.refresh();
+        await show(tester, server, today: at, held: c);
+        expect(row('shipped'), findsOneWidget);
+      });
+
+      testWidgets('trying again reads only the project that failed', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () => server.failReadsOf = 'projectId=lead',
+        );
+        server.parts.reads.clear();
+        server.failReadsOf = null;
+        await tester.tap(
+          find.byKey(const ValueKey('super-backlog-shipped-retry')),
+        );
+        await tester.pumpAndSettle();
+        expect(row('here'), findsOneWidget);
+        expect(row('there'), findsOneWidget);
+        expect(
+          closedReads(server).where((p) => p.contains('projectId=api')),
+          isEmpty,
+        );
+      });
+
+      testWidgets('a reload forgets what the reader may no longer read', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30), archived('kept', 31)]);
+        final c = await show(tester, server, today: at);
+        expect(row('recent'), findsOneWidget);
+        (server.state['conversations'] as List).cast<Map>().firstWhere(
+          (g) => g['id'] == 'recent',
+        )['audience'] = {
+          'people': [
+            {'id': 'pilot'},
+          ],
+        };
+        server.parts.epoch++;
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(row('recent'), findsNothing);
+        expect(row('kept'), findsOneWidget);
+      });
+
+      testWidgets('a page that reaches past 7 days ends the read', (
+        tester,
+      ) async {
+        final server = swarm()..parts.dormantPage = 1;
+        add(server, [
+          archived('oldest', 50, daysAgo: 20),
+          archived('older', 51, daysAgo: 19),
+        ]);
+        server.parts.clock = now - 30 * day;
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () {
+            server.parts.clock = now;
+            add(server, [archived('fresh', 52)]);
+            server.parts.reads.clear();
+          },
+        );
+        expect(row('fresh'), findsOneWidget);
+        final pages = server.parts.reads.where(
+          (p) => p.contains('dormant=1') && p.contains('projectId=lead'),
+        );
+        // The fresh task's page, then the first whose task is past the window.
+        expect(pages, hasLength(2));
+      });
+
+      testWidgets(
+        'a task that is back at work shows as the app holds it, once',
+        (tester) async {
+          final server = swarm();
+          server.parts.clock = now;
+          add(server, [archived('woken', 60)]);
+          final c = await show(tester, server, today: at);
+          expect(
+            find.byKey(const ValueKey('super-backlog-row-woken')),
+            findsOne,
+          );
+          final woken = (server.state['conversations'] as List).firstWhere(
+            (g) => (g as Map)['id'] == 'woken',
+          );
+          woken
+            ..remove('archived')
+            ..remove('shippedAt')
+            ..['assignment'] = {
+              'id': 'a-woken',
+              'agentId': 'kestrel',
+              'status': 'working',
+            };
+          await c.refresh();
+          await tester.pumpAndSettle();
+          expect(row('woken'), findsOneWidget);
+          expect(
+            tester.getTopLeft(row('woken')).dy,
+            lessThan(
+              tester.getTopLeft(header(SuperTabBacklogGroup.shipped)).dy,
+            ),
+          );
+        },
+      );
+
+      testWidgets('clicking an archived row reads it and opens its chat', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30)]);
+        final c = await show(tester, server, today: at);
+        await tester.tap(row('recent'));
+        await tester.pumpAndSettle();
+        expect(opened, ['recent']);
+        expect(c.snapshot!.conversation('recent'), isNotNull);
+      });
+
+      testWidgets(
+        'an empty Mine says so and links to what the reader shipped',
+        (tester) async {
+          final server = nothingOpen();
+          server.parts.clock = now;
+          add(server, [
+            archived('mine-a', 30),
+            archived('mine-b', 31),
+            archived('theirs', 32, requester: 'pilot'),
+          ]);
+          await show(tester, server, today: at);
+          await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+          await tester.pumpAndSettle();
+          expect(find.text('No open tasks of yours'), findsOneWidget);
+          expect(row('mine-a'), findsNothing);
+          final link = find.byKey(const ValueKey('super-backlog-mine-shipped'));
+          expect(
+            find.descendant(
+              of: link,
+              matching: find.text(
+                'Your shipped tasks from the last 7 days · 2',
+              ),
+            ),
+            findsOneWidget,
+          );
+          await tester.tap(link);
+          await tester.pumpAndSettle();
+          expect(find.text('No open tasks of yours'), findsNothing);
+          expect(row('mine-a'), findsOneWidget);
+          expect(row('mine-b'), findsOneWidget);
+          expect(row('theirs'), findsNothing);
+          expect(find.text('Shipped · 2'), findsOneWidget);
+          expect(find.text('2 tasks'), findsOneWidget);
+        },
+      );
+
+      testWidgets('an empty Mine with nothing shipped has no link', (
+        tester,
+      ) async {
+        await show(tester, nothingOpen(), today: at);
+        await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+        await tester.pumpAndSettle();
+        expect(find.text('No open tasks of yours'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-backlog-mine-shipped')),
+          findsNothing,
+        );
+      });
+
+      testWidgets('Mine goes by who asked, not who worked on it', (
+        tester,
+      ) async {
+        final server = nothingOpen();
+        server.parts.clock = now;
+        final conversations = server.state['conversations'] as List;
+        conversations.add({
+          ...archived('no-one-asked', 70),
+          'requesterId': null,
+        });
+        // The reader's own machine and agent did this one; Pilot asked for it.
+        add(server, [archived('theirs', 71, requester: 'pilot')]);
+        add(server, [archived('asked', 72)]);
+        await show(tester, server, today: at);
+        await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Your shipped tasks from the last 7 days · 1'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('a failed read says so, and trying again reads it', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30)]);
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () => server.failReads = true,
+        );
+        expect(row('recent'), findsNothing);
+        final retry = find.byKey(const ValueKey('super-backlog-shipped-retry'));
+        expect(retry, findsOneWidget);
+        expect(
+          find.text('Some shipped tasks could not be read.'),
+          findsOneWidget,
+        );
+        server.failReads = false;
+        await tester.tap(retry);
+        await tester.pumpAndSettle();
+        expect(retry, findsNothing);
+        expect(row('recent'), findsOneWidget);
+      });
     });
 
     testWidgets('a shipped task whose agent was removed still shows', (

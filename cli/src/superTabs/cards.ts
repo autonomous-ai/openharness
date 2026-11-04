@@ -218,9 +218,10 @@ const isIn = (m: Json, place: MessagePlace): boolean => place === 'any' ? true
   : m.thread === place.thread
 
 /** The newest row one of the chat's agents wrote: a person-visible message, not a system row (`source`), the person's or
- *  another agent's, in `place`. `at` in seconds; `id` the message's, or '' when it has none. */
-export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>, place: MessagePlace = 'any'): { text: string; at: number; id: string; sequence: number } | null {
-  let best: { text: string; at: number; id: string; sequence: number } | null = null
+ *  another agent's, in `place`. `at` in seconds; `id` the message's, or '' when it has none; `thread` the root of the thread
+ *  it replies in when it is in that thread only. */
+export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>, place: MessagePlace = 'any'): { text: string; at: number; id: string; sequence: number; thread?: string } | null {
+  let best: { text: string; at: number; id: string; sequence: number; thread?: string } | null = null
   for (const item of messages) {
     const m = object(item)
     const author = object(m.author).id
@@ -228,7 +229,8 @@ export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>
     const sequence = typeof m.sequence === 'number' ? m.sequence : -1
     if (best && sequence <= best.sequence) continue
     const stamp = typeof m.createdAt === 'number' ? m.createdAt : Date.parse(String(m.createdAt))
-    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, id: typeof m.id === 'string' ? m.id : '', sequence }
+    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, id: typeof m.id === 'string' ? m.id : '', sequence,
+      ...(isIn(m, 'chat') ? {} : { thread: m.thread as string }) }
   }
   return best
 }
@@ -304,8 +306,6 @@ export class SwarmCards {
   private notices = new Map<string, LeadNotice>()
   /** Each Lead's newest quiet notice from the reader's Buddy (`${tab}:${lead}`): apart, so it never hides the Lead's. */
   private buddyNotices = new Map<string, LeadNotice>()
-  /** The notices that are messages of their chat's main stream, not thread replies: only these answer a chat's recap. */
-  private inChat = new WeakSet<LeadNotice>()
   /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
   private sides = new Map<string, CardSide>()
   /** The thread the dial's own words started, per Swarm (spec 2026-11-03-dial-thread-face), and the Lead whose face it was
@@ -680,16 +680,16 @@ export class SwarmCards {
     }
   }
 
-  /** The newest message `voices` said in `messages` becomes the held notice at `key`, unless one held is newer; marked as the
-   *  chat's own when it is no thread reply. */
+  /** The newest message `voices` said in `messages` becomes the held notice at `key`, unless one held is newer; with its
+   *  thread when it replies in one only. Since tasks live in threads (#2704) the PM answers there, and a notice that read
+   *  as its chat's was read by opening the chat while the reply sat collapsed in its thread (Diego, 2026-10-29). */
   private raise(held: Map<string, LeadNotice>, key: string, chat: LeadNotice['chat'], chatId: string, messages: Json[], voices: ReadonlySet<string>): void {
     const said = lastAgentMessage(messages, voices)
     if (!said || !cardId(said.id)) return
-    const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at }
+    const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at, ...(said.thread ? { thread: said.thread } : {}) }
     const before = held.get(key)
     if (before && before.at > notice.at) return
     held.set(key, notice)
-    if (lastAgentMessage(messages, voices, 'chat')?.id === said.id) this.inChat.add(notice)
   }
 
   private forgetNotices(): void { this.notices.clear(); this.buddyNotices.clear(); this.failed.clear() }
@@ -770,7 +770,7 @@ export class SwarmCards {
     const kept = this.recaps.get(cachedKey(tabId, leadId, found, chat))
     // A notice is of the chat, never of a thread on the face.
     const notice = found.thread === undefined ? (found.buddy ? this.buddyNotices : this.notices).get(recapKey(tabId, leadId)) : undefined
-    const heard = notice && notice.chatId === found.id && this.inChat.has(notice) ? notice : undefined
+    const heard = notice && notice.chatId === found.id && notice.thread === undefined ? notice : undefined
     if (kept && (!heard || heard.at <= kept.recap.at)) return { recap: kept.recap, sequence: kept.sequence, stale: kept.sequence !== found.sequence }
     if (!heard) return null
     return { recap: { tabId, leadId, text: heard.text, at: heard.at, none: false, ...namedFor(found, chat) }, sequence: -1, stale: true }

@@ -636,6 +636,25 @@ describe('activity marks', () => {
     expect(db.productUsageActivity.upsert.mock.calls[2][0].update).toEqual({ worked: true })
   })
 
+  it('writes a hosting mark on the same row, apart from worked, leaving worked unset', async () => {
+    await markActivity('a', at, { hosting: true }, KEY)
+    const call = db.productUsageActivity.upsert.mock.calls[0][0]
+    expect(call.update).toEqual({ hosting: true })
+    expect(call.create).toMatchObject({ hosting: true, worked: false, surfaces: [] })
+  })
+
+  it('writes both marks for a person with both kinds of turn in a day, each once', async () => {
+    for (let i = 0; i < 2; i++) await markActivity('a', at, { hosting: true }, KEY)
+    for (let i = 0; i < 2; i++) await markActivity('a', at, { worked: true }, KEY)
+    expect(db.productUsageActivity.upsert.mock.calls.map(c => c[0].update)).toEqual([{ hosting: true }, { worked: true }])
+  })
+
+  it('writes no hosting mark while sharing is off', async () => {
+    db.productUsagePreference.findUnique.mockResolvedValue({ enabled: false, revision: 3 })
+    await markActivity('a', at, { hosting: true }, KEY)
+    expect(db.productUsageActivity.upsert).not.toHaveBeenCalled()
+  })
+
   it('starts a new day at UTC midnight', async () => {
     await markActivity('a', new Date('2026-10-13T23:59:59.999Z'), { surface: 'web' }, KEY)
     await markActivity('a', new Date('2026-10-14T00:00:00.000Z'), { surface: 'web' }, KEY)

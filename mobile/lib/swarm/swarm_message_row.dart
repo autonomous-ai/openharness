@@ -254,6 +254,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.name,
     required this.look,
     required this.role,
+    this.askTag,
     this.pm = false,
     required this.mentions,
     this.tagged = const [],
@@ -286,6 +287,9 @@ class SwarmMessageRow extends StatelessWidget {
   /// What its author wears.
   final SwarmLook look;
   final String? role;
+
+  /// Where the ask it is stands, after the time; null for any other message.
+  final String? askTag;
 
   /// Its author is its project's coordinator ([SuperTabSnapshot.isLead]),
   /// whatever its role is called: it wears manager blue.
@@ -422,6 +426,12 @@ class SwarmMessageRow extends StatelessWidget {
                 '${two(at.hour)}:${two(at.minute)}',
                 style: tty.style(color: AppPalette.textFaint, size: 12.5),
               ),
+        tag: askTag == null
+            ? null
+            : Text(
+                askTag!,
+                style: tty.style(color: AppPalette.textFaint, size: 12.5),
+              ),
       ),
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
@@ -526,7 +536,7 @@ class SwarmMessageRow extends StatelessWidget {
 }
 
 /// A message's first line: who, in what role, then [trailing] — its time,
-/// or how its post is going.
+/// or how its post is going — and [tag], where the ask it is stands.
 class SwarmMessageHeader extends StatelessWidget {
   const SwarmMessageHeader({
     super.key,
@@ -534,12 +544,13 @@ class SwarmMessageHeader extends StatelessWidget {
     required this.agent,
     this.role,
     this.trailing,
+    this.tag,
   });
 
   final String name;
   final bool agent;
   final String? role;
-  final Widget? trailing;
+  final Widget? trailing, tag;
 
   @override
   Widget build(BuildContext context) {
@@ -558,6 +569,7 @@ class SwarmMessageHeader extends StatelessWidget {
         ),
         if (role case final role?) SwarmRoleBadge(role),
         ?trailing,
+        ?tag,
       ],
     );
   }
