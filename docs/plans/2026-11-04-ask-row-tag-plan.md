@@ -74,8 +74,8 @@ Checked for the brief's item 4: the Swarm has written no ship row since plain ch
 
 **Interfaces:** every reply `moved` posts has `source: { kind: 'system', ask: 'on-it' | 'shipped' | 'closed' }`. A first recorded merge with no card posts the Merged reply.
 
-- [ ] Write failing tests; commit; watch them fail.
-- [ ] Implement; commit; watch them pass.
+- [x] Write failing tests; commit; watch them fail.
+- [x] Implement; commit; watch them pass.
 
 ## Task 3: Thread summaries carry the state
 
@@ -83,8 +83,8 @@ Checked for the brief's item 4: the Swarm has written no ship row since plain ch
 
 **Interfaces:** `ThreadSummary.ask?: 'proposal' | 'on-it' | 'shipped'`; `ThreadReply` gains `kind` and `ask`; the facet's part key gains `ask`.
 
-- [ ] Write failing tests for each state, the PM's reply, a hidden reply and a plain thread; commit; watch them fail.
-- [ ] Implement; commit; watch them pass.
+- [x] Write failing tests for each state, the PM's reply, a hidden reply and a plain thread; commit; watch them fail.
+- [x] Implement; commit; watch them pass.
 
 ## Task 4: Desktop draws the tag
 
@@ -92,8 +92,8 @@ Checked for the brief's item 4: the Swarm has written no ship row since plain ch
 
 **Interfaces:** `SuperTabThread.ask` and `askTag`; `consecutiveUpdates` and `groupsWith` take a `tagged` test.
 
-- [ ] Write failing tests: each state; no tag after a PM reply (no `ask` in the summary); a plain message; the engine mark unchanged; a tagged row keeps its header. Commit; watch them fail.
-- [ ] Implement; commit; watch them pass.
+- [x] Write failing tests: each state; no tag after a PM reply (no `ask` in the summary); a plain message; the engine mark unchanged; a tagged row keeps its header. Commit; watch them fail.
+- [x] Implement; commit; watch them pass.
 
 ## Task 5: Phone draws the tag
 
@@ -101,8 +101,8 @@ Checked for the brief's item 4: the Swarm has written no ship row since plain ch
 
 **Interfaces:** as Desktop; `_sameThread` compares `ask`, so a moved tag redraws.
 
-- [ ] Write the same failing tests, with the role badge in place of the engine mark; commit; watch them fail.
-- [ ] Implement; commit; watch them pass.
+- [x] Write the same failing tests, with the role badge in place of the engine mark; commit; watch them fail.
+- [x] Implement; commit; watch them pass.
 
 ## Task 6: Skill text (done)
 
@@ -110,5 +110,5 @@ Checked for the brief's item 4: the Swarm has written no ship row since plain ch
 
 ## Task 7: Screenshots and evidence
 
-- [ ] Light and dark screenshots of the project chat on phone and Desktop, committed then removed, and embedded in the PR.
-- [ ] Red/green evidence in a PR comment.
+- [x] Light and dark screenshots of the project chat on phone and Desktop, committed then removed, and embedded in the PR.
+- [x] Red/green evidence in a PR comment.
