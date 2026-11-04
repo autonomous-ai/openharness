@@ -88,6 +88,19 @@ describe('PATCH /api/auth/me: a person changes their own account name', () => {
     expect(fakes.users.get('u1')!.name).toBe('phorom12a')
   })
 
+  it('refuses a web address, an email-shaped name or a role\'s name, and writes nothing', async () => {
+    const link = await patch('elvis', { name: 'https://ev.il' })
+    expect(link.statusCode).toBe(400)
+    expect(link.json().error).toEqual({ code: 'INVALID_NAME', message: 'Use a name, not a web address.' })
+    const email = await patch('elvis', { name: 'ken15@autonomous.ai' })
+    expect(email.statusCode).toBe(400)
+    expect(email.json().error).toEqual({ code: 'INVALID_NAME', message: 'Use a name, not an email address.' })
+    const role = await patch('elvis', { name: 'Product Manager' })
+    expect(role.statusCode).toBe(400)
+    expect(role.json().error).toEqual({ code: 'NAME_RESERVED', message: 'Product Manager is a role\'s name. Choose another.' })
+    expect(fakes.update).not.toHaveBeenCalled()
+  })
+
   it('needs a sign-in', async () => {
     expect((await patch(null, { name: 'Elvis' })).statusCode).toBe(401)
     expect(fakes.update).not.toHaveBeenCalled()
