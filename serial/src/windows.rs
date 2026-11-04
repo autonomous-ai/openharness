@@ -8,7 +8,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Devices::Communication::{
-    COMMTIMEOUTS, DCB, GetCommState, NOPARITY, ONESTOPBIT, SetCommState, SetCommTimeouts,
+    CLRDTR, CLRRTS, COMMTIMEOUTS, DCB, EscapeCommFunction, GetCommState, NOPARITY, ONESTOPBIT,
+    SETRTS, SetCommState, SetCommTimeouts,
 };
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_PropertyW, CM_Get_Device_IDW, CM_Get_Parent, CM_NOTIFY_ACTION,
@@ -43,6 +44,7 @@ pub fn run(command: Command) -> i32 {
         Command::Watch => watch(),
         Command::Open(name) => open(&name),
         Command::Probe(name) => probe(&name),
+        Command::Reset(name) => reset(&name),
         Command::Version => 0,
     }
 }
@@ -562,6 +564,39 @@ fn open(name: &str) -> i32 {
         std::thread::spawn(move || pump_out(&port));
     }
     pump_in(&port, stdin_chunks());
+    0
+}
+
+/// Reset a board over its cable, the pulse esptool calls a hard reset (cli cable/boardReset.ts): RTS high with DTR low
+/// holds the chip in reset, then both low let it boot normally. DTR stays low throughout, as high would ask for the
+/// ROM's download mode.
+fn reset(name: &str) -> i32 {
+    let port = match create(name) {
+        Ok(port) => port,
+        Err(code) => {
+            return match model::open_failure(code) {
+                OpenFailure::Busy => model::EXIT_BUSY,
+                OpenFailure::Gone => model::EXIT_GONE,
+                OpenFailure::Other => {
+                    eprintln!("error: {}", describe(code));
+                    model::EXIT_CLOSED
+                }
+            };
+        }
+    };
+    if let Err(why) = configure(&port) {
+        eprintln!("error: {why}");
+        return model::EXIT_CLOSED;
+    }
+    let lines = |function| unsafe { EscapeCommFunction(port.0, function) } != 0;
+    if !lines(CLRDTR) || !lines(SETRTS) {
+        return model::EXIT_CLOSED;
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    if !lines(CLRRTS) {
+        return model::EXIT_CLOSED;
+    }
+    std::thread::sleep(Duration::from_millis(200));
     0
 }
 
