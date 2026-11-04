@@ -2511,7 +2511,9 @@ export class SuperTabStore {
   }
 
   /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it,
-   *  reading again when the host's answer or refusal is told, when the request turns late, or every few seconds unwoken. */
+   *  reading again when the host's answer or refusal is told, when the request turns late, or every few seconds unwoken. Each
+   *  read after the first that finds the request still waiting for pickup tells its machine again: a host that hears the
+   *  server push picks up only when told (cli superTabs/terminal.ts), so this is the net for a push lost on the way (#2800). */
   async terminalResult(user: AuthUser, tabId: string, requestId: string, asAgentId?: string, waitMs = 0) {
     const deadline = Date.now() + waitMs
     let told = false, done = false, wake = () => {}, stop = () => {}
@@ -2519,9 +2521,9 @@ export class SuperTabStore {
     if (waitMs > 0) this.hooks.watchTerminal?.(requestId, () => { told = true; wake() })
       .then(dispose => { if (done) dispose(); else stop = dispose }, () => {})
     try {
-      for (;;) {
+      for (let reads = 0; ; reads++) {
         told = false
-        const { answer, lateIn } = await transaction(this.db, async tx => {
+        const { answer, lateIn, waiting } = await transaction(this.db, async tx => {
           const { state } = await this.load(tx, user, tabId)
           const actor = await this.actor(tx, user, state, asAgentId)
           author(state, actor)
@@ -2537,12 +2539,13 @@ export class SuperTabStore {
             ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
             : row.status === 'claimed' && lateIn < 0
               ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
-          if (row.status !== 'done' && !late) return { answer: null, lateIn }
+          if (row.status !== 'done' && !late) return { answer: null, lateIn, waiting: row.status === 'pending' ? { machineId: row.machineId, agentId: row.agentId } : null }
           await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
           if (late || !row.ok) return { answer: { requestId, ok: false, error: late ?? row.error }, lateIn }
           return { answer: { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }, lateIn }
         })
         if (answer) return answer
+        if (reads && waiting) this.hooks.terminalWaiting?.({ machineId: waiting.machineId, tabId, agentId: waiting.agentId })
         const left = deadline - Date.now()
         if (left <= 0) return { requestId, pending: true }
         if (told) continue
