@@ -292,6 +292,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       // Offline is said once, by the reading's own age below.
       ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string'
         ? { teammatesRefused: teamWork.reason, projectOwnerId: projectOwner } : {}),
+      // Its owner lets teammates' work run in their own account (backend machines.ts ownAccountWork, task #2806): the teammate
+      // whose task lands there did not choose that, so the route says it (River, 11-04).
+      ...(teamWork.allowed === true && typeof teamWork.ownAccount === 'string' ? { ownAccount: teamWork.ownAccount, projectOwnerId: projectOwner } : {}),
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
@@ -615,6 +618,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
     const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
     const kept = typeof pool.keptForOthers === 'string' ? [pool.keptForOthers] : []
+    /** A note, never a refusal: a teammate's work here runs in the machine owner's own account, whoever's grant an agent has. */
+    const ownAccount = typeof pool.ownAccount === 'string' && pool.contributorId !== pool.projectOwnerId ? [pool.ownAccount] : []
     const newReasons = [...blocked, ...kept, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
@@ -638,10 +643,10 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const closed = Array.isArray(observed.closedHarnessIds) && observed.closedHarnessIds.includes(m.harnessId)
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, closed, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...kept, ...teammates(m.contributorId)] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
