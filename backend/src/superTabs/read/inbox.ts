@@ -31,7 +31,7 @@ import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
 import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
 import { voiceLabel } from '../voiceMessages.js'
-import { readBy } from '../parts/indexed.js'
+import { READ_BATCH, readBy } from '../parts/indexed.js'
 import { logger } from '../../utils/logger.js'
 import { ms } from '../parts/light.js'
 import type { SuperTabStore } from '../store.js'
@@ -150,8 +150,10 @@ export async function perRange(db: PrismaClient, pipelines: Prisma.InputJsonValu
   const rows: Row[] = []
   for (let i = 0; i < pipelines.length; i += CHATS_PER_READ) {
     const [first, ...rest] = pipelines.slice(i, i + CHATS_PER_READ)
+    // Every row in the first reply (READ_BATCH, as readBy asks): Mongo's default first batch of 101 left the rest of 30 chats'
+    // scans to a getMore, 32% of the slow message ops in Ken's log of 11-04 (~419 rows each).
     const raw = await db.superTabMessage.aggregateRaw({ pipeline: [...first!,
-      ...rest.map(pipeline => ({ $unionWith: { coll: 'SuperTabMessage', pipeline } }))] }) as unknown as Array<Record<string, unknown>>
+      ...rest.map(pipeline => ({ $unionWith: { coll: 'SuperTabMessage', pipeline } }))], options: { batchSize: READ_BATCH } }) as unknown as Array<Record<string, unknown>>
     rows.push(...raw.map(row))
   }
   return rows
