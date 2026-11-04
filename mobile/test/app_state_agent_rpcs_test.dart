@@ -98,6 +98,88 @@ void main() {
       },
     );
 
+    test('a Swarm Lead\'s create carries its role, skill mode and model, '
+        'as Desktop\'s does (#2941)', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (p) => created(p, 'lead');
+      final attempt = AgentCreationAttempt();
+
+      final error = await measured(
+        rig,
+        'm',
+        rig.app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          permissionMode: 'full',
+          swarmRole: 'lead',
+          swarmSkillMode: 'default',
+          launchModel: (model: 'opus', effort: 'xhigh'),
+          attempt: attempt,
+        ),
+      );
+
+      expect(error, isNull);
+      final asked = rig.conn('m').payloadsOf('agent_create').single;
+      expect(asked['swarmRole'], 'lead');
+      expect(asked['swarmSkillMode'], 'default');
+      expect(asked['model'], 'opus');
+      expect(asked['effort'], 'xhigh');
+      expect(attempt.launchModelRefused, isNull);
+    });
+
+    test('a machine that refuses the Lead\'s model starts it on its engine\'s '
+        'own, once', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (p) => p.containsKey('model')
+          ? throw refusal('LAUNCH_MODEL_UNSUPPORTED', detail: 'update claude')
+          : created(p, 'lead');
+      final attempt = AgentCreationAttempt();
+
+      final error = await measured(
+        rig,
+        'm',
+        rig.app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          swarmRole: 'lead',
+          launchModel: (model: 'opus', effort: 'xhigh'),
+          attempt: attempt,
+        ),
+      );
+
+      expect(error, isNull);
+      expect(attempt.agentId, 'lead');
+      final asked = rig.conn('m').payloadsOf('agent_create');
+      expect(asked, hasLength(2));
+      expect(asked.last.containsKey('model'), isFalse);
+      expect(asked.last['swarmRole'], 'lead');
+      expect(attempt.launchModelRefused, (model: 'opus', effort: 'xhigh'));
+    });
+
+    test('a terminal is sent none of a Swarm agent\'s keys', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (p) => created(p, 'shell');
+      await measured(
+        rig,
+        'm',
+        rig.app.createAgent(
+          'm',
+          engine: 'terminal',
+          folder: null,
+          swarmRole: 'lead',
+          swarmSkillMode: 'default',
+        ),
+      );
+      final asked = rig.conn('m').payloadsOf('agent_create').single;
+      expect(asked.containsKey('swarmRole'), isFalse);
+      expect(asked.containsKey('swarmSkillMode'), isFalse);
+    });
+
     test('a terminal with no folder is sent no cwd at all, and the machine '
         'opens it at home', () async {
       final rig = await signedInWith({'m': []});
@@ -567,57 +649,52 @@ void main() {
       });
     }
 
-    test(
-      'a folder named after the task, taken on an older machine, says how to get a new one',
-      () async {
-        final rig = await signedInWith({'m': []});
-        addTearDown(rig.app.dispose);
-        // A machine that predates `projectNameMode` refuses the name the phone
-        // made up, in words written for a name somebody typed.
-        const taken =
-            '“robot-talks-to-gemini” already exists. Select that folder from '
-            'your projects.';
-        rig.conn('m').answers['agent_create'] = (_) =>
-            throw refusal('PROJECT_EXISTS', detail: taken);
-        final attempt = AgentCreationAttempt();
+    test('a folder named after the task, taken on an older machine, says how to get a new one', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      // A machine that predates `projectNameMode` refuses the name the phone
+      // made up, in words written for a name somebody typed.
+      const taken =
+          '“robot-talks-to-gemini” already exists. Select that folder from '
+          'your projects.';
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw refusal('PROJECT_EXISTS', detail: taken);
+      final attempt = AgentCreationAttempt();
 
-        final error = await rig.app.createAgent(
+      final error = await rig.app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '',
+        projectFolder: ProjectFolderRequest.forTask('Robot talks to Gemini'),
+        prompt: 'Robot talks to Gemini',
+        attempt: attempt,
+      );
+
+      expect(error, contains('named after this task already exists'));
+      expect(error, contains('update Harness there'));
+      expect(attempt.awaitingConfirmation, isFalse);
+      expect(
+        rig.conn('m').payloadsOf('agent_create').single['projectNameMode'],
+        'suggested',
+      );
+
+      // The same, when the refusal arrives as the receipt.
+      rig.conn('m').answers['agent_create'] = (p) => {
+        'creationId': p['creationId'],
+        'state': 'failed',
+        'failure': {'code': 'PROJECT_EXISTS', 'detail': taken},
+      };
+      expect(
+        await rig.app.createAgent(
           'm',
           engine: 'claude',
           folder: '',
           projectFolder: ProjectFolderRequest.forTask('Robot talks to Gemini'),
           prompt: 'Robot talks to Gemini',
-          attempt: attempt,
-        );
-
-        expect(error, contains('named after this task already exists'));
-        expect(error, contains('update Harness there'));
-        expect(attempt.awaitingConfirmation, isFalse);
-        expect(
-          rig.conn('m').payloadsOf('agent_create').single['projectNameMode'],
-          'suggested',
-        );
-
-        // The same, when the refusal arrives as the receipt.
-        rig.conn('m').answers['agent_create'] = (p) => {
-          'creationId': p['creationId'],
-          'state': 'failed',
-          'failure': {'code': 'PROJECT_EXISTS', 'detail': taken},
-        };
-        expect(
-          await rig.app.createAgent(
-            'm',
-            engine: 'claude',
-            folder: '',
-            projectFolder: ProjectFolderRequest.forTask(
-              'Robot talks to Gemini',
-            ),
-            prompt: 'Robot talks to Gemini',
-          ),
-          error,
-        );
-      },
-    );
+        ),
+        error,
+      );
+    });
 
     test('an old engine with no reason names the way out', () async {
       final rig = await signedInWith({'m': []});
@@ -1104,23 +1181,26 @@ void main() {
       expect(rig.app.stateOf('m')!.agents.single.id, 'a');
     });
 
-    test('a stop the machine says to ask again is asked again, then goes', () async {
-      // IDENTITY_UNAVAILABLE: the conversation file changed under the machine's lookup.
-      final rig = await signedInWith({
-        'm': ['a', 'b'],
-      });
-      addTearDown(rig.app.dispose);
-      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
-      var asked = 0;
-      rig.conn('m').answers['agent_delete'] = (_) => ++asked == 1
-          ? {'error': 'IDENTITY_UNAVAILABLE', 'held': true, 'retryable': true}
-          : {'deleted': true};
+    test(
+      'a stop the machine says to ask again is asked again, then goes',
+      () async {
+        // IDENTITY_UNAVAILABLE: the conversation file changed under the machine's lookup.
+        final rig = await signedInWith({
+          'm': ['a', 'b'],
+        });
+        addTearDown(rig.app.dispose);
+        rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+        var asked = 0;
+        rig.conn('m').answers['agent_delete'] = (_) => ++asked == 1
+            ? {'error': 'IDENTITY_UNAVAILABLE', 'held': true, 'retryable': true}
+            : {'deleted': true};
 
-      expect(await rig.app.deleteAgent('m', 'a'), isNull);
+        expect(await rig.app.deleteAgent('m', 'a'), isNull);
 
-      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(2));
-      expect(rig.app.stateOf('m')!.agents.map((a) => a.id), ['b']);
-    });
+        expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(2));
+        expect(rig.app.stateOf('m')!.agents.map((a) => a.id), ['b']);
+      },
+    );
 
     test('asks again at most twice, then says why', () async {
       final rig = await signedInWith({
@@ -1128,8 +1208,10 @@ void main() {
       });
       addTearDown(rig.app.dispose);
       rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
-      rig.conn('m').answers['agent_delete'] = (_) =>
-          {'error': 'IDENTITY_UNAVAILABLE', 'retryable': true};
+      rig.conn('m').answers['agent_delete'] = (_) => {
+        'error': 'IDENTITY_UNAVAILABLE',
+        'retryable': true,
+      };
 
       expect(
         await rig.app.deleteAgent('m', 'a'),
@@ -1147,7 +1229,9 @@ void main() {
       });
       addTearDown(rig.app.dispose);
       rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
-      rig.conn('m').answers['agent_delete'] = (_) => {'error': 'STOP_UNCONFIRMED'};
+      rig.conn('m').answers['agent_delete'] = (_) => {
+        'error': 'STOP_UNCONFIRMED',
+      };
 
       expect(
         await rig.app.deleteAgent('m', 'a'),
@@ -1839,8 +1923,10 @@ void main() {
         await rig.app.retargetAgentToGridModel('m', 'a', 'qwen'),
         'Use another engine.',
       );
-      rig.conn('m').answers['agent_retarget'] = (_) =>
-          throw refusal('PTY_HOST_UNAVAILABLE', detail: 'harness-pty is not installed');
+      rig.conn('m').answers['agent_retarget'] = (_) => throw refusal(
+        'PTY_HOST_UNAVAILABLE',
+        detail: 'harness-pty is not installed',
+      );
       expect(
         await rig.app.clearAgentGrid('m', 'a'),
         "This machine's terminals did not answer. Run harness start there, then try again.",
