@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/backlog.dart';
 import 'package:harness/super_tabs/backlog_view.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -532,7 +533,7 @@ void main() {
         await c.refresh();
       }
       beforeBuild?.call();
-      await tester.binding.setSurfaceSize(const Size(1100, 900));
+      await tester.binding.setSurfaceSize(const Size(1100, 2000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         MaterialApp(
@@ -607,7 +608,8 @@ void main() {
     Future<void> chooseProject(WidgetTester tester, String name) async {
       await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text(name).last);
+      // The menu's row, not a project chip in the list.
+      await tester.tap(find.widgetWithText(AppMenuItem, name).last);
       await tester.pumpAndSettle();
     }
 
@@ -800,7 +802,7 @@ void main() {
           'requesterId': 'owner',
           'assignment': {'id': 'a-s$i', 'agentId': 'kestrel', 'status': 'done'},
           // Newest is ship-0, an hour apart; the number order is the other way.
-          'shippedAt': now - i * 3600000,
+          'shippedAt': now - (i + 1) * 3600000,
           'pullRequestUrls': [pr],
           'cards': {
             'pullRequests': [

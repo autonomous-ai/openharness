@@ -123,10 +123,46 @@ List<SuperTabConversation> superTabProjectTasks(
 }
 
 /// A task's priority as its title marks it (task #2774).
-enum SuperTabTaskPriority { urgent, high }
+enum SuperTabTaskPriority {
+  urgent('URGENT'),
+  high('HIGH');
 
-/// [title]'s priority marker and the title without it. Interface only, so
-/// the tests run; the parse follows.
+  const SuperTabTaskPriority(this.badge);
+  final String badge;
+}
+
+final _leading = RegExp(r'^\s*URGENT\b\s*:?\s*', caseSensitive: false);
+final _trailing = RegExp(
+  r'\s*\((?:[^()]*,\s*)?(urgent|high)(?:\s+priority)?\)\s*$',
+  caseSensitive: false,
+);
+
+/// [title]'s priority and the title without its marker (Scholes's mockup,
+/// task #2774). Tasks carry no priority field: the PM writes it into the
+/// title, as a leading URGENT or a closing "(Name, high)". Any other
+/// parenthetical stays.
 ({SuperTabTaskPriority? priority, String title}) superTabTitlePriority(
   String title,
-) => (priority: null, title: title);
+) {
+  if (_leading.firstMatch(title) case final match?) {
+    final rest = title.substring(match.end);
+    if (rest.isNotEmpty) {
+      return (
+        priority: SuperTabTaskPriority.urgent,
+        title: rest[0].toUpperCase() + rest.substring(1),
+      );
+    }
+  }
+  if (_trailing.firstMatch(title) case final match?) {
+    final rest = title.substring(0, match.start);
+    if (rest.isNotEmpty) {
+      return (
+        priority: match.group(1)!.toLowerCase() == 'urgent'
+            ? SuperTabTaskPriority.urgent
+            : SuperTabTaskPriority.high,
+        title: rest,
+      );
+    }
+  }
+  return (priority: null, title: title);
+}
