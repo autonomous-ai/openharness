@@ -139,7 +139,7 @@ describe('the Harness Team account, set up on its own', () => {
     let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
     const f = fake({ now: () => now, setup: vi.fn((progress?: (name: string) => void) => {
       step = progress ?? (() => {})
-      return new Promise((resolve) => { finish = resolve })
+      return new Promise<{ code: number; result: Record<string, unknown> | null }>((resolve) => { finish = resolve })
     }) })
     await f.auto.offer('manual')
     expect(await f.auto.status()).toEqual({ state: 'running', elapsedMs: 0 })
