@@ -190,8 +190,11 @@ export class SwarmReads {
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
+      // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
+      if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined),
+        epoch: read.parts.visibilityEpoch, ...sent,
         derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
     })
   }
@@ -499,7 +502,7 @@ export class SwarmReads {
       ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
         decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
     // People count a chat unread by its newest main row; agents keep no read marks.
-    if (actor.kind === 'person') await this.servedTops.apply(tabId, view)
+    if (actor.kind === 'person') view.parts.groups = await this.servedTops.served(tabId, state, view.parts.groups)
     return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 

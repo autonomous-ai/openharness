@@ -26,9 +26,12 @@ task has no agent now.") stay. They go only to the groups whose agents went, and
 ## Global Constraints
 
 - Nothing else about machine removal changes: cleanup records, the 30-minute fallback, offline removal, Team accounts.
-- Read cost: a person's read looks up only project chats, and each (Swarm, chat, `lastMainSequence`) once per server
-  process (kept up to 20,000 answers). A lookup is the inbox's existing one: the row at that number by the
-  (tabId, conversationId, sequence) index, and at most `LATEST_SCAN` rows more only when that row is hidden.
+- Read cost (ENGINEERING.md section 4): a person's first load and a poll's changed project chats are looked up, each
+  (Swarm, chat, `lastMainSequence`) once per server process (kept up to 20,000 answers). A poll's other groups are light
+  and carry no number. A lookup is the inbox's existing one: the row at that number by the (tabId, conversationId,
+  sequence) index, and at most `LATEST_SCAN` rows more only when that row is hidden. Measured on the bench Swarm (two runs
+  each way, 15 polls each, medians): idle polls and polls after a task-group post unchanged (62,012 database bytes,
+  17 to 21 ms); a poll after a project-chat post +674 database bytes and about +1.5 ms (18.4/18.8 to 20.4/19.9 ms).
 - No data migration: stored rows stay, hidden at read time. Rollback: an older backend shows them again.
 
 ## Review Focus
@@ -77,3 +80,9 @@ task has no agent now.") stay. They go only to the groups whose agents went, and
   chat's newest main row at their mark, with no read sent. Run it and see it fail.
 - [ ] Serve each project chat's newest main row people read (`ServedTops`); drop the mark read-through it replaces. Run it
   and see it pass.
+
+## Task 4 (review 2): a poll's changed project chat is served the same number
+
+- [ ] Integration test: after the line, a reply only in a thread re-sends the project chat in a poll; its
+  `lastMainSequence` is the newest row people read. Run it without the change-read path and see it fail.
+- [ ] Apply `ServedTops` to a change read's groups too. Measure a poll before and after (Read cost above).
