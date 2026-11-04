@@ -1055,6 +1055,64 @@ void main() {
     },
   );
 
+  // thaibao56 (11-04, #2738): Open terminal on Finn's card closed the card and
+  // nothing opened. A terminal opens only in a conversation that holds the
+  // agent, and no open one held Finn: the card says so in place instead.
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'Open terminal on the card of an agent no open conversation holds says why, and opens once one does ($brightness)',
+      (tester) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(const Size(560, 420));
+        await f.show(tester, brightness: brightness);
+        const reason =
+            'Not in a task or chat now. Give it work or add it to a chat to open its terminal.';
+        final card = find.byKey(const ValueKey('super-agent-card'));
+        Finder open() => find.descendant(
+          of: card,
+          matching: find.widgetWithText(TextButton, 'Open terminal'),
+        );
+        await f.card(tester, 3);
+        expect(tester.widget<TextButton>(open()).onPressed, isNull);
+        expect(
+          find.descendant(of: card, matching: find.text(reason)),
+          findsOneWidget,
+        );
+        await captureBoundary(
+          tester,
+          f.boundary.currentContext!.findRenderObject()!
+              as RenderRepaintBoundary,
+          captureDir,
+          'agent-card-no-terminal-${brightness.name}',
+        );
+        await tester.tap(open(), warnIfMissed: false);
+        await tester.pumpAndSettle();
+        expect(card, findsOneWidget, reason: 'the card stays open');
+        expect(f.opened, isNull);
+        await tester.tap(find.text('Details…'));
+        await tester.pumpAndSettle();
+        final details = find.widgetWithText(FilledButton, 'Open terminal');
+        expect(tester.widget<FilledButton>(details).onPressed, isNull);
+        expect(find.text(reason), findsOneWidget);
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.pumpAndSettle();
+
+        // Once a task holds Finn, Open terminal opens it, with no reason.
+        (f.server.state['conversations'] as List)[1]['agentIds'] = [
+          'agent-3',
+        ];
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        await f.card(tester, 3);
+        expect(find.text(reason), findsNothing);
+        await tester.tap(open());
+        await tester.pumpAndSettle();
+        expect(f.opened?.id, 'agent-3');
+        await f.close(tester);
+      },
+    );
+  }
+
   testWidgets('a reviewer reads Rev; an agent without a role stays Dev', (
     tester,
   ) async {
