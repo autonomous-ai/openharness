@@ -156,6 +156,25 @@ describe('thread summaries (spec 5 phase D)', () => {
     expect(replies(await store.messages(owner, s.tabId, s.web, {}))).toEqual({ 'w-a': 5, 'w-c': 1, 'w-lone': 1 })
   })
 
+  it('folds a reply into a 500-reply thread\'s summary from its own row, never re-reading the thread (task #2974)', async () => {
+    const s = await scene()
+    const long = Array.from({ length: 500 }, (_, i) => ({ id: `w-a-long-${i}`, conversationId: s.web, thread: 'w-a',
+      author: i % 2 ? person(peer) : agent(s.worker) }))
+    await insert(s.tabId, s.prefix, long)
+    await backfillThreads(db, Date.now())
+    const entries = await profiled(db, () => store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send', conversationId: s.web,
+      text: 'One more', replyTo: s.id('w-a'), recipientIds: [] } as never }))
+    const messages = entries.filter(entry => entry.ns.endsWith('.SuperTabMessage') && JSON.stringify(filterOf(entry) ?? null).includes(s.tabId))
+    const examined = messages.reduce((sum, entry) => sum + entry.docsExamined, 0)
+    // Before the fold: 509 (each of the thread's rows, then the root and quoted rows by id). After: the new row and those.
+    console.info(`[#2974] SuperTabMessage docs examined by one reply in a 505-reply thread: ${examined}`)
+    expect(plan(reads(entries, 'SuperTabMessage', ['conversationId', 'thread']))).toEqual([])
+    expect(examined, JSON.stringify(plan(messages))).toBeLessThanOrEqual(4)
+    const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: s.id('w-a') } })
+    expect(sorted(stored.parts as unknown[])).toEqual(sorted((await threadFacet(db, s.tabId, s.web, [s.id('w-a')])).parts))
+    expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(505)
+  })
+
   it('leaves no summary when the reply\'s transaction fails', async () => {
     const s = await scene()
     await expect(db.$transaction(async tx => {
