@@ -1,8 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
-import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
@@ -274,17 +271,42 @@ function fresh() {
 }
 
 describe('adding a Buddy', () => {
-  it('is refused on Codex for now, saying why, and leaves the chat and starts as they were (security review 1 of #2087)', () => {
-    const f = fresh()
-    const starts = f.state.starts?.length ?? 0, groups = f.state.conversations.length
-    expect(() => addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')).toThrow('A Codex Buddy is not available yet')
-    expect([f.state.starts?.length ?? 0, f.state.conversations.length]).toEqual([starts, groups])
-  })
+  // Ken, 11-04 (#2832): a Buddy launches with its owner's full access on their own machine, Codex as Claude Code. Codex was
+  // refused only because it ran no Buddy guard, and the guard is gone.
+  describe('on Codex, on its owner\'s own machine (#2832)', () => {
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    const codex = { ...configuration, engine: 'codex' }
+    /** fresh() with peer's Codex Buddy added and started on their own Mac. */
+    function started() {
+      const f = fresh()
+      const added = addBuddy(f, peer, undefined, 'peer-mac', 'codex')
+      const startId = added.result.startId as string
+      const agentId = f.run({ type: 'agent.started', startId, harnessId: 'native', configuration: codex }, peer, host).result.agentId as string
+      f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+      return { f, agentId, chat: added.result.conversationId as string }
+    }
 
-  it('words its Codex refusal as Desktop does beside a disabled Codex (security re-check of #2087)', () => {
-    // Desktop holds the same pair to this constant (desktop test/buddy_refusal_parity_test.dart).
-    const desktop = readFileSync(fileURLToPath(new URL('../../../desktop/lib/super_tabs/buddies.dart', import.meta.url)), 'utf8')
-    expect(/kBuddyEngineRefusals = \{\s*'codex':\s*'([^']*)'/.exec(desktop)?.[1]).toBe(CODEX_BUDDY_REFUSAL)
+    it('is accepted, and starts on Codex there as a Claude Code Buddy would', () => {
+      const f = fresh()
+      const added = addBuddy(f, peer, undefined, 'peer-mac', 'codex')
+      expect(added.result.conversationId).toBe(peerSwarmChat)
+      expect(f.state.starts!.find(s => s.id === added.result.startId)!.request).toMatchObject({ conversationId: peerSwarmChat, machineId: 'peer-mac',
+        engine: 'codex', buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'first' } })
+    })
+
+    it('starts a thread session beside it, on Codex', () => {
+      const { f, chat } = started()
+      const sent = f.run({ type: 'message.send', conversationId: chat, text: 'Look into the CPU spike', replyTo: null, recipientIds: [], newSession: true }, peer)
+      expect(f.state.starts!.find(s => s.id === sent.result.startId)!.request).toMatchObject({ engine: 'codex', buddySession: expect.anything() })
+    })
+
+    it('answers in an older project chat from an older app, on Codex', () => {
+      const { f } = started()
+      const old = f.run({ type: 'buddy.chat', projectId: f.web.projectId }, peer).result.conversationId as string
+      const sent = f.run({ type: 'message.send', conversationId: old, text: 'From the phone', replyTo: null, recipientIds: [] }, peer)
+      expect(sent.messages.map(m => m.text)).not.toContainEqual(expect.stringContaining('I can\'t start in this chat'))
+      expect(f.state.starts!.find(s => s.id === sent.result.startId)!.request).toMatchObject({ conversationId: old, engine: 'codex', buddyNarrow: true })
+    })
   })
 
   // One Buddy per person per Swarm (Dee, 10-31): its chat is at Swarm level, in no project, and it starts in its own folder
@@ -1061,6 +1083,23 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
     machine(f, 'owner-mac', 'owner')
     expect(() => add(f, 'owner-mac', 'owner')).toThrow('A Buddy runs only on your own machine')
     expect(add(f, 'peer-mac', 'peer').result.startId).toBeTruthy()
+  })
+
+  // Full access on its owner's machine makes the wrong machine worse, not better (#2832): Codex is refused there as Claude is.
+  it('is never someone else\'s machine or a Harness Team account on Codex either (#2832)', () => {
+    const f = fresh()
+    machine(f, 'owner-mac', 'owner')
+    machine(f, 'peer-team', 'peer')
+    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
+    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
+    const starts = f.state.starts?.length ?? 0
+    for (const [machineId, machineOwner] of [['owner-mac', 'owner'], ['peer-team', 'peer']] as const) {
+      let code: string | undefined
+      try { add(f, machineId, machineOwner, 'codex') } catch (error) { code = (error as { code?: string }).code }
+      expect(code, machineId).toBe('BUDDY_OWN_MACHINE')
+    }
+    expect(f.state.starts?.length ?? 0).toBe(starts)
+    expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
   })
 
   it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {
