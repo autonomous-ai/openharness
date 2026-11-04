@@ -1981,6 +1981,84 @@ describe('any agent of the project', () => {
       text: 'owner added "Shared" to the project. The project chat holds only its coordinator among agents, so "Shared" works in its tasks.' })])
   })
 
+  // Dee, 2026-11-04 (#2924): the agent doing the work answers people in the project chat itself. It posts there without
+  // joining it, so #2207 holds: the chat's members stay the coordinator alone, and no second terminal opens there.
+  describe('an agent with work in the project posting in its chat', () => {
+    const actorOf = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (text: string, replyTo: string | null = null, recipientIds: string[] = []) =>
+      ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds }) as Command
+    /** routed()'s coordinator, an Engineer assigned a task and a Reviewer holding its step, neither in the project chat. */
+    function working() {
+      const f = routed(), task = f.group()
+      const engineer = f.add('engineer', 'owner', task)
+      f.define(task)
+      f.run({ type: 'work.assign', conversationId: task, agentId: engineer })
+      const step = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: task, checks: [] }).result.conversationId as string
+      const reviewer = f.add('reviewer', 'owner', step)
+      f.run({ type: 'work.assign', conversationId: step, agentId: reviewer })
+      const chat = () => f.state.conversations.find(c => c.id === 'lead')!
+      return { f, task, step, engineer, reviewer, chat }
+    }
+
+    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator as before', () => {
+      const { f, engineer, reviewer, chat } = working()
+      const members = [...chat().agentIds]
+      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+      for (const agentId of [engineer, reviewer]) {
+        const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
+        expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [f.lead] })
+        const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
+          { reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: 0, thread: asked.id } }).messages.at(-1)!
+        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [f.lead] })
+      }
+      expect(chat().agentIds).toEqual(members)
+      expect(chat().agentIds).not.toContain(engineer)
+      expect(chat().agentIds).not.toContain(reviewer)
+    })
+
+    it('refuses everyone else there, and still adds no agent to the project chat', () => {
+      const { f, task, engineer, chat } = working()
+      // Of this project, with no task or step in it: added to a task it is not assigned.
+      const idle = f.add('idle', 'owner', task)
+      // Its task ended: cancelled, or lost to another agent.
+      const ended = f.add('ended', 'owner', f.group())
+      const endedTask = f.state.conversations.find(c => c.agentIds.includes(ended))!.id
+      f.define(endedTask)
+      const assignmentId = f.run({ type: 'work.assign', conversationId: endedTask, agentId: ended }).result.assignmentId as string
+      f.run({ type: 'work.cancel', conversationId: endedTask, assignmentId, reason: 'Not needed.' })
+      // Of another project, working on a task there.
+      const other = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+      const otherTask = f.run({ type: 'conversation.create', projectId: other.projectId as string, title: 'Elsewhere', brief: 'Build it.', checks: [] }).result.conversationId as string
+      const outsider = f.add('outsider', 'owner', otherTask)
+      f.run({ type: 'work.assign', conversationId: otherTask, agentId: outsider })
+      // A Buddy assigned work (which no Buddy is) still only proposes.
+      const buddy = f.add('buddy', 'owner', f.group())
+      const buddyTask = f.state.conversations.find(c => c.agentIds.includes(buddy))!
+      f.define(buddyTask.id)
+      f.run({ type: 'work.assign', conversationId: buddyTask.id, agentId: buddy })
+      f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
+      // A stopping agent with its task still open.
+      const stopping = f.add('stopping', 'owner', f.group())
+      const stoppingTask = f.state.conversations.find(c => c.agentIds.includes(stopping))!.id
+      f.define(stoppingTask)
+      f.run({ type: 'work.assign', conversationId: stoppingTask, agentId: stopping })
+      f.state.agents.find(a => a.id === stopping)!.workDecision = 'stop'
+      const before = structuredClone(f.state)
+      // Another project's agent does not read this chat at all; a Buddy posts only in its own chat (buddies.ts).
+      const refusals: Array<[string, string]> = [[idle, 'FORBIDDEN'], [ended, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
+      for (const [agentId, code] of refusals) expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
+      // Naming an agent that is not in it, or adding one, is refused as before (#2207), the working Engineer's post too.
+      const notMember = expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' })
+      expect(() => f.run(post('Look at this.', null, [idle]), actorOf(engineer))).toThrow(notMember)
+      expect(() => f.run(post('Look at this.', null, [engineer]), f.leadActor)).toThrow(notMember)
+      for (const actor of [f.leadActor, owner, actorOf(engineer)]) {
+        expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: engineer, present: true, lead: false }, actor)).toThrow()
+      }
+      expect(f.state).toEqual(before)
+      expect(chat().agentIds).not.toContain(engineer)
+    })
+  })
+
   // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
   // leaves a row there naming who did it, shown to the chat's readers and waking nobody.
   it('leaves a row naming who added or removed an agent', () => {
