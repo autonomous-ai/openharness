@@ -2592,8 +2592,8 @@ export class SuperTabStore {
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
       // A session hears its thread's rows; the one Buddy's session in an older project chat (commands.ts startOldChatBuddy)
-      // hears that chat's main rows, never a thread session's.
-      const heard = target.buddySession ? !!row?.buddySession : !!target.buddyNarrow && !row?.buddySession
+      // hears that chat's main rows, never a thread session's; so does a project's Lead that joined a chat with none (leadArrived).
+      const heard = target.buddySession ? !!row?.buddySession : (!!target.buddyNarrow || !!l.lead) && !row?.buddySession
       if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !heard || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue

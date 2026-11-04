@@ -54,6 +54,10 @@ class SuperTabPerson {
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
+      timeZone = switch (row['timeZone']) {
+        final String zone when zone.trim().isNotEmpty => zone,
+        _ => null,
+      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -70,11 +74,16 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
+      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
+
+  /// Their time zone's IANA name, as their own app told the Swarm (Desktop's
+  /// local_time_zone.dart); null until it has. The phone shows no card yet.
+  final String? timeZone;
 
   /// How the Swarm tags them (`@username`), as the server sends it; from an
   /// older server, their default ([superTabUsernames]). Desktop's rule.
@@ -542,8 +551,17 @@ class SuperTabProject {
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
-          : null;
+          : null,
+      leadWaiting = {
+        for (final entry in row['leadWaiting'] as List? ?? const [])
+          if (entry is Map && entry['id'] is String) entry['id'] as String,
+      };
   final String id, name, ownerId, leadConversationId;
+
+  /// The person's messages the server keeps for this project's Lead: a
+  /// Personal Swarm's chat with none, whose Lead their computer starts
+  /// (backend leadStart.ts). Empty from a server before it.
+  final Set<String> leadWaiting;
 
   /// Read as the desktop's model reads it; the phone starts no agents.
   final String skillMode;
