@@ -109,5 +109,5 @@ above the screen, seen or not; the down pill stays; Move pane keeps Alt+Shift+Up
 
 - [ ] **Step 1:** Write the bar's light and dark pictures with `SUPER_TAB_UNREAD_SHOTS=<dir>`, before (main) and after
   (this branch).
-- [ ] **Step 2:** Attach them to the pull request with the red/green evidence comment; run the whole Desktop unit suite
-  once (`make -C .. desktop-test`) before Ready.
+- [ ] **Step 2:** Attach them to the pull request with the red/green evidence comment. No local whole suite: the pull
+  request's CI runs Desktop's suite once it is Ready, and that green run is the suite evidence (Ken, 2026-11-04).
