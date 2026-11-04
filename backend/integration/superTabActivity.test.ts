@@ -261,6 +261,23 @@ describe('Activity: a reply tells everyone in its thread (task #2745)', () => {
     expect(notices(await rowsOf(s.tabId, peer))).toEqual([])
   })
 
+  it('still tells the starter of a Swarm notice in a chat the command did not load, as before', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    await send(s.tabId, s.web, 'Peer answers', peer, root)
+    const read = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
+    // The command's state without this chat, as a quiet chat is left out of it.
+    const state = { ...read, conversations: read.conversations.filter(c => c.id !== s.web) }
+    const rootRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: root } })
+    await db.$transaction(async tx => {
+      const threads = new Map([[root, await threadFacet(tx, s.tabId, s.web, [root])]])
+      await writeReplyActivity(tx, s.tabId, [{ id: 'quiet-notice', conversationId: s.web, text: 'Notice', replyTo: null, recipients: [], thread: root,
+        source: { kind: 'system' }, author: { kind: 'agent' as const, id: s.worker, name: 'worker-harness', membershipGeneration: 'fixture' } }],
+      new Map([['quiet-notice', rootRow.sequence + 10]]), Date.now(), { state, threads })
+    })
+    expect((await rowsOf(s.tabId, owner)).includes('quiet-notice')).toBe(true)
+  })
+
   it('writes nothing for a person who left the Swarm or can no longer read the chat', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.openChat, 'Owner root')
