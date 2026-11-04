@@ -157,6 +157,33 @@ describe('account HTTP in the gateway', () => {
     expect((await restarted.machines()).status).toBe(503)
   })
 
+  // Task #2598: the relay answers a machine this list shows offline without a dial (lib/remoteRelay.ts).
+  it('tells which machines the backend\'s list shows offline, and nothing on a sign-out', async () => {
+    const offline = vi.fn()
+    const { deps, request } = setup()
+    const api = createAccountHttp({ ...deps, offline })
+    request.mockResolvedValueOnce(response({ success: true, data: { machines: [
+      { machineId: 'off', computerId: 'a', status: 'stopped' }, { machineId: 'gone', computerId: 'b', status: 'offline' },
+      { machineId: 'on', computerId: 'c', status: 'running' }, { machineId: 'new', computerId: 'd', status: 'provisioning' },
+    ] } }))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(['off', 'gone'])
+    request.mockResolvedValueOnce(response({}, 401))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(null)
+  })
+
+  it('asks the list again only when it is older than asked, sharing a read in flight', async () => {
+    const { api, request } = setup()
+    await api.machines()
+    expect(request).toHaveBeenCalledTimes(1)
+    await api.recheck(60_000)
+    expect(request).toHaveBeenCalledTimes(1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await Promise.all([api.recheck(1), api.recheck(1)])
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
   it('does not serve stale rows across accounts or after a real refusal', async () => {
     const { api, request, account } = setup()
     await api.machines(true)

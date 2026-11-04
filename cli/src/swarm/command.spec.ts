@@ -7,8 +7,8 @@ const parts = (over: Record<string, unknown> = {}) => ({
   tabId: 't1', format: 2, serverTime: Date.now(), lastChangedAt: Date.now() - 3000,
   head: { data: { id: 't1', name: 'autonomous-harness', ownerId: 'u1', paused: false } },
   members: [{ data: { id: 'u1', email: 'owner@x.io', role: 'owner' } }],
-  machines: [{ data: { machineId: 'm1', name: 'gridtest', contributorId: 'u1', engines: ['claude'], sessionKind: 'team',
-    observation: { receivedAt: Date.now() - 2000 } } }],
+  machines: [{ data: { machineId: 'm1', name: 'gridtest', contributorId: 'u1', engines: [{ engine: 'claude' }],
+    observation: { receivedAt: Date.now() - 2000, sessionKind: 'team' } } }],
   agents: [{ data: { id: 'a1', name: 'Lead', machineId: 'm1', configuration: { engine: 'claude' }, leadOf: 'p1' } }],
   groups: [{ data: { id: 'lead', title: 'autonomous-harness', leadId: 'a1' } }],
   starts: [

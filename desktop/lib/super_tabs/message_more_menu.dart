@@ -15,8 +15,18 @@ typedef SuperTabMoreAction = ({
 /// The ⋯ of a message's hover bar: the choices that have no button of their
 /// own. Each closes the menu, then runs.
 class SuperTabMessageMoreMenu extends StatefulWidget {
-  const SuperTabMessageMoreMenu({super.key, required this.actions});
+  const SuperTabMessageMoreMenu({
+    super.key,
+    required this.actions,
+    this.color,
+    this.hoverColor,
+    this.hoverFill,
+  });
   final List<SuperTabMoreAction> actions;
+
+  /// The ⋯'s ink and lift, for a menu drawn on the picture viewer's veil
+  /// ([AppIconButton] by default).
+  final Color? color, hoverColor, hoverFill;
 
   @override
   State<SuperTabMessageMoreMenu> createState() =>
@@ -69,6 +79,9 @@ class _SuperTabMessageMoreMenuState extends State<SuperTabMessageMoreMenu> {
         icon: AppIcons.ellipsis,
         focusNode: _focus,
         tooltip: 'More',
+        color: widget.color,
+        hoverColor: widget.hoverColor,
+        hoverFill: widget.hoverFill,
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );

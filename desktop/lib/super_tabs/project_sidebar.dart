@@ -1,10 +1,8 @@
 import 'dart:async';
 
-import 'package:collection/collection.dart' show mergeSort;
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
@@ -18,20 +16,12 @@ import '../widgets/harness_activity_mark.dart';
 import 'activity.dart';
 import 'attention.dart';
 import 'controller.dart';
-import 'identity.dart';
-import 'leaderboard/models_section.dart';
-import 'leaderboard/reader.dart';
-import 'local_models.dart';
 import 'buddies.dart';
-import 'machines.dart';
-import 'linked_tasks.dart';
 import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'task_groups.dart';
-import 'task_status.dart';
-import 'workgroup_name.dart';
 import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
@@ -240,28 +230,30 @@ class ProjectSidebar extends StatelessWidget {
   }) {
     final project = reading?.project;
     final selected = !_paneCovered && controller.selectedId == group.id;
-    final waiting = reading == null
-        ? needsHuman(group) > 0
-        : reading.waiting.isNotEmpty;
-    // Open, a project's row is its own chat's, as each workgroup under it
-    // has its own; collapsed, it is bold for anything it hides. Both by what
-    // is for a person (#2427), never agents' progress alone.
+    // A project's row is bold for anything in it for a person (#2427), its
+    // tasks' too, never agents' progress alone.
     final unread = reading == null
         ? controller.unreadShown(group)
-        : controller.expandedProjects.contains(project?.id)
-        ? reading.unread.contains(group.id)
         : reading.unread.isNotEmpty;
-    // Only what opening this row shows, so opening it clears the number (Dee,
-    // Slack's way). Tags in the task conversations it hides make it bold, and
-    // are on their own rows and in Activity.
-    final badge = attention?.mentionsIn(group.id) ?? 0;
-    final badgeTooltip = attention?.badgeTooltipIn(group.id);
+    // Tags in its chat, which opening it clears (Dee, Slack's way), and the
+    // tasks that need the reader, so someone in another project still sees
+    // them (task #2569). Tags in tasks make it bold, and are in Activity.
+    final mentions = attention?.mentionsIn(group.id) ?? 0;
+    final needsYou = reading?.needsYou ?? 0;
+    final badge = mentions + needsYou;
+    final badgeTooltip = needsYou == 0
+        ? attention?.badgeTooltipIn(group.id)
+        : [
+            if (mentions > 0)
+              attention?.badgeTooltipIn(group.id) ??
+                  (mentions == 1 ? '1 mention' : '$mentions mentions'),
+            needsYou == 1 ? '1 task needs you' : '$needsYou tasks need you',
+          ].join(' · ');
     return _drawRow(
       group,
       project: project,
       key: key,
       selected: selected,
-      waiting: waiting,
       unread: unread,
       badge: badge,
       badgeTooltip: badgeTooltip,
@@ -270,39 +262,6 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  /// A workgroup's row from what its project's reading already asked.
-  /// A task row's status, kept current by its own clock, for its line and
-  /// its tooltip alike; any other row is built without one.
-  Widget _withTaskStatus(
-    SuperTabConversation group,
-    Widget Function(SuperTabTaskStatus? status) build, {
-    required bool task,
-  }) => task
-      ? SuperTabTaskClock(
-          group: group,
-          personName: _personName,
-          builder: (_, status) => build(status),
-        )
-      : build(null);
-
-  /// A member as the Humans list names them, for a task's "Waiting on …".
-  String? _personName(String personId) => switch (controller.snapshot?.people
-      .where((p) => p.id == personId)
-      .firstOrNull) {
-    final person? => superTabPersonName(person.email),
-    null => null,
-  };
-
-  Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
-      _drawRow(
-        group,
-        selected: !_paneCovered && controller.selectedId == group.id,
-        waiting: reading.waiting.contains(group.id),
-        unread: reading.unread.contains(group.id),
-        badge: attention?.mentionsIn(group.id) ?? 0,
-        badgeTooltip: attention?.badgeTooltipIn(group.id),
-      );
-
   Widget _drawRow(
     SuperTabConversation group, {
     SuperTabProject? project,
@@ -310,7 +269,6 @@ class ProjectSidebar extends StatelessWidget {
     String? label,
     String? key,
     required bool selected,
-    required bool waiting,
     required bool unread,
     int badge = 0,
     String? badgeTooltip,
@@ -320,14 +278,11 @@ class ProjectSidebar extends StatelessWidget {
     VoidCallback? onTap,
     bool tappable = true,
   }) {
-    final expanded =
-        project != null && controller.expandedProjects.contains(project.id);
-    // A collapsed project shows as selected while one of its conversations it
-    // hides is open; the reader's Buddy chat has a row of its own.
+    // A project shows as selected while one of its tasks is open; the
+    // reader's Buddy chat has a row of its own.
     final highlighted =
         selected ||
         (project != null &&
-            !expanded &&
             !_paneCovered &&
             selectedProjectId == project.id &&
             controller.selectedId != buddyChat?.id);
@@ -356,206 +311,144 @@ class ProjectSidebar extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: _arrowToggles(
-                project,
-                expanded: expanded,
-                child: InkWell(
-                  key: ValueKey(key ?? 'super-group-${group.id}'),
-                  onTap: !tappable
-                      ? null
-                      : onTap ??
-                            // A second click on the open project shows its
-                            // workgroups (Quiet Swarm: no chevrons).
-                            (project != null &&
-                                    !_paneCovered &&
-                                    controller.selectedId == group.id
-                                ? () => controller.toggleProject(project.id)
-                                : () => onSelect(group.id)),
-                  hoverColor: Colors.transparent,
-                  focusColor: grid.AppSurface.hoverFill,
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                  child: Row(
-                    children: [
-                      SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-                      SizedBox(
-                        width: _iconColumn,
-                        child: project != null
-                            ? _channelMark(isPrivate: project.isPrivate)
-                            : label != null
-                            ? Icon(
-                                AppIcons.bot,
-                                size: AppIcons.inlineSize,
-                                color: DesktopChrome.foreground,
-                              )
+              child: InkWell(
+                key: ValueKey(key ?? 'super-group-${group.id}'),
+                onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
+                hoverColor: Colors.transparent,
+                focusColor: grid.AppSurface.hoverFill,
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                child: Row(
+                  children: [
+                    SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+                    SizedBox(
+                      width: _iconColumn,
+                      child: project != null
+                          ? _channelMark(isPrivate: project.isPrivate)
+                          : label != null
+                          ? Icon(
+                              AppIcons.bot,
+                              size: AppIcons.inlineSize,
+                              color: DesktopChrome.foreground,
+                            )
+                          : null,
+                    ),
+                    Expanded(
+                      child: Semantics(
+                        label: project?.isPrivate == true
+                            ? 'Private project'
                             : null,
-                      ),
-                      Expanded(
-                        child: Semantics(
-                          label: project?.isPrivate == true
-                              ? 'Private project'
-                              : null,
-                          selected: selected,
-                          child: _withTaskStatus(
-                            group,
-                            task: project == null && label == null,
-                            (status) => Tooltip(
-                              // Beside the row, level with it, never over
-                              // the rows below (Huy, 11-03, #2427).
-                              positionDelegate: _besideTheRow,
-                              // Compact: a long name wraps rather than
-                              // needing more room than the window has right
-                              // of the list.
-                              constraints: const BoxConstraints(maxWidth: 260),
-                              message:
-                                  label ??
-                                  project?.name ??
-                                  [
-                                    SuperTabWorkgroupName.plain(group),
-                                    if (status != null)
-                                      superTabTaskStatusText(status),
-                                  ].join('\n'),
-                              child: ConstrainedBox(
-                                // A project and its tasks a little taller
-                                // than other rows (Huy, 11-03, #2427).
-                                constraints: BoxConstraints(
-                                  minHeight: label == null
-                                      ? SwarmType.projectRowHeight(
-                                          compact: compact,
-                                        )
-                                      : SwarmType.sidebarRowHeight(
-                                          compact: compact,
-                                        ),
-                                ),
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    vertical: label == null
-                                        ? SwarmType.projectRowPadding(
-                                            compact: compact,
+                        selected: selected,
+                        child: Tooltip(
+                          // Beside the row, level with it, never over
+                          // the rows below (Huy, 11-03, #2427).
+                          positionDelegate: _besideTheRow,
+                          // Compact: a long name wraps rather than
+                          // needing more room than the window has right
+                          // of the list.
+                          constraints: const BoxConstraints(maxWidth: 260),
+                          message: label ?? project!.name,
+                          child: ConstrainedBox(
+                            // A project a little taller than other rows
+                            // (Huy, 11-03, #2427).
+                            constraints: BoxConstraints(
+                              minHeight: label == null
+                                  ? SwarmType.projectRowHeight(compact: compact)
+                                  : SwarmType.sidebarRowHeight(
+                                      compact: compact,
+                                    ),
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                vertical: label == null
+                                    ? SwarmType.projectRowPadding(
+                                        compact: compact,
+                                      )
+                                    : SwarmType.sidebarRowPadding(
+                                        compact: compact,
+                                      ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: label != null
+                                        ? Text(
+                                            label,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: style,
                                           )
-                                        : SwarmType.sidebarRowPadding(
-                                            compact: compact,
-                                          ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: label != null
-                                            ? Text(
-                                                label,
+                                        : Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                project!.name,
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: style,
-                                              )
-                                            : project == null
-                                            // One line, as Slack's (Huy,
-                                            // 11-03, #2427): the state is the
-                                            // mark at its right and the
-                                            // tooltip, and a screen reader
-                                            // still hears it (#957).
-                                            ? Semantics(
-                                                label: status == null
-                                                    ? null
-                                                    : superTabTaskStatusText(
-                                                        status,
-                                                      ),
-                                                child: SuperTabWorkgroupName(
-                                                  group,
-                                                  style: style,
-                                                  quietNumber: true,
-                                                ),
-                                              )
-                                            : Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Text(
-                                                    project.name,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: style,
-                                                  ),
-                                                  // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                                  ProjectGitHubLine(
-                                                    controller: controller,
-                                                    project: project,
-                                                  ),
-                                                ],
                                               ),
-                                      ),
-                                      if (badge > 0) ...[
-                                        const SizedBox(width: 8),
-                                        Semantics(
-                                          label:
-                                              badgeTooltip ??
-                                              (badge == 1
-                                                  ? '1 mention'
-                                                  : '$badge mentions'),
-                                          excludeSemantics: true,
-                                          child: SuperTabCountBadge(
-                                            badge,
-                                            key: ValueKey(
-                                              'super-mentions-${group.id}',
-                                            ),
-                                            tooltip: badgeTooltip,
+                                              // Teammates' agents cannot push to its repository yet (project_github.dart).
+                                              ProjectGitHubLine(
+                                                controller: controller,
+                                                project: project,
+                                              ),
+                                            ],
                                           ),
-                                        ),
-                                      ],
-                                      if (muted) ...[
-                                        const SizedBox(width: 8),
-                                        Tooltip(
-                                          message: 'Muted',
-                                          child: Icon(
-                                            AppIcons.bellOff,
-                                            key: ValueKey(
-                                              'super-muted-${group.id}',
-                                            ),
-                                            size: 14,
-                                            color: DesktopChrome.muted,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
                                   ),
-                                ),
+                                  if (badge > 0) ...[
+                                    const SizedBox(width: 8),
+                                    Semantics(
+                                      label:
+                                          badgeTooltip ??
+                                          (badge == 1
+                                              ? '1 mention'
+                                              : '$badge mentions'),
+                                      excludeSemantics: true,
+                                      child: SuperTabCountBadge(
+                                        badge,
+                                        key: ValueKey(
+                                          'super-mentions-${group.id}',
+                                        ),
+                                        tooltip: badgeTooltip,
+                                      ),
+                                    ),
+                                  ],
+                                  if (muted) ...[
+                                    const SizedBox(width: 8),
+                                    Tooltip(
+                                      message: 'Muted',
+                                      child: Icon(
+                                        AppIcons.bellOff,
+                                        key: ValueKey(
+                                          'super-muted-${group.id}',
+                                        ),
+                                        size: 14,
+                                        color: DesktopChrome.muted,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                           ),
                         ),
                       ),
-                      SizedBox(
-                        // A project's row keeps no column for a mark it does
-                        // not have: its red number ends where Activity's does.
-                        width: project != null && trailing == null
-                            ? _rowEnd
-                            : _iconColumn,
-                        // Unread is drawn as a bold name; a screen reader
-                        // hears it said, as it heard the dot it replaces.
-                        child: Semantics(
-                          label: unread ? 'Unread messages' : null,
-                          child: Center(
-                            // What waits on the reader is Activity's to say; a
-                            // project's row says only what opening it shows.
-                            child: waiting && project == null
-                                ? Tooltip(
-                                    message: 'Needs a human',
-                                    child: Text(
-                                      '?',
-                                      style: DesktopChrome.control(
-                                        color: grid.AppPalette.warn,
-                                        medium: true,
-                                      ),
-                                    ),
-                                  )
-                                : project == null && label == null
-                                ? SuperTabTaskMark(group)
-                                : trailing,
-                          ),
-                        ),
+                    ),
+                    SizedBox(
+                      // A project's row keeps no column for a mark it does
+                      // not have: its red number ends where Activity's does.
+                      width: project != null && trailing == null
+                          ? _rowEnd
+                          : _iconColumn,
+                      // Unread is drawn as a bold name; a screen reader
+                      // hears it said, as it heard the dot it replaces.
+                      child: Semantics(
+                        label: unread ? 'Unread messages' : null,
+                        child: Center(child: trailing),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -563,123 +456,6 @@ class ProjectSidebar extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  /// On a focused project name, → shows its conversations and ← hides them.
-  /// An arrow that would change nothing moves focus as it does elsewhere.
-  Widget _arrowToggles(
-    SuperTabProject? project, {
-    required bool expanded,
-    required Widget child,
-  }) => project == null
-      ? child
-      : Focus(
-          canRequestFocus: false,
-          skipTraversal: true,
-          onKeyEvent: (node, event) {
-            final keyboard = HardwareKeyboard.instance;
-            final toggles =
-                event is! KeyUpEvent &&
-                !keyboard.isShiftPressed &&
-                !keyboard.isControlPressed &&
-                !keyboard.isAltPressed &&
-                !keyboard.isMetaPressed &&
-                (event.logicalKey == LogicalKeyboardKey.arrowRight
-                    ? !expanded
-                    : event.logicalKey == LogicalKeyboardKey.arrowLeft &&
-                          expanded);
-            if (!toggles) return KeyEventResult.ignored;
-            controller.toggleProject(project.id);
-            return KeyEventResult.handled;
-          },
-          child: child,
-        );
-
-  /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
-  /// ones that left the active set, as read for the project so far.
-  List<Widget> _closed(_ProjectReading reading) {
-    final project = reading.project;
-    final groups = reading.conversations
-        .where(
-          (g) =>
-              g.id != project.leadConversationId &&
-              !g.isBuddyChat &&
-              !controller.hiddenByBuddies(g) &&
-              g.closed,
-        )
-        .toList();
-    if (groups.isEmpty) return const [];
-    final open = controller.closedOpenProjects.contains(project.id);
-    return [
-      Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Material(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          clipBehavior: Clip.antiAlias,
-          child: Semantics(
-            button: true,
-            expanded: open,
-            child: InkWell(
-              key: ValueKey('super-closed-${project.id}'),
-              onTap: () => controller.toggleClosed(project.id),
-              hoverColor: grid.AppSurface.hoverFill,
-              focusColor: grid.AppSurface.hoverFill,
-              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-              child: Row(
-                children: [
-                  SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-                  const SizedBox(width: _iconColumn),
-                  Expanded(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: SwarmType.sidebarRowHeight(compact: compact),
-                      ),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Closed (${groups.length})',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: SwarmType.sidebar(
-                            compact: compact,
-                            color: DesktopChrome.muted,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: _iconColumn,
-                    child: Icon(
-                      open ? AppIcons.chevronDown : AppIcons.chevronRight,
-                      size: AppIcons.inlineSize,
-                      color: DesktopChrome.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      if (open) ...[
-        for (final group in groups) _row(group),
-        if (controller.hasEarlierDormant(project.id))
-          _navigationRow(
-            key: 'super-closed-earlier-${project.id}',
-            label: controller.dormantLoading(project.id)
-                ? 'Loading…'
-                : 'Show earlier',
-            icon: AppIcons.chevronDown,
-            onTap: controller.dormantLoading(project.id)
-                ? null
-                : () => unawaited(
-                    controller.loadDormant(project.id, earlier: true),
-                  ),
-          ),
-      ],
-    ];
   }
 
   /// The signed-in person's Buddy chat in each project, there from the start
@@ -767,7 +543,6 @@ class ProjectSidebar extends StatelessWidget {
       key: 'super-swarm-buddy',
       selected:
           chat != null && !_paneCovered && controller.selectedId == chat.id,
-      waiting: false,
       // Muted, it is greyed and never bold, as every chat (_drawRow).
       unread: chat != null && controller.unreadShown(chat),
       trailing: agent == null ? null : _buddyMark(agent),
@@ -800,128 +575,6 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  /// A project's open conversations, newest first: the most recently created
-  /// has the highest number, and one without a number predates numbering.
-  List<SuperTabConversation> _newestFirst(_ProjectReading reading) =>
-      superTabOpenWorkgroups(
-        controller,
-        reading.project,
-        reading.conversations,
-      );
-
-  /// A task group's heading under a project, as the mockup Huy approved
-  /// draws it: "▾ Needs you  1". It folds and unfolds the group, by click,
-  /// Enter or Space.
-  Widget _taskGroupHeading(
-    SuperTabProject project,
-    SuperTabTaskGroup group,
-    int count,
-  ) {
-    final folded = controller.taskGroupFolded(project.id, group);
-    final style = SwarmType.sidebar(
-      compact: compact,
-      color: DesktopChrome.muted,
-    );
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
-        child: Semantics(
-          button: true,
-          expanded: !folded,
-          child: InkWell(
-            key: ValueKey('super-task-group-${project.id}-${group.name}'),
-            onTap: () => controller.toggleTaskGroup(project.id, group),
-            hoverColor: grid.AppSurface.hoverFill,
-            focusColor: grid.AppSurface.hoverFill,
-            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-            child: Row(
-              children: [
-                SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-                SizedBox(
-                  width: _iconColumn,
-                  child: Icon(
-                    folded ? AppIcons.chevronRight : AppIcons.chevronDown,
-                    size: AppIcons.inlineSize,
-                    color: DesktopChrome.muted,
-                  ),
-                ),
-                Flexible(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: SwarmType.sidebarRowHeight(compact: compact),
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        group.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: style,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text('$count', style: style),
-                const SizedBox(width: _rowEnd),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// A project's open tasks in their groups (Huy, #2309): each group with a
-  /// row the unread filter keeps gets its heading, then its rows newest
-  /// first; a folded one shows only the open chat's row.
-  List<Widget> _workgroups(_ProjectReading reading) {
-    final project = reading.project;
-    final groups = _newestFirst(reading)
-        .where((g) => _keptByFilter(g, reading))
-        .toList();
-    final grouped = superTabGroupTasks(
-      groups,
-      readerId: controller.accountId,
-      mentions: (g) => attention?.mentionsIn(g.id) ?? 0,
-      // Asked once per build already (_ProjectReading).
-      needsHuman: (g) => reading.waiting.contains(g.id) ? 1 : 0,
-    );
-    return groups.isEmpty
-        ? [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                SuperTabSectionHeading.indentFor(0) + _iconColumn,
-                8,
-                12,
-                10,
-              ),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'No workgroups yet',
-                  style: DesktopChrome.metadata(),
-                ),
-              ),
-            ),
-          ]
-        : [
-            for (final MapEntry(key: taskGroup, value: rows) in grouped.entries)
-              if (rows.isNotEmpty) ...[
-                _taskGroupHeading(project, taskGroup, rows.length),
-                for (final group in rows)
-                  // The open chat stays listed, Manage or Devices over it
-                  // too: its row is the way back to it.
-                  if (!controller.taskGroupFolded(project.id, taskGroup) ||
-                      controller.selectedId == group.id)
-                    _workgroupRow(group, reading),
-              ],
-          ];
-  }
-
   /// Whether the unread filter keeps [read]'s project: its chat or an open
   /// workgroup is unread or tags the reader, or the open chat is in it.
   /// By the rule its rows are bold by (#2427): what is for a person.
@@ -931,15 +584,12 @@ class ProjectSidebar extends StatelessWidget {
       read.mentions > 0 ||
       (read.lead != null && controller.unreadForPeople(read.lead!));
 
-  /// Whether the unread filter keeps [group]'s row: a project's chat or task
-  /// by what makes it bold ([reading]'s, review of #2790), a Buddy chat by
-  /// any new message, as its row is bold.
-  bool _keptByFilter(SuperTabConversation group, [_ProjectReading? reading]) =>
+  /// Whether the unread filter keeps a Buddy chat's row: any new message, as
+  /// its row is bold.
+  bool _keptByFilter(SuperTabConversation group) =>
       !controller.unreadOnly ||
       (!_paneCovered && controller.selectedId == group.id) ||
-      (reading != null
-          ? reading.unread.contains(group.id)
-          : controller.unreadShown(group)) ||
+      controller.unreadShown(group) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
   /// Every project with its workgroups, by name from A to Z. The round dial
@@ -958,21 +608,7 @@ class ProjectSidebar extends StatelessWidget {
           Column(
             key: ValueKey('super-project-${project.id}'),
             mainAxisSize: MainAxisSize.min,
-            children: [
-              _row(read.lead!, reading: read),
-              if (controller.expandedProjects.contains(project.id)) ...[
-                // Built when the list lays the project out, not on every
-                // rebuild: an expanded project off screen costs nothing, as
-                // the 8 newest did behind "… N more" (#2309).
-                Builder(
-                  builder: (_) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: _workgroups(read),
-                  ),
-                ),
-                ..._closed(read),
-              ],
-            ],
+            children: [_row(read.lead!, reading: read)],
           ),
         ),
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
@@ -1193,10 +829,28 @@ class _ProjectReading {
       sidebar.controller.snapshot?.conversation(project.leadConversationId);
   late final buddyChat = sidebar.controller.buddyChat(project.id);
 
-  /// The open conversations that need a human, and those with unread messages;
-  /// never the reader's Buddy chat, which has its own row under Buddies.
-  Set<String> get waiting => _open.waiting;
-  Set<String> get unread => _open.unread;
+  /// The open conversations with unread messages; never the reader's Buddy
+  /// chat, which has its own row under Buddies.
+  late final Set<String> unread = {
+    for (final g in conversations)
+      if (!g.closed &&
+          !g.isBuddyChat &&
+          g.audience == null &&
+          (sidebar.controller.unreadForPeople(g) ||
+              (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0))
+        g.id,
+  };
+
+  /// How many of its tasks need the reader: what its row's badge adds.
+  late final int needsYou = superTabTasksNeedingYouIn(
+    superTabProjectBoard(
+      sidebar.controller,
+      project,
+      now: clock.now(),
+      needsHuman: sidebar.needsHuman,
+      attention: sidebar.attention,
+    ),
+  );
 
   /// Tags of the reader in the project's chat and its open workgroups: why the
   /// unread filter keeps a collapsed project. Never its number ([_row]).
@@ -1213,87 +867,27 @@ class _ProjectReading {
                 attention.mentionsIn(g.id),
           ].fold(0, (a, b) => a + b),
   };
-
-  /// A row is bold when a person wrote there or the reader is tagged there
-  /// (#2427): what there is to read. Agents' progress alone leaves it, and a
-  /// wait is its ? mark, not bold (review of #2790). Each conversation's wait
-  /// is asked once per build.
-  late final _open = () {
-    final waiting = <String>{}, unread = <String>{};
-    final controller = sidebar.controller;
-    for (final g in conversations) {
-      if (g.closed || g.isBuddyChat || g.audience != null) continue;
-      final waits = sidebar.needsHuman(g) > 0;
-      if (waits) waiting.add(g.id);
-      if (controller.unreadForPeople(g) ||
-          (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0) {
-        unread.add(g.id);
-      }
-    }
-    return (waiting: waiting, unread: unread);
-  }();
-}
-
-/// A project's open workgroups as the sidebar lists them, newest first: the
-/// most recently created has the highest number, and one without a number
-/// predates numbering.
-List<SuperTabConversation> superTabOpenWorkgroups(
-  SuperTabController controller,
-  SuperTabProject project, [
-  List<SuperTabConversation>? conversations,
-]) {
-  final groups =
-      superTabListedWork(
-            conversations ?? controller.projectConversations(project.id),
-          )
-          .where(
-            (g) =>
-                g.id != project.leadConversationId &&
-                !g.isBuddyChat &&
-                !controller.hiddenByBuddies(g) &&
-                !g.closed,
-          )
-          .toList();
-  // A stable sort keeps the backend's order among unnumbered ones.
-  mergeSort(
-    groups,
-    compare: (a, b) => (b.number ?? 0).compareTo(a.number ?? 0),
-  );
-  return groups;
 }
 
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
 /// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
-/// under Projects), each project from A to Z, its chat then its open
-/// workgroups in their groups (#2309), each newest first, then the reader's
-/// project Buddy chats. [needsHuman] is the sidebar's. The round dial swipes
-/// projects in this A to Z order too (cli superTabs/cards.ts `leadsOf`): the
-/// two must match.
-List<String> superTabSidebarOrder(
-  SuperTabController controller, {
-  int Function(SuperTabConversation group)? needsHuman,
-}) {
+/// under Projects), each project's chat from A to Z, then the reader's
+/// project Buddy chats. Tasks are in each project's Tasks view, not here
+/// (task #2569). The round dial swipes projects in this A to Z order too (cli
+/// superTabs/cards.ts `leadsOf`): the two must match.
+List<String> superTabSidebarOrder(SuperTabController controller) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.projects]
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  final attention = SuperTabAttention.of(controller);
   return [
     if (controller.oneBuddy)
       if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
           case final chat?)
         chat.id,
-    for (final project in projects) ...[
+    for (final project in projects)
       if (snapshot.conversation(project.leadConversationId) != null)
         project.leadConversationId,
-      for (final tasks in superTabGroupTasks(
-        superTabOpenWorkgroups(controller, project),
-        readerId: controller.accountId,
-        mentions: (g) => attention.mentionsIn(g.id),
-        needsHuman: needsHuman,
-      ).values)
-        for (final group in tasks) group.id,
-    ],
     for (final project in projects)
       if (controller.buddyChat(project.id) case final chat?) chat.id,
   ];

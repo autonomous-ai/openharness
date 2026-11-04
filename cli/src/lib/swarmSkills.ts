@@ -127,6 +127,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - Codex's "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
+- Keep the project's Next up in the order work should start: work.queue with after (null for the top) moves a task, and notBefore (YYYY-MM-DD) marks a promise such as removing a route after a date.
 - Cancel a duplicate, obsolete or wrong task with a reason.
 - When a worker finishes: reuse, keep or stop. Prefer stop unless more work is coming soon.
 
@@ -465,6 +466,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac's own account and its Team account are different: the Team account has none of the owner's tools, devices or sign-ins. If none has it, tag the requester with the choice.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
+- Keep the project's Next up in the order work should start: work.queue with after (null for the top) moves a task, and notBefore (YYYY-MM-DD) marks a promise such as removing a route after a date.
 
 ## 5. Review and accept
 - Work that will be merged, or carries medium risk or more, gets a Reviewer. When its Builder marks ready for review with a pull request link, the Swarm opens "Review: <group>", assigns a free Reviewer and tells you in one line; cancel it there if it is not needed. When no Reviewer is free, route it, start one, assign it and add it to the Builder's group. Without a pull request link, create the review group yourself the same way.

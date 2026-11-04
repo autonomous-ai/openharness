@@ -137,6 +137,17 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
         !group.isBuddyChat &&
         reader.error == null) {
       _wakeUpAt(null, now);
+      // Kept for the Lead the person's computer starts (a Personal Swarm,
+      // task #2633): it will be delivered, so it is not "Not sent".
+      if (snapshot.projectFor(group.id)?.leadWaiting.contains(message.id) ==
+          true) {
+        return _line(
+          icon: LucideIcons.clock,
+          color: AppPalette.textSecondary,
+          title:
+              'Waiting for a Lead · open Harness on your computer to start one',
+        );
+      }
       return _noLead(context, c, snapshot.isProjectLead(group.id));
     }
     // Said only of a recipient of this chat, from what was just read: a row
