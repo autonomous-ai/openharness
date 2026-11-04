@@ -19,7 +19,8 @@ import 'link_another_machine_dialog.dart'
         kHarnessDownloadUrl,
         kLinkServerInstallCommand,
         kLinkServerLoginCommand,
-        kLinkServerStartCommand;
+        kLinkServerStartCommand,
+        kLinkServerWindowsNote;
 import 'new_device_notice.dart' show DeviceListReviewLine;
 import 'terminal_text_action.dart';
 
@@ -724,7 +725,7 @@ class MachinePickerFormState extends State<MachinePickerForm> {
             line('On the other computer:'),
             gap,
             if (widget.kind == MachinePickerFormKind.app) ...[
-              line('1. Install Harness for macOS or Linux.'),
+              line('1. Install Harness for macOS, Windows or Linux.'),
               line(kHarnessDownloadUrl.toString(), selectable: true),
               gap,
               line(
@@ -741,6 +742,8 @@ class MachinePickerFormState extends State<MachinePickerForm> {
               gap,
               line('3. Start Harness.'),
               line(kLinkServerStartCommand, selectable: true),
+              gap,
+              line(kLinkServerWindowsNote, selectable: true),
             ],
             gap,
             // Signing in is what makes this app trust it (the device key log): no password to set.
