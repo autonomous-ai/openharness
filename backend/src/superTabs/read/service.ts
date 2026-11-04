@@ -33,7 +33,8 @@ import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { derivedEtag, marksOf } from './derivedEtag.js'
+import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -71,6 +72,14 @@ function readableMarks(read: Read, marks: ReadMarkRow[], threads: Map<string, Ma
   const chatSettings = Object.fromEntries([...settings].filter(([id]) => readable.has(id)))
   return { readMarks: Object.fromEntries(kept.map(mark => [mark.conversationId, mark.sequence])), ...(Object.keys(unreadMarks).length ? { unreadMarks } : {}),
     ...(Object.keys(threadMarks).length ? { threadMarks } : {}), ...(Object.keys(chatSettings).length ? { chatSettings } : {}) }
+}
+
+/** A reply's `derived` with its etag, or only the reader's marks when `held` is still the etag of the summary (task #2906). */
+function stamped(derived: Derived): { derived: Derived; derivedEtag: string }
+function stamped(derived: Derived, held: string | undefined): { derived: Derived | ReaderMarks; derivedEtag: string; derivedUnchanged?: true }
+function stamped(derived: Derived, held?: string) {
+  const etag = derivedEtag(derived)
+  return held === etag ? { derived: marksOf(derived), derivedEtag: etag, derivedUnchanged: true as const } : { derived, derivedEtag: etag }
 }
 
 /** A change poll's light base (parts/light.ts): the same for every reader of a Swarm, so one load per stamp serves them all. */
@@ -114,8 +123,8 @@ export class SwarmReads {
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
-        derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
-          await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) } }
+        ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
+          await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
   }
 
@@ -163,7 +172,10 @@ export class SwarmReads {
     })
   }
 
-  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string, options: { lightMachines?: boolean } = {}): Promise<Changes> {
+  /** `derivedEtag`: the etag of the summary the client holds (derivedEtag.ts); while it still matches, the reply leaves the
+   *  summary out and sends only the reader's moved marks. */
+  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string,
+    options: { lightMachines?: boolean; derivedEtag?: string } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
@@ -197,7 +209,7 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
-        derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
+        ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
 

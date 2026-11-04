@@ -4052,7 +4052,7 @@ class SuperTabController extends ChangeNotifier {
       try {
         final answer = await request(
           'GET',
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
+          '$_path/changes?${held.changesQuery}',
         );
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
@@ -4073,7 +4073,14 @@ class SuperTabController extends ChangeNotifier {
           );
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }

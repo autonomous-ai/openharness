@@ -55,6 +55,7 @@ class SuperTabParts {
     required this.epoch,
     required this.lastChangedAt,
     required this.githubApp,
+    this.derivedEtag,
   });
 
   /// A first load (section 4.3). Throws a [FormatException] for a response of another format.
@@ -76,6 +77,7 @@ class SuperTabParts {
       // Null for a Swarm with no part changed yet (contract.ts `ReadMeta`).
       lastChangedAt: _int(answer['lastChangedAt'] ?? 0),
       githubApp: answer['githubApp'] == true,
+      derivedEtag: _etag(answer),
     );
     parts._seen['head'] = _int(parts._head['version']);
     for (final kind in _lists) {
@@ -130,6 +132,26 @@ class SuperTabParts {
 
   /// Whether the backend has the GitHub app, as the first load says.
   final bool githubApp;
+
+  /// The etag of the summary held (`derived` without the marks, backend read/derivedEtag.ts, #2906), as the last read
+  /// sent it: sent back with the cursor, so a change read leaves the summary out while it still matches. Null from a
+  /// backend without it, and then none is sent.
+  String? derivedEtag;
+
+  /// What a change read asks after `?`: the cursor, and the summary's etag when one is held.
+  String get changesQuery {
+    final etag = derivedEtag;
+    final query = 'cursor=${Uri.encodeQueryComponent(cursor)}';
+    return etag == null
+        ? query
+        : '$query&derivedEtag=${Uri.encodeQueryComponent(etag)}';
+  }
+
+  static String? _etag(Map<String, dynamic> answer) =>
+      switch (answer['derivedEtag']) {
+        final String etag when etag.isNotEmpty => etag,
+        _ => null,
+      };
 
   Map<String, dynamic> _head;
   Map<String, dynamic> _derived;
@@ -269,6 +291,14 @@ class SuperTabParts {
   /// Merges one change read (section 4.4): a higher version wins, a tombstone removes the part, a dormant stub moves
   /// the group out of the active ones, `derived` is replaced, and the cursor moves. A reload answer is the caller's.
   SuperTabPartsChange apply(Map<String, dynamic> changes) {
+    // Without the summary, a reply is only right for the one held: checked before anything is merged.
+    final unchanged = changes['derivedUnchanged'] == true;
+    final etag = _etag(changes);
+    if (unchanged && (etag == null || etag != derivedEtag)) {
+      throw const FormatException(
+        'A Swarm read left out a summary this reader does not hold.',
+      );
+    }
     var changed = false;
     // Anything but a machine's own report moved.
     var beyondMachines = false;
@@ -333,11 +363,14 @@ class SuperTabParts {
         _takeThreadMarks(derived.remove('threadMarks')) |
         _takeChatSettings(derived.remove('chatSettings')) |
         readMarksMoved;
-    if (!const DeepCollectionEquality().equals(derived, _derived)) {
+    // Unchanged: `derived` held only the marks, and the summary held stands.
+    if (!unchanged &&
+        !const DeepCollectionEquality().equals(derived, _derived)) {
       if (!_sameBeyondMachines(derived, _derived)) beyondMachines = true;
       _derived = derived;
       changed = true;
     }
+    derivedEtag = etag;
     cursor = _cursor(changes);
     epoch = _int(changes['epoch'] ?? epoch);
     lastChangedAt = _int(changes['lastChangedAt'] ?? lastChangedAt);
@@ -494,6 +527,7 @@ class SuperTabParts {
       for (final kind in _lists)
         kind: (_live[kind] ?? const {}).values.toList(),
       'derived': _derived,
+      if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
