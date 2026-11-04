@@ -211,7 +211,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
-      // The agents it reaches, any agent of this project; with none, an agent's post reaches the PM (project instructions).
+      // The agents it reaches, any agent of this project; the server adds @Name, a reply's author and a task's assignee (#2963).
       else if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
       // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).

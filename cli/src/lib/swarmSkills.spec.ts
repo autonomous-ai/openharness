@@ -983,8 +983,8 @@ describe('a Buddy\'s folder', () => {
 // Project instructions, phase 4 (decision 1): a session is a coordinator, an agent or a Buddy. Its role file stays the
 // built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
 describe('role kinds keep their role files', () => {
-  /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds. */
-  const REVIEW = { orchestration: '7b9273ef8d7a5f4dd7fd2133c7048aa734e29d3b3a700b5e26f46b4c04b20711', default: '594c0f21ba60582624c0a141d64bc2aa6751dbd2a0f3ed81fb1b65cd20fdde82' }
+  /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds (its post rules as of #2963). */
+  const REVIEW = { orchestration: '4270fcbf17355c8df6a65c6977b70bcc6064c2d3210533dc99fdf3b16af5d2d9', default: '2704930e91c7861d47c95f1c19ec7383edf23220eb720bed09ab1acbe7d34034' }
   const folder = (workspace: string, key: string, name: string) =>
     join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
   it('keeps each session\'s role file', () => {

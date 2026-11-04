@@ -2275,8 +2275,8 @@ export class SuperTabHost {
     const native = source.kind === 'native'
       ? `This is an observed native ${String(source.phase)} in ${shownName(message.author, 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
       : ''
-    // A post that names no one reaches the coordinator, or from the coordinator the task's assignee: a reply to another agent
-    // names it, or an Engineer answering a Reviewer reaches the PM instead (final review). A person reads the chat itself.
+    // A reply to an agent names it: a backend from before #2963 delivered an unnamed reply to the coordinator instead of its
+    // author (final review). A person reads the chat itself.
     const author = object(message.author)
     const to = author.kind === 'agent' && identifier(author.id) ? ` --to ${shellQuote(author.id)}` : ''
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
