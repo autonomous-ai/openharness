@@ -1669,10 +1669,23 @@ class SuperTabController extends ChangeNotifier {
   /// replies" reads on, a page at a time.
   static const threadPagesOnOpen = 5;
 
+  /// The read of earlier replies under way ([readingEarlierReplies]).
+  Future<void>? _earlierRead;
+
   /// Reads the open thread: from its newest reply back through
   /// [threadPagesOnOpen] pages, or with [earlier] the page before those read,
-  /// and its root when no page brought it.
-  Future<void> loadThread({bool earlier = false}) async {
+  /// and its root when no page brought it. With [earlier] while a read of
+  /// them is under way, that read: a caller waiting for the page gets it.
+  Future<void> loadThread({bool earlier = false}) {
+    if (earlier && readingEarlierReplies) {
+      return _earlierRead ?? Future.value();
+    }
+    final read = _loadThread(earlier: earlier);
+    if (earlier) _earlierRead = read;
+    return read;
+  }
+
+  Future<void> _loadThread({bool earlier = false}) async {
     final open = openedThread;
     if (open == null || _disposed || accessRevoked) return;
     if (earlier && (!hasEarlierReplies(open.root) || readingEarlierReplies)) {
