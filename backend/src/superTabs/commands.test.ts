@@ -1153,7 +1153,8 @@ describe('route.record and route.override', () => {
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c1', reason: 'Opus quota is needed elsewhere.' }) }])
     expect(effects.messages[0]!.recipients).toEqual([f.lead])
     // What happened and why, never the next step (project instructions, phase 4).
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
+    // By name, never email: the PM reads this row and copied the email into a tag (review of #2954).
+    expect(effects.messages[0]!.text).toBe('owner chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
     expect(effects.messages[0]!.source).toEqual({ kind: 'route-override', decisionId: 'd1', by: 'person' })
   })
   it('refuses an override by an agent, of a closed decision, or of the current choice', () => {
@@ -5283,6 +5284,12 @@ describe('lead.switch', () => {
     const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
     expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
       text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    // The owner's Buddy reads it: never an email, even one the asker took as their name (review of #2954).
+    const named = lent()
+    named.f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
+    named.f.run(named.request)
+    expect(done(named).messages.find(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')!.text)
+      .toBe('owner moved the PM of Pilot on Studio to your Codex account "Work".')
     const def = lent()
     def.f.run({ ...def.request, profileId: 'default' })
     expect(done(def).messages).toHaveLength(1)
