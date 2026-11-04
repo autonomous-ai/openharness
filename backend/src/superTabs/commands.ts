@@ -3473,8 +3473,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         : [state.ownerId, project.ownerId].includes(actor.userId)
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
-      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now },
+      const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
         accountable ? departed : undefined)
+      const first = !earlier
+      // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
+      // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
+      for (const failure of cleared) {
+        message(group.id, `${name} cleared ${failure.name ? `${failure.name}'s` : 'a checker\'s'} failure of “${check.description}”, as they left the Swarm: `
+          + (failure.evidence.split('\n')[0] ?? '').trim().slice(0, 300), [], null, SYSTEM_ROW)
+      }
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       const byAssignee = actor.kind === 'agent' && actor.agentId === group.assignment.agentId
       // A checker's verdict on a check counts once per attempt.

@@ -599,8 +599,8 @@ describe('checks with several checkers', () => {
     check(reviewer, true, 'Diff reads right')
     expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline\nlog' })
     expect(read().verdicts).toEqual([
-      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000 },
-      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now },
+      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000, name: expect.any(String) },
+      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now, name: expect.any(String) },
     ])
   })
 
