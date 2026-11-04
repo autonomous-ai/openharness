@@ -1,10 +1,16 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/actions.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 import 'super_tab_roster_test.dart' show RosterFixture;
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
@@ -12,6 +18,9 @@ import 'swarm_state_test.dart' show MemoryStore;
 /// sidebar Agents list showed the name the agent was added with, and a terminal
 /// title when the pane had no name of its own.
 void main() {
+  final captureDir = Platform.environment['HARNESS_ROSTER_CAPTURE_DIR'];
+  setUpAll(() => loadCaptureFonts(captureDir));
+
   group('Add agent names the agent', () {
     test('an explicit harness name is sent as it is', () {
       expect(
@@ -82,6 +91,49 @@ void main() {
         expect(teammate.controller.snapshot!.agentName('agent-1'), 'Sage');
       },
     );
+
+    for (final brightness in [Brightness.light, Brightness.dark]) {
+      testWidgets(
+        'the Agents list before and after a rename, ${brightness.name}',
+        (tester) async {
+          final f = RosterFixture();
+          await f.initialize();
+          await tester.binding.setSurfaceSize(const Size(560, 420));
+          final previous = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = previous);
+          final agents = f.server.state['agents'] as List;
+          // As Darren's list was: the name the agent was added with, and a
+          // terminal title.
+          agents[1]['displayName'] = 'cd /Users/macbookpro/proj…';
+          agents[3]['displayName'] = 'Divide';
+          await f.controller.refresh();
+          await f.show(tester, brightness: brightness);
+          await captureBoundary(
+            tester,
+            f.boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary,
+            captureDir,
+            'agents-before-${brightness.name}',
+          );
+          agents[1]['displayName'] = 'Release PM';
+          agents[3]['displayName'] = 'Docs writer';
+          await f.controller.refresh();
+          await tester.pumpAndSettle();
+          expect(find.text('Release PM'), findsOneWidget);
+          expect(find.text('Docs writer'), findsOneWidget);
+          expect(find.textContaining('cd /Users'), findsNothing);
+          await captureBoundary(
+            tester,
+            f.boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary,
+            captureDir,
+            'agents-after-${brightness.name}',
+          );
+          await f.close(tester);
+        },
+      );
+    }
 
     test('the client renames the agent in every loaded Swarm that holds '
         'the harness, and no other', () async {
