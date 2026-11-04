@@ -19,12 +19,12 @@ import { identifier, object } from './wire.js'
 type Json = Record<string, unknown>
 interface Own { tabId: string; agentId: string; harnessId: string }
 
-/** Every host of every Swarm asks, so not every second (Lead, 2026-10-23); the backend gives up on a pickup after 10 s. */
+/** Every host of every Swarm asks, so not every second (Lead, 2026-10-23); the backend gives up on a pickup after 10 s.
+ *  Only without the push lease: while the server pushes deliveries it also says when a request waits for this machine
+ *  (`__terminal_waiting`, spec 2026-11-02-poll-cost Part 4.2), and says it again at each of the sender's re-checks while the
+ *  request still waits (backend store.ts terminalResult). Task #2800: the 8 s fallback poll kept then was still almost all
+ *  empty pickups, each a transaction; the host now asks only when told. */
 export const SERVE_EVERY_MS = 3_000
-/** While the server pushes deliveries (the host's push lease), it also says when a request waits for this machine
- *  (`__terminal_waiting`, spec 2026-11-02-poll-cost Part 4.2): this poll is then only the net for a lost push, still inside the
- *  backend's 10 s. Prod 2026-11-02: 305 empty pickups a minute, each a transaction. */
-export const SERVE_PUSHED_EVERY_MS = 8_000
 /** A screen read per agent; the 3-minute prompt wait does not need it finer. */
 const WATCH_EVERY_MS = 15_000
 const PROMPT_WAIT_MS = 3 * 60_000
@@ -167,8 +167,8 @@ type Episode = { since: number; alerted: boolean } | null
 interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number; skips?: number }
 
 export class TerminalHost {
-  /** When the last pickup started: the next is due after the interval the push lease allows now, so a lapsed lease is
-   *  back to every 3 s at once. */
+  /** When the last pickup started: without the push lease the next is due 3 s after it, so a lapsed lease is back to every
+   *  3 s at once. */
   private servedAt = -Infinity
   private nextWatchAt = 0
   private serving: Promise<void> | null = null
@@ -200,7 +200,7 @@ export class TerminalHost {
     if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
-    if (!this.serving && now - this.servedAt >= (this.pushes() ? SERVE_PUSHED_EVERY_MS : SERVE_EVERY_MS)) this.startServing()
+    if (!this.serving && !this.pushes() && now - this.servedAt >= SERVE_EVERY_MS) this.startServing()
     if (!this.watching && now >= this.nextWatchAt) {
       this.nextWatchAt = now + WATCH_EVERY_MS
       this.watching = this.watch(own).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.watching = null })

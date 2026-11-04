@@ -7416,42 +7416,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         topInset: _native ? 0 : _tabBarHeight,
         onOpened: onOpened,
         ownsPointer: (position) => _owns(_notificationsButtonKey, position),
-        onOpen: (row) async {
-          final destination = swarmDestinations(app)
-              .where(
-                (item) =>
-                    item.machineId == row.machineId &&
-                    item.agentId == row.agentId,
-              )
-              .firstOrNull;
-          if (destination == null) return false;
-          final readToken = app.agentUnread.readTokenFor(
-            row.machineId,
-            row.agentId,
-          );
-          final questionId = app
-              .questionFor(row.machineId, row.agentId)
-              ?.requestId;
-          final opened = await activateSwarmDestination(
-            app,
-            destination,
-            destinationSwarmId: app.activeSwarmId,
-          );
-          // Opening acknowledges this notification. Its question stays pending
-          // until the daemon confirms an answer, independently of unread state.
-          if (opened &&
-              app.agentUnread.readTokenFor(row.machineId, row.agentId) ==
-                  readToken &&
-              app.questionFor(row.machineId, row.agentId)?.requestId ==
-                  questionId) {
-            app.readAgentNotification(
-              row.machineId,
-              row.agentId,
-              readToken: readToken,
-            );
-          }
-          return opened;
-        },
+        onOpen: (row) => openInboxNotification(app, row),
       ),
     );
   }

@@ -318,6 +318,76 @@ class SuperTabUnreadBar extends StatelessWidget {
   }
 }
 
+/// Shown while the chat holds unread tags of the reader in replies that live only in their thread (#2814): a flat row
+/// across the top of the chat, like [SuperTabUnreadBar], that names them and opens the oldest one's thread at the
+/// reply. The words carry it, not the colour.
+class SuperTabThreadTagBar extends StatelessWidget {
+  const SuperTabThreadTagBar({
+    super.key,
+    required this.count,
+    required this.onOpen,
+  });
+
+  /// The unread tags in threads.
+  final int count;
+  final VoidCallback onOpen;
+
+  static String label(int count) => count == 1
+      ? '1 new reply mentions you · Open'
+      : '$count new replies mention you · Open';
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final accent = DesktopChrome.accent;
+    final words = label(count);
+    return Material(
+      key: const ValueKey('super-thread-tag-bar'),
+      color: DesktopChrome.selection,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+        ),
+        child: Semantics(
+          button: true,
+          label: '$words its thread',
+          excludeSemantics: true,
+          child: InkWell(
+            onTap: onOpen,
+            child: Padding(
+              padding: SuperTabUnreadBar._padding,
+              child: Row(
+                children: [
+                  Icon(
+                    AppIcons.atSign,
+                    size: grid.AppDesktop.iconSize,
+                    color: accent,
+                  ),
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Expanded(
+                    child: Text(
+                      words,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(color: accent, medium: true),
+                    ),
+                  ),
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Icon(
+                    AppIcons.arrowRight,
+                    size: grid.AppDesktop.iconSize,
+                    color: accent,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Shown while the New messages line, not yet seen this visit, is below the reader (a link opened the chat above
 /// it): takes the reader down to it.
 class SuperTabJumpToUnread extends StatelessWidget {

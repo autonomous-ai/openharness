@@ -34,6 +34,7 @@ import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
+import { profiled } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -3821,6 +3822,36 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
     expect(Date.now() - answeredAt).toBeLessThan(6_000)
     expect(loads()).toBeLessThanOrEqual(3)
+  })
+
+  // Task #2800: while the server pushes, a host picks up terminal requests only when told (cli superTabs/terminal.ts), so a push
+  // lost on the way is told again by the sender's own wait, at each re-check of a request still waiting for its host: inside
+  // the 10 s pickup window, and with no read the wait does not already make.
+  it('tells the host again of a request still waiting for pickup at each re-check, and never of one picked up', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const told: unknown[] = []
+    const at = new SuperTabStore(db, Date.now, null, { terminalWaiting: waiting => { told.push(waiting) } })
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([{ machineId: 'test-host', tabId: tab, agentId: worker }])
+    expect(await claim()).toHaveLength(1)
+    told.length = 0
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([])
+  })
+
+  // Task #2800's measure: the database operations one empty answer costs, which each read a timer no longer makes saves.
+  // Printed for the pull request.
+  it('measures the database operations of an empty worker list read and an empty terminal pickup', async () => {
+    const { tab, worker } = await terminalFixture()
+    const ops = async (run: () => Promise<unknown>) => (await profiled(db, run)).filter(e => !e.ns.endsWith('.system.profile')).length
+    const full = await ops(() => store.deliveries(host, tab, worker))
+    const quiet = await ops(() => store.deliveries(host, tab, worker))
+    // 30 s on, as the host's timer read came: the full poll again, the read cache warm.
+    const warm = await ops(() => later(31_000).deliveries(host, tab, worker))
+    const pickup = await ops(() => store.hostTerminal(host, 'test-host'))
+    process.stderr.write(`[#2800 measure] DB operations per empty answer: worker list full ${full} (cold cache) / ${warm} (warm), quiet ${quiet}, terminal pickup ${pickup}\n`)
+    expect(Math.min(full, warm, quiet, pickup)).toBeGreaterThan(0)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {
