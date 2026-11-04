@@ -286,11 +286,7 @@ void main() {
       }
     }
 
-    for (final (ask, tag) in [
-      ('proposal', '✋ Proposal'),
-      ('on-it', '● On it'),
-      ('shipped', '✓ Shipped'),
-    ]) {
+    for (final (ask, tag) in [('proposal', '✋ Proposal')]) {
       testWidgets('$ask shows $tag after the time, in its muted style', (
         tester,
       ) async {
@@ -332,18 +328,25 @@ void main() {
       }
     });
 
-    testWidgets('tags a person\'s own message a task was opened from', (
-      tester,
-    ) async {
-      final server = _server('task-line');
-      server.messages.first.remove('source');
-      server.threadAsks['root'] = 'on-it';
-      await showView(tester, server);
-      expect(
-        find.descendant(of: _row('root'), matching: find.text('● On it')),
-        findsOneWidget,
-      );
-    });
+    // Anh Dee, 11-04 ('bot messages'): a task's agent reacts 👀 and ✅ on
+    // the message that asked; the row draws no On it or Shipped, even from a
+    // server that still sends them.
+    for (final ask in ['on-it', 'shipped']) {
+      testWidgets('draws no tag on a person\'s own message for $ask', (
+        tester,
+      ) async {
+        final server = _server('task-line');
+        server.messages.first.remove('source');
+        server.threadAsks['root'] = ask;
+        await showView(tester, server);
+        for (final tag in ['● On it', '✓ Shipped', 'On it', 'Shipped']) {
+          expect(
+            find.descendant(of: _row('root'), matching: find.text(tag)),
+            findsNothing,
+          );
+        }
+      });
+    }
 
     testWidgets('a message that is no ask keeps its words and has no tag', (
       tester,
@@ -376,7 +379,7 @@ void main() {
     testWidgets('an agent\'s engine mark stays between its name and the time', (
       tester,
     ) async {
-      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      final server = _server('task-line')..threadAsks['root'] = 'proposal';
       (server.state['agents'] as List).add({
         'id': 'pm',
         'name': 'Lead',
@@ -403,7 +406,7 @@ void main() {
       );
       final tag = find.descendant(
         of: _row('root'),
-        matching: find.text('● On it'),
+        matching: find.text('✋ Proposal'),
       );
       expect(left(name), lessThan(left(mark)));
       expect(left(mark), lessThan(left(tag)));
@@ -412,7 +415,7 @@ void main() {
     testWidgets('keeps its header when the same person wrote just before', (
       tester,
     ) async {
-      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      final server = _server('task-line')..threadAsks['root'] = 'proposal';
       server.messages.insert(0, {
         'id': 'before',
         'conversationId': 'lead',
@@ -428,7 +431,7 @@ void main() {
       });
       await showView(tester, server);
       expect(
-        find.descendant(of: _row('root'), matching: find.text('● On it')),
+        find.descendant(of: _row('root'), matching: find.text('✋ Proposal')),
         findsOneWidget,
       );
       expect(
@@ -438,14 +441,14 @@ void main() {
     });
 
     testWidgets('has no tag at the head of its own thread', (tester) async {
-      final server = _server('task-line')..threadAsks['root'] = 'on-it';
+      final server = _server('task-line')..threadAsks['root'] = 'proposal';
       final c = await showView(tester, server);
       c.openThread('root');
       await tester.pumpAndSettle();
       expect(
         find.descendant(
           of: _row('root', thread: true),
-          matching: find.text('● On it'),
+          matching: find.text('✋ Proposal'),
         ),
         findsNothing,
       );
