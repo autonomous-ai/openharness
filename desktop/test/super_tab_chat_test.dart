@@ -395,10 +395,9 @@ void main() {
     expect(projectWeight(), grid.AppFont.semibold);
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
-    // A workgroup with no work is in The rest, which starts folded (#2309).
-    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    expect(projectWeight(), grid.AppFont.semibold);
+    // Opened as the project's Tasks view opens it (task #2569).
+    await c.select('offline');
     await tester.pumpAndSettle();
     expect(find.text('An unread workgroup update'), findsOneWidget);
     expect(c.unread(c.selected!), isFalse);

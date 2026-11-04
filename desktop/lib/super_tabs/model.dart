@@ -384,6 +384,8 @@ class SuperTabConversation {
               (row['shippedAt'] as num).toInt(),
             )
           : null,
+      queueRank = (row['queueRank'] as num?)?.toDouble(),
+      notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -480,6 +482,15 @@ class SuperTabConversation {
   /// (a pull request card's `merged` is); null until then, and from a server
   /// that does not say.
   final DateTime? shippedAt;
+
+  /// Its place in its project's shared Next up, set by a person or the PM
+  /// (backend taskQueue.ts); null until someone moves it, when its number
+  /// places it (task_groups.dart).
+  final double? queueRank;
+
+  /// The day before which its work may not start, a promise the PM keeps
+  /// ("remove the preview route after Dec 4"); null when there is none.
+  final DateTime? notBefore;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found

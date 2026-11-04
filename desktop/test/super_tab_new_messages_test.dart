@@ -731,14 +731,16 @@ void main() {
       'name': 'Worker',
     };
     final c = await show(tester, server);
+    // The sidebar lists no tasks (task #2569): the task's news makes its
+    // project's row bold.
+    final name = c.snapshot!.projects.single.name;
     FontWeight? weight() => tester
         .widget<RichText>(
           find.descendant(
-            of: find.byKey(const ValueKey('super-group-offline')),
+            of: find.byKey(const ValueKey('super-group-lead')),
             matching: find.byWidgetPredicate(
               (widget) =>
-                  widget is RichText &&
-                  widget.text.toPlainText() == 'Offline editing',
+                  widget is RichText && widget.text.toPlainText() == name,
             ),
           ),
         )
@@ -746,9 +748,6 @@ void main() {
         .style
         ?.fontWeight;
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-    await tester.pumpAndSettle();
-    // A workgroup with no work is in The rest, which starts folded (#2309).
-    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
     await tester.pumpAndSettle();
     expect(weight(), grid.AppFont.semibold);
     // Read on another device.
