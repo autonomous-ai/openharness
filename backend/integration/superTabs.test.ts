@@ -32,6 +32,7 @@ import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
+import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -847,6 +848,7 @@ describe('private swarm projects on the real control API', () => {
   // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
   // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
   it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+    wantDefaultDigest()
     // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
@@ -867,7 +869,7 @@ describe('private swarm projects on the real control API', () => {
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207), and the task's "Let's build" message with its brief in its thread (#2294).
+    // After the row naming who added the Lead (#2207), and the task's message with its brief in its thread (#2294).
     expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'task-line', 'system', 'update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
@@ -1252,8 +1254,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'Change this implementation', truncated: false, interrupted: false }
     const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    // Besides the rows naming who added each agent (#2207), only the task's own "Let's build" message (#2294).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(["Let's build: Implementation"])
+    // Besides the rows naming who added each agent (#2207), only the task's own message (#2294).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Implementation'])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => !memberRow(m))).toHaveLength(1)
     expect(await store.deliveries(host, tab, worker)).toEqual([])
     // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.

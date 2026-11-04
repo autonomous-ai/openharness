@@ -27,8 +27,18 @@ void main() {
   SuperTabMessage mine(int sequence, {String? thread}) =>
       message(sequence, author: me, kind: 'person', thread: thread);
 
-  String? first(List<SuperTabMessage> read, int? mark, {bool older = false}) =>
-      swarmFirstUnread(read, mark, accountId: me, hasOlder: older);
+  String? first(
+    List<SuperTabMessage> read,
+    int? mark, {
+    bool older = false,
+    Set<String>? hidden,
+  }) => swarmFirstUnread(
+    read,
+    mark,
+    accountId: me,
+    hasOlder: older,
+    drawn: hidden == null ? null : (m) => !hidden.contains(m.id),
+  );
 
   test('is the first message past the mark', () {
     expect(first([message(1), message(2), message(3)], 1), 'm2');
@@ -79,6 +89,29 @@ void main() {
       first([message(5), message(6)], 2),
       'm5',
       reason: 'nothing is older than what was read',
+    );
+  });
+
+  test('passes over a message the chat does not draw, such as an answered '
+      "prompt's warning in a task's chat", () {
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m2'}),
+      'm3',
+    );
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m2', 'm3'}),
+      isNull,
+      reason: 'nothing unread is drawn',
+    );
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m1'}),
+      'm2',
+      reason: 'a hidden message already read changes nothing',
+    );
+    expect(
+      first([message(3), message(4)], 2, older: true, hidden: {'m3'}),
+      'm4',
+      reason: 'a hidden message still counts toward reaching the mark',
     );
   });
 

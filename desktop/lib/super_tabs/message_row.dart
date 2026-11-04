@@ -52,6 +52,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.dimmed = false,
     this.thread,
     this.threadUnread = false,
+    this.threadTagged = false,
     this.onOpenThread,
     this.threadTrailing,
     this.threadEnd,
@@ -70,6 +71,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
   final bool threadUnread;
+
+  /// Whether an unread reply in [thread] tags the reader.
+  final bool threadTagged;
 
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
@@ -150,14 +154,20 @@ class SuperTabMessageRow extends StatefulWidget {
   /// the rows shown (view.dart).
   static const groupLimit = 20;
 
+  static bool _untagged(SuperTabMessage _) => false;
+
   /// The messages that join the one above them under its header: like Slack,
   /// one sender's messages within five minutes of each other, whatever their
   /// length (Huy, 2026-11-03, #2419), up to [groupLimit] to a group.
-  static Set<String> consecutiveUpdates(List<SuperTabMessage> messages) {
+  static Set<String> consecutiveUpdates(
+    List<SuperTabMessage> messages, {
+    bool Function(SuperTabMessage) tagged = _untagged,
+  }) {
     final joined = <String>{};
     var first = 0;
     for (var i = 1; i < messages.length; i++) {
-      if (i - first < groupLimit && groupsWith(messages[i], messages[i - 1])) {
+      if (i - first < groupLimit &&
+          groupsWith(messages[i], messages[i - 1], tagged: tagged)) {
         joined.add(messages[i].id);
       } else {
         first = i;
@@ -168,13 +178,20 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
-  /// on its own with its Replied in thread line; [inThread], replies group.
+  /// on its own with its Replied in thread line; [inThread], replies group. A
+  /// line that draws its own row has no header to share, on either side, and
+  /// a [tagged] row's header is where its tag shows.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
     bool inThread = false,
+    bool Function(SuperTabMessage) tagged = _untagged,
   }) {
     if (previous == null ||
+        current.drawsOwnRow ||
+        previous.drawsOwnRow ||
+        tagged(current) ||
+        tagged(previous) ||
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
@@ -474,6 +491,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             style: SwarmType.time(context),
                                           ),
                                         ),
+                                      if (widget.thread?.askTag case final tag?)
+                                        Text(
+                                          tag,
+                                          style: SwarmType.time(context),
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -583,6 +605,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                   thread: thread,
                                   unread: widget.threadUnread,
+                                  tagged: widget.threadTagged,
                                   onOpen: open,
                                   member: widget.member,
                                   trailing: widget.threadTrailing,
@@ -821,6 +844,7 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.thread,
     required this.unread,
     required this.onOpen,
+    this.tagged = false,
     this.member,
     this.trailing,
     this.end,
@@ -833,7 +857,7 @@ class SuperTabThreadLine extends StatelessWidget {
 
   /// Drawn last, outside the line's link: End session.
   final Widget? end;
-  final bool unread;
+  final bool unread, tagged;
   final VoidCallback onOpen;
 
   /// Dresses each reply author as their own messages are: a person's
@@ -886,7 +910,7 @@ class SuperTabThreadLine extends StatelessWidget {
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
-      label: unread ? '$count, unread' : count,
+      label: [count, if (unread) 'unread', if (tagged) '@ you'].join(', '),
       onTap: onOpen,
       builder: (active) => Row(
         children: [
@@ -912,6 +936,14 @@ class SuperTabThreadLine extends StatelessWidget {
                         ),
                   ),
                 ),
+                if (tagged) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Text(
+                    '@ you',
+                    key: ValueKey('super-thread-tagged-${thread.id}'),
+                    style: DesktopChrome.metadata(color: DesktopChrome.accent),
+                  ),
+                ],
                 const SizedBox(width: grid.AppDesktop.controlGap),
                 Flexible(
                   child: Text(

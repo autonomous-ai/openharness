@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const record = vi.hoisted(() => vi.fn())
 const mark = vi.hoisted(() => vi.fn())
 const machineUpdate = vi.hoisted(() => vi.fn())
+const swarmAgentFind = vi.hoisted(() => vi.fn())
+const warn = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
-vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate } } }))
+vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate }, swarmAgent: { aggregateRaw: swarmAgentFind } } }))
+vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
 beforeEach(() => {
   record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
   machineUpdate.mockReset(); machineUpdate.mockResolvedValue({})
+  swarmAgentFind.mockReset(); swarmAgentFind.mockResolvedValue([]); warn.mockReset()
 })
 it('forwards only the choice identity and a fixed metric, never device, agent or location', async () => {
   const now = new Date('2026-10-13T12:00:00Z')
@@ -201,4 +205,43 @@ it('keeps Harness OS and Orange Pi connections separate without storing identity
   expect(record.mock.calls).toEqual([
     ['account', now, 'relay_harness-os_opens'], ['account', now, 'relay_harness-os-pi_opens'],
   ])
+})
+
+// A Swarm agent's turn on someone's Mac is hosting, never that person working (Dee, 2026-11-04).
+describe('a turn is marked by who started it', () => {
+  const now = new Date('2026-11-04T12:00:00Z')
+
+  it('marks an own session\'s turn as worked', async () => {
+    await recordTurnStarted('owner', 'mac', 'own-session', now)
+    expect(mark.mock.calls).toEqual([['owner', now, { worked: true }]])
+  })
+
+  it('marks a Swarm agent\'s turn as hosting, not worked, found by its machine and current terminal', async () => {
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
+    await recordTurnStarted('owner', 'mac', 'swarm-session', now)
+    expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
+    expect(swarmAgentFind.mock.calls[0]![0].pipeline[0]).toEqual({ $match: { machineId: 'mac', deleted: false, 'data.harnessId': 'swarm-session' } })
+  })
+
+  it('marks a Team account\'s turn as hosting without reading anything: it runs only Swarm agents', async () => {
+    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
+    expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
+    expect(swarmAgentFind).not.toHaveBeenCalled()
+  })
+
+  it('marks neither when it cannot tell, says so without ids, and still counts the turn', async () => {
+    swarmAgentFind.mockRejectedValue(new Error('down'))
+    await expect(recordTurnStarted('PRIVATE_OWNER', 'PRIVATE_MACHINE', 'PRIVATE_AGENT', now)).resolves.toBeUndefined()
+    expect(mark).not.toHaveBeenCalled()
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started'])
+    expect(warn).toHaveBeenCalledOnce()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE_')
+  })
+
+  it('counts the turn in the relay total whichever mark it gets', async () => {
+    swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
+    await recordTurnStarted('owner', 'mac', 'swarm-session', now)
+    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
+    expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started', 'relay_turns_started'])
+  })
 })

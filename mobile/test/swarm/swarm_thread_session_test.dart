@@ -233,4 +233,56 @@ void main() {
       });
     },
   );
+
+  group('@ where a session hears the thread (Desktop thread `_tagChoices`, '
+      '`sendThreadReply`)', () {
+    test('a plain thread offers the chat\'s Buddy; a reply that starts a '
+        'session offers no agent', () async {
+      final (_, chat, thread) = await rig();
+      expect([for (final a in thread.mentionable) a.id], ['agent-wren']);
+
+      thread.newSession = true;
+
+      expect(thread.newSession, isTrue);
+      expect(thread.mentionable, isEmpty);
+      expect(chat.mentionable, isNotEmpty, reason: 'the chat still offers it');
+    });
+
+    test('a thread a session answers offers no agent', () async {
+      final rows = [
+        sessionMessage('m1', 1, author: me),
+        sessionMessage('m2', 2, root: 'm1', session: true),
+      ];
+      final (_, _, thread) = await rig(
+        backend: sessionBackend(sessions: live, page: rows),
+        page: rows,
+      );
+      expect(thread.session, isNotNull);
+      expect(thread.mentionable, isEmpty);
+    });
+
+    test('an agent named before New session was chosen holds the reply back '
+        'and says why, as the desktop does; unnamed, it goes', () async {
+      final (fake, _, thread) = await rig();
+      thread.mention('agent-wren');
+      thread
+        ..draft = '${thread.draft}look'
+        ..newSession = true;
+
+      expect(await thread.send(), isFalse);
+
+      expect(
+        thread.error,
+        "Only this thread's session hears a reply here. Remove the agent's "
+        'mention.',
+      );
+      expect(fake.commands.where((c) => c['type'] == 'message.send'), isEmpty);
+      expect(thread.draft, '@Wren look', reason: 'nothing left the box');
+
+      thread.draft = 'look';
+      expect(await thread.send(), isTrue);
+      expect(sent(fake)['recipientIds'], isEmpty);
+      expect(sent(fake)['newSession'], isTrue);
+    });
+  });
 }

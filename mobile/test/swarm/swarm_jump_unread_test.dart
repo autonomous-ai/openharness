@@ -48,6 +48,7 @@ void main() {
     List<Map<String, dynamic>> page, {
     required int mark,
     bool older = false,
+    int taskMark = 40,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -76,7 +77,7 @@ void main() {
           buddyData('agent-wren', displayName: 'Wren'),
         ],
         derived: {
-          'readMarks': {chat: mark, 'g1': 40},
+          'readMarks': {chat: mark, 'g1': taskMark},
         },
       ),
       'members': [part(me, 1, person(me))],
@@ -283,7 +284,7 @@ void main() {
       expect(pill, findsOneWidget);
     });
 
-    testWidgets('a work chat has none', (tester) async {
+    testWidgets('a work chat read through its end has none', (tester) async {
       await pump(
         tester,
         backend(forty(), mark: 40),
@@ -291,6 +292,24 @@ void main() {
         messageId: 'msg-20',
       );
       expect(onScreen(tester, find.text('Update 20.')), isTrue);
+      expect(line, findsNothing);
+      expect(pill, findsNothing);
+    });
+
+    testWidgets('a work chat with its line above has it too, and a tap lands '
+        'on the line', (tester) async {
+      await pump(
+        tester,
+        backend(forty(), mark: 40, taskMark: 5),
+        conversation: 'g1',
+        messageId: 'msg-20',
+      );
+      expect(onScreen(tester, find.text('Update 20.')), isTrue);
+      expect(pill, findsOneWidget);
+
+      await tester.tap(pill);
+      await tester.pumpAndSettle();
+      expect(onScreen(tester, line), isTrue);
       expect(pill, findsNothing);
     });
   });

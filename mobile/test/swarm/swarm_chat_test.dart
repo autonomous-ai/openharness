@@ -2529,6 +2529,11 @@ void main() {
       expect(key('swarm-replied-in-thread-m3'), findsNothing);
       expect(key('swarm-thread-box'), findsOneWidget);
       expect(find.text('Reply'), findsOneWidget, reason: 'the field hint');
+      // Also send is in Reply options, folded until it is opened.
+      expect(find.text('Reply options'), findsOneWidget);
+      expect(find.text('Also send to the chat'), findsNothing);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(find.text('Also send to the chat'), findsOneWidget);
     });
 
@@ -2768,8 +2773,19 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(key('swarm-thread-field'), 'Ship it as drawn.');
+      String said() =>
+          tester.widget<Text>(key('swarm-thread-options-label')).data!;
+      // Folded under Reply options until it is opened, nothing ticked.
+      expect(key('swarm-thread-also-send'), findsNothing);
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       await tester.tap(key('swarm-thread-also-send'));
       await tester.pump();
+      // Folded again, its line says the reply goes to the chat too.
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      expect(said(), 'Reply options · Also send to the chat');
       await tester.tap(key('swarm-thread-send'));
       await tester.pumpAndSettle();
 
@@ -2777,6 +2793,9 @@ void main() {
       expect(fake.commands.single['replyTo'], 'm1');
       expect(inThread('Ship it as drawn.'), findsOneWidget);
       // Ticked for this reply alone.
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(
         tester
             .widget<Semantics>(key('swarm-thread-also-send'))
@@ -2791,6 +2810,12 @@ void main() {
           .body!['operationId'];
       expect(find.text('Ship it as drawn.'), findsOneWidget);
       expect(key('swarm-replied-in-thread-${sentId(sent)}'), findsOneWidget);
+
+      // Opened again, the thread starts with Reply options folded.
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-thread-options'), findsOneWidget);
+      expect(key('swarm-thread-also-send'), findsNothing);
     });
 
     bool sendable(WidgetTester tester, String button) =>

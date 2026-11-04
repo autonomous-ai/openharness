@@ -153,7 +153,7 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })
     expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [], author: { kind: 'person', id: peer.sub },
-      source: { kind: 'buddy-proposal', personId: peer.sub }, text: "Let's build: Offline sync" })
+      source: { kind: 'buddy-proposal', personId: peer.sub }, text: 'Offline sync' })
     // The full proposal is the root's first reply, from the Buddy: the one row the PM is woken for.
     const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: sent, replyTo: sent } })
     expect(details).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], text: 'Goal: Offline sync\nScope: Web only\nPriority: normal' })

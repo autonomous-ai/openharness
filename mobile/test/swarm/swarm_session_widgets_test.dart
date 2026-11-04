@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/semantics.dart' show SemanticsProperties;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -215,12 +216,17 @@ void main() {
       final fake = threadBackend(replies: plain);
       await pump(tester, fake, thread: 'm1');
       expect(key('swarm-thread-session-line'), findsNothing);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       await tester.tap(key('swarm-thread-also-send'));
       await tester.pump();
+      final box = tester.getRect(key('swarm-thread-box'));
       await tester.tap(key('swarm-thread-new-session'));
       await tester.pump();
       // A reply that starts a session is not offered to the chat too.
       expect(key('swarm-thread-also-send'), findsNothing);
+      // Also send's line keeps its place under the card: no jump.
+      expect(tester.getRect(key('swarm-thread-box')), box);
       await tester.enterText(key('swarm-thread-field'), 'Look into it');
       await tester.pump();
       await tester.tap(key('swarm-thread-send'));
@@ -228,6 +234,59 @@ void main() {
       expect(sent(fake)['newSession'], isTrue);
       expect(sent(fake)['replyTo'], 'm1');
       expect(sent(fake).containsKey('alsoSend'), isFalse);
+    });
+
+    testWidgets('Reply options starts folded with nothing ticked; a tap '
+        'opens it, another folds it and says what is on', (tester) async {
+      final fake = threadBackend(replies: plain);
+      await pump(tester, fake, thread: 'm1');
+      SemanticsProperties options() =>
+          tester.widget<Semantics>(key('swarm-thread-options')).properties;
+      String said() =>
+          tester.widget<Text>(key('swarm-thread-options-label')).data!;
+      bool? ticked(String name) =>
+          tester.widget<Semantics>(key(name)).properties.checked;
+
+      // Folded: its line only, under the card.
+      expect(said(), 'Reply options');
+      expect(options().expanded, isFalse);
+      expect(options().value, isNull);
+      expect(key('swarm-thread-new-session'), findsNothing);
+      expect(key('swarm-thread-also-send'), findsNothing);
+      expect(
+        tester.getRect(key('swarm-thread-options')).top,
+        tester.getRect(key('swarm-composer-card')).bottom,
+      );
+
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      expect(options().expanded, isTrue);
+      expect(ticked('swarm-thread-new-session'), isFalse);
+      expect(ticked('swarm-thread-also-send'), isFalse);
+      // New session above Also send, both under Reply options' line.
+      final line = tester.getRect(key('swarm-thread-options'));
+      final session = tester.getRect(key('swarm-thread-new-session'));
+      final also = tester.getRect(key('swarm-thread-also-send'));
+      expect(session.top, line.bottom);
+      expect(also.top, session.bottom);
+
+      await tester.tap(key('swarm-thread-new-session'));
+      await tester.pump();
+      // Open, the line says only its name: the ticks are in sight.
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      expect(options().expanded, isFalse);
+      expect(key('swarm-thread-new-session'), findsNothing);
+      expect(said(), 'Reply options · New session');
+      expect(options().value, 'New session');
+
+      // Folding keeps the tick: the reply still starts a session.
+      await tester.enterText(key('swarm-thread-field'), 'Look into it');
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+      expect(sent(fake)['newSession'], isTrue);
     });
 
     testWidgets('a live session shows its status line; End session ends it '
@@ -275,6 +334,8 @@ void main() {
         ],
       );
       await pump(tester, fake, thread: 'm1');
+      // Not even folded: Reply options is not there to open.
+      expect(key('swarm-thread-options'), findsNothing);
       expect(key('swarm-thread-new-session'), findsNothing);
       expect(key('swarm-thread-also-send'), findsNothing);
     });
@@ -337,6 +398,14 @@ void main() {
         'Session ended: idle for 30 minutes',
       );
       expect(key('swarm-thread-session-end'), findsNothing);
+      // Folded, Reply options still says the reply starts a session.
+      expect(
+        tester.widget<Text>(key('swarm-thread-options-label')).data,
+        'Reply options · New session',
+      );
+      expect(key('swarm-thread-new-session'), findsNothing);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(
         tester.widget<Text>(key('swarm-thread-new-session-note')).data,
         'This thread\'s session ended. Your reply starts a new one.',
@@ -361,6 +430,13 @@ void main() {
     ) async {
       final fake = threadBackend(replies: plain, engine: 'codex');
       await pump(tester, fake, thread: 'm1');
+      // Nothing on: the folded line says only its name.
+      expect(
+        tester.widget<Text>(key('swarm-thread-options-label')).data,
+        'Reply options',
+      );
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(
         tester.widget<Text>(key('swarm-thread-new-session-note')).data,
         'Sessions need a Claude Code Buddy',

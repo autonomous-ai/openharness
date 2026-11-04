@@ -127,18 +127,10 @@ class SuperTabActivity extends ChangeNotifier {
   static const _unknown = 9007199254740991;
 
   /// The tags that need the reader: not read past (the number clears by
-  /// reading). One in a thread that New replies lists is shown there instead;
-  /// a tag in a thread the reader does not follow still needs them.
+  /// reading). A tagged thread may also be in New replies; its mention remains
+  /// a separate Needs you item so the conversation badge represents it.
   Iterable<SuperTabMention> get _tags {
-    final listed = {
-      for (final t in newReplies) '${t.conversationId}/${t.rootId}',
-    };
-    return mentions.waiting.where(
-      (m) =>
-          mentionUnread(m) &&
-          (m.threadId == null ||
-              !listed.contains('${m.conversationId}/${m.threadId}')),
-    );
+    return mentions.waiting.where(mentionUnread);
   }
 
   /// A task whose agent waits on the reader (it needs a decision, or is
