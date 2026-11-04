@@ -1318,7 +1318,10 @@ describe('routes given only a store', () => {
     await plain.ready()
     try {
       expect((await plain.inject({ method: 'GET', url: `/api/super-tabs/${s.tabId}/parts` })).statusCode).toBe(200)
-      expect((await plain.inject({ method: 'GET', url: '/api/super-tabs/hosts/host/changes?full=1' })).statusCode).toBe(200)
+      const hosts = await plain.inject({ method: 'GET', url: '/api/super-tabs/hosts/host/changes?full=1' })
+      expect(hosts.statusCode).toBe(200)
+      // Only this test's own Swarm: a machine shared with every earlier test's Swarm made this read take 4 s here and 10 s on CI.
+      expect(hosts.json().data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
     } finally { await plain.close() }
   }, 10_000)
 })
@@ -1344,6 +1347,14 @@ describe('what a read costs the database (group 3b)', () => {
   const bulky = (s: ReturnType<typeof swarm>) => {
     for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
   }
+
+  it('counts none of the reads an earlier test left running', async () => {
+    const s = await scene(f => bulky(f))
+    // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
+    await leftover
+  })
 
   it('a Desktop change read with nothing changed loads a few tens of KB, not the Swarm', async () => {
     const s = await scene(f => bulky(f))
