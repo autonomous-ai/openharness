@@ -267,9 +267,7 @@ class SwarmReader extends ChangeNotifier {
     final held = _parts;
     if (held != null) {
       try {
-        final answer = await _get(
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
-        );
+        final answer = await _get('$_path/changes?${held.changesQuery}');
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
           try {
@@ -283,7 +281,14 @@ class SwarmReader extends ChangeNotifier {
           return (changed: change.changed || stale, view: null);
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }
