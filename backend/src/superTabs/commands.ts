@@ -1130,11 +1130,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       final: { ...finalOf(decision), ...patch }, ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
     const chosenId = decision.override?.candidateId ?? decision.final?.candidateId ?? decision.record.pick
     if (chosenId === undefined) {
-      // The only candidate that can run needs no rule to choose it.
-      const only = decision.record.via === 'only' ? ONLY_CANDIDATE : undefined
+      const chosen = decision.record.candidates.find(c => matches(c, decision))
+      // The only candidate that can run needs no rule to choose it; a start of anything else still says why (review of #3010).
+      const only = decision.record.via === 'only' && chosen ? ONLY_CANDIDATE : undefined
       const reason = reasonText ?? only ?? fail('ROUTE_REASON_REQUIRED',
         'This route names no pick: send, as overrideReason, the project\'s Routing rule that chose this candidate.')
-      const chosen = decision.record.candidates.find(c => matches(c, decision))
       const override: RouteOverride | undefined = chosen ? undefined : { by: 'lead', actorKey: actorKey(actor), reason }
       final(chosen ? { candidateId: chosen.id } : {}, override)
       const instead = (done: string) => `${who} ${done}, which is none of the route's candidates. Reason: ${reason}`
