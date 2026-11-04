@@ -1058,7 +1058,7 @@ mod tests {
         let (sink, mut events) = mpsc::unbounded_channel();
         let (sender, receive) = mpsc::unbounded_channel();
         app.account.driver = Some(sender.clone());
-        let mut command = tokio::process::Command::new("/bin/sh");
+        let mut command = tokio::process::Command::new(crate::sys::sh());
         command.args(["-c", r#"printf '%s\n' '{"type":"confirm","email":"dev@example.test"}'; IFS= read -r answer; [ "$answer" = yes ] || exit 1; printf '%s\n' '{"type":"result","status":"success","email":"dev@example.test"}'"#]);
         let task = tokio::spawn(drive(command, app.account.generation, sink, receive));
         apply_next(&mut app, &mut events).await;
@@ -1078,7 +1078,7 @@ mod tests {
         let (sink, mut events) = mpsc::unbounded_channel();
         let (sender, receive) = mpsc::unbounded_channel();
         app.account.driver = Some(sender);
-        let mut command = tokio::process::Command::new("/bin/sh");
+        let mut command = tokio::process::Command::new(crate::sys::sh());
         command.args(["-c", r#"printf '%s\n' '{"type":"waiting","message":"waiting for driver"}'; IFS= read -r answer; printf '%s\n' '{"type":"result","status":"error","message":"cleanup finished"}'"#]);
         let task = tokio::spawn(drive(command, app.account.generation, sink, receive));
         apply_next(&mut app, &mut events).await;
@@ -1097,7 +1097,7 @@ mod tests {
         let (sink, mut events) = mpsc::unbounded_channel();
         let (sender, receive) = mpsc::unbounded_channel();
         app.account.driver = Some(sender);
-        let mut command = tokio::process::Command::new("/bin/sh");
+        let mut command = tokio::process::Command::new(crate::sys::sh());
         command.args(["-c", r#"printf '%s\n' '{"type":"result","status":"success","email":"dev@example.test"}'; exit 1"#]);
         let task = tokio::spawn(drive(command, app.account.generation, sink, receive));
         apply_next(&mut app, &mut events).await;

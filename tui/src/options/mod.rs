@@ -691,10 +691,11 @@ mod tests {
     /// The default shell is this computer's, as tmux's is, never the fixture's Mac `/bin/zsh`.
     #[test]
     fn the_default_shell_is_the_users_or_sh() {
-        assert_eq!(default_shell(Some("/bin/sh")), "/bin/sh");
-        assert_eq!(default_shell(Some("/nonexistent/zsh")), "/bin/sh");
-        assert_eq!(default_shell(Some("zsh")), "/bin/sh", "not a full path");
-        assert_eq!(default_shell(None), "/bin/sh");
+        let sh = crate::sys::sh();
+        assert_eq!(default_shell(Some(&sh)), sh);
+        assert_eq!(default_shell(Some("/nonexistent/zsh")), sh);
+        assert_eq!(default_shell(Some("zsh")), sh, "not a full path");
+        assert_eq!(default_shell(None), sh);
         let expected = default_shell(std::env::var("SHELL").ok().as_deref());
         assert_eq!(tmux_defaults()["default-shell"], expected);
     }

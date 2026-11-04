@@ -688,8 +688,9 @@ fn matches(fm: &Mod, pattern: &str, text: &str) -> String {
 /// tmux uses the platform's POSIX extended expressions, including its escape rules.
 #[cfg(windows)]
 fn posix_match(pattern: &str, text: &str, icase: bool) -> bool {
-    // Windows has no regcomp. The regex crate reads the same extended syntax for all but back-references, which regcomp's
-    // extended form leaves undefined too.
+    // Windows has no regcomp. The regex crate reads the same extended syntax, with Perl's `(?…)` groups beside it, which an
+    // extended expression has none of: as on a Mac, those match nothing.
+    if pattern.contains("(?") { return false }
     regex::RegexBuilder::new(pattern).case_insensitive(icase).build().is_ok_and(|re| re.is_match(text))
 }
 

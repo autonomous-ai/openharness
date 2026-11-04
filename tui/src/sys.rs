@@ -21,6 +21,13 @@ pub fn prepare_environment() {
     }
 }
 
+/// This account's home, by `$HOME`, or on Windows the profile.
+pub fn home() -> PathBuf {
+    std::env::var_os("HOME").filter(|home| !home.is_empty()).map(PathBuf::from)
+        .or_else(|| if cfg!(windows) { std::env::var_os("USERPROFILE").map(PathBuf::from) } else { None })
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 /// A console that reads the escape sequences hn writes. Windows Terminal and conhost both take them, once asked; without this
 /// they print them. Input is the reader thread's (term_input.rs).
 pub fn prepare_console() {

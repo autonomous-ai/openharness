@@ -2594,7 +2594,7 @@ mod tests {
     #[tokio::test]
     async fn the_home_folder_is_a_new_project_unless_the_harness_is_a_terminal() {
         let mut app = app();
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::sys::home().display().to_string();
         app.homes.insert(crate::local::MACHINE.into(), home.clone());
         let form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some(format!("{home}/")), Surface::Dialog).unwrap();
         assert!(matches!(&form.draft.project, Project::New(name) if name.is_empty()), "{:?}", form.draft.project);

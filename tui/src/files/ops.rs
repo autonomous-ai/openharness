@@ -95,11 +95,37 @@ pub(super) fn paste(paths: &[PathBuf], cut: bool, dest: &Path) -> (Vec<String>, 
 
 // ── the Trash ────────────────────────────────────────────────────────────────
 
-/// The home Trash: $XDG_DATA_HOME/Trash, else ~/.local/share/Trash.
+/// What a person calls it here, in what the file manager says.
+pub(super) const TRASH_NAME: &str = if cfg!(windows) { "Recycle Bin" } else { "Trash" };
+
+/// The home Trash: $XDG_DATA_HOME/Trash, else ~/.local/share/Trash. On Windows nothing: the Recycle Bin has no folder to name.
 pub(super) fn trash_home() -> PathBuf {
+    if cfg!(windows) { return PathBuf::new() }
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
         .unwrap_or_else(|| super::home().join(".local/share"));
     data.join("Trash")
+}
+
+/// [path] (absolute) into the Recycle Bin, with no dialog of Windows' own: hn has asked already. The one exception is a drive with
+/// no Recycle Bin (a network share), where FOF_ALLOWUNDO alone would delete it for good: FOF_WANTNUKEWARNING has Windows ask first,
+/// and a no comes back as aborted, which hn's own question to delete it for good then follows.
+#[cfg(windows)]
+fn recycle(path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, SHFILEOPSTRUCTW, SHFileOperationW};
+    // A list ended by two NULs, as the call reads it.
+    let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+    // SAFETY: the list outlives the call, and every other field is zero, which the call allows.
+    let (result, aborted) = unsafe {
+        let mut operation: SHFILEOPSTRUCTW = std::mem::zeroed();
+        operation.wFunc = FO_DELETE;
+        operation.pFrom = from.as_ptr();
+        operation.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING) as u16;
+        (SHFileOperationW(&mut operation), operation.fAnyOperationsAborted != 0)
+    };
+    if result != 0 { return Err(io::Error::other(format!("Windows could not move it to the Recycle Bin (code {result})"))) }
+    if aborted { return Err(io::Error::other("it cannot go to the Recycle Bin")) }
+    Ok(())
 }
 
 /// Why something could not go to the Trash: across file systems (it would be copied), or another.
@@ -115,6 +141,8 @@ impl std::fmt::Display for TrashError {
 /// `info/NAME.trashinfo` (its Path, URL-escaped, and DeletionDate) made first and exclusively, then
 /// it renamed into `files/NAME` — NAME its name, or `stem.2.ext`… when that is taken. Where it is.
 pub(super) fn trash(path: &Path, trash: &Path) -> Result<PathBuf, TrashError> {
+    #[cfg(windows)]
+    if trash.as_os_str().is_empty() { return recycle(path).map(|()| PathBuf::new()).map_err(TrashError::Other) }
     let other = TrashError::Other;
     let (files, info) = (trash.join("files"), trash.join("info"));
     let new = !trash.exists();
@@ -259,8 +287,8 @@ mod tests {
         assert_eq!(to, t.join("files/my file.txt"));
         assert!(!d.join("my file.txt").exists());
         let info = fs::read_to_string(t.join("info/my file.txt.trashinfo")).unwrap();
-        assert!(info.starts_with("[Trash Info]\nPath=/"), "{info}");
-        assert!(info.contains("/my%20file.txt\n") && info.contains("DeletionDate=2"), "{info}");
+        assert!(info.starts_with("[Trash Info]\nPath="), "{info}");
+        assert!(info.contains("my%20file.txt\n") && info.contains("DeletionDate=2"), "{info}");
         // A second of the same name: its own.
         fs::write(d.join("my file.txt"), "y").unwrap();
         assert_eq!(trash(&d.join("my file.txt"), &t).ok().unwrap(), t.join("files/my file.2.txt"));

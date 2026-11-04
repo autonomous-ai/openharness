@@ -455,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn a_terminal_from_a_window_opened_at_home_opens_at_home() {
         let mut app = app();
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::sys::home().display().to_string();
         app.homes.insert(crate::local::MACHINE.into(), home.clone());
         ensure(&mut app, None, Some(home.clone()));
         let tab = app.tab().id.clone();

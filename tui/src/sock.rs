@@ -83,7 +83,7 @@ mod imp {
     use std::time::Duration;
 
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
-    use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE, LocalFree};
+    use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED, HANDLE, LocalFree};
     use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
     use windows_sys::Win32::Security::{EqualSid, GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser};
     use windows_sys::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
@@ -188,7 +188,14 @@ mod imp {
         }
 
         pub async fn accept(&mut self) -> io::Result<Stream> {
-            self.next.connect().await?;
+            loop {
+                match self.next.connect().await {
+                    Ok(()) => break,
+                    // A client came and went before this was asked (`answers` does): that instance is spent.
+                    Err(error) if error.raw_os_error() == Some(ERROR_NO_DATA as i32) => self.next = instance(&self.name, false, &self.security)?,
+                    Err(error) => return Err(error),
+                }
+            }
             let fresh = instance(&self.name, false, &self.security)?;
             Ok(Box::new(std::mem::replace(&mut self.next, fresh)))
         }
@@ -225,8 +232,14 @@ mod imp {
         Err(io::Error::new(io::ErrorKind::TimedOut, "this socket stayed busy"))
     }
 
-    /// Whether anything listens at [path]; the connection is let go at once, and runs nothing.
-    pub fn answers(path: &Path) -> bool { open_sync(path).is_ok() }
+    /// Whether anything listens at [path]; the connection is let go at once, and runs nothing. A pipe that exists but has no
+    /// free instance this moment (its last one spent on a client that just left, or all busy) still has its listener.
+    pub fn answers(path: &Path) -> bool {
+        match open_sync(path) {
+            Ok(_) => true,
+            Err(error) => matches!(error.kind(), io::ErrorKind::TimedOut) || error.raw_os_error() == Some(ERROR_PIPE_NOT_CONNECTED as i32),
+        }
+    }
 
     /// A file that stays, nothing listening on it (`ipc::gone`).
     pub fn leave_closed(path: &Path) { let _ = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path); }
