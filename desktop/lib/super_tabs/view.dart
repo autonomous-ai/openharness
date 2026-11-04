@@ -33,6 +33,7 @@ import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
 import 'personal_lead.dart';
+import 'personal_lead_card.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
 import 'pull_request_facts.dart';
@@ -2810,6 +2811,37 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// Whether [group]'s empty chat offers to start its Lead: a Personal
+  /// project with none, read by someone who may write (task #2815).
+  bool _offersLead(SuperTabConversation group) => switch (widget.app) {
+    final app? => c.canWrite && PersonalLeadStarter.of(app).wants(c, group.id),
+    null => false,
+  };
+
+  /// A Personal project's empty chat with no Lead: the card that starts one
+  /// (Huy 11-04, task #2815), and under it the project's panes when it holds
+  /// any.
+  Widget _leadWaiting(SuperTabConversation group) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: grid.AppDesktop.formWidth),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            PersonalLeadStartCard(
+              controller: c,
+              conversationId: group.id,
+              app: widget.app!,
+            ),
+            if (_personalPaneCount(group) > 0) _panesWaiting(group),
+          ],
+        ),
+      ),
+    ),
+  );
+
   /// Opens the group's terminals beside the chat; null when it has none this
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
@@ -4198,6 +4230,12 @@ class _SuperTabViewState extends State<SuperTabView>
               ? const Center(child: CircularProgressIndicator())
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
+              : messages.isEmpty &&
+                    outgoing.isEmpty &&
+                    !c.accessRevoked &&
+                    group != null &&
+                    _offersLead(group)
+              ? _leadWaiting(group)
               : messages.isEmpty &&
                     outgoing.isEmpty &&
                     !c.accessRevoked &&
