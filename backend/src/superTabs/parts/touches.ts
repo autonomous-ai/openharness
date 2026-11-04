@@ -119,6 +119,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)
       break
+    // A move reads that the task it goes after is still open in the project: archiving it meets the move here.
+    case 'work.queue':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      group(command.after ?? undefined)
+      break
     case 'message.send': {
       // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
       // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it

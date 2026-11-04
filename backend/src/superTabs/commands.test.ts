@@ -5282,7 +5282,8 @@ describe('the Next-up queue (work.queue)', () => {
     expect(() => f.run(queue(archived, { after: c }))).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
     f.state.conversations.push({ id: 'private', title: 'Private', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null,
       lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
-    expect(() => f.run(queue('private', { after: c }))).toThrow(expect.objectContaining({ code: 'AUDIENCE_CHAT_ONLY' }))
+    // A Chat with PM from before Buddies is nobody's to read now (buddies.test.ts), so it reads as missing.
+    expect(() => f.run(queue('private', { after: c }))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     f.state.conversations.pop()
     expect(f.state).toEqual(before)
   })

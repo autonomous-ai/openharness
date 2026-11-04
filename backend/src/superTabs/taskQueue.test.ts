@@ -10,7 +10,7 @@ describe('the Next-up queue order', () => {
   it('sorts an unranked task by its number, so a new task comes last', () => {
     expect(queueKey(task('a', 7))).toBe(7)
     expect(queueKey(task('a', 7, 0.5))).toBe(0.5)
-    expect(queueKey({ id: 'chat' })).toBe(0)
+    expect(queueKey({})).toBe(0)
     const moved = [task('a', 1, 3.5), task('b', 2), task('c', 3), task('new', 4)]
     expect(queueOrder(moved).map(t => t.id)).toEqual(['b', 'c', 'a', 'new'])
     // A tie goes by number.
