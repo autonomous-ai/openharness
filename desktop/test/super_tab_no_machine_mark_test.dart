@@ -49,12 +49,13 @@ void main() {
     controller.dispose();
   }
 
-  Finder mark(String id) =>
-      find.byKey(ValueKey('super-person-no-machine-$id'));
+  Finder mark(String id) => find.byKey(ValueKey('super-person-no-machine-$id'));
 
   testWidgets('marks a person with no machine, says why on hover', (
     tester,
   ) async {
+    // A screen reader hears why, as hover says it.
+    final semantics = tester.ensureSemantics();
     final controller = await show(tester, membersSwarm());
     expect(mark('peer'), findsOneWidget);
     expect(mark('tony'), findsOneWidget);
@@ -68,14 +69,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    // The row reads as one: the name, then why, then the points.
     expect(
-      find.descendant(
-        of: row,
-        matching: find.bySemanticsLabel('No machine shared yet'),
-      ),
-      findsOneWidget,
+      tester.getSemantics(mark('peer')).label,
+      contains('dee\nNumber one this week\nNo machine shared yet'),
     );
     await close(tester, controller);
+    semantics.dispose();
   });
 
   testWidgets('a machine that is only offline still counts', (tester) async {
