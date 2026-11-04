@@ -4,6 +4,8 @@
  *  marks' collection). A person's marks go only to their own reads (read/service.ts); agents, Buddies included, have none. */
 import { Prisma, type PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
+import { removeChunk, startChunkSweep } from '../lib/chunkSweep.js'
+import { logger } from '../utils/logger.js'
 import { fail, stableId } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { ms } from './parts/light.js'
@@ -15,10 +17,34 @@ export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
  *  mark went reads as far as its conversation's mark, as on a device that never kept one. */
 export const THREAD_MARK_CAP = 500
 
-/** Run by the singleton worker at startup, like the mention expiry. Thread marks need no index option: the hourly sweep
- *  deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
-export async function ensureReadMarkExpiry(db: PrismaClient): Promise<void> {
-  await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry', expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 })
+/** Run by the singleton worker at startup, like the mention expiry; answers whether the expiry is set. Where the database user
+ *  may not set it (production's, no collMod), startReadMarkSweep removes the old marks instead. Thread marks need no index
+ *  option: the hourly sweep deletes them (sweepThreadMarks), as the app user may not set one on an index `db push` built (#2238). */
+export async function ensureReadMarkExpiry(db: Pick<PrismaClient, '$runCommandRaw'>): Promise<boolean> {
+  return await ensureIndex(db, 'SuperTabReadMark', { key: { updatedAt: 1 }, name: 'read_mark_expiry',
+    expireAfterSeconds: READ_MARK_EXPIRY_MS / 1000 }) === 'ready'
+}
+
+/** Where the expiry is refused: one chunk of 500 marks every 30 s, as the usage-receipt sweep (lib/productUsageReceiptSweep.ts). */
+export const READ_MARK_SWEEP = { chunk: 500, everyMs: 30_000 } as const
+
+/** Removes up to [chunk] marks untouched for READ_MARK_EXPIRY_MS, oldest first, by the expiry index, and answers how many went.
+ *  A mark moved between the read of the chunk and its delete stays (lib/chunkSweep.ts). */
+export async function sweepReadMarks(db: Pick<PrismaClient, '$runCommandRaw'>, now: Date, chunk: number = READ_MARK_SWEEP.chunk): Promise<number> {
+  return removeChunk(db, { collection: 'SuperTabReadMark', sort: { updatedAt: 1 }, hint: 'read_mark_expiry', chunk,
+    filter: { updatedAt: { $lt: { $date: new Date(now.getTime() - READ_MARK_EXPIRY_MS).toISOString() } } } })
+}
+
+/** In the singleton worker, where the database refused the expiry (ensureReadMarkExpiry false: production's app user may not
+ *  run collMod, Ken's prod scan 11-04), removes old marks itself: one chunk now and every READ_MARK_SWEEP.everyMs, for as long
+ *  as the worker runs, since marks keep ageing. Where the expiry is set, it runs nothing. Answers its stop. */
+export function startReadMarkSweep(db: Pick<PrismaClient, '$runCommandRaw'>, expirySet: boolean,
+  settings: Partial<{ chunk: number; everyMs: number; now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
+  if (expirySet) return () => {}
+  const { chunk, everyMs, now, log } = { ...READ_MARK_SWEEP, now: () => new Date(), log: logger, ...settings }
+  log.warn(`[read-marks] the database refused the read-mark expiry: removing marks untouched for ${READ_MARK_EXPIRY_MS / 86_400_000} days `
+    + `here instead, ${chunk} every ${everyMs / 1000} s`)
+  return startChunkSweep({ label: '[read-marks]', everyMs, log, pass: async () => ({ removed: await sweepReadMarks(db, now(), chunk), done: false }) })
 }
 
 export interface ReadMarkWrite { tabId: string; personId: string; conversationId: string; sequence: number; now: number }
