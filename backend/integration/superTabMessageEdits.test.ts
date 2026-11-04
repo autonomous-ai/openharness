@@ -214,7 +214,7 @@ describe('message.delete', () => {
     const root = await f.send(f.web.conversationId, 'Owner root', owner)
     const reply = await f.send(f.web.conversationId, 'Reply', peer, { replyTo: root, recipientIds: [f.pm] })
     await f.execute({ type: 'message.react', conversationId: f.web.conversationId, messageId: reply, emoji: 'thumbs_up', on: true }, owner)
-    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread']
+    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread', 'SuperTabMention']
     const entries = await profiled(db, () => f.remove(f.web.conversationId, reply))
     // The profiler saw the delete's writes (so the check below is not empty by accident).
     for (const c of ['SuperTabMessage', 'SuperTabDelivery', 'SuperTabActivity']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)

@@ -1912,8 +1912,9 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
-      if (command.type === 'message.edit' && effects.result.changed) {
-        await tx.superTabMessage.update({ where: { id: command.messageId }, data: { text: command.text, editedAt: new Date(context.now) } })
+      // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
+      if (effects.messageEdit) {
+        await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
       }
       if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, effects.state.people.map(p => p.id), context.now)
       if (context.avatarUpload) {
@@ -2443,7 +2444,7 @@ export class SuperTabStore {
    *  deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
    *  A root with replies stays as DELETED_TEXT with nothing else of what it said; a reply's thread summary is written again. */
   private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, people: string[], now: number) {
-    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
+    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true, mentions: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
     if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [{ q: { _id: { $in: files }, tabId }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true }] })
@@ -2453,12 +2454,17 @@ export class SuperTabStore {
     const activityIds = [...reactions.map(r => stableId(tabId, 'reaction', r.id)), ...people.map(personId => stableId(tabId, 'reply', row.id, personId))]
     await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })
     if (activityIds.length) await tx.$runCommandRaw({ delete: 'SuperTabActivity', deletes: [{ q: { _id: { $in: activityIds }, tabId }, limit: 0 }] })
+    // Its tags (mentions.ts writeMentions ids): nobody keeps a waiting tag to a message they cannot open (security review 1 of #2967).
+    const tagIds = (row.mentions ?? []).map(personId => stableId(tabId, row.id, personId))
+    if (tagIds.length) await tx.$runCommandRaw({ delete: 'SuperTabMention', deletes: [{ q: { _id: { $in: tagIds }, tabId }, limit: 0 }] })
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
       // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it.
       await tx.$runCommandRaw({ update: 'SuperTabMessage', updates: [{ q: { _id: row.id, tabId }, u: { $set: { text: DELETED_TEXT, mentions: [],
         deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '' } } }] })
+      // Its own thread's summary drops the people only this root tagged.
+      await refreshThreads(tx, tabId, row.conversationId, [row.id])
       return
     }
     await tx.superTabMessage.delete({ where: { id: row.id } })

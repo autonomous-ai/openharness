@@ -53,9 +53,10 @@ export function deleteMessage(group: Counters, actor: Actor, messageId: string,
   group.reactionSeq = (group.reactionSeq ?? 0) + 1
   if (found.hasReplies) return { kept: true }
   // Each counter that pointed at the row steps back to the newest row left of its kind (parts/commit.ts numberMessages).
+  // One with no row of its kind found within the look-back stays as it was: rare, and safer than saying the chat is empty.
   const before = found.before ?? {}
-  if (group.lastMessageSequence === found.sequence) group.lastMessageSequence = before.message ?? 0
-  if (group.lastMainSequence === found.sequence) group.lastMainSequence = before.main ?? 0
-  if (group.lastPersonSequence === found.sequence) group.lastPersonSequence = before.person ?? 0
+  if (group.lastMessageSequence === found.sequence && before.message !== undefined) group.lastMessageSequence = before.message
+  if (group.lastMainSequence === found.sequence && before.main !== undefined) group.lastMainSequence = before.main
+  if (group.lastPersonSequence === found.sequence && before.person !== undefined) group.lastPersonSequence = before.person
   return { kept: false }
 }

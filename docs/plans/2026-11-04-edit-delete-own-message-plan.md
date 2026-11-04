@@ -26,8 +26,10 @@ say what agents see, and test that a Buddy cannot change its owner's messages.
 - Only the author changes a message: a person (`actor.kind === 'person'`), whose id is the row's `author.id` with
   `author.kind === 'person'`, on a plain post (`source` null). Agents (a Buddy included), other people, viewers and
   system rows are refused. Team sessions are never the person already (lib/teamSession.ts).
-- No edit history is stored or served: an edit overwrites `text` and sets `editedAt`; a delete clears `text`, files and
-  mentions.
+- No edit history is stored or served: an edit overwrites `text` (credentials removed, as a send's) and sets `editedAt`;
+  a delete clears `text`, files and mentions, and removes the tags the message gave.
+- An edit changes the text only: who it tagged and who it was sent to stay as sent (Slack does not re-notify on an edit
+  either). A tag typed into an edit is not a new tag.
 - Replies keep their thread: a deleted root with replies stays as a tombstone; its replies stay under it.
 - Nothing about who can read a message changes: the target is found with the same checks as `reactionTarget`.
 - Copy: "Edit message", "Delete message", "(edited)", "This message was deleted.", dialog "Delete message?" /

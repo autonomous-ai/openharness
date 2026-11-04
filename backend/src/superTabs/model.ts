@@ -699,6 +699,8 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
+  messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
