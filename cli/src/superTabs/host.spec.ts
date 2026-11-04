@@ -2958,8 +2958,9 @@ describe('a Lead\'s terminal requests', () => {
       { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
   })
 
-  // Spec 2026-11-02-poll-cost Part 4.2: picked up on the server's word, polled every 8 s while it pushes, every 3 s without.
-  it('picks one up at once when the server says one waits, and polls every 8 s only while the server pushes', async () => {
+  // Spec 2026-11-02-poll-cost Part 4.2 and task #2800: picked up on the server's word, which the sender's wait repeats while
+  // the request waits; asked for on a timer only without it, every 3 s.
+  it('picks one up at once when the server says one waits, and asks only when told while the server pushes', async () => {
     const t = setup()
     Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
       screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
@@ -2968,13 +2969,12 @@ describe('a Lead\'s terminal requests', () => {
     t.idle()
     t.push({ type: 'super_tab_deliveries' })
     await host.tick()
-    await vi.waitFor(() => expect(pickups()).toBe(1))
     t.wait(3_000); await host.tick()
-    expect(pickups()).toBe(1)
+    expect(pickups()).toBe(0)
     t.push({ type: '__terminal_waiting', tabId: 'tab', agentId: 'agent' })
-    await vi.waitFor(() => expect(pickups()).toBe(2))
-    t.wait(8_000); await host.tick()
-    await vi.waitFor(() => expect(pickups()).toBe(3))
+    await vi.waitFor(() => expect(pickups()).toBe(1))
+    for (let i = 0; i < 6; i++) { t.wait(10_000); await host.tick() }
+    expect(pickups()).toBe(1)
   })
 })
 

@@ -178,7 +178,8 @@ describe('terminal requests the server pushes', () => {
 
   it('picks up once more after a push that came during a pickup', async () => {
     const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
-    const first = host.tick([row()])
+    await host.tick([row()])
+    const first = host.waiting()
     const pushed = host.waiting()
     await first; await pushed
     await vi.waitFor(() => expect(t.polls()).toBe(2))
