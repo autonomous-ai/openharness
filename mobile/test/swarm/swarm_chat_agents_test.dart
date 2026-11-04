@@ -383,6 +383,27 @@ void main() {
       expect(computers.asked.single.$2, {'action': 'wake'});
     });
 
+    testWidgets('a computer that does not answer the wake is named: the agent '
+        'stays added, as nothing else may start its host', (tester) async {
+      await pump(tester);
+      runSessions();
+      await addSheet(tester);
+      computers.answer = (_, _) =>
+          throw const SuperTabFailure('OFFLINE', 'Could not reach it.');
+      await tester.tap(find.text('Fix flaky test'));
+      await tester.pumpAndSettle();
+
+      expect(sent().single['type'], 'agent.add');
+      expect(computers.asked.single.$2, {'action': 'wake'});
+      expect(
+        find.text(
+          "Studio didn't answer, so it may not have picked up Fix flaky test "
+          'yet.',
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('the server\'s refusal is said at the foot of the screen, '
         'and wakes nothing', (tester) async {
       await pump(tester);
