@@ -2056,9 +2056,21 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (!current() || target == null) return;
     final row = _rowShowing(id, target) ?? target;
+    final landing = c.messages(id).where((m) => m.id == row).firstOrNull;
+    final scroll = _scroll[id];
     setState(() {
-      // The window is a new list: it divides at its first row.
-      _split.remove(id);
+      // The window is a new list, divided at the row it lands on, with the
+      // view's top there: the rows before it grow up and those after it down,
+      // so landing lays out only the rows around it, not every row above.
+      if (landing != null) {
+        _split[id] = landing;
+        c.keepFrom(id, landing);
+        if (scroll != null && scroll.hasClients) {
+          scroll.moveContent(-scroll.position.pixels, across: true);
+        }
+      } else {
+        _split.remove(id);
+      }
       _latest[id] = c.messages(id).lastOrNull?.sequence ?? 0;
       _newAfter.remove(id);
       _target = row;

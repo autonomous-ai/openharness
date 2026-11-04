@@ -126,4 +126,37 @@ void main() {
     );
     expect(c.messages('lead').any((m) => m.createdAt!.isBefore(from)), isTrue);
   }, skip: !_measure);
+
+  testWidgets('a week back, one read of the window around it (#2911)', (
+    tester,
+  ) async {
+    final (c, _, reads) = await open(tester);
+    await tester.drag(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      const Offset(0, 300),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('super-day-pill')));
+    await tester.pumpAndSettle();
+    reads.clear();
+    final frames = <Duration>[];
+    final watch = Stopwatch()..start();
+    await tester.tap(find.text('Last week'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    for (var i = 0; i < 6; i++) {
+      frames.add(await frame(tester));
+    }
+    watch.stop();
+    // ignore: avoid_print
+    print('reads: $reads frames ${frames.map((f) => f.inMilliseconds).toList()}');
+    await report(
+      tester,
+      'one window read',
+      reads,
+      watch.elapsed,
+      frames,
+      c.messages('lead').length,
+    );
+    expect(c.messages('lead').any((m) => m.createdAt!.isBefore(from)), isTrue);
+  }, skip: !_measure);
 }
