@@ -226,6 +226,74 @@ class SwarmInbox extends ChangeNotifier {
     return true;
   }
 
+  /// Names sent for a Swarm and not yet read back, with the number of the
+  /// rename that sent each ([rename]): what the list shows for it meanwhile,
+  /// so a read under way does not put the old name back.
+  final _renaming = <String, (String, int)>{};
+  int _renames = 0;
+
+  /// Renames Swarm [id] to [name], trimmed (backend `tab.rename`, the
+  /// desktop's Rename Tab): Home and the switcher show it at once, and the
+  /// name before it again when the server did not keep it. A newer rename of
+  /// the same Swarm settles it. Null once kept, when nothing changes, or once
+  /// the Swarm is no longer the person's to read; else the sentence to show.
+  Future<String?> rename(String id, String name) async {
+    final trimmed = name.trim();
+    final before = swarms.where((swarm) => swarm.id == id).firstOrNull?.name;
+    final reader = _readers[id];
+    if (_disposed || before == null || reader == null) return null;
+    if (reader.accessRevoked || !swarmCanWrite(reader)) {
+      return 'You can’t rename this Swarm.';
+    }
+    if (trimmed.isEmpty) return 'Name cannot be empty';
+    if (trimmed == before) return null;
+    final asked = ++_renames;
+    _renaming[id] = (trimmed, asked);
+    _named(id, trimmed);
+    String? error;
+    try {
+      await request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(id)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {'type': 'tab.rename', 'name': trimmed},
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      error = failure.message;
+    } catch (_) {
+      // A call lost on the way (a timeout, a socket dropped) is no answer.
+      error = 'Could not rename the Swarm.';
+    }
+    if (_disposed) return null;
+    final newest = _renaming[id]?.$2 == asked;
+    if (error != null) {
+      if (newest) {
+        _renaming.remove(id);
+        _named(id, before);
+      }
+      // Lost meanwhile: the refusal is for a Swarm no longer shown.
+      return reader.accessRevoked || !identical(_readers[id], reader)
+          ? null
+          : error;
+    }
+    // Read back past a read under way, which may have been sent before it.
+    if (_refreshing case final reading?) await reading;
+    await Future.wait([refresh(), reader.refresh()]);
+    if (_renaming[id]?.$2 == asked) _renaming.remove(id);
+    return null;
+  }
+
+  /// Swarm [id] is called [name] in [swarms], at once.
+  void _named(String id, String name) {
+    if (!swarms.any((swarm) => swarm.id == id)) return;
+    swarms = List.unmodifiable([
+      for (final swarm in swarms) swarm.id == id ? (id: id, name: name) : swarm,
+    ]);
+    _rebuild(told: true);
+  }
+
   /// Leaves [invitation] for now: it stays on the server, and the start
   /// screen goes on to what else there is.
   void notNow(SwarmInvitation invitation) {
@@ -545,7 +613,8 @@ class SwarmInbox extends ChangeNotifier {
         // (backend superTabs/deletion.ts): one marked so is left out.
         if (row['deletedAt'] != null) continue;
         final id = row['id'] as String;
-        listed[id] = (id: id, name: row['name'] as String);
+        // A rename on its way is shown until a read after it carries it.
+        listed[id] = (id: id, name: _renaming[id]?.$1 ?? row['name'] as String);
         changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;
       }
       after = page['next'] as String?;

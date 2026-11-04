@@ -5,7 +5,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -48,6 +48,9 @@ export interface ContributedMachine {
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
   lentDays?: import('./leaderboard/lent.js').LentDay[]
+  /** The leaderboard week (Monday 00:00 UTC) its owner was last told someone else's work started here (othersWork.ts): once
+   *  a week. On a Mac, for its Harness Team account too. Kept when the contribution is saved again. */
+  othersToldWeek?: number
   /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
    *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
   projects?: string[]
@@ -165,6 +168,11 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
    *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
   preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
+  /** The starts on this machine whose host reports the server refused, each with the refusal (cli superTabs/machines.ts): each
+   *  fails at once (liveness.ts failRefusedStarts), where it waited out the 3 minutes with its reason in the machine's log alone
+   *  (task #2441). The store keeps only this machine's own starts that neither run nor failed; no reader reads them. Absent from
+   *  hosts before it. */
+  refusedStarts: z.array(z.object({ startId: z.string().min(1).max(160), reason: z.string().min(1).max(300) }).strict()).max(100).optional(),
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
   capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
@@ -186,25 +194,32 @@ export type StoredReading = NonNullable<ContributedMachine['observation']>
 export const preparableStart = (start: AgentStart, machineId: string): boolean =>
   start.request.machineId === machineId && !!start.dispatched && !start.harnessId && !start.error
 
+/** A start this machine may say the server refused: one of its own that neither runs nor failed, launched or not. */
+export const refusableStart = (start: AgentStart, machineId: string): boolean =>
+  start.request.machineId === machineId && !start.harnessId && !start.error
+
 /**
  * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
- * them), the preparing starts [preparable] allows, the contributed engines' quotas, privacy only from a team session
+ * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, privacy only from a team session
  * (observedPrivacy), and how the machine is signed in, from the session and never from the report (lib/teamSession.ts).
  * A full report and a reading-only one (DB 2.5) store the same.
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
-  opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, profiles, ...reading } = observation
+  opts: { team: boolean; now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
   const preparing = preparingStartIds?.filter(opts.preparable)
+  // None unless the caller can tell which starts this machine may name (refusableStart).
+  const refused = refusedStarts?.filter(r => opts.refusable?.(r.startId) ?? false)
   const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
-    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
+    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
+    ...(refused?.length ? { refusedStarts: refused } : {}) }
 }
 
 const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
@@ -214,14 +229,15 @@ const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
 
 /**
  * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
- * running and stopped sessions, no stop proof, the same preparing starts. Progress renews leases (liveness.ts
+ * running and stopped sessions, no stop proof, no refused start, the same preparing starts. Progress renews leases (liveness.ts
  * reportRenewedAt), so it also keeps its shape, and no session's progress goes back: a lease then ends no sooner than the
  * last full report saw.
  */
 export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
   // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
   // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
-  if (!previous || next.stoppedReservations?.length || previous.sessionKind !== next.sessionKind) return false
+  // A refused start fails in the full report, which reads the Swarm's starts (store.ts fullReading).
+  if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length || previous.sessionKind !== next.sessionKind) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
@@ -533,6 +549,14 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 /** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
 export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
+/** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
+ *  stops re-reading every machine; #2900 has what grows with the count. */
+const MAX_MACHINES = 32
+export const MACHINES_FULL_MESSAGE = `This Swarm is at its limit of ${MAX_MACHINES} machines. One has to be removed before another can be added.`
+/** Whether [state] can take another machine, or with [team] another Team account's entry: one for each machine at most. */
+export const machinesFull = (state: SuperTabState, team = false): boolean => team
+  ? (state.machines?.length ?? 0) >= 2 * MAX_MACHINES
+  : (state.machines ?? []).filter(m => !m.hostMachineId).length >= MAX_MACHINES
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
@@ -584,15 +608,21 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
   const teams = owned.pool ? teamPoolsOf(state, owned.pool).filter(m => !m.removal).map(m => m.machineId) : []
   const members = [...owned.members, ...state.agents.filter(a => teams.includes(a.machineId))]
   const led = members.map(a => ledProject(state, a.id)).find(Boolean)
+  const visibleAgents = members.filter(a => canReadAgent(state, actor, a))
+  const soleSourceProjects = projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl)
+  const visibleSoleSourceProjects = soleSourceProjects.filter(p => canReadProject(state, actor, p))
   return {
-    blockedBy: led ? { projectId: led.id, projectName: led.name } : null,
-    agents: members.map(a => {
+    blockedBy: led ? canReadProject(state, actor, led)
+      ? { projectId: led.id, projectName: led.name } : { reason: "A Product Manager of a project you can't see runs on this machine." } : null,
+    agents: visibleAgents.map(a => {
       const task = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
       return { id: a.id, name: a.displayName ?? a.name, projectName: projectsOf(state).find(p => p.id === agentProjectId(state, a))?.name ?? '',
         ...(task ? { task: task.title } : {}) }
     }),
+    hiddenAgentCount: members.length - visibleAgents.length,
     // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
-    soleSourceProjects: projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl).map(p => ({ id: p.id, name: p.name })),
+    soleSourceProjects: visibleSoleSourceProjects.map(p => ({ id: p.id, name: p.name })),
+    hiddenSoleSourceProjectCount: soleSourceProjects.length - visibleSoleSourceProjects.length,
   }
 }
 

@@ -26,6 +26,39 @@ final _pullRequest = RegExp(
   r'^https://github\.com/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)$',
 );
 
+/// The `owner/repo` a GitHub repository address names (https, ssh or scp
+/// form), or null for another host or no address.
+String? swarmGithubRepository(String? address) {
+  final match = RegExp(
+    r'^(?:https?://|ssh://git@|git@)github\.com[/:]([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$',
+  ).firstMatch(address ?? '');
+  return match == null ? null : '${match.group(1)}/${match.group(2)}';
+}
+
+/// What each pull request button says (the desktop's
+/// `superTabPullRequestLabels`): `repo · PR #n`, with `owner/repo` when the
+/// pull request is not in the project's own repository ([repositoryUrl]), or,
+/// when the project's is unknown, when two owners share a repository name.
+List<String> swarmPullRequestLabels(List<Uri> links, {String? repositoryUrl}) {
+  final own = swarmGithubRepository(repositoryUrl)?.toLowerCase();
+  final owners = <String, Set<String>>{};
+  for (final link in links) {
+    owners
+        .putIfAbsent(link.pathSegments[1].toLowerCase(), () => {})
+        .add(link.pathSegments[0].toLowerCase());
+  }
+  return [
+    for (final link in links)
+      () {
+        final owner = link.pathSegments[0], repo = link.pathSegments[1];
+        final elsewhere = own != null
+            ? '$owner/$repo'.toLowerCase() != own
+            : owners[repo.toLowerCase()]!.length > 1;
+        return '${elsewhere ? '$owner/$repo' : repo} · PR #${link.pathSegments[3]}';
+      }(),
+  ];
+}
+
 /// What a ship line says: what shipped, and who asked, built and reviewed
 /// it, as ids the Swarm names; its pull requests, at most four.
 class SwarmShip {
@@ -39,16 +72,24 @@ class SwarmShip {
       builderIds = _ids(message.source['builderIds']),
       reviewerIds = _ids(message.source['reviewerIds']),
       pullRequests = List.unmodifiable(
-        _ids(message.source['pullRequests'])
-            .where(_pullRequest.hasMatch)
-            .map(Uri.parse)
-            .take(4),
+        _oneEach(message.source['pullRequests']),
       );
 
   final String title;
   final String? requesterId;
   final List<String> builderIds, reviewerIds;
   final List<Uri> pullRequests;
+
+  /// GitHub pull requests only, one per owner, repository and number (names are
+  /// not case sensitive), at most four.
+  static Iterable<Uri> _oneEach(Object? value) {
+    final seen = <String>{};
+    return _ids(value)
+        .where(_pullRequest.hasMatch)
+        .map(Uri.parse)
+        .where((link) => seen.add(link.path.toLowerCase()))
+        .take(4);
+  }
 
   static List<String> _ids(Object? value) => List.unmodifiable([
     for (final id in value is List ? value : const [])
@@ -159,10 +200,18 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
     ];
     final credits = [
       if (requester != null)
-        ('Requested by', [(requester.id, requester.username)]),
+        ('Requested by', [(requester.id, requester.shownName)]),
       ('Built by', agents(ship.builderIds)),
       ('Reviewed by', agents(ship.reviewerIds)),
     ].where((credit) => credit.$2.isNotEmpty).toList();
+    final labels = swarmPullRequestLabels(
+      ship.pullRequests,
+      repositoryUrl:
+          snapshot
+                  ?.projectFor(widget.message.conversationId)
+                  ?.repository?['repositoryUrl']
+              as String?,
+    );
     final accent = AppPalette.accentOnSurface;
     final card = Container(
       key: ValueKey('swarm-ship-$id'),
@@ -266,6 +315,7 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
                   _PullRequestButton(
                     key: ValueKey('swarm-ship-pr-$id-$i'),
                     link: link,
+                    label: labels[i],
                   ),
               ],
             ),
@@ -281,13 +331,17 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
 /// A pull request the ship links, as a button: its repository and number,
 /// opened in the in-app browser.
 class _PullRequestButton extends StatelessWidget {
-  const _PullRequestButton({super.key, required this.link});
+  const _PullRequestButton({
+    super.key,
+    required this.link,
+    required this.label,
+  });
 
   final Uri link;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    final label = '${link.pathSegments[1]} · PR #${link.pathSegments[3]}';
     return Semantics(
       button: true,
       link: true,

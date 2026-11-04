@@ -126,6 +126,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/lead/ci-load?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
+    json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
     multipart('POST /api/super-tabs/:tabId/avatars', `${t}/avatars`, form([file('me.png', 'image/png', 'not a png')])),
     json('POST', 'POST /api/super-tabs/:tabId/workspace-visibility', `${t}/workspace-visibility`, { visibility: 'workspace' }),

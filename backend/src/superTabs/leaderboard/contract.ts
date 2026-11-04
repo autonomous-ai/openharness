@@ -16,6 +16,20 @@ export interface PersonDetails {
   unblocked: Array<{ title: string; conversationId: string; kind: UnblockKind; waitedMinutes: number }>
   /** Each machine's busy agent-hours this week, to one decimal, busiest first. */
   lent: Array<{ machineName: string; busyHours: number }>
+  /** Every machine the person brought that the reader may see, a Harness Team account in its Mac's row: what it did this
+   *  week (contributor view, #2444). Absent from a backend before it. Supersedes [lent] for clients that read it. */
+  brought: BroughtMachine[]
+}
+
+/** One machine a person brought. `shipped`: verified requests (shipped with a PR, no fix after merge) whose shipping attempt
+ *  ran on it, anyone's; `busyHours`: its agents' time on other people's tasks, to one decimal; `subscriptions`: each
+ *  contributed engine's weekly window from its last reading, `usedPercent` and `resetsAt` (epoch ms) null when unknown. */
+export interface BroughtMachine {
+  machineId: string
+  machineName: string
+  shipped: number
+  busyHours: number
+  subscriptions: Array<{ engine: string; usedPercent: number | null; resetsAt: number | null }>
 }
 
 export interface PersonScore {
@@ -115,4 +129,7 @@ export interface Leaderboard {
   byModel: ModelScore[]
   /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
   recentModels: RecentModel[]
+  /** People whose machine ran an attempt on the groups summed, this week and last, and how many of last week's ran again
+   *  this week: PRODUCT.md's contributors per week and kept next week. Counts only. Absent from a backend before it. */
+  contributors: { thisWeek: number; lastWeek: number | null; kept: number | null }
 }

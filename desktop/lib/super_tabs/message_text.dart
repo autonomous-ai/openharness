@@ -18,6 +18,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.onOpenGroup,
     this.mentions = const [],
     this.addresses = const {},
+    this.labels = const {},
     this.taggedYou = false,
   });
   final String text;
@@ -31,6 +32,11 @@ class SuperTabMessageText extends StatelessWidget {
   /// The address of each person in [mentions], by name: a tag by full
   /// address is theirs only when it is this one.
   final Map<String, String> addresses;
+
+  /// The name a person in [mentions] shows as, by the name they are tagged
+  /// by: their tag reads `@Minh Nguyen` though the text says `@wkpnjjhbnm`
+  /// (backend personNames.ts). Absent, the tag reads as written.
+  final Map<String, String> labels;
 
   /// The message tags the reader, so its row is washed in the accent: a tag
   /// takes the stronger accent in light, to stay 4.5:1 on its pill there.
@@ -88,7 +94,7 @@ class SuperTabMessageText extends StatelessWidget {
       inlineSyntaxes: [
         _WebAutolink(),
         _WorkgroupReference(references),
-        if (mentions.isNotEmpty) _Mention(mentions, addresses),
+        if (mentions.isNotEmpty) _Mention(mentions, addresses, labels),
       ],
       builders: {
         'pre': _CodeBlock(),
@@ -265,21 +271,25 @@ bool _says(String tag, String name, Map<String, String> addresses) {
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
-  _Mention(this.mentions, this.addresses) : super(tag.pattern);
+  _Mention(this.mentions, this.addresses, this.labels) : super(tag.pattern);
   // Never right after a letter, digit, `@` or `/` (an address, a path, a
   // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
     r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
   );
   final List<String> mentions;
-  final Map<String, String> addresses;
+  final Map<String, String> addresses, labels;
   @override
   bool onMatch(md.InlineParser parser, Match match) {
     final tag = '${match[1]}${match[2] ?? ''}'.toLowerCase();
+    final name = mentions.where((n) => _says(tag, n, addresses)).firstOrNull;
     parser.addNode(
-      mentions.any((name) => _says(tag, name, addresses))
-          ? md.Element.text('mention', match[0]!)
-          : md.Text(match[0]!),
+      name == null
+          ? md.Text(match[0]!)
+          : md.Element.text(
+              'mention',
+              labels[name] == null ? match[0]! : '@${labels[name]}',
+            ),
     );
     return true;
   }

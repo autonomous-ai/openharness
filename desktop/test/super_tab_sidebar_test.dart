@@ -9,6 +9,7 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -70,6 +71,7 @@ Future<void> pumpSidebar(
             controller: controller,
             app: app,
             needsHuman: (_) => 0,
+            attention: SuperTabAttention.of(controller),
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},
             onNotifications: onNotifications ?? () {},
@@ -154,6 +156,67 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 }
 
 void main() {
+  testWidgets(
+    'private projects use a leading lock and keep notifications at the right',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final server = ConversationServer();
+      final controller = await projectSidebar(server);
+      server.tag('message-1', conversationId: 'lead');
+      await controller.refresh();
+      final attention = SuperTabAttention.of(controller);
+      await attention.mentions.load();
+      await controller.setNotify('empty-lead', SuperTabNotify.muted);
+      await pumpSidebar(tester, controller, app);
+
+      final privateRow = find.byKey(const ValueKey('super-group-empty-lead'));
+      final privateLock = inRow(
+        'super-group-empty-lead',
+        find.byIcon(AppIcons.lock),
+      );
+      final privateName = inRow(
+        'super-group-empty-lead',
+        find.text('sample-project'),
+      );
+      final publicName = inRow('super-group-lead', find.text('web-project'));
+      final badge = inRow(
+        'super-group-lead',
+        find.byKey(const ValueKey('super-mentions-lead')),
+      );
+      final muted = inRow(
+        'super-group-empty-lead',
+        find.byKey(const ValueKey('super-muted-empty-lead')),
+      );
+
+      expect(privateRow, findsOneWidget);
+      expect(privateLock, findsOneWidget);
+      expect(
+        inRow('super-group-empty-lead', find.byTooltip('Private project')),
+        findsOneWidget,
+      );
+      expect(inRow('super-group-empty-lead', find.text('#')), findsNothing);
+      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+      expect(badge, findsOneWidget);
+      expect(muted, findsOneWidget);
+      expect(
+        tester.getCenter(privateLock).dx,
+        lessThan(tester.getCenter(privateName).dx),
+      );
+      expect(
+        tester.getCenter(badge).dx,
+        greaterThan(tester.getCenter(publicName).dx),
+      );
+      expect(
+        tester.getCenter(muted).dx,
+        greaterThan(tester.getCenter(privateName).dx),
+      );
+
+      await disposeSidebar(tester, controller);
+    },
+  );
+
   for (final scale in [1.0, 2.0]) {
     testWidgets(
       'flat navigation shares text and selection bounds; a project row '
@@ -206,6 +269,11 @@ void main() {
         // A second click shows its workgroups (no chevrons: Quiet Swarm).
         await tester.tap(project);
         await tester.pumpAndSettle();
+        // A workgroup with no work is in The rest, which starts folded (#2309).
+        await tester.tap(
+          find.byKey(const ValueKey('super-task-group-lead-rest')),
+        );
+        await tester.pumpAndSettle();
         final work = find.byKey(const ValueKey('super-group-offline'));
         expect(work, findsOneWidget);
         final textX = tester
@@ -217,6 +285,8 @@ void main() {
           sample,
           // A workgroup's number is grey, with no #: it is no channel.
           inRow('super-group-offline', find.text('12  Offline editing')),
+          // Its group's heading lines up with it.
+          inRow('super-task-group-lead-rest', find.text('The rest')),
         ]) {
           expect(tester.getTopLeft(label).dx, textX, reason: '$label');
         }
@@ -316,7 +386,8 @@ void main() {
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.text('No workgroups yet'),
       find.byKey(const ValueKey('super-group-lead')),
-      find.byKey(const ValueKey('super-group-offline')),
+      // Its one workgroup has no work: The rest, folded (#2309).
+      find.byKey(const ValueKey('super-task-group-lead-rest')),
       find.text('Buddies'),
       find.byKey(const ValueKey('super-buddy-lead')),
       find.byKey(const ValueKey('super-buddy-empty')),
@@ -329,11 +400,17 @@ void main() {
         reason: '${order[i - 1]} above ${order[i]}',
       );
     }
-    for (final (key, name) in [
-      ('empty-lead', 'sample-project'),
-      ('lead', 'web-project'),
+    for (final (key, name, isPrivate) in [
+      ('empty-lead', 'sample-project', true),
+      ('lead', 'web-project', false),
     ]) {
-      expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
+      expect(
+        inRow(
+          'super-group-$key',
+          isPrivate ? find.byIcon(AppIcons.lock) : find.text('#'),
+        ),
+        findsOneWidget,
+      );
       expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
     }
     expect(find.byKey(const ValueKey('super-group-leads')), findsNothing);
@@ -740,7 +817,7 @@ void main() {
     );
 
     test(
-      'lists only fresh readings, once each, and none while the add-on is off',
+      'lists only fresh readings, once per machine, and none while the add-on is off',
       () {
         final now = DateTime.fromMillisecondsSinceEpoch(1000000);
         SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
@@ -775,6 +852,7 @@ void main() {
             grid: swarmGrid,
             model: 'm',
             name: 'm',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'local',
           ),
@@ -782,6 +860,7 @@ void main() {
             grid: 'team',
             model: 'n',
             name: 'n',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'shared',
           ),

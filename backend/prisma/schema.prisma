@@ -556,7 +556,8 @@ model ProductUsageTotal {
   @@index([dayUtc], map: "product_usage_expiry")
 }
 
-/// Random report receipt, used only to prevent retries counting twice. No identity or report body.
+/// Random report receipt, used only to prevent retries counting twice. No identity or report body. Removed at expiresAt by a TTL index
+/// (product_usage_expiry); the old 36-day receipts go by 2026-12-04, sooner if the sweep may install its rule (lib/productUsageReceiptSweep.ts).
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
@@ -579,6 +580,9 @@ model ProductUsageActivity {
   dayUtc    DateTime
   surfaces  String[]
   worked    Boolean  @default(false)
+  /// A Swarm agent's turn ran on this person's Mac that day. Not `worked`, which is only their own sessions' turns. Set only when true;
+  /// absent on rows from before 2026-11-04.
+  hosting   Boolean?
   signupDay DateTime
   staff     Boolean
   expiresAt DateTime
@@ -1358,6 +1362,7 @@ model SuperTabUploadAllowance {
   at DateTime
 }
 
+/// One command's receipt, so a repeat of the same request gets the same answer. Removed 30 days after createdAt by a TTL index.
 model SuperTabOperation {
   id           String   @id @map("_id")
   tabId        String
@@ -1369,7 +1374,13 @@ model SuperTabOperation {
   parts        Json?
   createdAt    DateTime @default(now())
 
-  @@index([tabId])
+  /// A Swarm's receipts, and by date: Atlas's Performance Advisor saw a read scan 107 k rows to return 40 (Ken's plan, 2026-11-04). No
+  /// backend read uses the date yet; check on Atlas after the release, and shorten it to tabId if nothing does. It replaces the index on
+  /// tabId alone, its prefix, since this collection gets a write on every command.
+  @@index([tabId, createdAt])
+  /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
+  /// schema step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "operation_expiry")
 }
 
 // A conversation-scoped provenance receipt. It grants no terminal access.
@@ -1485,7 +1496,8 @@ model SuperTabAttempt {
   @@index([tabId, conversationId, createdAt])
 }
 
-/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Deleted 90 days after createdAt on each write (routeDecisions.ts
+/// RETENTION_MS; the costs report reads 90 days). Stored trimmed (routeRecord.ts storedRecord).
 model SuperTabRouteDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1781,6 +1793,9 @@ model SwarmHead {
   visibilityEpoch Int       @default(1)
   /// The tab revision when it was split into parts (0 for a Swarm born in parts). Every later message sequence is above it.
   sequenceBase    Int       @default(0)
+  /// The highest version of any agent tombstone the sweep purged (superTabs/agentTombstones.ts): an agent added with no
+  /// tombstone starts above it, so its versions never go back. Missing until the first purge.
+  agentFloor      Int?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -1871,6 +1886,9 @@ model SwarmAgent {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
+  @@index([tabId, deleted])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.

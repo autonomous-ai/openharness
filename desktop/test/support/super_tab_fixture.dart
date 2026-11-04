@@ -439,6 +439,10 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
+  /// Where the ask at each thread's root stands, by root: what the backend's
+  /// summaries say (threads.ts).
+  final threadAsks = <String, String>{};
+
   /// Whether messages are written with threads, as backends from threads on
   /// write them (backend threads.ts).
   bool threads = false;
@@ -446,6 +450,9 @@ class ConversationServer {
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
+
+  /// Fails, as if offline, each read whose path holds this.
+  String? failReadsOf;
 
   /// Names a person's message as the backend does: a hash of the Swarm, the
   /// sender and the send's receipt id (backend model.ts `stableId`, used by
@@ -621,6 +628,8 @@ class ConversationServer {
     String text, {
     String conversationId = 'lead',
     List<Map<String, dynamic>> attachments = const [],
+    // An agent's message: it moves no lastPersonSequence (backend parts/commit.ts, #2427).
+    bool agent = false,
   }) {
     revision++;
     messages.add({
@@ -633,12 +642,16 @@ class ConversationServer {
       'text': text,
       'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
-      'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
+      'author': agent
+          ? {'kind': 'agent', 'id': 'lead', 'name': 'Lead'}
+          : {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
       'deliveries': <dynamic>[],
     });
-    (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
-      (g) => g['id'] == conversationId,
-    )['lastMessageSequence'] = revision;
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == conversationId);
+    group['lastMessageSequence'] = revision;
+    if (!agent) group['lastPersonSequence'] = revision;
   }
 
   /// The read marks this device sent, in order: {conversationId, sequence}.
@@ -789,6 +802,7 @@ class ConversationServer {
           case final thread when thread.length > 1)
         {
           'id': root,
+          'ask': ?threadAsks[root],
           'replies': thread.length - 1,
           'lastSequence': thread.last['sequence'],
           'lastAt': thread.last['createdAt'],
@@ -852,6 +866,11 @@ class ConversationServer {
               'status': command['status']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
+            else if (command['type'] == 'member.name')
+              'name': (command['name'] as String?)?.replaceAll(
+                RegExp(r'\s+'),
+                ' ',
+              )
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -1107,6 +1126,7 @@ class ConversationServer {
         }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
+          command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
@@ -1486,6 +1506,9 @@ class ConversationServer {
     }
     if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
+    if (failReadsOf case final part? when path.contains(part)) {
+      throw StateError('Offline');
+    }
     final uri = Uri.parse(path);
     if (uri.pathSegments.length > 5 &&
         uri.pathSegments[3] == 'projects' &&

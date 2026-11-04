@@ -19,6 +19,7 @@ import 'swarm_profile.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_name_editor.dart';
 import 'swarm_username_editor.dart';
 
 /// One photo from the person's library, or null when they back out. Asked
@@ -50,7 +51,7 @@ Future<Uint8List?> readPickedSwarmPhoto(XFile? picked) async {
 }
 
 /// The person's own profile in the Swarm [swarmId], in a sheet over the
-/// page: their username, a built-in picture or a photo of theirs, and a
+/// page: their name and username, a built-in picture or a photo of theirs, and a
 /// status that clears when they say — the desktop's profile (`profile_sheet.dart`) in the
 /// phone's own way.
 Future<void> showSwarmProfile(
@@ -116,6 +117,9 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
 
   /// The username's own Save is on its way: [_busy] says it for the rest.
   bool _naming = false;
+
+  /// The name's own Save is on its way, as [_naming] for the username.
+  bool _titling = false;
   String? _error;
 
   @override
@@ -146,6 +150,17 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
     });
     final error = await profile.setUsername(username);
     if (mounted) setState(() => _busy = _naming = false);
+    return error;
+  }
+
+  /// A refused name is said under its own field, as a username's is.
+  Future<String?> _saveName(SwarmProfile profile, String? name) async {
+    setState(() {
+      _busy = _titling = true;
+      _error = null;
+    });
+    final error = await profile.setName(name);
+    if (mounted) setState(() => _busy = _titling = false);
     return error;
   }
 
@@ -279,7 +294,7 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
     SuperTabPersonStatus? status,
     SwarmProfile profile,
   ) {
-    final name = me.username;
+    final name = me.shownName;
     final edit = profile.canEdit && !_busy;
     final current = me.avatar;
     final text = _text.text.trim();
@@ -330,6 +345,13 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
         // A viewer's name is theirs too, though they change nothing else.
         // One field per reader: an answer sent under another account or
         // Swarm never lands in this one.
+        SwarmNameEditor(
+          key: ValueKey((profile.reader, 'name')),
+          name: me.name,
+          enabled: profile.canRename && (!_busy || _titling),
+          busy: _titling,
+          onSave: (name) => _saveName(profile, name),
+        ),
         SwarmUsernameEditor(
           key: ObjectKey(profile.reader),
           username: me.username,
@@ -701,7 +723,7 @@ class SwarmPersonSheet extends StatelessWidget {
   Widget _sheet(BuildContext context, SwarmReader reader) {
     final person = reader.snapshot?.person(personId);
     final mine = personId == reader.accountId;
-    final name = person == null ? 'Someone' : person.username;
+    final name = person == null ? 'Someone' : person.shownName;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -760,6 +782,16 @@ class SwarmPersonSheet extends StatelessWidget {
                             ),
                         ],
                         const SizedBox(height: 4),
+                        // The handle a tag types, under a name they set.
+                        if (person.name != null)
+                          Text(
+                            '@${person.username}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppType.caption(
+                              color: AppPalette.textSecondary,
+                            ),
+                          ),
                         Text(
                           person.email,
                           maxLines: 1,

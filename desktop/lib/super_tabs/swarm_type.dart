@@ -61,6 +61,15 @@ abstract final class SwarmType {
   static double sidebarRowHeight({required bool compact}) =>
       compact ? 36 : sidebarRow - 2;
 
+  /// A project's and a task's row under Projects: 4 px taller than [sidebarRowHeight], which Huy found cleaner (11-03,
+  /// #2427). A phone keeps 36.
+  static double projectRowHeight({required bool compact}) =>
+      compact ? 36 : sidebarRow + 2;
+
+  /// The room above and below a project's or a task's line.
+  static double projectRowPadding({required bool compact}) =>
+      compact ? 8 : (projectRowHeight(compact: false) - bodyLine) / 2;
+
   /// The room above and below a sidebar row's line.
   static double sidebarRowPadding({required bool compact}) =>
       compact ? 8 : (sidebarRow - 2 - bodyLine) / 2;

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
@@ -11,6 +12,7 @@ import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
@@ -408,6 +410,32 @@ void main() {
         await close(tester, c);
       },
     );
+
+    testWidgets('a private Buddy project uses a lock in its project label', (
+      tester,
+    ) async {
+      final server = buddySwarm();
+      server.state['projects'] = [
+        projectFixture('lead', 'Pilot', 'lead', visibility: 'private'),
+      ];
+      giveBuddy(server);
+      final c = await show(tester, server);
+
+      await tester.tap(buddyEntry);
+      await tester.pumpAndSettle();
+
+      final bar = find.byKey(const ValueKey('super-buddy-bar'));
+      expect(
+        find.descendant(of: bar, matching: find.byIcon(AppIcons.lock)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: bar, matching: find.textContaining('#Pilot')),
+        findsNothing,
+      );
+
+      await close(tester, c);
+    });
 
     testWidgets(
       'the reader\'s Buddy row says where it runs; other people\'s Buddies appear nowhere',
@@ -1477,6 +1505,8 @@ void main() {
         });
         final c = await show(tester, server);
         if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
+        // Workgroups with no work are in The rest, unfolded here (#2309).
+        c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await tester.pumpAndSettle();
 
         expect(
@@ -1540,7 +1570,7 @@ void main() {
 
     group('a proposal in the project chat', () {
       testWidgets(
-        "opens labelled from the server's tag, with whose behalf it is on",
+        "legacy content stays complete and opens with ordinary Reply",
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1563,20 +1593,18 @@ void main() {
           await c.select('lead');
           await tester.pumpAndSettle();
 
-          // In the chat it is one line; opened, it reads whole, labelled.
+          expect(find.textContaining('Scope: Desktop only'), findsOneWidget);
+          final row = find.byKey(ValueKey('super-message-${proposal['id']}'));
+          await tester.tap(
+            find.descendant(of: row, matching: find.byTooltip('Reply')),
+          );
+          await tester.pumpAndSettle();
+          expect(c.openedThread?.root, proposal['id']);
           expect(
             find.byKey(const ValueKey('super-proposal-label')),
             findsNothing,
           );
-          await tester.tap(find.textContaining('Proposal from'));
-          await tester.pumpAndSettle();
-          expect(
-            find.descendant(
-              of: find.byKey(const ValueKey('super-proposal-label')),
-              matching: find.text("Proposal · on ken.tran's behalf"),
-            ),
-            findsOneWidget,
-          );
+          expect(find.textContaining('Scope: Desktop only'), findsNWidgets(2));
           await close(tester, c);
         },
       );

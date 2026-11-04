@@ -4,11 +4,11 @@ import { failedSessionStart } from './buddySessions.js'
 import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
-import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPickupSuffix, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPickupSuffix, REFUSED_INFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
-import { staleSwitches } from './tidy.js'
+import { staleModelRequests, staleSwitches } from './tidy.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -374,7 +374,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
@@ -522,6 +522,9 @@ function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
   const stalled = new Map<string, Array<{ group: Conversation; next: TaskLiveness }>>()
   const steps = stepIndex(state)
   for (const group of state.conversations) {
+    // A step lost earlier in this pass, after loseTasks passed its task, ends its Engineer's wait before the task is judged,
+    // as a command's write does (recordTaskState): else the Engineer reads as stalled and loses its task the next sweep.
+    stepsEnded(state, group, now, steps)
     const before = group.liveness
     const next = nextState(state, group, now, steps)
     if (sameState(before, next)) continue
@@ -576,28 +579,49 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
-    const suspended = noteStartFailed(state, start, now)
-    if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error))
-    // Never a lookup that throws: these checks run inside every machine's report.
-    if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
-    const group = state.conversations.find(c => c.id === start.request.conversationId)
-    // Recorded in this write: once the start has ended, no later poll loads it.
-    if (group) recordTaskState(state, group, now)
-    if (!group) return []
-    // Told to the coordinator and the agent that made it, with the model it asked for; nothing is started elsewhere (project
-    // instructions, phase 4, decision 18).
-    const text = `${failureNotice(start.request.name, start.error, askedModel(start), coordinatorOfGroup(state, group))}${suspended ? `\n\n${suspended}` : ''}`
-    const source = { kind: 'start-timeout', startId: start.id }
-    const author = failureAuthor(state, start, group)
-    if (!author) return []
-    const recipients = failureRecipients(start, group)
-    const row = reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null, recipients,
-      author, text, ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source })
-    // A task with no lead, or one its lead left: its coordinator hears it in its own chat.
-    const copy = coordinatorCopy(state, group, recipients)
-    return copy ? [row, reachable(state, { id: stableId('start-timeout', start.id, 'coordinator'), conversationId: copy.conversationId, replyTo: null,
-      recipients: [copy.coordinator], author, text, source: forRecipients(source) })] : [row]
+    return failedStartNotices(state, start, now, noteStartFailed(state, start, now))
   })
+}
+
+/**
+ * Fails at once each start that machine [machineId]'s reading names refused: the server refused that machine's own report for
+ * it, so it would otherwise wait out the 3 minutes with the reason in that machine's log alone (task #2441). Only a reading
+ * the store took from that machine's own pool names one, and only one of its starts that neither runs nor failed
+ * (machines.ts refusableStart). A refusal is no failure of its engine, so it suspends nothing.
+ */
+export function failRefusedStarts(state: SuperTabState, machineId: string, now: number): MessageDraft[] {
+  const refused = state.machines?.find(m => m.machineId === machineId)?.observation?.refusedStarts ?? []
+  return refused.flatMap(({ startId, reason }) => {
+    const start = state.starts?.find(s => s.id === startId)
+    if (!start || start.request.machineId !== machineId || start.harnessId || start.error) return []
+    start.error = `${machineName(state, machineId)}${REFUSED_INFIX}${reason}`
+    return failedStartNotices(state, start, now, null)
+  })
+}
+
+/** Who hears that [start] failed, and what they read: its Lead, its Buddy's person, or its task's coordinator and the agent
+ *  that made it. [suspended]: the line saying its engine is now suspended there, if this failure suspended it. */
+function failedStartNotices(state: SuperTabState, start: AgentStart, now: number, suspended: string | null): MessageDraft[] {
+  if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error!))
+  // Never a lookup that throws: these checks run inside every machine's report.
+  if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
+  const group = state.conversations.find(c => c.id === start.request.conversationId)
+  // Recorded in this write: once the start has ended, no later poll loads it.
+  if (group) recordTaskState(state, group, now)
+  if (!group) return []
+  // Told to the coordinator and the agent that made it, with the model it asked for; nothing is started elsewhere (project
+  // instructions, phase 4, decision 18).
+  const text = `${failureNotice(start.request.name, start.error!, askedModel(start), coordinatorOfGroup(state, group))}${suspended ? `\n\n${suspended}` : ''}`
+  const source = { kind: 'start-timeout', startId: start.id }
+  const author = failureAuthor(state, start, group)
+  if (!author) return []
+  const recipients = failureRecipients(start, group)
+  const row = reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null, recipients,
+    author, text, ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source })
+  // A task with no lead, or one its lead left: its coordinator hears it in its own chat.
+  const copy = coordinatorCopy(state, group, recipients)
+  return copy ? [row, reachable(state, { id: stableId('start-timeout', start.id, 'coordinator'), conversationId: copy.conversationId, replyTo: null,
+    recipients: [copy.coordinator], author, text, source: forRecipients(source) })] : [row]
 }
 
 /** Who a failed start's notice is written as: its task's lead, else the agent that made the start, else its project's

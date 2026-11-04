@@ -134,6 +134,9 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   final _targetKey = GlobalKey();
   bool _landing = false;
 
+  /// Reply options under the card is open: folded each time the page opens.
+  bool _optionsOpen = false;
+
   /// Once the thread is read: finds the focus (reading earlier replies back
   /// to it, a bounded number of pages), scrolls to it and lights it for
   /// 2 seconds, as the chat does for a quoted message.
@@ -407,45 +410,70 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
               listenable: _thread,
               builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
             ),
+            // The box takes what it needs, up to all of the room under the
+            // header, as the chat's composer does: on a short phone with the
+            // keyboard up and the @ list open, the list and then the field
+            // give up room before anything overflows.
             Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: NotificationListener<Notification>(
-                      onNotification: _measured,
-                      child: ListenableBuilder(
-                        // Message links resolve against the inbox's current
-                        // reader, which can change independently of this
-                        // thread's older conversation reader.
-                        listenable: Listenable.merge([
-                          _thread,
-                          if (_session case final session?) session.inbox,
-                        ]),
-                        builder: (context, _) => _body(tty),
+              child: LayoutBuilder(
+                builder: (context, below) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: NotificationListener<Notification>(
+                              onNotification: _measured,
+                              child: ListenableBuilder(
+                                // Message links resolve against the inbox's
+                                // current reader, which can change
+                                // independently of this thread's older
+                                // conversation reader.
+                                listenable: Listenable.merge([
+                                  _thread,
+                                  if (_session case final session?)
+                                    session.inbox,
+                                ]),
+                                builder: (context, _) => _body(tty),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 8,
+                            child: ListenableBuilder(
+                              listenable: Listenable.merge([_thread, _farBack]),
+                              builder: (context, _) =>
+                                  _farBack.value &&
+                                      _thread.state == SwarmChatState.loaded
+                                  ? Center(
+                                      child: SwarmNewPill(
+                                        count: 0,
+                                        onTap: _toFoot,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 8,
-                    child: ListenableBuilder(
-                      listenable: Listenable.merge([_thread, _farBack]),
-                      builder: (context, _) =>
-                          _farBack.value &&
-                              _thread.state == SwarmChatState.loaded
-                          ? Center(
-                              child: SwarmNewPill(count: 0, onTap: _toFoot),
-                            )
-                          : const SizedBox.shrink(),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: below.maxHeight),
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([
+                          _thread,
+                          _thread.composer,
+                          _voice,
+                        ]),
+                        builder: (context, _) => _foot(tty),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            ListenableBuilder(
-              listenable: Listenable.merge([_thread, _thread.composer, _voice]),
-              builder: (context, _) => _foot(tty),
             ),
           ],
         ),
@@ -547,6 +575,9 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     return ListView(
       key: const ValueKey('swarm-thread-messages'),
       controller: _scroll,
+      // As the chat: a finger's scroll puts the keyboard away, the draft
+      // stays; a reply arriving or a jump moving the list leaves it up.
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       // The chat's own inset, so a message sits where it does there.
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpace.m,
@@ -623,6 +654,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     final group = t.chat.conversation;
     final error = t.error;
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // The first read's failure is said in the body, with Try again.
@@ -643,7 +675,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
             ),
           ),
         if (t.canPost)
-          _box(t, tty)
+          Flexible(child: _box(t, tty))
         else if (group != null)
           Padding(
             padding: const EdgeInsets.all(AppSpace.l),
@@ -659,25 +691,48 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
-  /// The reply box: notes, then the card ([SwarmComposerCard]) — the files
-  /// going with the reply, a field that grows with what is typed and its X,
-  /// then +, Also send, the mic and a round Send (the desktop's thread
-  /// composer, with the main chat's mic). While a take is under way the
-  /// toolbar is the voice row ([SwarmVoiceRow]): Also send is hidden, and
-  /// keeps its tick for the row's Send or the one after the take. No Tag: a
-  /// thread has no @ picker.
+  /// The reply box: the @ picker while a name is typed, notes, then the card
+  /// ([SwarmComposerCard]) — the files going with the reply, a field that
+  /// grows with what is typed and its X, then +, @, the mic and a round
+  /// Send (the desktop's thread composer, with the main chat's mic and @)
+  /// — and under the card Reply options, folded until tapped: New session
+  /// and Also send, the desktop's two choices, both off to begin with
+  /// ([_options]). While a take is under way the toolbar is the voice row
+  /// ([SwarmVoiceRow]): the picker is hidden, and Reply options stays as it
+  /// is but takes no taps, its ticks kept for the row's Send or the one
+  /// after the take.
   Widget _box(SwarmThread t, Tty tty) {
     // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
     final canAttach = !t.uploading && t.files.room > 0;
     final voice = _voice;
     final talking = voice?.face != null;
+    final snapshot = t.reader.snapshot;
+    final query = t.mentionQuery;
+    final taggable =
+        snapshot != null &&
+        (t.mentionablePeople.isNotEmpty || t.mentionable.isNotEmpty);
     return Padding(
       key: const ValueKey('swarm-thread-box'),
       padding: SwarmComposer.padding,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // The chat's picker: short of room, it scrolls in what is left.
+          if (query != null && snapshot != null && !talking)
+            Flexible(
+              child: SwarmMentionPicker(
+                people: t.mentionablePeople,
+                agents: t.mentionable,
+                snapshot: snapshot,
+                query: query,
+                onPick: (id) {
+                  t.completeMention(id);
+                  _focus.requestFocus();
+                },
+              ),
+            ),
           ValueListenableBuilder(
             valueListenable: _attachNote,
             builder: (context, note, _) => note == null
@@ -725,7 +780,6 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          if (t.offersSessions && !talking) SwarmNewSessionCheck(thread: t),
           SwarmComposerCard(
             focus: _focus,
             chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
@@ -754,16 +808,15 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                               ? () => unawaited(_pickFiles())
                               : null,
                         ),
-                      if (t.offersAlsoSend)
-                        Expanded(
-                          child: _AlsoSend(
-                            label: t.alsoSendLabel,
-                            value: t.alsoSend,
-                            onChanged: (on) => t.alsoSend = on,
-                          ),
-                        )
-                      else
-                        const Spacer(),
+                      if (taggable)
+                        SwarmTagButton(
+                          open: query != null,
+                          onTap: () {
+                            t.toggleMention();
+                            _focus.requestFocus();
+                          },
+                        ),
+                      const Spacer(),
                       // The main chat's mic, beside Send as there.
                       if (voice != null) SwarmVoiceMic(voice: voice),
                       SwarmRoundButton(
@@ -781,9 +834,66 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     ],
                   ),
           ),
+          // None in a session's thread: its replies stay in the thread.
+          if (t.session == null)
+            ..._options(t, talking: talking, picking: query != null),
         ],
       ),
     );
+  }
+
+  /// Reply options under the card: a line that says what is on while it is
+  /// folded, and opens to New session (in the person's own Buddy chat) and
+  /// Also send. A reply that starts a session never also goes to the chat:
+  /// Also send then keeps its place, so the box does not jump. Short of
+  /// room, the open choices scroll in what is left rather than overflow.
+  /// While the @ picker is up they step aside for it, the line saying what
+  /// is on and taking no taps, and come back after the pick.
+  List<Widget> _options(
+    SwarmThread t, {
+    required bool talking,
+    required bool picking,
+  }) {
+    final on = [
+      if (t.offersSessions && t.newSession) 'New session',
+      if (t.offersAlsoSend && t.alsoSend) t.alsoSendLabel,
+    ];
+    final open = _optionsOpen && !picking;
+    return [
+      IgnorePointer(
+        ignoring: talking || picking,
+        child: _ReplyOptionsToggle(
+          open: open,
+          on: on,
+          onTap: () => setState(() => _optionsOpen = !open),
+        ),
+      ),
+      if (open)
+        Flexible(
+          child: IgnorePointer(
+            ignoring: talking,
+            child: SingleChildScrollView(
+              key: const ValueKey('swarm-thread-options-choices'),
+              // Never the page's: a tap on the status bar scrolls the thread.
+              primary: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (t.offersSessions) SwarmNewSessionCheck(thread: t),
+                  t.offersAlsoSend
+                      ? _AlsoSend(
+                          label: t.alsoSendLabel,
+                          value: t.alsoSend,
+                          onChanged: (on) => t.alsoSend = on,
+                        )
+                      : const SizedBox(height: _AlsoSend.height),
+                ],
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 
   Widget _said(String text, {Key? key}) => Padding(
@@ -799,14 +909,81 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   );
 }
 
+/// Reply options' line: its name and a chevron, and while folded what is
+/// on, so a ticked choice is never out of sight. The whole line is a
+/// thumb's target.
+class _ReplyOptionsToggle extends StatelessWidget {
+  const _ReplyOptionsToggle({
+    required this.open,
+    required this.on,
+    required this.onTap,
+  });
+
+  final bool open;
+
+  /// The labels of the choices that are on.
+  final List<String> on;
+  final VoidCallback onTap;
+
+  static const _name = 'Reply options';
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final said = open || on.isEmpty ? _name : '$_name · ${on.join(' · ')}';
+    return Semantics(
+      key: const ValueKey('swarm-thread-options'),
+      button: true,
+      expanded: open,
+      label: _name,
+      value: on.isEmpty ? null : on.join(', '),
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: _AlsoSend.height),
+          child: Padding(
+            // Its words start where the checkboxes' squares do.
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    said,
+                    key: const ValueKey('swarm-thread-options-label'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: swarmChatText(14, color: AppPalette.textSecondary),
+                  ),
+                ),
+                const SizedBox(width: AppSpace.xs),
+                Icon(
+                  open ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                  size: 16,
+                  color: AppPalette.textSecondary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Also send, ticked or not: the reply goes to the chat's main stream too.
-/// The whole line is a thumb's target.
+/// The whole line is a thumb's target, and its label is never cut short:
+/// large text wraps it instead.
 class _AlsoSend extends StatelessWidget {
   const _AlsoSend({
     required this.label,
     required this.value,
     required this.onChanged,
   });
+
+  /// The line's height at normal text size, kept while it is hidden.
+  static const double height = 44;
 
   final String label;
   final bool value;
@@ -828,7 +1005,7 @@ class _AlsoSend extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: enabled ? () => onChanged!(!value) : null,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 44),
+          constraints: const BoxConstraints(minHeight: height),
           child: Row(
             children: [
               // The theme's checkbox, as the desktop's thread composer has.
@@ -842,7 +1019,8 @@ class _AlsoSend extends StatelessWidget {
               Flexible(
                 child: Text(
                   label,
-                  maxLines: 1,
+                  key: const ValueKey('swarm-thread-also-send-label'),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: swarmChatText(
                     14,

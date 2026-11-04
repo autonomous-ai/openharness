@@ -69,6 +69,15 @@ describe('catch-up summary of the unread span', () => {
     expect(summary([before, row('Thread reply', { author: me, thread: 'm1' })]).needsYou.total).toBe(1)
   })
 
+  it('does not read the chat at a message the server posted in the reader\'s name (plain chat, #2294)', () => {
+    const tagged = row('Dee, which colour?', { mentions: [READER] })
+    const root = row("Let's build: Offline drafts", { author: me, source: { kind: 'task-line', taskId: 't1' } })
+    const proposal = row("Let's build: Sync", { author: me, source: { kind: 'buddy-proposal', personId: READER } })
+    const result = summary([tagged, root, proposal])
+    expect(result.needsYou.items.map(i => i.messageId)).toEqual([tagged.id])
+    expect(result.unread).toBe(3)
+  })
+
   it('keeps the five newest items of a list, oldest first, and counts them all', () => {
     const rows = Array.from({ length: 7 }, (_, i) => row(`Question ${i + 1}`, { mentions: [READER] }))
     const result = summary(rows)

@@ -85,7 +85,7 @@ class SwarmYouButton extends StatelessWidget {
     final session = SwarmScope.of(context);
     Widget face() {
       final me = swarmYouOf(session).me;
-      final name = me == null || me.email.isEmpty ? 'You' : me.username;
+      final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
       final status = me?.statusAt(clock.now())?.label;
       return Semantics(
         button: true,
@@ -126,7 +126,7 @@ class SwarmYouButton extends StatelessWidget {
 /// You, as Tony's prototype C4 draws it (2026-10-30), opened from the avatar
 /// on Home and Activity since it stopped being a tab (2026-11-03):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — then their status and their username, each with Change for their
+/// Swarm — then their status, their name and their username, each with Change for their
 /// profile, where it is set ([showSwarmProfile]); Your models, with how many of their own machines'
 /// models the Swarms can use now, and Your devices, with how many of their
 /// own computers are online; and Settings. Only what is theirs counts: not a
@@ -223,12 +223,26 @@ class SwarmYouPage extends StatelessWidget {
           ),
         ],
       ),
+      const SwarmCaption('Name'),
+      SwarmGroup(
+        children: [
+          SwarmRow(
+            key: const ValueKey('swarm-you-name'),
+            leading: const SwarmRowGlyph(LucideIcons.user300),
+            // How the Swarm shows them, the username until they set one;
+            // nothing of a Swarm before it is read, or once it is taken away.
+            title: me == null ? 'Name' : me.name ?? 'Add your name',
+            trailing: profile == null ? null : const _Change(),
+            onTap: profile,
+          ),
+        ],
+      ),
       const SwarmCaption('Username'),
       SwarmGroup(
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-username'),
-            leading: const _Glyph(LucideIcons.atSign300),
+            leading: const SwarmRowGlyph(LucideIcons.atSign300),
             // How the Swarm tags them, as the server keeps it; nothing of a
             // Swarm before it is read, or once it is taken away.
             title: me?.username ?? 'Username',
@@ -242,7 +256,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-models'),
-            leading: const _Glyph(LucideIcons.cpu300),
+            leading: const SwarmRowGlyph(LucideIcons.cpu300),
             title: 'Your models',
             detail: switch (_models(inbox, swarms)) {
               null => null,
@@ -253,7 +267,7 @@ class SwarmYouPage extends StatelessWidget {
           ),
           SwarmRow(
             key: const ValueKey('swarm-you-devices'),
-            leading: const _Glyph(LucideIcons.laptop300),
+            leading: const SwarmRowGlyph(LucideIcons.laptop300),
             title: 'Your devices',
             detail: switch (_devices(computers)) {
               null => null,
@@ -268,7 +282,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-settings'),
-            leading: const _Glyph(LucideIcons.settings300),
+            leading: const SwarmRowGlyph(LucideIcons.settings300),
             title: 'Settings',
             onTap: switch (onSettings) {
               final settings? => () => settings(context),
@@ -334,7 +348,7 @@ class _Me extends StatelessWidget {
     AppTheme.watch(context);
     final me = this.me;
     // A Home kept for a cold start holds no email.
-    final name = me == null || me.email.isEmpty ? 'You' : me.username;
+    final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -395,7 +409,7 @@ class _Status extends StatelessWidget {
     final me = this.me;
     Widget row(String title, {required bool known}) => SwarmRow(
       leading: SizedBox(
-        width: _Glyph.width,
+        width: SwarmRowGlyph.width,
         child: Center(
           child: Container(
             width: 10,
@@ -440,19 +454,4 @@ class _Change extends StatelessWidget {
       ],
     );
   }
-}
-
-/// A row's glyph, in a 32-point box so the titles line up.
-class _Glyph extends StatelessWidget {
-  const _Glyph(this.icon);
-
-  static const double width = 32;
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: width,
-    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
-  );
 }

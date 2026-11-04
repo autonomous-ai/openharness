@@ -107,7 +107,35 @@ class SwarmScore {
         final String name when name.isNotEmpty => name,
         _ => null,
       },
-      prevWeekPoints = _optional(json['prevWeekPoints']);
+      prevWeekPoints = _optional(json['prevWeekPoints']),
+      details = json['details'] is Map
+          ? SwarmPersonDetails.fromJson(_map(json['details']))
+          : null,
+      brought = switch (_map(json['details'])['brought']) {
+        final List<Object?> machines => [
+          for (final machine in machines.whereType<Map<String, dynamic>>())
+            if (_text(machine['machineName']) case final name?)
+              (
+                machineName: _withoutLocal(name),
+                shipped: _int(machine['shipped']),
+                busyHours: machine['busyHours'] is num
+                    ? (machine['busyHours'] as num).toDouble()
+                    : 0.0,
+                subscriptions: [
+                  for (final sub
+                      in (machine['subscriptions'] as List? ?? const [])
+                          .whereType<Map<String, dynamic>>())
+                    if (sub['engine'] case final String engine)
+                      (
+                        engine: engine,
+                        usedPercent: _optional(sub['usedPercent']),
+                        resetsAt: _optional(sub['resetsAt']),
+                      ),
+                ],
+              ),
+        ],
+        _ => null,
+      };
 
   final String personId;
 
@@ -130,7 +158,135 @@ class SwarmScore {
   /// The same scoring for the time before; null from a server before it, and
   /// for Last 30d, which has no comparison.
   final int? prevWeekPoints;
+
+  /// What the numbers are made of; null from a server before details.
+  final SwarmPersonDetails? details;
+
+  /// Every machine the person brought (contributor view, #2444): the verified
+  /// requests that shipped on it, its hours for others, and each
+  /// subscription's weekly use and reset; named without `.local`. Null from a
+  /// server before it, which shows Lent instead.
+  final List<SwarmBroughtMachine>? brought;
 }
+
+/// One machine a person brought (backend `BroughtMachine`).
+typedef SwarmBroughtMachine = ({
+  String machineName,
+  int shipped,
+  double busyHours,
+  List<({String engine, int? usedPercent, int? resetsAt})> subscriptions,
+});
+
+/// A person's period item by item, each list newest first and only what the
+/// reader can read (the desktop's `SuperTabPersonDetails`). An item without a
+/// title, or a machine without a name, is left out.
+class SwarmPersonDetails {
+  SwarmPersonDetails.fromJson(Map<String, dynamic> json)
+    : shipped = List.unmodifiable([
+        for (final item in _maps(json['shipped']))
+          if (_text(item['title']) case final title?)
+            (title: title, link: _webLink(item['prUrl'])),
+      ]),
+      unblocked = List.unmodifiable([
+        for (final item in _maps(json['unblocked']))
+          if (_text(item['title']) case final title?)
+            (title: title, waitedMinutes: _int(item['waitedMinutes'])),
+      ]),
+      lent = List.unmodifiable([
+        for (final item in _maps(json['lent']))
+          if (_text(item['machineName']) case final name?)
+            (
+              machineName: _withoutLocal(name),
+              busyHours: item['busyHours'] is num
+                  ? (item['busyHours'] as num).toDouble()
+                  : 0.0,
+            ),
+      ]);
+
+  /// Pull requests that merged; [link] only a web page's, as a link from the
+  /// server is data and any other scheme could open a file or an app.
+  final List<({String title, Uri? link})> shipped;
+
+  /// Questions answered, and how long the agent waited.
+  final List<({String title, int waitedMinutes})> unblocked;
+
+  /// Machines whose agents ran, and for how long; named without `.local`.
+  final List<({String machineName, double busyHours})> lent;
+}
+
+List<Map<String, dynamic>> _maps(Object? value) => [
+  if (value is List)
+    for (final item in value)
+      if (item is Map) _map(item),
+];
+
+String? _text(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
+Uri? _webLink(Object? value) {
+  final uri = value is String ? Uri.tryParse(value) : null;
+  return uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty
+      ? uri
+      : null;
+}
+
+/// A machine's name without its `.local`, as the desktop shows it.
+String _withoutLocal(String name) {
+  const suffix = '.local';
+  return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
+      ? name.substring(0, name.length - suffix.length)
+      : name;
+}
+
+/// How Brought names a subscription's engine, as the Swarm's other lines do.
+const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
+/// "31 h", "12.5 h", "0 h".
+String _broughtHours(double hours) {
+  final rounded = (hours * 10).round() / 10;
+  return rounded == rounded.roundToDouble()
+      ? '${rounded.round()} h'
+      : '${rounded.toStringAsFixed(1)} h';
+}
+
+/// "3d", "5h 10m", "20m", "now": until a subscription's week resets.
+String _resetsIn(int at, DateTime now) {
+  final minutes = DateTime.fromMillisecondsSinceEpoch(at)
+      .difference(now)
+      .inMinutes;
+  return minutes <= 0
+      ? 'now'
+      : minutes < 60
+      ? '${minutes}m'
+      : minutes < 1440
+      ? '${minutes ~/ 60}h ${minutes % 60}m'
+      : '${minutes ~/ 1440}d';
+}
+
+/// "5 shipped · 31 h for others": what a machine the person brought did.
+String swarmBroughtSummary(SwarmBroughtMachine machine) =>
+    '${machine.shipped} shipped · ${_broughtHours(machine.busyHours)} for others';
+
+/// Each of a brought machine's subscriptions with its week, as
+/// ("Claude", "38% used · resets in 3d"), in the desktop's words
+/// (`person_row.dart`).
+List<(String, String)> swarmBroughtSubscriptions(
+  SwarmBroughtMachine machine,
+  DateTime now,
+) => [
+  for (final sub in machine.subscriptions)
+    (
+      _engineNames[sub.engine] ?? sub.engine,
+      switch (sub) {
+        (usedPercent: final used?, resetsAt: final at?, engine: _) =>
+          '$used% used · resets in ${_resetsIn(at, now)}',
+        (usedPercent: final used?, resetsAt: null, engine: _) => '$used% used',
+        _ => 'not read yet',
+      },
+    ),
+];
 
 /// "6 min" under an hour, then hours with one decimal unless whole: "3 h",
 /// "3.1 h" (the desktop's `leaderboardDuration`).
@@ -358,3 +514,18 @@ List<(String, String)> swarmPersonWeek(SwarmScore score) {
     ),
   ];
 }
+
+/// The points first in a person's details, as the desktop's
+/// `LeaderboardPersonWeek` says them, the time before beside them rather than
+/// a difference: "21 points in the last 7 days · 15 the 7 days before".
+String swarmPersonPoints(SwarmScore score) => [
+  '${_plural(score.points, 'point')} ${score.spanName}',
+  if (score.prevWeekPoints case final before?) '$before ${score.earlierName}',
+].join(' · ');
+
+/// "waited 1.6 h": how long an answered question's agent waited.
+String swarmWaited(int minutes) => 'waited ${swarmDuration(minutes * 60000)}';
+
+/// "12.5 h busy": how long a lent machine's agents ran.
+String swarmBusy(double hours) =>
+    '${swarmDuration((hours * 3600000).round())} busy';

@@ -589,7 +589,7 @@ static int workspace_index(const char *id)
  * never in focus, agent.open or voice.begin. Voice goes to the Lead's `local` harness id.
  */
 // SIDE: id "buddy" or "pm". SIDE_KEPT: the side a restart took off the face, told to the daemon without moving the window.
-enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERTAB_SIDE_KEPT };
+enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERTAB_SIDE_KEPT, SUPERTAB_THREAD_LEAVE };
 #define SWARM_WAITS 16
 #define SWARM_SAID 24   // one per inbox entry the Lead messages can fill (NOTICES)
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
@@ -598,6 +598,7 @@ static EXT_RAM_BSS_ATTR struct {
     char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
+    struct { char tab[ID_MAX], lead[ID_MAX], root[ID_MAX]; uint32_t until; } left;   // the thread just swiped out of: a card still in flight naming it is refused
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
     char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
     // The Swarm, Lead and side a session down or an emptied list took off the face, not the person: stale until that
@@ -756,6 +757,21 @@ static void swarm_leave(void)
     sw.tab[0] = sw.lead[0] = sw.desk[0] = 0; sw.at = 0; sw.opened = false;
     ht_supertabs_recap_open(&swarm, "", "", ms());
     change();
+}
+// A horizontal swipe on a thread face leaves the thread (spec 2026-11-03-dial-thread-face): the daemon is told, the face
+// shows the main chat at once and asks for its recap again. It changes no project and selects nothing; true when it was one.
+static bool swarm_thread_swipe(void)
+{
+    const ht_lead_t *l = swarm_lead();
+    if (!l || !l->thread_root[0] || !s.connected) return false;
+    COPY(sw.left.tab, sw.tab); COPY(sw.left.lead, sw.lead); COPY(sw.left.root, l->thread_root); sw.left.until = ms() + 3000;
+    swarm_send(SUPERTAB_THREAD_LEAVE, sw.tab, sw.lead);
+    ht_supertabs_thread_leave(&swarm, sw.tab, sw.lead);
+    sw.retried = false;
+    ht_supertabs_recap_open(&swarm, sw.tab, sw.lead, ms());
+    swarm_send(SUPERTAB_RECAP_GET, sw.tab, sw.lead);
+    change();
+    return true;
 }
 static void swarm_desk_note(void)
 {
@@ -1438,6 +1454,78 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
 }
 /*
+ * THE THREAD FACE (spec 2026-11-03-dial-thread-face, mockup round-thread): a Lead whose face chat is a thread. The teal
+ * ring at the glass edge, "Thread" (Buddy: "Thread · Buddy"), the thread's title on two lines, no pet, and the card of the
+ * thread's last message with its meta line (who, how many replies) and up to three lines; "Waiting for ..." until one
+ * comes. A sideways swipe leaves it. Inter has no hooked arrow, so the label leads with one drawn in boxes.
+ */
+// The next line of `*cursor` in `w` px, copied to `out`.
+static void thread_line(const char **cursor, const ht_font_t *font, int w, char out[HT_TEXT_BYTES])
+{
+    const char *start = *cursor, *end = focus_take(cursor, font, w);
+    size_t n = (size_t)(end - start);
+    if (n >= HT_TEXT_BYTES) {
+        n = HT_TEXT_BYTES - 1;
+        while (n && ((unsigned char)start[n] & 0xC0) == 0x80) n--;   // on a character boundary
+    }
+    memcpy(out, start, n);
+    out[n] = 0;
+}
+// What is left of `*cursor` as one line (newlines as spaces); focus_put ends it "…" when it does not fit.
+static void thread_rest(const char *cursor, char out[HT_TEXT_BYTES])
+{
+    size_t n = strlen(cursor);
+    if (n >= HT_TEXT_BYTES) {
+        n = HT_TEXT_BYTES - 1;
+        while (n && ((unsigned char)cursor[n] & 0xC0) == 0x80) n--;
+    }
+    for (size_t i = 0; i < n; i++) out[i] = cursor[i] == '\n' ? ' ' : cursor[i];
+    out[n] = 0;
+}
+static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait)
+{
+    // A Lead waiting on the person stays visible: the wait's text in the card, in the accent the main face writes it in.
+    if (wait) recap = wait;
+    ht_arc_title_face(f, FG, l->project[0] ? l->project : "Untitled", &ht_arc_inter_prop);
+    const unsigned TEAL = 0x2dd4bfu;
+    ht_ring_arc(f, 233 * 16, 233 * 16, 229 * 16, 5 * 16, 90, 180, color(mix_black(TEAL, 55)));
+    const ht_font_t *small = &ht_lv_inter_20.base, *body = &ht_lv_inter_25.base;
+    uint16_t teal = color(TEAL), bg = BG, card = color(0x1c1e26u);
+    char line[HT_TEXT_BYTES];
+    // "↳" is not in Inter: a hook arrow of boxes (a stroke down, a stroke right, a small head), 21 px wide, left of the label.
+    const char *label = buddy ? "Thread \u00b7 Buddy" : "Thread";
+    int lw = ht_measure(small, label), ax = 233 - (21 + 6 + lw) / 2;
+    ht_box(f, ax + 2, 100, 2, 12, 0, teal, teal);
+    ht_box(f, ax + 2, 110, 12, 2, 0, teal, teal);
+    for (int k = 0; k < 4; k++) ht_box(f, ax + 13 + 2 * k, 107 + k, 2, 9 - 2 * k, 0, teal, teal);
+    ht_text(f, ax + 27, 93, lw, small, teal, bg, label);
+    // The title on words: a first line, then the rest on a second that ends "…" when it runs long.
+    const char *cursor = l->thread_title;
+    thread_line(&cursor, body, 330, line);
+    focus_put(f, 63, 119, 340, body, FG, bg, line, true);
+    bool two = *cursor != 0;
+    if (two) { thread_rest(cursor, line); focus_put(f, 63, 119 + 29, 340, body, FG, bg, line, true); }
+    // The card, lower by a title line: the meta line (who, how many replies) above up to three lines, else what it waits for.
+    int top = 172 + (two ? 29 : 0);
+    char meta[40] = "";
+    if (recap && !wait && l->thread_replies >= 0)
+        snprintf(meta, sizeof meta, "%s · %ld repl%s", buddy ? "Buddy" : "PM", (long)l->thread_replies, l->thread_replies == 1 ? "y" : "ies");
+    int rows = recap ? 0 : 1;
+    char text[3][HT_TEXT_BYTES] = {{0}};
+    for (const char *p = recap; p && *p && rows < 3; rows++) {
+        if (rows == 2) { thread_rest(p, text[rows++]); break; }
+        thread_line(&p, body, 304, text[rows]);
+    }
+    if (rows == 0) rows = 1;
+    int h = 26 + rows * 38 + (meta[0] ? 28 : 0);
+    // x 63..403, symmetric. Three lines under a two-line title end at y 369: its corners are 180 px from the centre at most,
+    // inside the ring's 226 px inner edge, so all three lines stay. No spine and no "chat" label (Diego, 2026-11-04).
+    ht_box(f, 63, top, 340, h, 28, card, color(mix_black(TEAL, 70)));
+    if (meta[0]) focus_put(f, 75, top + 13, 316, small, teal, card, meta, true);
+    if (!recap) focus_put(f, 75, top + 17, 316, body, DIM, card, buddy ? "Waiting for your Buddy…" : "Waiting for the PM…", true);
+    else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, wait ? ACCENT : FG, card, text[i], true);
+}
+/*
  * A SWARM PANE'S FACE (spec §4): the agent face, built from the Lead. The project on the upper arc; working: the pet
  * and the time since `since` (none for a remote Lead); asking or stuck: the asking pose and, in the recap's place, the
  * local wait's question, else the Lead's last message; done: that message, or the resting face. No Leads: PANES' own
@@ -1452,11 +1540,13 @@ static void render_swarm_face(ht_scene_t *f)
     if (buddy && !l->buddy.has) { render_buddy_empty(f, l); return; }
     const char *wait = swarm_wait_text(l);
     bool asking = l->state == HT_LEAD_ASK || l->state == HT_LEAD_STUCK || wait;
-    bool working = l->state == HT_LEAD_WORK && !wait && !buddy;
+    bool thread = l->thread_root[0] != 0;   // the face is a thread: no pet, no working time, its own recap card
+    bool working = l->state == HT_LEAD_WORK && !wait && !buddy && !thread;
     // A swarmChat daemon's recap is that of the chat on the face: one read for a chat the desktop has since left is not
     // shown (design 2026-10-28-round-dial-swarm-chat §3). An older daemon names no chat on either side.
-    const char *recap = wait ? wait : !working && swarm.recap.state == HT_RECAP_LOADED &&
-        !strcmp(swarm.recap.lead, l->id) && !strcmp(swarm.recap.chat_id, l->chat_id) && (l->chat == HT_CHAT_BUDDY) == buddy &&
+    const char *recap = wait && !thread ? wait : !working && swarm.recap.state == HT_RECAP_LOADED &&
+        !strcmp(swarm.recap.lead, l->id) && !strcmp(swarm.recap.chat_id, l->chat_id) && !strcmp(swarm.recap.thread, l->thread_root) &&
+        (l->chat == HT_CHAT_BUDDY) == buddy &&
         !s.nap ? swarm.recap.text : NULL;
     uint32_t since_ms = working && l->since_s >= 0 ? (uint32_t)l->since_s * 1000u + (ms() - l->since_at_ms) : 0;
     uint32_t since = since_ms / 1000;
@@ -1482,21 +1572,22 @@ static void render_swarm_face(ht_scene_t *f)
         .straight_title = s.straight_title, .ink = FG, .foreground = FG, .dim = DIM,
         .primary_title = true, .roomy_reading = true};
     bool focus_face = character.id == HT_CHARACTER_FOCUS;
-    if (focus_face) ht_focus_pick_working(&s.working_pick, &f_, recap, l->id, esp_random);
-    if (again && focus_face) {
+    if (focus_face && !thread) ht_focus_pick_working(&s.working_pick, &f_, recap, l->id, esp_random);
+    if (again && focus_face && !thread) {
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
-    ht_character_face(f, &character, &f_, ACCENT, recap);
-    s.pet_next_ms = focus_face ? ht_focus_pet_next_ms(&f_, recap) : 0;
+    if (thread) face_thread(f, l, buddy, recap, wait);
+    else ht_character_face(f, &character, &f_, ACCENT, recap);
+    s.pet_next_ms = focus_face && !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
-    bool told = bell && focus_face && ht_focus_alert_shown(&f_, recap, &bubble);
+    bool told = bell && focus_face && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
     int bell_y = 400;
     if (bell && !told) {
         if (focus_face) focus_bell(f, unread, bell_y);
         else ht_notification_bell(f, unread, f_.ink);
     }
-    if (buddy) {
+    if (buddy && !thread) {
         // The avatar stands where the pet does on Focus, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
         // today's place (it rises with its lines). A creature skin keeps its creature.
         if (focus_face) {
@@ -1526,7 +1617,7 @@ static void render_swarm_face(ht_scene_t *f)
         face_buddy_dots(f, buddy, heard);
         for (int i = 0; i < f->count; i++) lower |= f->runs[i].arc == 2 && f->runs[i].text[0];
         ht_box(f, 0, 0, 1, 1, 0, BG, BG); ht_box(f, 0, 0, 1, 1, 0, BG, BG);
-        if (heard && !lower) ht_arc_status_face(f, color(BUDDY_LILAC), "Your Buddy replied", &ht_arc_inter_lower);
+        if (heard && !lower && !thread) ht_arc_status_face(f, color(BUDDY_LILAC), "Your Buddy replied", &ht_arc_inter_lower);
         else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
     }
     // The same targets as a pane's face: the name opens PANES, the bell the inbox, the rest talks (to a local Lead).
@@ -3378,6 +3469,7 @@ static void worker(void *unused)
             if (a.value >= SUPERTAB_RECAP_GET && a.value <= SUPERTAB_SELECT) cable_client_supertab_send(ops[a.value], a.text, a.id);
             else if (a.value == SUPERTAB_SIDE) cable_client_supertab_side(a.text, !strcmp(a.id, "buddy"));
             else if (a.value == SUPERTAB_SIDE_KEPT) cable_client_supertab_side_kept(a.text);
+            else if (a.value == SUPERTAB_THREAD_LEAVE) cable_client_supertab_thread_leave(a.text, a.id);
             break;
         }
         case A_NOTICE_READ:
@@ -3793,7 +3885,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 if (dx>0 && !s.q.pending) view(s.view==ANSWER_REVIEW ? CHOICE : s.view==CHOICE ? QUESTION : HOME);
             } else if (s.view == INBOX && s.notice_count)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
-            else if (surface && swarm_here() && swarm_here()->lead_n && s.connected) {
+            else if (surface && swarm_thread_swipe()) {
+                // A thread face: out of the thread, not to the next project.
+            } else if (surface && swarm_here() && swarm_here()->lead_n && s.connected) {
                 // A Swarm's next or previous project, by `order`, wrapping as the panes do (never `focus`).
                 // One project wraps onto itself: nothing to pick, ask or reopen on the desktop (Diego, 2026-10-29).
                 int n = swarm_here()->lead_n, i = (sw.at + (dx < 0 ? 1 : n - 1)) % n;
@@ -5270,6 +5364,15 @@ bool ui_supertab(const ht_supertab_t *in)
         else if (before && !now && !turn) turn = -1;
     }
     int n = ht_supertabs_put(&swarm, in, ms(), ev, (int)(sizeof ev / sizeof ev[0]));
+    // A card made before the swipe out still names the thread left: it does not bring the face back, until a card without it
+    // comes or 3 s pass.
+    if (sw.left.root[0] && !strcmp(sw.left.tab, in->id)) {
+        const ht_supertab_t *now = ht_supertabs_find(&swarm, in->id);
+        int j = now ? swarm_lead_index(now, sw.left.lead) : -1;
+        if (j >= 0 && !strcmp(now->leads[j].thread_root, sw.left.root) && (int32_t)(ms() - sw.left.until) < 0)
+            ht_supertabs_thread_leave(&swarm, in->id, sw.left.lead);
+        else sw.left.root[0] = 0;
+    }
     // A daemon that says the side is the truth: a face alone cannot tell it where no project has a Buddy chat (review of
     // #2218). An older one says none, and the faces' turns tell it.
     if (in->side != HT_SIDE_NONE) swarm_side_put(in->id, buddies && in->side == HT_SIDE_BUDDY);
@@ -5298,10 +5401,10 @@ bool ui_supertab(const ht_supertab_t *in)
                 sw.opened = true;
             } else
             // The face's chat moved (a side the daemon took, the desktop) and what is held is another chat's: asked for
-            // again. That chat's recap can come before this frame, and is refused as another chat's (a card is held 300 ms,
+            // again, and so is a thread entered or left. That chat's recap can come before this frame, and is refused as another chat's (a card is held 300 ms,
             // a recap is not): the Buddy side showed no last message (Diego's dial, 2026-10-29).
             if ((swarm.recap.state == HT_RECAP_LOADED || swarm.recap.state == HT_RECAP_EMPTY) && !strcmp(swarm.recap.lead, sw.lead) &&
-                strcmp(swarm.recap.chat_id, t->leads[i].chat_id)) {
+                (strcmp(swarm.recap.chat_id, t->leads[i].chat_id) || strcmp(swarm.recap.thread, t->leads[i].thread_root))) {
                 sw.retried = false;
                 ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
                 swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
@@ -5316,10 +5419,10 @@ bool ui_supertab(const ht_supertab_t *in)
     display_unlock();
     return beep;
 }
-void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
+void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none)
 {
     display_lock();
-    if (ht_supertabs_recap_put(&swarm, tab, lead, chat_id, text, at, none)) change();
+    if (ht_supertabs_recap_put(&swarm, tab, lead, chat_id, thread, text, at, none)) change();
     display_unlock();
 }
 // `lead` "" is the desktop on that Swarm's tab with no project open (its Chat with PM, a DM): the dial still goes in, on
@@ -5357,7 +5460,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
  * A LEAD'S NEW MESSAGE (design 2026-10-28-round-dial-swarm-chat §3), in its Lead conversation or Chat with PM: the one
  * alert a swarmChat daemon raises. It is that Lead's single entry, news rather than a question, the message as its text
  * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
- * once only when that Lead's face shows that very chat. True when the caller should beep (the coalescing is the audio's).
+ * once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its root) that very
+ * thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere (#2463). True
+ * when the caller should beep (the coalescing is the audio's).
  */
 _Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
 static int swarm_said_of(const char *lead)
@@ -5365,10 +5470,10 @@ static int swarm_said_of(const char *lead)
     for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
     return -1;
 }
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at)
 {
     (void)at;
-    if (!tab || !lead || !chat_id || !text) return false;
+    if (!tab || !lead || !chat_id || !thread || !text) return false;
     display_lock();
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
@@ -5396,7 +5501,7 @@ bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, 
     if (slot < 0) slot = 0;
     COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
     s.notice_sequence++;
-    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id);
+    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id) && (!thread[0] || !strcmp(l->thread_root, thread));
     if (face) notice_read_now(l->id);
     else display_wake();
     change();
