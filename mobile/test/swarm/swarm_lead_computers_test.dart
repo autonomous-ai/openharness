@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/engine_availability.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/swarm/swarm_computers.dart';
-import 'package:harness_mobile/swarm/swarm_lead_start.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../viewer_app_fixture.dart';
@@ -149,9 +148,8 @@ void main() {
   test('a computer that refuses says why', () async {
     final rig = await signedInWith({'m': []});
     addTearDown(rig.app.dispose);
-    rig.conn('m').answers['agent_create'] = (_) => {
-      'error': 'TMUX_UNAVAILABLE',
-    };
+    rig.conn('m').answers['agent_create'] = (_) =>
+        throw refusal('TMUX_UNAVAILABLE');
     final computers = AppSwarmComputers(rig.app);
     addTearDown(computers.dispose);
 

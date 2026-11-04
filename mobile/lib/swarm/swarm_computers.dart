@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/models.dart';
+import '../core/project_folder.dart';
 import '../phone/agent_index.dart';
 import '../phone/agents_list_page.dart';
 import '../phone/phone_navigation.dart';
@@ -12,6 +13,8 @@ import '../phone/welcome/your_computer.dart';
 import '../state/app_state.dart';
 import 'swarm_agents.dart';
 import 'swarm_chat_agents.dart';
+import 'swarm_lead_start.dart';
+import 'swarm_request.dart';
 import 'swarm_start.dart';
 
 /// The account's computers for Swarm's start screens, from the app's own
@@ -25,7 +28,11 @@ import 'swarm_start.dart';
 ///
 /// It also lists the sessions running on them, for Add agent ([running]).
 class AppSwarmComputers extends ChangeNotifier
-    implements SwarmComputers, SwarmAgentsSource, SwarmRunningSessions {
+    implements
+        SwarmComputers,
+        SwarmAgentsSource,
+        SwarmRunningSessions,
+        SwarmLeadComputers {
   AppSwarmComputers(this.notifier) {
     notifier.addListener(_changed);
     _changed();
@@ -86,6 +93,99 @@ class AppSwarmComputers extends ChangeNotifier
     _own = own;
     _rechecking = rechecking;
     notifyListeners();
+  }
+
+  /// The person's own connected computers a Personal project's Lead starts
+  /// on (task #2941), as Desktop's card lists them (personal_lead.dart
+  /// `machinesFor`): never shared, a Harness Team account or one waiting for
+  /// a link. Each with Claude Code then Codex where installed (or installable)
+  /// and not signed out; a list not read yet asks the computer and offers
+  /// Claude Code meanwhile, as Desktop does. And each repo its agents work
+  /// in, by remote, with the checkout's folder.
+  @override
+  List<SwarmLeadComputer> get leadComputers => [
+    for (final machine in notifier.machineStates.values)
+      if (!machine.machine.shared &&
+          machine.machine.sessionKind != 'team' &&
+          !machine.needsLink &&
+          machine.connectionStatus == ConnectionStatus.connected)
+        (
+          id: machine.machine.machineId,
+          name: machine.machine.displayName,
+          engines: _leadEngines(machine),
+          folders: {
+            for (final agent in machine.agents)
+              if (agent.project case final project?)
+                ?swarmNormalizedRemote(project.remote):
+                    project.root ?? project.cwd,
+          },
+        ),
+  ];
+
+  List<String> _leadEngines(MachineState machine) {
+    final engines = machine.engines;
+    if (!engines.loaded) {
+      unawaited(
+        notifier
+            .probeEngines(machine.machine.machineId)
+            .then((_) => notifyListeners()),
+      );
+      return const ['claude'];
+    }
+    return [
+      for (final engine in const ['claude', 'codex'])
+        if (engines[engine] case final known?
+            when (known.installed || known.installable) &&
+                known.signedIn != false)
+          engine,
+    ];
+  }
+
+  /// Starts the Lead on [machineId] as Desktop's card does (personal_lead.dart
+  /// `_launch`): approving everything, as a Swarm agent, with the Lead's
+  /// prompt and Claude's Lead model, in the repo's folder or a new one named
+  /// after the project.
+  @override
+  Future<SwarmLeadStarted> startLead(
+    String machineId,
+    SwarmLeadLaunch launch,
+  ) async {
+    final attempt = AgentCreationAttempt();
+    final failure = await notifier.createAgent(
+      machineId,
+      engine: launch.engine,
+      folder: launch.folder,
+      projectFolder: launch.folder == null
+          ? ProjectFolderRequest.forTask(launch.projectName)
+          : null,
+      permissionMode: 'full',
+      prompt: launch.prompt,
+      swarmRole: 'lead',
+      swarmSkillMode: launch.skillMode,
+      launchModel: launch.engine == 'claude'
+          ? (model: 'opus', effort: 'xhigh')
+          : null,
+      attempt: attempt,
+    );
+    if (failure != null) throw SuperTabFailure('CREATE_FAILED', failure);
+    final harnessId = attempt.agentId;
+    if (harnessId == null) {
+      throw const SuperTabFailure(
+        'CREATE_FAILED',
+        'the computer didn’t say which harness it started',
+      );
+    }
+    final project = notifier
+        .stateOf(machineId)
+        ?.agents
+        .where((a) => a.id == harnessId)
+        .firstOrNull
+        ?.project;
+    return (
+      harnessId: harnessId,
+      cwd: project == null ? launch.folder : project.root ?? project.cwd,
+      remote: project?.remote,
+    );
   }
 
   /// The account's own computers, as the Buddy picker lists them: never one

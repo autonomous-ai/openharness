@@ -134,7 +134,7 @@ void main() {
       final rig = await signedInWith({'m': []});
       addTearDown(rig.app.dispose);
       rig.conn('m').answers['agent_create'] = (p) => p.containsKey('model')
-          ? {'error': 'LAUNCH_MODEL_UNSUPPORTED', 'detail': 'update claude'}
+          ? throw refusal('LAUNCH_MODEL_UNSUPPORTED', detail: 'update claude')
           : created(p, 'lead');
       final attempt = AgentCreationAttempt();
 
