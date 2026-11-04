@@ -7,7 +7,7 @@ export * from './types.js'
 export { clock, createClock } from './clock.js'
 export { knownKind, reassemble, split, toLegacyState } from './shape.js'
 
-export { DORMANT_PAGE, insertParts, lastChangedAt, loadActive, loadAll, loadChanged, loadDelta, loadDormant, loadFinishedStarts, loadGroups, loadMachineParts, loadMachines, loadObserved, loadReadBase, loadStartsOfAgents } from './load.js'
+export { DORMANT_PAGE, insertParts, lastChangedAt, loadAccess, loadActive, loadAll, loadChanged, loadDelta, loadDormant, loadFinishedStarts, loadGroups, loadGroupUnless, loadMachineParts, loadMachines, loadMachineAccounts, loadObserved, loadReadBase, loadStartsOfAgents } from './load.js'
 export type { SwarmDelta } from './load.js'
 export { loadLight, loadLightGroups } from './light.js'
 export { guardedWrite, PartConflict, type PartWrite } from './write.js'

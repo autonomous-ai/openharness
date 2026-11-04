@@ -34,6 +34,9 @@ import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let app: FastifyInstance
+/** Backend processes, each with its own read cache: production runs five at least. */
+const PODS = 5
+let pods: FastifyInstance[]
 let stamps: MemoryStamps
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
@@ -56,21 +59,28 @@ beforeAll(async () => {
   await db.machine.create({ data: { machineId: 'peer-mac', userId: peer.sub, apiKey: 'fixture-only-peer', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   stamps = new MemoryStamps()
   configureSwarmStamps(stamps, { reads: false })
+  pods = await Promise.all(Array.from({ length: PODS }, () => pod()))
+  app = pods[0]!
+})
+/** One backend process: its own read cache over the shared stamps, as each production pod has. */
+async function pod(): Promise<FastifyInstance> {
   const store = new SuperTabStore(db, Date.now, null, { readCache: new SwarmCache(stamps, { delta: readDelta(db) }) })
-  app = Fastify()
-  app.setErrorHandler(errorHandler)
+  const server = Fastify()
+  server.setErrorHandler(errorHandler)
   // External SSO is replaced with fixture accounts; every permission and transaction below is real.
-  app.addHook('onRequest', async (request, reply) => {
+  server.addHook('onRequest', async (request, reply) => {
     const found = [owner, peer, outsider].find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!found) return reply.code(401).send({ success: false })
     request.user = found
   })
-  await app.register(superTabRoutes, { store, github: null, reads: new SwarmReads(store), hosts: new HostReads(store) })
-  await app.ready()
-})
+  await server.register(superTabRoutes, { store, github: null, reads: new SwarmReads(store), hosts: new HostReads(store) })
+  await server.ready()
+  return server
+}
+
 afterAll(async () => {
   configureSwarmStamps(null)
-  await app?.close()
+  for (const each of pods ?? []) await each.close()
   await db?.$disconnect()
   await replica?.stop()
 })
@@ -91,6 +101,8 @@ async function scene() {
     return id
   })
   const busy = Array.from({ length: 20 }, (_, i) => s.group(`Busy ${i}`))
+  // Briefs about a task's size, so the change feeds carry what a busy Swarm's do.
+  s.edit(state => { for (const c of state.conversations) c.brief = `${c.title}: ${'what to build and why. '.repeat(80)}` })
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
@@ -108,8 +120,18 @@ async function touch(tabId: string, key: string) {
   })
 }
 
-const read = async (tabId: string, id: string, asAgentId?: string, as: AuthUser = owner) => {
-  const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tabId}/groups/${id}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+/** A machine's part rewritten, as a reading or a setting changes it: the machine feed moves too. */
+async function touchMachine(tabId: string, machineId: string) {
+  await swarmTransaction(db, async tx => {
+    const current = (await parts.loadActive(tx, tabId)).machines.find(m => m.key === machineId)!
+    const data = structuredClone(current.data!)
+    data.contribution!.name = `${machineId} ${Date.now()}`
+    await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: current.version, data }, Date.now())
+  })
+}
+
+const read = async (tabId: string, id: string, asAgentId?: string, as: AuthUser = owner, on: FastifyInstance = app) => {
+  const response = await on.inject({ method: 'GET', url: `/api/super-tabs/${tabId}/groups/${id}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
     headers: { authorization: `Bearer ${as.sub}` } })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
 }
@@ -143,6 +165,17 @@ function feedReads(rows: ProfileEntry[]): ProfileEntry[] {
 }
 const bytes = (rows: ProfileEntry[]) => rows.reduce((n, r) => n + (r.responseLength ?? 0), 0)
 const dbMs = (rows: ProfileEntry[]) => rows.reduce((n, r) => n + r.millis, 0)
+/** Reads and bytes per collection and operation kind, largest first. */
+function byCollection(rows: ProfileEntry[]): string {
+  const sums = new Map<string, { reads: number; bytes: number }>()
+  for (const r of rows) {
+    if (r.op === 'getmore') continue
+    const name = `${r.ns.split('.').at(-1)} ${(r.planSummary ?? r.op).split(' {')[0]} ${(r.planSummary ?? '').match(/\{[^}]*\}/)?.[0] ?? ''}`
+    const sum = sums.get(name) ?? { reads: 0, bytes: 0 }
+    sums.set(name, { reads: sum.reads + 1, bytes: sum.bytes + (r.responseLength ?? 0) })
+  }
+  return [...sums].sort((a, b) => b[1].bytes - a[1].bytes).map(([name, sum]) => `  ${name}: ${sum.reads} reads, ${sum.bytes} bytes`).join('\n')
+}
 const describeRows = (rows: ProfileEntry[]) => rows.filter(r => r.op !== 'getmore').map(r =>
   `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 60)} docs=${r.docsExamined ?? 0} returned=${r.nreturned ?? 0} bytes=${r.responseLength ?? 0}`).join('\n')
 
@@ -269,27 +302,26 @@ describe('one group read by id (task #2875)', () => {
     }
   }, 120_000)
 
-  it(`answers a burst of 1,000 reads of ${QUIET} quiet groups by ${AGENTS} agents while the Swarm moves, without its change feeds`, async () => {
+  it(`answers a burst of 1,000 reads of ${QUIET} quiet groups by ${AGENTS} agents on ${PODS} pods while the Swarm moves, without its change feeds`, async () => {
     const s = await scene()
-    for (const agent of s.agents) expect((await read(s.tabId, s.quiet[0]!, agent)).status).toBe(200)
-    const times: number[] = []
-    const { rows } = await profiled(async () => {
-      for (let wave = 0; wave < 10; wave++) {
-        // The Swarm moves between waves, as a busy one does every second.
-        await touch(s.tabId, s.busy[wave % s.busy.length]!)
-        await Promise.all(Array.from({ length: 100 }, async (_, i) => {
-          const started = performance.now()
-          const answer = await read(s.tabId, s.quiet[(wave * 100 + i) % QUIET]!, s.agents[i % AGENTS])
-          times.push(performance.now() - started)
-          expect(answer.status).toBe(200)
-        }))
-      }
-    })
+    for (const [i, agent] of s.agents.entries()) expect((await read(s.tabId, s.quiet[0]!, agent, owner, pods[i % PODS])).status).toBe(200)
+    const times: number[] = [], rows: ProfileEntry[] = []
+    for (let wave = 0; wave < 10; wave++) {
+      // The Swarm moves between waves, as a busy one does every second: five tasks and a machine. Only the reads are measured.
+      for (let i = 0; i < 5; i++) await touch(s.tabId, s.busy[(wave * 5 + i) % s.busy.length]!)
+      await touchMachine(s.tabId, 'host')
+      rows.push(...(await profiled(() => Promise.all(Array.from({ length: 100 }, async (_, i) => {
+        const started = performance.now()
+        const answer = await read(s.tabId, s.quiet[(wave * 100 + i) % QUIET]!, s.agents[i % AGENTS], owner, pods[i % PODS])
+        times.push(performance.now() - started)
+        expect(answer.status).toBe(200)
+      })))).rows)
+    }
     times.sort((a, b) => a - b)
     const feeds = feedReads(rows)
     console.info(`burst of 1,000 one group reads: ${rows.filter(r => r.op !== 'getmore').length} database reads, ${bytes(rows)} bytes, ` +
       `${dbMs(rows)} ms in the database; change feed reads ${feeds.length}, ${bytes(feeds)} bytes; per call p50 ${times[499]!.toFixed(1)} ms, ` +
-      `p95 ${times[949]!.toFixed(1)} ms`)
+      `p95 ${times[949]!.toFixed(1)} ms\n${byCollection(rows)}`)
     expect(feeds.length, describeRows(feeds)).toBe(0)
   }, 300_000)
 })

@@ -85,6 +85,21 @@ export const baseRule: PatchRule<SwarmParts> = {
   },
 }
 
+/** The `access` entry (parts/load.ts loadAccess): the head, members and agents a read check needs, patched from those kinds
+ *  alone (task #2875), never from the group, machine and progress feeds a one-group read once made every pod read. */
+export const accessRule: PatchRule<SwarmParts> = {
+  kinds: ['head', 'member', 'agent'],
+  alone: true,
+  apply(held, delta) {
+    if (delta.head && delta.head.visibilityEpoch !== held.visibilityEpoch) return 'reload'
+    const { parts } = delta
+    const headPart = parts.find(p => p.kind === 'head' && p.version > held.head.version)
+    const members = applyByKey(held.members, parts, 'member', live), agents = applyByKey(held.agents, parts, 'agent', live)
+    if (!headPart && members === held.members && agents === held.agents) return held
+    return { ...held, head: headPart ? asLoaded(headPart) : held.head, members, agents, ...(headPart && delta.head ? delta.head : {}) }
+  },
+}
+
 /** The `machines` entry: every live machine part. */
 export const machinesRule: PatchRule<Part<MachineData>[]> = {
   kinds: ['machine'],
