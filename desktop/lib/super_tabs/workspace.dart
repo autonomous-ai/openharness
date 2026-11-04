@@ -469,11 +469,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     String tabId,
     SuperTabAgent agent,
   ) async {
-    final groups =
-        controller.snapshot?.conversations
-            .where((g) => !g.closed && g.agentIds.contains(agent.id))
-            .toList() ??
-        <SuperTabConversation>[];
+    final groups = superTabAgentTerminalGroups(controller, agent.id);
     if (groups.isEmpty) return;
     if (groups.length == 1) {
       _focusAgent(controller, tabId, agent, groups.single.id);
