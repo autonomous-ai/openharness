@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -54,6 +55,7 @@ Future<dynamic> _mount(
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: brightness),
       home: Scaffold(
         body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
@@ -70,6 +72,18 @@ Future<void> _rightClick(WidgetTester tester, String id) async {
     buttons: kSecondaryMouseButton,
   );
   await tester.pumpAndSettle();
+}
+
+/// Whether [text]'s line is cut short where it is laid out: ellipsized, or narrower than the text needs.
+bool _cut(WidgetTester tester, String text) {
+  final paragraph = tester.renderObject<RenderParagraph>(find.text(text));
+  final whole = TextPainter(
+    text: paragraph.text,
+    textDirection: TextDirection.ltr,
+    textScaler: paragraph.textScaler,
+  )..layout();
+  return paragraph.didExceedMaxLines ||
+      paragraph.size.width < whole.width - 0.5;
 }
 
 Future<void> _done(WidgetTester tester, dynamic c) async {
@@ -92,7 +106,15 @@ void main() {
       ];
       final c = await _mount(tester, server);
       await _rightClick(tester, 'studio');
-      expect(find.text("Let teammates' work run in my account"), findsOneWidget);
+      expect(
+        find.text("Let teammates' work run in my account"),
+        findsOneWidget,
+      );
+      expect(
+        _cut(tester, "Let teammates' work run in my account"),
+        isFalse,
+        reason: 'the item reads whole, not cut short',
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       for (final other in ['pro', 'studio-team']) {
@@ -144,7 +166,11 @@ void main() {
       await tester.tap(find.byKey(_allow));
       await tester.pumpAndSettle();
       expect(_ownAccountCommands(server), [
-        {'type': 'machine.ownAccountWork', 'machineId': 'studio', 'allowed': true},
+        {
+          'type': 'machine.ownAccountWork',
+          'machineId': 'studio',
+          'allowed': true,
+        },
       ]);
       expect(find.byKey(_allow), findsNothing);
       await _done(tester, c);
@@ -161,7 +187,15 @@ void main() {
           find.text("Run teammates' work only in the Team account"),
           findsOneWidget,
         );
-        expect(find.text("Let teammates' work run in my account"), findsNothing);
+        expect(
+          find.text("Let teammates' work run in my account"),
+          findsNothing,
+        );
+        expect(
+          _cut(tester, "Run teammates' work only in the Team account"),
+          isFalse,
+          reason: 'the item reads whole, not cut short',
+        );
         await tester.tap(find.byKey(_item));
         await tester.pumpAndSettle();
         expect(
@@ -183,7 +217,8 @@ void main() {
       final server = ConversationServer()
         ..refuse = {
           'code': 'OWNER_REQUIRED',
-          'message': "Only the machine's owner can change where teammates' work runs.",
+          'message':
+              "Only the machine's owner can change where teammates' work runs.",
         }
         ..refuseStatus = 403;
       server.state['machines'] = [_machine('studio')];
@@ -242,14 +277,25 @@ void main() {
     ) async {
       final server = ConversationServer();
       server.state['people'] = [
-        {'id': 'owner', 'email': 'gray@example.com', 'role': 'owner', 'name': 'Gray'},
-        {'id': 'scholes', 'email': 'scholes@example.com', 'role': 'member', 'name': 'Scholes'},
+        {
+          'id': 'owner',
+          'email': 'gray@example.com',
+          'role': 'owner',
+          'name': 'Gray',
+        },
+        {
+          'id': 'scholes',
+          'email': 'scholes@example.com',
+          'role': 'member',
+          'name': 'Scholes',
+        },
       ];
       server.state['machines'] = [
         _machine(
           'studio',
           allowed: true,
-          ownAccountLine: "Gray's Mac runs teammates' work in Gray's own account.",
+          ownAccountLine:
+              "Gray's Mac runs teammates' work in Gray's own account.",
         ),
       ];
       final c = await _mount(tester, server);
