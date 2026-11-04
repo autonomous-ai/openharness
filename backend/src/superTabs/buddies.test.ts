@@ -662,6 +662,25 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(shownBefore(threaded, 'ask', 'buddy')).toEqual(['Thread line'])
   })
 
+  // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
+  it('is closed with a reason by its project\'s PM or a person in the project, posting nothing, and by nobody else', () => {
+    const { f, propose } = asked()
+    const root = propose().messages[0]!
+    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+    const close = (actor: Actor, messageId = root.id, loaded: Partial<CommandContext> = context) =>
+      f.run({ type: 'proposal.close', projectId: f.app.projectId, messageId, reason: '  Built in #2901 ' }, actor, loaded)
+    const closed = close(agentActor(f.pm))
+    expect(closed.closedProposal).toEqual({ messageId: root.id, conversationId: f.app.conversationId, reason: 'Built in #2901' })
+    expect(closed.messages).toEqual([])
+    expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
+    const webPm = group(f, f.web.conversationId).leadId!
+    for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()
+    expect(() => close(agentActor(f.pm), 'talk', { proposal: { id: 'talk', conversationId: f.app.conversationId, author: root.author, source: null } }))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
+    expect(() => close(agentActor(f.pm), 'missing', {})).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNKNOWN' }))
+    for (const reason of ['', 'x'.repeat(201)]) expect(commandSchema.safeParse({ type: 'proposal.close', projectId: 'p', messageId: 'm', reason }).success).toBe(false)
+  })
+
   it('is one per ask: the same message never asks twice', () => {
     const { propose } = asked()
     propose()

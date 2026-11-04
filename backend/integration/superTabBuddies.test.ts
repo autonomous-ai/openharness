@@ -840,6 +840,21 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
   })
 
+  // River, 11-04 (task #2926): a proposal answered before threads, or built without the task's link, is closed by hand.
+  it('leaves the open proposals for good once the PM closes it with a reason, posting nothing', async () => {
+    const { f, proposal } = await proposed()
+    const rows = await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })
+    await f.execute({ type: 'proposal.close', projectId: 'lead', messageId: proposal, reason: 'Built in #2901' }, owner, f.lead)
+    const listed = async () => (await f.store.proposals(owner, f.tab, 'lead')).proposals.map(p => p.messageId)
+    expect(await listed()).not.toContain(proposal)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })).toBe(rows)
+    // Past the seed's half hour too, and its reason kept with it.
+    await db.superTabOpenProposal.updateMany({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
+    expect(await listed()).not.toContain(proposal)
+    const [kept] = await db.superTabOpenProposal.aggregateRaw({ pipeline: [{ $match: { _id: proposal } }] }) as unknown as Array<Record<string, unknown>>
+    expect(kept).toMatchObject({ sequence: -2, closed: { reason: 'Built in #2901', by: f.lead } })
+  })
+
   it('links the proposal when the PM names its details, the reply it was delivered; a reply of its own stays refused (Scholes, 11-04)', async () => {
     const { f, proposal, pm } = await proposed()
     // A proposal posted before task #2926 has its Buddy's first reply holding its details, stored as it was written then.
