@@ -155,6 +155,7 @@ Future<SuperTabController> _show(
   List<String>? openedProposals,
   Set<String> asking = const {},
   Size size = const Size(1400, 900),
+  String? selectedId,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -171,6 +172,7 @@ Future<SuperTabController> _show(
           needsHuman: (task) => asking.contains(task.id) ? 1 : 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (id) => openedProposals?.add(id),
+          selectedId: selectedId,
           now: () => _now,
         ),
       ),
@@ -338,6 +340,45 @@ void main() {
         matching: find.text('0'),
       ),
       findsOneWidget,
+    );
+    await _close(tester, c);
+  });
+
+  testWidgets('the open task has the sidebar\'s selected fill and says so', (
+    tester,
+  ) async {
+    final c = await _show(tester, tasksServer(), selectedId: 'tag');
+    Color? fill(String id) =>
+        (tester
+                    .widget<Ink>(
+                      find.descendant(
+                        of: _card(id),
+                        matching: find.byType(Ink),
+                      ),
+                    )
+                    .decoration!
+                as BoxDecoration)
+            .color;
+    expect(
+      fill('tag'),
+      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.inset),
+    );
+    expect(tester.getSemantics(_card('tag')), isSemantics(isSelected: true));
+    for (final id in ['preview', 'test-copy', 'p-old']) {
+      expect(fill(id), grid.AppCard.inset, reason: id);
+      expect(
+        tester.getSemantics(_card(id)),
+        isNot(isSemantics(isSelected: true)),
+        reason: id,
+      );
+    }
+    // The List shows the same row selected; the others stay plain.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(fill('tag'), grid.AppSurface.selectedFill);
+    expect(
+      find.descendant(of: _card('preview'), matching: find.byType(Ink)),
+      findsNothing,
     );
     await _close(tester, c);
   });

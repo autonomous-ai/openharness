@@ -97,4 +97,28 @@ void main() {
     expect(c.selectedId, 'lead');
     expect(_key('super-tasks-column-working'), findsOneWidget);
   });
+
+  testWidgets('back on the board, the task just opened shows selected', (
+    tester,
+  ) async {
+    await _showView(tester, tasksServer());
+    await tester.tap(_key('super-tasks'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(_key('super-task-card-tag')),
+      isNot(isSemantics(isSelected: true)),
+    );
+    await tester.tap(_key('super-task-card-tag'));
+    await tester.pumpAndSettle();
+    await tester.tap(_key('super-tasks'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(_key('super-task-card-tag')),
+      isSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(_key('super-task-card-preview')),
+      isNot(isSemantics(isSelected: true)),
+    );
+  });
 }
