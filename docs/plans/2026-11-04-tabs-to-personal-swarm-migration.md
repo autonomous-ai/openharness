@@ -152,8 +152,9 @@ tabs. The desk is then kept read-only for at least two releases, so a person who
    panes while a newer Desktop shows projects. Projects mode is a setting of each Desktop, not of the account, so an
    older Desktop on the same account simply shows tabs.
 8. **A way back.** The "Use projects instead of tabs" setting, off by default until Phase 3 and always in Settings.
-   Restoring needs no saved copy: the desk is never changed by projects mode, and the local tab layout keeps being
-   written. Personal's project map (`super_tab.repos.<account>`) stays too, so switching back and forth makes no new
+   Restoring needs no copy of the tabs: the desk is never changed by projects mode, and the local tab layout keeps
+   being written. The one thing saved is this computer's list of the Swarm tabs the switch closed, to reopen them
+   (Phase 2). Personal's project map (`super_tab.repos.<account>`) stays too, so switching back and forth makes no new
    projects.
 
 ## Design
