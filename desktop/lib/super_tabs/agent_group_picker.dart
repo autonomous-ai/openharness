@@ -8,9 +8,10 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
 
-/// The open conversations that hold [agentId]: where its terminal can open.
-/// The backend opens a terminal only in a conversation that holds the agent,
-/// and a dormant one is not in the Swarm's snapshot (#2738).
+/// Where [agentId]'s terminal can open: the conversations that hold it and
+/// are not archived, as the backend opens one (superTabs/native.ts). The open
+/// ones when there are any; else the finished (dormant) ones the Desktop
+/// holds, such as the finished task the reader has open (#2738, review).
 List<SuperTabConversation> superTabAgentTerminalGroups(
   SuperTabController controller,
   String agentId,
@@ -19,9 +20,11 @@ List<SuperTabConversation> superTabAgentTerminalGroups(
   if (controller.accessRevoked || snapshot?.agent(agentId) == null) {
     return const [];
   }
-  return snapshot!.conversations
-      .where((g) => !g.closed && g.agentIds.contains(agentId))
+  final held = snapshot!.conversations
+      .where((g) => !g.archived && g.agentIds.contains(agentId))
       .toList();
+  final open = held.where((g) => !g.dormant).toList();
+  return open.isNotEmpty ? open : held;
 }
 
 /// Why Open terminal cannot open [agentId]'s terminal, and how to let it,
