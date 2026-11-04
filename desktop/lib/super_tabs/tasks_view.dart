@@ -395,7 +395,20 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           _heading(column, entries.length),
           const SizedBox(height: grid.AppDesktop.listRowGap),
           Expanded(
-            child: column == SuperTabTaskColumn.nextUp
+            child: entries.isEmpty
+                // Said, not left blank: a column with nothing in it reads
+                // as one still loading (task #2948).
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: grid.AppDesktop.groupGap,
+                    ),
+                    child: Text(
+                      'No tasks',
+                      textAlign: TextAlign.center,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  )
+                : column == SuperTabTaskColumn.nextUp
                 ? _nextUp(entries, now)
                 : LaidOutListView.builder(
                     itemCount: entries.length,
