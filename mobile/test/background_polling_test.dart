@@ -172,11 +172,19 @@ void main() {
             );
           rig.app.bootstrap();
           async.flushMicrotasks();
+          final api = rig.app.api as _Api;
+          // What a return reads of the log anyway, with no key awaited: `ensureRegistered`, since a
+          // `device_keys_changed` sent while away reached nobody.
+          var reads = api.keyReads;
+          rig.app.handleAppPaused();
+          rig.app.handleAppResumed();
+          async.flushMicrotasks();
+          final resumeReads = api.keyReads - reads;
+          expect(resumeReads, greaterThan(0));
           // A computer that signed in a moment ago, its key not in the log yet.
           rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
           async.elapse(const Duration(seconds: 1));
           expect(rig.app.stateOf('m')!.awaitingKey, isTrue);
-          final api = rig.app.api as _Api;
           final before = api.keyReads;
           async.elapse(rig.app.keyWatchEvery);
           expect(api.keyReads, before + 1, reason: 'in front: the log re-read');
@@ -185,14 +193,18 @@ void main() {
           async.elapse(rig.app.keyWatchEvery * 3);
           expect(api.keyReads, before + 1, reason: 'in a pocket: not');
 
-          // The resume reads the log once anyway (a `device_keys_changed` sent while away reached
-          // nobody): that is the watch's read, not one beside it.
+          // The return's own read of the log is the watch's read, not one beside it.
+          reads = api.keyReads;
           rig.app.handleAppResumed();
           async.flushMicrotasks();
-          expect(api.keyReads, before + 2);
+          expect(api.keyReads, reads + resumeReads);
 
           async.elapse(rig.app.keyWatchEvery);
-          expect(api.keyReads, before + 3, reason: 'watched again');
+          expect(
+            api.keyReads,
+            reads + resumeReads + 1,
+            reason: 'watched again',
+          );
 
           rig.app.dispose();
         });
@@ -215,11 +227,11 @@ void main() {
         await tester.pump();
         final before = app.reads;
 
-        await _toBackground(tester);
+        _toBackground(tester);
         await tester.pump(const Duration(seconds: 60) * 3);
         expect(app.reads, before, reason: 'nothing asked from a pocket');
 
-        await _toFront(tester);
+        _toFront(tester);
         await tester.pump();
         expect(app.reads, before + 1, reason: 'one read at once');
 
@@ -245,6 +257,7 @@ void main() {
           await rig.app.bootstrap();
           await settle();
         });
+        _forwardLifecycle(tester, rig.app);
         await tester.pumpWidget(
           MaterialApp(
             home: ComputerWatch(notifier: rig.app, child: const SizedBox()),
@@ -254,16 +267,13 @@ void main() {
         final before = rig.api.machineFetches;
         expect(before, greaterThan(0), reason: 'in front: watched');
 
-        // The shell passes the lifecycle to the app model as well ([PhoneShell]).
-        await _toBackground(tester);
-        rig.app.handleAppPaused();
+        _toBackground(tester);
         await tester.pump(ComputerWatch.every * 3);
         expect(rig.api.machineFetches, before, reason: 'nothing from a pocket');
 
         // The app model reads the list on its own return (no machine connected): the watch's
         // read is that one, not a second beside it.
-        await _toFront(tester);
-        rig.app.handleAppResumed();
+        _toFront(tester);
         await tester.pump();
         expect(rig.api.machineFetches, before + 1);
 
@@ -316,14 +326,14 @@ void main() {
         final before = boards();
         expect(before, 1, reason: 'read on opening');
 
-        // The shell tells Swarm the app went behind ([PhoneShell]); the page hears the lifecycle.
-        await _toBackground(tester);
+        // The shell tells Swarm the app went behind (`PhoneShell`); the page hears the lifecycle.
+        _toBackground(tester);
         host.foreground = false;
         await tester.pump(const Duration(minutes: 5) * 3);
         expect(boards(), before, reason: 'nothing asked from a pocket');
 
         host.foreground = true;
-        await _toFront(tester);
+        _toFront(tester);
         await tester.pump();
         expect(boards(), before + 1, reason: 'one read at once');
 
@@ -381,8 +391,28 @@ void _ageList(AppNotifier app, String machineId) =>
       AppNotifier.agentSyncInterval * 4,
     );
 
+/// What `PhoneShell` does with the lifecycle, ahead of every page (its observer is the first): the
+/// app model told the app went into a pocket, and came back.
+void _forwardLifecycle(WidgetTester tester, AppNotifier app) {
+  final shell = _ShellLifecycle(app);
+  tester.binding.addObserver(shell);
+  addTearDown(() => tester.binding.removeObserver(shell));
+}
+
+class _ShellLifecycle with WidgetsBindingObserver {
+  _ShellLifecycle(this.app);
+
+  final AppNotifier app;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) app.handleAppPaused();
+    if (state == AppLifecycleState.resumed) app.handleAppResumed();
+  }
+}
+
 /// Into a pocket, the way the OS says it: `inactive`, `hidden`, `paused`.
-Future<void> _toBackground(WidgetTester tester) async {
+void _toBackground(WidgetTester tester) {
   for (final state in const [
     AppLifecycleState.inactive,
     AppLifecycleState.hidden,
@@ -393,7 +423,7 @@ Future<void> _toBackground(WidgetTester tester) async {
 }
 
 /// Back in front: `hidden`, `inactive`, `resumed`.
-Future<void> _toFront(WidgetTester tester) async {
+void _toFront(WidgetTester tester) {
   for (final state in const [
     AppLifecycleState.hidden,
     AppLifecycleState.inactive,
