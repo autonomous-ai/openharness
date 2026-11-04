@@ -302,6 +302,20 @@ describe('one group read by id (task #2875)', () => {
     }
   }, 120_000)
 
+  it('makes one read for identical reads in flight on one process, and each reader its own', async () => {
+    const s = await scene()
+    const [quiet] = s.quiet
+    expect((await read(s.tabId, quiet!, s.agents[0])).status).toBe(200)
+    const { value, rows } = await profiled(() => Promise.all([
+      ...Array.from({ length: 50 }, () => read(s.tabId, quiet!, s.agents[0])),
+      read(s.tabId, quiet!, s.agents[1]), read(s.tabId, quiet!)]))
+    expect(value.map(r => r.status)).toEqual(Array(52).fill(200))
+    expect(new Set(value.map(r => JSON.stringify(r.body.data.group))).size).toBe(1)
+    // The 50 alike share one read of the group; the other agent and the person read their own.
+    const groupReads = rows.filter(r => r.ns.endsWith('.SwarmGroup') && r.op !== 'getmore')
+    expect(groupReads.length, describeRows(groupReads)).toBe(3)
+  }, 120_000)
+
   it(`answers a burst of 1,000 reads of ${QUIET} quiet groups by ${AGENTS} agents on ${PODS} pods while the Swarm moves, without its change feeds`, async () => {
     const s = await scene()
     for (const [i, agent] of s.agents.entries()) expect((await read(s.tabId, s.quiet[0]!, agent, owner, pods[i % PODS])).status).toBe(200)
