@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/local_key_value_store.dart';
 import '../shared/theme/app_icons.dart';
@@ -59,6 +60,16 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   /// List's sections folded: Shipped starts so; not kept.
   final _folded = {SuperTabTaskColumn.shipped};
+
+  /// Next up as the reader just ordered it, by task id, until the server
+  /// answers; and why the last move was refused.
+  List<String>? _moving;
+  String? _moveError;
+
+  /// Whether the last drag ended over Next up: a card dropped anywhere else
+  /// goes back.
+  bool _droppedOnNextUp = false;
+  final _nextUpKey = GlobalKey();
 
   @override
   void initState() {
@@ -193,6 +204,18 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     child: Row(
       children: [
         Text('Tasks', style: DesktopChrome.text(medium: true)),
+        if (_moveError case final error?) ...[
+          const SizedBox(width: grid.AppDesktop.groupGap),
+          Flexible(
+            child: Text(
+              error,
+              key: const ValueKey('super-tasks-move-error'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+        ],
         const Spacer(),
         DesktopPill(
           key: const ValueKey('super-tasks-layout-board'),
@@ -335,15 +358,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
               children: [
                 _heading(column, shown[column]!.length),
                 Expanded(
-                  child: LaidOutListView.builder(
-                    itemCount: shown[column]!.length,
-                    itemBuilder: (context, i) => Padding(
-                      padding: const EdgeInsets.only(
-                        bottom: grid.AppDesktop.listRowGap,
-                      ),
-                      child: _card(shown[column]![i], now, list: false),
-                    ),
-                  ),
+                  child: column == SuperTabTaskColumn.nextUp
+                      ? _nextUp(shown[column]!, now)
+                      : LaidOutListView.builder(
+                          itemCount: shown[column]!.length,
+                          itemBuilder: (context, i) => Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: grid.AppDesktop.listRowGap,
+                            ),
+                            child: _card(shown[column]![i], now, list: false),
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -372,6 +397,91 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.groupGap),
       itemCount: rows.length,
       itemBuilder: (context, i) => rows[i],
+    );
+  }
+
+  /// Next up in the order the reader just set, while the server has not
+  /// answered yet.
+  List<SuperTabTaskEntry> _inOrder(List<SuperTabTaskEntry> entries) {
+    final moving = _moving;
+    if (moving == null) return entries;
+    final at = {for (final (i, id) in moving.indexed) id: i};
+    return [...entries]..sort(
+      (a, b) => (at[a.task!.id] ?? moving.length).compareTo(
+        at[b.task!.id] ?? moving.length,
+      ),
+    );
+  }
+
+  /// Puts [ordered]'s card at [to] in place, right after the card now above
+  /// it (none: the top), and tells the server, which keeps the order for
+  /// everyone. Refused, the card goes back and the bar says why.
+  Future<void> _move(List<SuperTabTaskEntry> ordered, int from, int to) async {
+    if (from == to || to < 0 || to >= ordered.length) return;
+    final ids = [for (final e in ordered) e.task!.id];
+    final id = ids.removeAt(from);
+    ids.insert(to, id);
+    setState(() {
+      _moving = ids;
+      _moveError = null;
+    });
+    final refused = await widget.controller.queueTask(
+      id,
+      after: to == 0 ? null : ids[to - 1],
+    );
+    if (!mounted) return;
+    setState(() {
+      _moving = null;
+      _moveError = refused;
+    });
+  }
+
+  /// Next up, the one column a card is dragged in (or moved with ⌥↑ and ⌥↓):
+  /// its order is the project's shared queue.
+  Widget _nextUp(List<SuperTabTaskEntry> entries, DateTime now) {
+    final ordered = _inOrder(entries);
+    return Listener(
+      key: _nextUpKey,
+      onPointerUp: (event) {
+        final box = _nextUpKey.currentContext?.findRenderObject() as RenderBox?;
+        _droppedOnNextUp =
+            box != null &&
+            (Offset.zero & box.size).contains(event.localPosition);
+      },
+      child: ReorderableListView.builder(
+        buildDefaultDragHandles: false,
+        itemCount: ordered.length,
+        onReorderItem: (from, to) {
+          if (_droppedOnNextUp) unawaited(_move(ordered, from, to));
+        },
+        itemBuilder: (context, i) {
+          final id = ordered[i].task!.id;
+          return ReorderableDragStartListener(
+            key: ValueKey('super-task-drag-$id'),
+            index: i,
+            child: Padding(
+              padding: const EdgeInsets.only(
+                bottom: grid.AppDesktop.listRowGap,
+              ),
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(
+                    LogicalKeyboardKey.arrowUp,
+                    alt: true,
+                  ): () =>
+                      unawaited(_move(ordered, i, i - 1)),
+                  const SingleActivator(
+                    LogicalKeyboardKey.arrowDown,
+                    alt: true,
+                  ): () =>
+                      unawaited(_move(ordered, i, i + 1)),
+                },
+                child: _card(ordered[i], now, list: false),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -3070,6 +3070,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Moves [taskId] right after [after] in its project's shared Next up, or to
+  /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
+  /// once the server took it; otherwise why it did not.
+  Future<String?> queueTask(String taskId, {required String? after}) async {
+    final done = await command({
+      'type': 'work.queue',
+      'conversationId': taskId,
+      'after': after,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves the reader's one Buddy onto [gridModel], a model shared in the
   /// Swarm, or back to their own subscription when null (backend
   /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
