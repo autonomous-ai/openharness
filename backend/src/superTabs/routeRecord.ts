@@ -50,8 +50,11 @@ export const routeRecordSchema = z.object({
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),
   notes: z.boolean(),
-  pick: candidateId,
-  via: z.enum(['jev', 'order', 'only']),
+  /** The candidate an older CLI ranked first. The route names none since task #2901 (Ken, 2026-11-04): the project's Routing
+   *  instructions choose, and the start or assignment records which candidate it was (RouteFinal.candidateId). */
+  pick: candidateId.optional(),
+  /** `instructions`: no pick, the coordinator chooses by the Routing instructions (task #2901). `only` comes with or without one. */
+  via: z.enum(['jev', 'order', 'only', 'instructions']),
   /** Why the policy order decided, when it did: Jev answered without enough confidence, or could not be asked. */
   fallback: z.enum(['unsure', 'unavailable']).optional(),
   p: z.number().min(0).max(1).nullable(),
@@ -70,11 +73,15 @@ export const routeRecordSchema = z.object({
   /** The project instructions' revision the route relied on (`project.instructionsRevision ?? 0` when it was recorded), written
    *  by the server, never taken from the route. Absent from records before project instructions. */
   instructionsRevision: z.number().int().nonnegative().optional(),
-}).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
+}).strict().refine(d => d.pick === undefined || d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
-/** A candidate as a decision keeps it: the pick whole; any other only who and where it is and its title (storedRecord). */
-export type KeptCandidate = Omit<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'> & Partial<Pick<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'>>
+/** The part of a quota fit every candidate of a record without a pick keeps: what the route history reads of the one that ran. */
+export type KeptFit = Pick<z.infer<typeof fit>, 'account' | 'spend'>
+/** A candidate as a decision keeps it: the pick whole; any other only who and where it is and its title, and with no pick its
+ *  account and spend too (storedRecord). */
+export type KeptCandidate = Omit<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'> & Partial<Pick<RouteCandidate, 'quality' | 'cost' | 'label'>>
+  & { fit?: RouteCandidate['fit'] | KeptFit }
 /** A record as its readers get it back (readRecord): its candidates as kept. */
 export type ReadRouteRecord = Omit<RouteRecord, 'candidates'> & { candidates: KeptCandidate[] }
 
@@ -91,11 +98,13 @@ export interface StoredRouteRecord extends Omit<ReadRouteRecord, 'excluded'> {
  *  and where it is (a start or assignment matching it, startedAs; a person choosing it, route.override; its Team-work check) and
  *  its title (the chat lines, Desktop's Details). Its label, strength, cost and quota fit are read of the pick only: the route
  *  showed the others when it ran, and the route history takes the account and spend of the pick (cli service.ts routeHistory).
- *  Each exclusion reason is kept once, with its titles in order. */
+ *  A record with no pick (task #2901) keeps every candidate's account and spend instead, as any of them may be the one that
+ *  runs and nobody knows which until the start. Each exclusion reason is kept once, with its titles in order. */
 export function storedRecord(record: RouteRecord): StoredRouteRecord {
   const { excluded, ...rest } = record
-  const candidates = record.candidates.map(({ label: _label, quality: _quality, cost: _cost, fit: _fit, ...c }, i) =>
-    c.id === record.pick ? record.candidates[i]! : c)
+  const candidates = record.candidates.map(({ label: _label, quality: _quality, cost: _cost, fit, ...c }, i): KeptCandidate =>
+    record.pick === undefined ? { ...c, ...fit ? { fit: { ...fit.account ? { account: fit.account } : {}, spend: fit.spend } } : {} }
+      : c.id === record.pick ? record.candidates[i]! : c)
   const byReason = new Map<string, string[]>()
   for (const { title, reason } of excluded) byReason.set(reason, [...byReason.get(reason) ?? [], title])
   return { ...rest, candidates, ...byReason.size ? { unavailable: [...byReason].map(([reason, titles]) => ({ reason, titles })) } : { excluded: [] } }
@@ -125,11 +134,13 @@ export const finalMatches = (candidate: KeptCandidate, final: RouteFinal | null)
 
 export type RouteCandidate = z.infer<typeof routeCandidateSchema>
 export type RouteRecord = z.infer<typeof routeRecordSchema>
+/** `candidateId` names the candidate the start or assignment matched when the record has no pick (task #2901): the
+ *  coordinator's own choice by the Routing instructions, which the route history reads back. */
 export type RouteFinal =
-  | { kind: 'member'; agentId: string; machineId: string }
+  | { kind: 'member'; agentId: string; machineId: string; candidateId?: string }
   /** After a failed model switch, `model` and `effort` are what ran and `requested` is what routing asked for. */
   | { kind: 'new'; startId: string; machineId: string; engine: string; model: string; effort: string; requested?: { model: string; effort: string };
-      gridModel?: string; gridName?: string }
+      gridModel?: string; gridName?: string; candidateId?: string }
 export interface RouteOverride { by: 'lead' | 'person'; actorKey: string; candidateId?: string; reason: string }
 export interface RouteDecision {
   id: string; conversationId: string; record: ReadRouteRecord

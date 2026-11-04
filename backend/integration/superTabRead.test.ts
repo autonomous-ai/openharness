@@ -127,7 +127,7 @@ describe('first load (design 4.3)', () => {
     clock = NOW
     const { status, body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
     expect(status).toBe(200)
-    expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
+    expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
       'machines', 'members', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
     expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
@@ -1237,6 +1237,74 @@ describe('decisions asked of one person (v2)', () => {
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
     clock = Date.now()
     expect((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.cursor}`, peer)).body.data.derived.decisionsWaiting).toBe(1)
+  })
+})
+
+// Task #2906: an unchanged poll leaves out the machine and agent summary the reader already holds (12 KB a poll at 36
+// machines, 92 KB at 360). A released client, which echoes no etag, still gets it whole.
+describe('the summary only when it changed (derivedEtag)', () => {
+  const read = async (url: string, as: AuthUser) => { clock = Date.now(); return (await get(url, as)).body.data }
+  const poll = (tabId: string, cursor: string, as: AuthUser, etag?: string) =>
+    read(`/api/super-tabs/${tabId}/changes?cursor=${cursor}${etag ? `&derivedEtag=${etag}` : ''}`, as)
+  /** An open decision asked of peer, written as a row (as `askedBefore` does): a command would leave its notices and wakes
+   *  running into the next tests, whose database-byte counts (group 3b) then count them. */
+  const ask = async (tabId: string, conversationId: string, lead: string) => {
+    await db.superTabDecision.create({ data: { id: `etag-${randomUUID()}`, tabId, batchId: `${conversationId}-etag`, projectId: 'lead',
+      conversationId, assignmentId: null, personId: peer.sub, askerAgentId: lead, question: 'Ship how?', options: ['Behind a flag', 'To everyone'],
+      recommended: 0, unblocks: 'The release', createdAt: new Date() } })
+  }
+
+  it('stamps a first load and a change read alike, and an echoed etag gets no summary', async () => {
+    const s = await scene()
+    const first = await read(`/api/super-tabs/${s.tabId}/parts`, peer)
+    expect(first.derivedEtag).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    const unchanged = await poll(s.tabId, first.cursor, peer, first.derivedEtag)
+    expect(unchanged).toMatchObject({ reload: false, derivedEtag: first.derivedEtag, derivedUnchanged: true })
+    expect(Object.keys(unchanged.derived).filter(k => !['readMarks', 'unreadMarks', 'threadMarks', 'chatSettings'].includes(k))).toEqual([])
+  })
+
+  it('sends the whole summary to a client that echoes none, or another etag', async () => {
+    const s = await scene()
+    const first = await read(`/api/super-tabs/${s.tabId}/parts`, peer)
+    for (const etag of [undefined, 'not-the-etag']) {
+      const reply = await poll(s.tabId, first.cursor, peer, etag)
+      expect(reply.derivedUnchanged, String(etag)).toBeUndefined()
+      expect(reply.derivedEtag, String(etag)).toBe(first.derivedEtag)
+      expect(reply.derived, String(etag)).toEqual(first.derived)
+    }
+  })
+
+  it('a summary change after an unchanged poll sends it whole, with a new etag', async () => {
+    const s = await scene()
+    const first = await read(`/api/super-tabs/${s.tabId}/parts`, peer)
+    expect(first.derived.decisionsWaiting).toBe(0)
+    const quiet = await poll(s.tabId, first.cursor, peer, first.derivedEtag)
+    expect(quiet.derivedUnchanged).toBe(true)
+    await ask(s.tabId, s.web, s.lead)
+    const moved = await poll(s.tabId, quiet.cursor, peer, quiet.derivedEtag)
+    expect(moved.derivedUnchanged).toBeUndefined()
+    expect(moved.derivedEtag).not.toBe(first.derivedEtag)
+    expect(moved.derived).toMatchObject({ decisionsWaiting: 1, agents: first.derived.agents })
+    expect((await poll(s.tabId, moved.cursor, peer, moved.derivedEtag)).derivedUnchanged).toBe(true)
+  })
+
+  it('an unchanged poll still sends the reader\'s moved marks', async () => {
+    const s = await scene()
+    const first = await read(`/api/super-tabs/${s.tabId}/parts`, peer)
+    await writeReadMark(db, { tabId: s.tabId, personId: peer.sub, conversationId: s.web, sequence: 3, now: Date.now() })
+    const reply = await poll(s.tabId, first.cursor, peer, first.derivedEtag)
+    expect(reply.derivedUnchanged).toBe(true)
+    expect(reply.derived).toEqual({ readMarks: { [s.web]: 3 } })
+  })
+
+  it('an etag is the reader\'s own: another reader\'s summary never matches it', async () => {
+    const s = await scene()
+    await ask(s.tabId, s.web, s.lead)
+    const [mine, theirs] = [await read(`/api/super-tabs/${s.tabId}/parts`, peer), await read(`/api/super-tabs/${s.tabId}/parts`, owner)]
+    expect(mine.derivedEtag).not.toBe(theirs.derivedEtag)
+    const reply = await poll(s.tabId, mine.cursor, peer, theirs.derivedEtag)
+    expect(reply.derivedUnchanged).toBeUndefined()
+    expect(reply.derived).toMatchObject({ decisionsWaiting: 1 })
   })
 })
 

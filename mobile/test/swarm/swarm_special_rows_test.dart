@@ -162,6 +162,22 @@ void main() {
       expect(fake.paths.where((p) => p == decisions), hasLength(1));
     });
 
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the start's row
+    // names the candidate the instructions chose.
+    testWidgets('Details says the Routing instructions chose', (tester) async {
+      final fake = backend([
+        row('r1', 2, 'x', {...routeSource(), 'via': 'instructions'}),
+      ]);
+      fake.routes[decisions] = (_) => {
+        'record': {'instructionsRevision': 7},
+      };
+      const chosen = 'Chosen by the project\'s Routing instructions';
+      await show(tester, fake);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      expect(inRow('r1', find.text('Selection: $chosen')), findsOneWidget);
+    });
+
     testWidgets('a failed read says so, and Retry reads again', (tester) async {
       final fake = backend([row('r1', 2, 'x', routeSource())]);
       var fails = true;

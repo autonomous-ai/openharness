@@ -81,7 +81,9 @@ const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
-const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional() })
+// `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
+const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
+  derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
@@ -521,7 +523,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId,
-      req.query.machines === 'light' ? { lightMachines: true } : {}), nothingChanged)))
+      { ...(req.query.machines === 'light' ? { lightMachines: true } : {}), ...(req.query.derivedEtag ? { derivedEtag: req.query.derivedEtag } : {}) }),
+      nothingChanged)))
   // The whole readings on demand, for a client that takes lines in its changes (read/changes.ts).
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { HostTabRows } from './contract.js'
 
 /** JSON with sorted keys, so equal rows hash equal whatever order their records were built in. */
-const sorted = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+export const sorted = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)
 
 /**

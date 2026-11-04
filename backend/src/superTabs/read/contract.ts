@@ -153,9 +153,15 @@ export interface FirstLoad extends ReadMeta {
   starts: LivePart<StartView>[]
   progress: LivePart<ProgressView>[]
   derived: Derived
+  /** Opaque: the reader's summary (`derived` without its marks) as a hash (derivedEtag.ts). Send it back as `derivedEtag` on
+   *  the next change read. Absent from an older backend. */
+  derivedEtag: string
 }
 
-/** GET /api/super-tabs/:tabId/changes?cursor=[&asAgentId=] */
+/** The reader's own marks of `derived`, which a change read sends only as they move. */
+export type ReaderMarks = Pick<Derived, 'readMarks' | 'unreadMarks' | 'threadMarks' | 'chatSettings'>
+
+/** GET /api/super-tabs/:tabId/changes?cursor=[&asAgentId=][&machines=light][&derivedEtag=] */
 export type Changes = ChangesReload | ChangesDelta
 /** Drop the store and do a first load: bad or old cursor, another epoch, or older than tombstones are kept. */
 export interface ChangesReload { reload: true }
@@ -175,7 +181,13 @@ export interface ChangesDelta extends ReadMeta {
   machineReadings?: MachineReading[]
   starts: PartChange<StartView>[]
   progress: PartChange<ProgressView>[]
-  derived: Derived
+  /** The whole summary, or with `derivedUnchanged` only the reader's moved marks: the client keeps the summary it holds. */
+  derived: Derived | ReaderMarks
+  /** As a first load's: the summary this reply's reader has now, sent whether or not `derived` carries it. */
+  derivedEtag: string
+  /** Only when the client sent the `derivedEtag` its summary still hashes to (task #2906): `derived` then holds only the
+   *  reader's moved marks. A client that sends no etag, as every released one, always gets the whole summary. */
+  derivedUnchanged?: true
 }
 
 /** GET /api/super-tabs/:tabId/groups?dormant=1[&projectId=][&before=][&asAgentId=]: newest activity first, 50 a page. */
