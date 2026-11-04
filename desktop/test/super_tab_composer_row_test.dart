@@ -237,6 +237,8 @@ void main() {
         await tester.pump();
         expect(focusedIn(tester, next), isTrue, reason: '$next');
       }
+      // The draft's save runs out.
+      await tester.pump(const Duration(seconds: 1));
     });
   });
 

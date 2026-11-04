@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -71,6 +70,7 @@ import 'project_status.dart';
 import 'ship_row.dart';
 import 'switch_pm.dart';
 import 'pane_layout.dart';
+import 'composer_actions.dart';
 import 'view_room.dart';
 import 'voice_recorder.dart';
 import 'swarm_type.dart';
@@ -2332,50 +2332,25 @@ class _SuperTabViewState extends State<SuperTabView>
     return ((room - 275) / line).floor().clamp(2, 5);
   }
 
-  /// The composer's field and its controls: a row on a wide window. A phone
-  /// gives the field the width and the controls a row below (Huy, 2026-11-02:
-  /// the field had about 40% of the row): [options] and [attach] at the left,
-  /// wrapping if they must, and [send] at the right.
+  /// The composer's field and its controls, as on the phone (Huy and Scholes,
+  /// 11-04): the field on top with the width, and one row under it with
+  /// [attach] (+), [tag] (@ Tag) and [options] (New session) at the left, and
+  /// [trailing] (the mic) and [send] at the right. Send keeps the box's
+  /// bottom-right corner however long the message (Scholes, 11-03).
   Widget _composerLayout({
     required double room,
     required Widget field,
-    required List<Widget> options,
     required Widget attach,
+    required Widget tag,
+    required List<Widget> options,
+    required List<Widget> trailing,
     required Widget send,
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
-    // up): the actions take the row's end again. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows.
-    if (_phone && room >= _phoneComposerTwoRowsFrom) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(
-              right: grid.AppDesktop.controlGap,
-              bottom: grid.AppDesktop.controlGap,
-            ),
-            child: field,
-          ),
-          Row(
-            key: const ValueKey('super-message-composer-actions'),
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [...options, attach],
-                ),
-              ),
-              send,
-            ],
-          ),
-        ],
-      );
-    }
-    // A phone with too little height keeps its squeezed row as it was.
-    if (_phone) {
+    // up): the actions take the row's end. A narrow phone with so little
+    // height gets the squeezed row, which beats a composer that overflows; it
+    // has no room for @ Tag there, and an @ typed still opens the list.
+    if (_phone && room < _phoneComposerTwoRowsFrom) {
       return ConstrainedBox(
         constraints: BoxConstraints(
           minHeight: grid.AppControl.heightFieldScaled,
@@ -2384,49 +2359,49 @@ class _SuperTabViewState extends State<SuperTabView>
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Expanded(child: field),
-            ...options,
             attach,
+            ...options,
+            ...trailing,
             send,
           ],
         ),
       );
     }
-    // The controls stay at the bottom-right as the message grows, level with
-    // its last line (Scholes, 11-03: centred, they drifted up the box). The
-    // field is padded to the row's height, so one line sits where it did,
-    // centred on the controls, and a longer message's last line keeps that
-    // place.
-    final row = grid.AppControl.heightFieldScaled;
-    // The line of the style the field draws with: a padding measured on
-    // another one left the chips a pixel off the line once the composer took
-    // Slack's 15 px on 22 px lines (#2732).
-    final style = SwarmType.composer(context);
-    final line =
-        MediaQuery.textScalerOf(context).scale(style.fontSize!) * style.height!;
-    final inset = math.max(0.0, (row - line) / 2);
-    return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: row),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: inset),
-              child: field,
-            ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(
+            right: grid.AppDesktop.controlGap,
+            bottom: grid.AppDesktop.controlGap,
           ),
-          // As tall as the row at least, the controls centred in it as before;
-          // taller with larger text.
-          ConstrainedBox(
-            constraints: BoxConstraints(minHeight: row),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [...options, attach, send],
+          child: field,
+        ),
+        Row(
+          key: const ValueKey('super-message-composer-actions'),
+          children: [
+            attach,
+            tag,
+            Expanded(
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: options,
+              ),
             ),
-          ),
-        ],
-      ),
+            ...trailing,
+            send,
+          ],
+        ),
+      ],
     );
+  }
+
+  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
+  void _promptTag() {
+    _composer.value = superTabTagPrompt(_composer.value);
+    _composerEdited(_composer.text);
+    _focus.requestFocus();
   }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
@@ -4277,6 +4252,21 @@ class _SuperTabViewState extends State<SuperTabView>
                                   onChanged: _composerEdited,
                                 ),
                               ),
+                              attach: fingerTarget(
+                                enabled: _phone,
+                                NewHarnessAttachButton(
+                                  attachments: _files,
+                                  enabled: writable && !busy,
+                                  icon: AppIcons.plus,
+                                ),
+                              ),
+                              tag: fingerTarget(
+                                enabled: _phone,
+                                SuperTabComposerTagButton(
+                                  key: const ValueKey('super-composer-tag'),
+                                  onPressed: writable ? _promptTag : null,
+                                ),
+                              ),
                               options: [
                                 if (c.offersChatSessions)
                                   Padding(
@@ -4295,13 +4285,22 @@ class _SuperTabViewState extends State<SuperTabView>
                                     child: _chatSessionProject(writable),
                                   ),
                               ],
-                              attach: fingerTarget(
-                                enabled: _phone,
-                                NewHarnessAttachButton(
-                                  attachments: _files,
-                                  enabled: writable && !busy,
-                                ),
-                              ),
+                              trailing: [
+                                if (widget.voiceRecorder case final recorder?)
+                                  fingerTarget(
+                                    enabled: _phone,
+                                    SuperTabComposerMic(
+                                      key: const ValueKey('super-composer-mic'),
+                                      onPressed: writable
+                                          ? () => unawaited(
+                                              recorder.start(
+                                                conversationId: chatId,
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                  ),
+                              ],
                               send: ListenableBuilder(
                                 listenable: Listenable.merge([
                                   _composer,
