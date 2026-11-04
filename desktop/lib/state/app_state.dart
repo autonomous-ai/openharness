@@ -17183,6 +17183,17 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _renameAgent(request.machine, agentId, name);
+      // The Swarms that hold this harness show its agent by their own name:
+      // the rename reaches everyone's sidebar (task #2912).
+      final swarmErrors = await superTabs.renameHarnessAgent(
+        machineId,
+        agentId,
+        name,
+      );
+      if (swarmErrors.isNotEmpty) {
+        error =
+            'Renamed here, but the Swarm kept the old name: ${swarmErrors.first}';
+      }
     } catch (failure) {
       error = failure is WsRequestTimeout
           ? 'Could not confirm the rename. Refresh harnesses to check the name.'

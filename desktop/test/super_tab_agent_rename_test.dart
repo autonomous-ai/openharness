@@ -31,7 +31,9 @@ void main() {
       expect(agent.displayName, startsWith('cd /Users'));
       expect(superTabAddName(agent), 'Agent');
       expect(
-        superTabAddName(const Agent(id: 'a', name: 'harness 11-04 09:30')),
+        superTabAddName(
+          const Agent(id: 'a', name: 'Claude harness 11-04 09:30'),
+        ),
         'Agent',
       );
     });
@@ -44,24 +46,42 @@ void main() {
       await f.initialize();
     });
 
-    testWidgets('the sidebar row shows the new name at once', (tester) async {
+    test('its person renames it, and the Swarm shows the new name', () async {
+      expect(f.controller.snapshot!.agentName('agent-1'), 'Sage');
+      expect(await f.controller.renameAgent('agent-1', ' Darren PM '), isNull);
+      expect(f.controller.snapshot!.agentName('agent-1'), 'Darren PM');
+    });
+
+    testWidgets('the sidebar row shows the Swarm\'s current name, in its list '
+        'and under Idle', (tester) async {
+      // Built inside the test: its server and controller run on the test's clock.
+      final f = RosterFixture();
+      await f.initialize();
       await f.show(tester);
       expect(find.text('Sage'), findsOneWidget);
-      final error = await f.controller.renameAgent('agent-1', 'Darren PM');
-      expect(error, isNull);
+      (f.server.state['agents'] as List)[1]['displayName'] = 'Darren PM';
+      (f.server.state['agents'] as List)[3]['displayName'] = 'Idle PM';
+      await f.controller.refresh();
       await tester.pumpAndSettle();
       expect(find.text('Darren PM'), findsOneWidget);
+      expect(find.text('Idle PM'), findsOneWidget);
       expect(find.text('Sage'), findsNothing);
       await f.close(tester);
     });
 
-    test('a refusal says why and changes nothing', () async {
-      final other = f.server.controller(account: 'peer');
-      await other.refresh();
-      final refused = await other.renameAgent('agent-1', 'Stolen');
-      expect(refused, contains('Only the person who runs this agent'));
-      expect(other.snapshot!.agentName('agent-1'), isNot('Stolen'));
-    });
+    test(
+      'a teammate who does not run the agent is refused, with why',
+      () async {
+        final teammate = RosterFixture(account: 'peer');
+        await teammate.initialize();
+        final refused = await teammate.controller.renameAgent(
+          'agent-1',
+          'Stolen',
+        );
+        expect(refused, contains('Only the person who runs this agent'));
+        expect(teammate.controller.snapshot!.agentName('agent-1'), 'Sage');
+      },
+    );
 
     test('the client renames the agent in every loaded Swarm that holds '
         'the harness, and no other', () async {
@@ -101,7 +121,11 @@ void main() {
       )..bind('owner');
       final tab = await client.open('tab');
       await client.open('other');
-      final errors = await client.renameHarnessAgent('m', 'native-pm', 'Darren');
+      final errors = await client.renameHarnessAgent(
+        'm',
+        'native-pm',
+        'Darren',
+      );
       expect(errors, isEmpty);
       await tab.refresh();
       expect(tab.snapshot!.agentName('pm'), 'Darren');

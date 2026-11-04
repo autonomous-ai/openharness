@@ -3129,6 +3129,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Renames the agent [agentId] for everyone in the Swarm (backend
+  /// `agent.rename`): only the person who runs it, or its machine's owner, may.
+  /// Null once the server took it; otherwise why it did not.
+  Future<String?> renameAgent(String agentId, String name) async {
+    final done = await command({
+      'type': 'agent.rename',
+      'agentId': agentId,
+      'name': name.trim(),
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves [taskId] right after [after] in its project's shared Next up, or to
   /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
   /// once the server took it; otherwise why it did not.
