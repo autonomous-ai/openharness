@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { dirname, join } from 'node:path'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
+import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_SESSION_ENGINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 import { PM_HOMES } from './teamDaemon.js'
-import { buddyNarrowFile } from '../lib/buddyGuard.js'
-import { worktreeFolderName } from '../lib/agentNames.js'
-import { env } from '../config/env.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
@@ -18,6 +18,10 @@ vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), pr
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
+/** A Buddy's start as its owner's own machine's host dispatches it (task #2832): the Swarm's record of the machine and the
+ *  account signed in there both its owner's. */
+const OWN_HOST = { hostDispatch: true, signedIn: 'peer' } as const
+const ownMachine = (f: { start: Record<string, unknown> }) => Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
 function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
@@ -391,7 +395,8 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
 it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy skill, talking in its owner\'s chat and waiting for no assignment', async engine => {
   const f = fixture()
   f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
+  ownMachine(f)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request } as never, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('buddy')
   expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
@@ -412,7 +417,8 @@ it('admits a person\'s one Buddy by the disk its folder is made on, as the folde
       return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: disk?.freeBytes ?? null }, tools: { git: true }, devices: {} }
     })
     f.start.request = { ...f.start.request, cwd: join(root, 'swarm', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'one-buddy', request: f.start.request }, f.scoped, where, f.open)
+    ownMachine(f)
+    const result = await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'one-buddy', request: f.start.request } as never, f.scoped, where, f.open)
     expect(result.error).not.toBe('CAPACITY_UNAVAILABLE')
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
     expect(payload.cwd).toContain(join('worktrees', 'buddy-home'))
@@ -423,10 +429,11 @@ it('admits a person\'s one Buddy by the disk its folder is made on, as the folde
 it('tells a person\'s one Buddy where to read which revision each project copy is at, and when it may say it is behind', async () => {
   const f = fixture()
   f.start.request = { ...f.start.request, cwd: join(tmpdir(), 'swarm-buddy-prompt', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  ownMachine(f)
   // The mocked folder has its copies ready.
   prepared.value = { ready: ['Web'], missing: [] }
   try {
-    await startAgent({ action: 'start', tabId: 'tab', operationId: 'one-buddy-copies', request: f.start.request }, f.scoped, where, f.open)
+    await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'one-buddy-copies', request: f.start.request } as never, f.scoped, where, f.open)
     const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
     expect(prompt).toContain('project-copies.txt')
     expect(prompt).toContain('Say your copy is behind only when that file says it may be')
@@ -436,11 +443,13 @@ it('tells a person\'s one Buddy where to read which revision each project copy i
 it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {
   const plain = fixture()
   plain.start.request = { ...plain.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof plain.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-main', request: plain.start.request }, plain.scoped, where, plain.open)
+  ownMachine(plain)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-main', request: plain.start.request } as never, plain.scoped, where, plain.open)
   const main = plain.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   const f = fixture()
   f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 42 } } as typeof f.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-main', request: f.start.request }, f.scoped, where, f.open)
+  ownMachine(f)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-main', request: f.start.request } as never, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   const chat = f.start.request.conversationId
   // Everything but the prompt is the main Buddy's: its role, permissions, worktree and skill.
@@ -455,50 +464,88 @@ it.each(['claude'])('starts a %s thread session as a Buddy in every way, told it
   expect(prompt).not.toContain('assign')
 })
 
-// Task #2356 (Diego): a thread session of one project, in an older project's Buddy chat or a project session, launches with no
-// wide guard, as its chat's own Buddy does (lib/buddyGuard.ts buddyLaunchWide): its folder is marked before it launches.
-it('marks a narrow thread session\'s folder before it launches, and a wide one\'s not', async () => {
-  const mark = buddyNarrowFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start'))
-  const wide = fixture()
-  wide.start.request = { ...wide.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof wide.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-session-wide', request: wide.start.request }, wide.scoped, where, wide.open)
-  expect(wide.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(true)
-  expect(existsSync(mark)).toBe(false)
-  const f = fixture()
-  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 }, buddyNarrow: true } as typeof f.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-session-narrow', request: f.start.request }, f.scoped, where, f.open)
-  expect(f.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(true)
-  expect(existsSync(mark)).toBe(true)
-})
-
-it('refuses a Codex thread session before anything launches: Codex runs without the Buddy guard hook (security review 1 of #2345)', async () => {
+it('launches a Codex thread session as any Buddy: the guard its refusal stood for is gone (task #2832)', async () => {
   const f = fixture()
   f.start.request = { ...f.start.request, engine: 'codex', buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof f.start.request
-  const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-codex-session', request: f.start.request }, f.scoped, where, f.open)
-  expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_SESSION_ENGINE })
-  expect(f.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(false)
-  expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_SESSION_ENGINE }) }))
+  ownMachine(f)
+  const result = await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-codex-session', request: f.start.request } as never, f.scoped, where, f.open)
+  expect(result.error).toBeUndefined()
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect([payload.engine, payload.permissionMode, payload.bypassPermission]).toEqual(['codex', 'full', true])
 })
 
 it('starts a plain Buddy for a thread session whose thread is not an id', async () => {
   const f = fixture()
   f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'x; rm -rf ~', from: 1 } } as typeof f.start.request
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-odd', request: f.start.request }, f.scoped, where, f.open)
+  ownMachine(f)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-odd', request: f.start.request } as never, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.prompt).not.toContain('rm -rf')
   expect(payload.prompt).not.toContain('--thread')
 })
 
-it('starts no Buddy with full permissions or the GitHub App\'s token: Claude refusing what its guard does not allow, Codex in its read-only sandbox asking', async () => {
-  for (const [engine, mode, bypass] of [['claude', 'buddy', false], ['codex', 'readOnlyAsk', false]] as const) {
+it('starts a Buddy in full mode, like its owner\'s own session, and never with the GitHub App\'s token (task #2832)', async () => {
+  for (const engine of ['claude', 'codex'] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-    await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,
+    ownMachine(f)
+    await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, github: { requester: 'peer' } } as never,
       f.scoped, where, f.open)
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, mode, bypass, undefined])
+    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, 'full', true, undefined])
     expect(payload.prompt).not.toContain('GitHub')
   }
+})
+
+// Task #2832 (Ken, 11-04): a Buddy runs with its owner's full rights, so it launches only where those are its owner's own: its
+// machine's own host dispatches it, in its owner's own account (never a Harness Team account), the account signed in here is
+// its owner's, and the Swarm's record says the machine is theirs and not lent. Any of these missing launches nothing.
+describe('a Buddy launches only on its owner\'s own machine', () => {
+  const ownStart = (f: ReturnType<typeof fixture>, engine = 'claude', extra: Record<string, unknown> = {}) => {
+    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' }, ...extra } as typeof f.start.request
+    ownMachine(f)
+    Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
+  }
+  const launches = (f: ReturnType<typeof fixture>) => f.request.mock.calls.some(call => call[0] === 'agent_create')
+
+  it.each(['claude', 'codex'])('launches a %s Buddy dispatched by its owner\'s own host, signed in as its owner', async engine => {
+    const f = fixture()
+    ownStart(f, engine)
+    const mark = buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start'))
+    rmSync(mark, { force: true })
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: `own-${engine}`, request: f.start.request, hostDispatch: true, signedIn: 'peer' } as never,
+      f.scoped, where, f.open)
+    expect(result.error).toBeUndefined()
+    expect(launches(f)).toBe(true)
+    // Its folder is recorded as its owner's before it launches, so its relaunches find the check passed (security review 2).
+    expect(buddyOwnerOf(join('/somewhere', worktreeFolderName('super-tab/start')), env.ADAPTER_DATA_DIR)).toBe('peer')
+    rmSync(mark, { force: true })
+  })
+
+  const refusals: [string, (f: ReturnType<typeof fixture>) => Record<string, unknown>][] = [
+    ['not dispatched by its machine\'s own host', () => ({})],
+    ['in a Harness Team account', () => { teamDaemon.value = true; return { hostDispatch: true, signedIn: 'peer' } }],
+    ['with another account signed in here', () => ({ hostDispatch: true, signedIn: 'owner' })],
+    ['with no account signed in here', () => ({ hostDispatch: true, signedIn: null })],
+    ['on a machine the Swarm records as another person\'s', f => { Object.assign(f.start, { machineOwnerId: 'owner' }); return { hostDispatch: true, signedIn: 'peer' } }],
+    ['on a machine another person contributed', f => { Object.assign(f.start, { contributorId: 'owner' }); return { hostDispatch: true, signedIn: 'peer' } }],
+    ['on a machine lent to its owner', f => { Object.assign(f.start, { hostGrant: 'grant' }); return { hostDispatch: true, signedIn: 'peer' } }],
+  ]
+  it.each(refusals)('refuses a Buddy before anything launches %s', async (_case, given) => {
+    for (const engine of ['claude', 'codex']) {
+      const f = fixture()
+      ownStart(f, engine)
+      try {
+        const input = given(f)
+        const result = await startAgent({ action: 'start', tabId: 'tab', operationId: `refused-${engine}`, request: f.start.request, ...input } as never, f.scoped, where, f.open)
+        expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
+        expect(launches(f)).toBe(false)
+        expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
+        expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
+        expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
+      } finally { teamDaemon.value = false }
+    }
+  })
 })
 
 it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
@@ -1586,7 +1633,8 @@ describe('neutral start prompts', () => {
   const starts = async (extra: Record<string, unknown>, roleName?: string) => {
     const f = fixture()
     f.start.request = { ...f.start.request, ...extra, ...(roleName ? { roleName } : {}) } as typeof f.start.request
-    await startAgent({ action: 'start', tabId: 'tab', operationId: 'neutral', request: f.start.request }, f.scoped, where, f.open)
+    if (extra.buddyOf) ownMachine(f)
+    await startAgent({ ...(extra.buddyOf ? OWN_HOST : {}), action: 'start', tabId: 'tab', operationId: 'neutral', request: f.start.request } as never, f.scoped, where, f.open)
     return { payload: f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!, f }
   }
   const lead = { leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }

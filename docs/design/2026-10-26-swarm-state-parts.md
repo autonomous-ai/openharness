@@ -92,7 +92,7 @@ conversations addendum (4.8).
 
 | Command | W (writes) | T (touches) | Invariants and the rule that guards each |
 |---|---|---|---|
-| `machine.contribute` | `Mc(m)`; `Mc` of the Mac's team pools (name, slots, pause, `commands.ts:832`); `S` of abandoned starts (error); `GP` of each project told; `X` when `m` is new | `H` when `m` is new | Not cleaning, no pending start on `m` (`commands.ts:806,823`): every start on `m` writes `Mc(m)`, rule (a). At most 32 machines: a new contribution touches `H`, rule (a). |
+| `machine.contribute` | `Mc(m)`; `Mc` of the Mac's team pools (name, slots, pause, `commands.ts:832`); `S` of abandoned starts (error); `GP` of each project told; `X` when `m` is new | `H` when `m` is new | Not cleaning, no pending start on `m` (`commands.ts:806,823`): every start on `m` writes `Mc(m)`, rule (a). At most 20 machines per person: a new contribution touches `H`, rule (a). |
 | `machine.pause` | `Mc(m)`, `Mc` of team pools | — | Contributor only, not removed: data of `Mc(m)`, written. |
 | `machine.remove` | `Mc(m)` and team pools (removal or cleanup); `A` of every removed agent (tombstone); `G` of every group containing them (D8) with notices; `S` of pending starts on `m` (error); `H` (rules lose `m`, `commands.ts:572-582`); `X`; `Δrows` deliveries cancelled | — | No start dispatched on `m` (`commands.ts:550`): dispatch touches `Mc(m)`, (a). A Lead is never removed (`protectLead`, `commands.ts:307-312`): `agent.add` and `conversation.agent` that make an agent a Lead write or touch its `A`, which conflicts with the tombstone, (a). |
 | `machine.cleaned` | `Mc(m)` (contribution or cleanup dropped); `X` (`cleanupMachineIds`) | — (the host may have left; no `SA`) | Removal id matches: data of `Mc(m)`. |
@@ -1128,7 +1128,7 @@ The items as raised:
     wanted.
 - The PM channel UI builds on (a)–(f).
 
-**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 32 (Team accounts' entries apart), projects
+**Q4. Swarm-wide limits serialize on the head.** Pending starts ≤ 32 (`commands.ts:1034`), machines ≤ 20 per person (Team accounts' entries counted apart, #2637), projects
 ≤ 100 and rules ≤ 50 are guarded by touching or writing `H`. So two `agent.start` calls in one Swarm conflict and
 one retries. **Recommendation:** accept. Starts are rare, and the limit stays exact.
 

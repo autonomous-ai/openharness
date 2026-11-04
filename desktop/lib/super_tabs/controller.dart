@@ -909,6 +909,10 @@ class SuperTabController extends ChangeNotifier {
   /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
 
+  /// Whether the open thread's pane is on screen, as its read mark counts it:
+  /// its replies are being read.
+  bool get threadPaneOnScreen => openedThread != null && !_threadUnshown;
+
   /// The pane of the open thread is on screen.
   void threadPaneShown() {
     if (!_threadUnshown) return;
@@ -3787,6 +3791,28 @@ class SuperTabController extends ChangeNotifier {
       if (_listed(m) || m.sequence > loaded) break;
       last = m.sequence;
     }
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
+    if ((_readAt[id] ?? 0) >= last) return;
+    _readAt[id] = last;
+    _saveSoon();
+    _changed();
+  }
+
+  /// [id] was read through [sequence] outside its chat (Activity's Mark read
+  /// on a tag): kept here and sent to the server, as [markThreadRead] does for
+  /// a thread. Unlike [markRead] it does not stop at the loaded messages, as
+  /// the chat may not be open; it stops at the chat's newest message.
+  void markReadThrough(String id, int sequence) {
+    final group = snapshot?.conversation(id);
+    if (_disposed || accessRevoked || group == null || sequence <= 0) return;
+    final last = min(
+      sequence,
+      max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(id),
+      ),
+    );
+    _unreadHeld.remove(id);
     _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
