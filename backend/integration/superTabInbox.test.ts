@@ -917,3 +917,41 @@ describe('reading many thread ranges at once', () => {
     expect(filterOf(reads.find(e => !e.command?.hint)!)).not.toHaveProperty('$or')
   }, 60_000)
 })
+
+// anh Dee, 11-04 (#2742): "remove these messages", the "<machine> left the Swarm: ..." lines in every project chat. Those already
+// stored are read by nobody, and a chat whose newest row is one does not stay unread.
+describe('a machine-left line stored before #2742', () => {
+  const left = { text: 'Studio left the Swarm: its host confirmed its cleanup.', author: personAuthor(owner),
+    source: { kind: 'machine-left', machine: 'Studio' } }
+  const mark = async (tabId: string, conversationId: string, sequence: number, as: AuthUser) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/conversations/${conversationId}/read`,
+      headers: { authorization: `Bearer ${as.sub}` }, payload: { sequence } })
+    expect(response.statusCode).toBe(200)
+    return (response.json() as { data: { sequence: number } }).data.sequence
+  }
+
+  it('is in no page and no preview, and a read through the newest row the person sees reads it too', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, s.web, 'Web latest')
+    const [line] = await insert(s.tabId, s.web, [left])
+    for (const as of [owner, peer]) {
+      const page = (await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages`, as)).body.data.messages as any[]
+      expect(page.map(m => m.text)).toContain('Web latest')
+      expect(JSON.stringify(page)).not.toContain('left the Swarm')
+      expect(latestOf((await inbox(s.tabId, as)).body.data)[s.web]).toBe('Web latest')
+    }
+    // The app reads up to 'Web latest', the newest row it was given: the chat's newest main row is the hidden line, so the mark
+    // moves on to it and the chat reads as read (the phone counts unread by the chat's newest main row).
+    const top = await sequenceOf(line!)
+    expect(top).toBeGreaterThan(latest.sequence)
+    expect(await mark(s.tabId, s.web, latest.sequence, peer)).toBe(top)
+  })
+
+  it('never reads past a row the person can read: a mark stops before it', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, s.web, 'Web latest')
+    await insert(s.tabId, s.web, [left])
+    await send(s.tabId, s.web, 'After the line')
+    expect(await mark(s.tabId, s.web, latest.sequence, peer)).toBe(latest.sequence)
+  })
+})
