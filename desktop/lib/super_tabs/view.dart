@@ -1804,7 +1804,13 @@ class _SuperTabViewState extends State<SuperTabView>
             say('That day is too far back to open.');
             return;
           }
+          // A read that fails keeps its error and its place: nothing came.
+          final loaded = c.messages(id).length;
           await c.loadMessages(id, older: true);
+          if (current() && c.messages(id).length == loaded) {
+            say('Couldn’t load earlier messages.');
+            return;
+          }
         }
       }
     } catch (_) {

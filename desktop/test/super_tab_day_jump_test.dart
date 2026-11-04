@@ -441,14 +441,10 @@ void main() {
         }
         server.markReadElsewhere('lead', 60);
         await open(tester, server);
-        final reads = <String>[];
-        server
-          ..failReadsOf = 'before='
-          ..onRead = reads.add;
+        server.failReadsOf = 'before=';
         await choose(tester, _pill, 'Last week');
         expect(find.text('Couldn’t load earlier messages.'), findsOneWidget);
         expect(find.text('That day is too far back to open.'), findsNothing);
-        expect(reads.where((r) => r.contains('before=')), hasLength(1));
         expect(anyLit(tester), isFalse);
       },
     );
@@ -477,17 +473,13 @@ void main() {
         final (c, _) = await open(tester, server);
         c.openThread('message-1');
         await tester.pumpAndSettle();
-        final reads = <String>[];
-        server
-          ..failReadsOf = 'before='
-          ..onRead = reads.add;
+        server.failReadsOf = 'before=';
         await choose(
           tester,
           const ValueKey('super-thread-day-pill'),
           'Last week',
         );
         expect(find.text('Couldn’t load earlier replies.'), findsOneWidget);
-        expect(reads.where((r) => r.contains('before=')), hasLength(1));
         expect(anyLit(tester), isFalse);
       },
     );

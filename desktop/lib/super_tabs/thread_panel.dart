@@ -115,14 +115,27 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     bool before(SuperTabMessage m) =>
         from == null || (m.createdAt?.isBefore(from) ?? false);
     List<SuperTabMessage> held() => c.threadMessages(widget.root);
+    void say(String text) =>
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(text)));
     // They read on from the row they land on, not the newest.
     _scroll.holdPlace();
-    for (var page = 0; page < 50; page++) {
-      final reached =
-          from != null && held().any((m) => m.id != widget.root && before(m));
+    // The root is always held, at the top: the very beginning reads nothing.
+    for (var page = 0; from != null; page++) {
+      final reached = held().any((m) => m.id != widget.root && before(m));
       if (reached || !c.hasEarlierReplies(widget.root)) break;
+      if (page == 50) {
+        say('That day is too far back to open.');
+        return;
+      }
+      // A read that fails keeps its error and its place: nothing came.
+      final loaded = held().length;
       await c.loadThread(earlier: true);
       if (!mounted || jump != _jumps) return;
+      if (held().length == loaded) {
+        say('Couldn’t load earlier replies.');
+        return;
+      }
     }
     final messages = held();
     final target = from == null

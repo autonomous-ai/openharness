@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -344,6 +345,13 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
   final _first = FocusNode(debugLabel: 'Swarm day pill first choice');
   bool _picking = false;
 
+  /// The keys that open it, as a button's.
+  static final _opens = {
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+    LogicalKeyboardKey.space,
+  };
+
   /// The calendar's size: Material's month header (52) over its grid of
   /// seven rows of 42 (weekdays and up to six weeks), 7 columns of 42 with
   /// its 8 of padding each side. Taller than a menu may be by default.
@@ -444,6 +452,15 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
             onTap: () => menu.isOpen ? menu.close() : menu.open(),
             child: Focus(
               focusNode: _focus,
+              // Enter or Space opens it, as a button.
+              onKeyEvent: (_, event) {
+                if (event is! KeyDownEvent ||
+                    !_opens.contains(event.logicalKey)) {
+                  return KeyEventResult.ignored;
+                }
+                menu.isOpen ? menu.close() : menu.open();
+                return KeyEventResult.handled;
+              },
               child: SuperTabDayPill(day: widget.day, chevron: true),
             ),
           ),
