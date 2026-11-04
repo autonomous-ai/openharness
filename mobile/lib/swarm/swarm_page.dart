@@ -735,7 +735,8 @@ class _SwarmPageState extends State<SwarmPage> {
         SwarmCaption(
           swarm.name,
           key: ValueKey('swarm-heading-${swarm.id}'),
-          first: first && notices.isEmpty && swarm == firstDrawn,
+          // The first heading sits close under the need-you line too.
+          first: notices.isEmpty && swarm == firstDrawn,
         )
       else if (notices.isNotEmpty)
         const SizedBox(height: AppSpace.s),
