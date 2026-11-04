@@ -275,6 +275,57 @@ void main() {
       expect(find.byKey(const ValueKey('super-thread-panel')), findsOneWidget);
     });
 
+    testWidgets('earlier replies are read before the root counts', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..threads = true
+        ..messagePage = 1;
+      server.append('Có lỗi ở đây?');
+      for (var i = 1; i <= 9; i++) {
+        server.append(i == 1 || i == 9 ? 'Lỗi $i' : 'Reply $i');
+        server.messages.last
+          ..['thread'] = 'message-1'
+          ..['replyTo'] = 'message-1';
+      }
+      final c = await show(tester, server);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      expect(c.hasEarlierReplies('message-1'), isTrue);
+      await tester.tap(
+        inThread(find.byKey(const ValueKey('super-thread-find-button'))),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(inThread(field), 'loi');
+      await tester.pumpAndSettle();
+      String said() => tester
+          .widget<Text>(
+            inThread(find.byKey(const ValueKey('super-find-count'))),
+          )
+          .data!;
+      // The root waits until the replies before the loaded ones are read.
+      expect(said(), '1 of 1');
+      await tester.tap(
+        inThread(find.byKey(const ValueKey('super-find-older'))),
+      );
+      await tester.pumpAndSettle();
+      // Reply 1, the earliest, not the root above the unread ones.
+      expect(said(), '2 of 3');
+      expect(
+        tester
+            .widget<SuperTabMessageHighlight>(
+              find
+                  .ancestor(
+                    of: inThread(row('message-2')),
+                    matching: find.byType(SuperTabMessageHighlight),
+                  )
+                  .first,
+            )
+            .on,
+        isTrue,
+      );
+    });
+
     testWidgets('the chat’s find leaves thread-only replies out', (
       tester,
     ) async {
