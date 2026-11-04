@@ -23,6 +23,7 @@ import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
+import 'local_time_zone.dart';
 import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
@@ -195,6 +196,7 @@ class SuperTabController extends ChangeNotifier {
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
     SuperTabReading reading = const SuperTabReading(),
+    this.stillListed,
   }) : _policy = reading {
     if (initial['tabId'] == tabId && initial['accountId'] == accountId) {
       final order = initial['sendOrder'];
@@ -3540,6 +3542,36 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// The zone this app last told the Swarm, or tried to: told once per zone
+  /// and session, so an older backend's refusal is not sent again.
+  String? _zoneTold;
+
+  /// Tells the Swarm the reader's time zone when it differs from the one it
+  /// keeps for them (backend `member.timeZone`), for the local time on their
+  /// card. Quietly: a refusal (an older backend) leaves their card without a
+  /// time, which is what it shows anyway.
+  void _reportTimeZone(SuperTabSnapshot next) {
+    final zone = superTabLocalTimeZone();
+    if (zone == null || zone == _zoneTold) return;
+    final me = next.people.where((p) => p.id == accountId).firstOrNull;
+    if (me == null || me.timeZone == zone) return;
+    _zoneTold = zone;
+    unawaited(
+      request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {'type': 'member.timeZone', 'timeZone': zone},
+        },
+      ).then<void>(
+        (_) {},
+        onError: (Object error) =>
+            appLog.debug('swarm', 'time zone not told: $error'),
+      ),
+    );
+  }
+
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
     return _refreshing ??= _read().whenComplete(() {
@@ -3634,6 +3666,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _reportTimeZone(next);
         _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a
@@ -4346,6 +4379,12 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
   }
 
+  /// Whether the account's Swarm list still names this Swarm: true while it
+  /// does, false once a list read that answered leaves it out; it throws when
+  /// the list cannot be read. Null: a refused read is final at once.
+  final Future<bool> Function()? stillListed;
+  bool _checkingListed = false;
+
   void _readFailure(Object failure, {bool revokeTab = true}) {
     if (_disposed) return;
     if (_isUpdateRequired(failure)) return _requireUpdate();
@@ -4355,23 +4394,52 @@ class SuperTabController extends ChangeNotifier {
     if (revokeTab &&
         failure is SuperTabFailure &&
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
-      accessRevoked = true;
-      devicesSelected = false;
-      _forgetClosedShipped();
-      _forgetAttention();
-      snapshot = null;
-      _showingSaved = false;
-      _parts = null;
-      _messages.clear();
-      _staleHeld.clear();
-      _forgetNewer();
-      _quoted.clear();
-      _quoting.clear();
-      _forgetThreads();
-      _poll?.cancel();
-      _firstReadRetry?.cancel();
-      cancelUpload();
+      // A backend restarting under an open Swarm can refuse a read it answers
+      // a moment later (Dee's "autonomous.ai", 2026-11-04). Only the list says
+      // the Swarm is gone: until it does, this is a failed read like any
+      // other, and the Swarm keeps what it shows and says Reconnecting.
+      if (stillListed case final listed?) {
+        unawaited(_takeAwayUnlessListed(listed));
+        return;
+      }
+      _takeAway();
     }
+  }
+
+  Future<void> _takeAwayUnlessListed(Future<bool> Function() listed) async {
+    if (_checkingListed) return;
+    _checkingListed = true;
+    bool? still;
+    try {
+      still = await listed();
+    } catch (_) {
+      still = null;
+    } finally {
+      _checkingListed = false;
+    }
+    if (_disposed || accessRevoked || still != false) return;
+    _takeAway();
+    _changed();
+  }
+
+  /// The Swarm is not this account's any more: nothing of it is kept or read.
+  void _takeAway() {
+    accessRevoked = true;
+    devicesSelected = false;
+    _forgetClosedShipped();
+    _forgetAttention();
+    snapshot = null;
+    _showingSaved = false;
+    _parts = null;
+    _messages.clear();
+    _staleHeld.clear();
+    _forgetNewer();
+    _quoted.clear();
+    _quoting.clear();
+    _forgetThreads();
+    _poll?.cancel();
+    _firstReadRetry?.cancel();
+    cancelUpload();
   }
 
   /// Joins a read of [id] in the same direction already under way, so a

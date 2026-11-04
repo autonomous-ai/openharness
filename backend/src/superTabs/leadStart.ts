@@ -228,3 +228,30 @@ export function leadStartFailed(state: SuperTabState, start: AgentStart, reason:
   Object.assign(placement, { status: 'failed', reason: publicReason(reason) })
   return failureNotice(start.request.name, reason)
 }
+
+/** How long a person's message in their Personal Swarm's project chat with no Lead waits for its Lead (task #2633, Huy 11-04):
+ *  one sent longer before the Lead joins is not delivered to it. */
+export const LEAD_WAIT_MS = 30 * 60_000
+/** At most this many messages wait for a project's Lead, the newest. */
+export const MAX_LEAD_WAITING = 20
+/** How long one Desktop's claim to start a project's Lead (lead.claim) holds off another machine's: past it, that start is
+ *  taken as lost. A native start takes a few minutes at most, an engine's install included. */
+export const LEAD_CLAIM_MS = 10 * 60_000
+
+/** Records message [id] as waiting for [project]'s Lead, dropping what waited too long, keeping the newest. */
+export function leadWaits(project: SwarmProject, id: string, now: number): void {
+  project.leadWaiting = [...(project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS), { id, at: now }].slice(-MAX_LEAD_WAITING)
+}
+
+/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it, as a
+ *  Buddy's waiting messages are (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
+ *  and the claim end. */
+export function leadArrived(state: SuperTabState, project: SwarmProject, agentId: string, now: number) {
+  const waiting = (project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS)
+  delete project.leadWaiting
+  delete project.leadClaim
+  const owner = state.people.find(p => p.id === project.ownerId)
+  if (!owner) return []
+  return waiting.map(w => ({ messageId: w.id, conversationId: project.leadConversationId, agentId, lead: true as const,
+    author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
+}

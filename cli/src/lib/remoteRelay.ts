@@ -59,8 +59,28 @@ const ISOLATED_DIAL_COOLDOWN_MS = 30_000
 // median 0.4 s, open, sign in, select, refused, closed, because the window's pool dialled again on every
 // select its local clients made: the app's retry, a TUI, a CLI command.
 const REFUSED_BACKOFF_MAX_MS = 30_000
+// A machine refused as offline, which no list says is offline (LISTED_RECHECK_MS), is asked again after 30 s, then 1, 2,
+// 4 minutes, and at most every 5: a machine that is off is usually off for long, and every ask is a socket and a sign-in.
+// A list that shows it online lifts this at once.
+const OFFLINE_BACKOFF_FIRST_MS = 30_000
+const OFFLINE_BACKOFF_MAX_MS = 5 * 60_000
 // A retry-after longer than this is read as this: a wrong answer must not shut a machine out for long.
 const RETRY_AFTER_MAX_MS = 5 * 60_000
+// A machine the account's machine list shows offline is not dialled at all: its selects are answered MACHINE_OFFLINE
+// from the list until a list shows it online. Prod, 2026-11-04: about 3,600 web-ws opens an hour from 76 users, mostly
+// CLI 0.5.33, each signed in, refused MACHINE_OFFLINE and closed in ~120 ms. The backoff above is per machine and capped
+// at 30 s, so a person with many offline machines kept the loop going, and every open cost the backend a session
+// sign-in. While selects are held the list is asked again at most this often: one read for every machine, served from
+// the cache when anything else read it since.
+const LISTED_RECHECK_MS = 5 * 60_000
+// An explicit redial (a person pressing Retry) of a held machine asks the list again at once, served from the cache when
+// it is younger than this, and dials if the list now shows the machine back. No online event reaches the CLI (review of
+// #2891: the backend pushes a list change only on create, rename, delete or share), so without it a machine back for a
+// minute stayed unreachable until the 5-minute recheck. One list read for every machine, never a socket per machine.
+const REDIAL_RECHECK_MS = 30_000
+// A list read longer ago than this holds nothing: the backoff decides again, so a list nothing can re-read (the
+// backend unreachable over REST) cannot shut a machine out.
+const LISTED_TRUST_MS = 15 * 60_000
 // Warm background sessions kept per machine. Each concurrent background client needs its own (they
 // must not see each other's frames), so the cap is "how many pollers may overlap on one machine and
 // still find a warm session"; beyond it the extra session is closed on detach, as `shelf full`, so the backend's
@@ -275,11 +295,20 @@ export interface RemoteRelayPoolOptions {
   refusals?: Map<string, Refusal>
   /** The clock the backoff reads; a test's own. */
   now?: () => number
+  /** Shared record of the machines the account's machine list last showed offline (LISTED_RECHECK_MS). */
+  listedOffline?: ListedOffline
+  /** Ask the machine list again unless it was read within `maxAgeMs`: a held select may be of a machine back since. It
+   *  settles once the list read (and `listed()` was told), or failed. */
+  recheckList?: (maxAgeMs: number) => Promise<void>
 }
 
+/** The machines the account's machine list last showed offline, when it was read, and when a held select last asked
+ *  for it again. `at` 0: no list the backend answered, which holds nothing. */
+export interface ListedOffline { ids: Set<string>; at: number; asked: number }
+
 /** A machine whose last dials failed `count` times in a row: selects of it before `until` get `error` back.
- *  `asked`: the backend set `until` (its retry-after), which even an explicit redial waits out. */
-interface Refusal { until: number; error: unknown; count: number; asked: boolean }
+ *  `askedUntil`: the end of the backend's own retry-after, which even an explicit redial waits out. */
+interface Refusal { until: number; error: unknown; count: number; askedUntil: number }
 
 const DENIED_TRIES = 3
 const DENIED_WINDOW_MS = 60_000
@@ -299,6 +328,8 @@ export class RemoteRelayPool {
   private readonly denials: Map<string, number[]>
   private readonly refusals: Map<string, Refusal>
   private readonly now: () => number
+  private readonly listedOffline: ListedOffline
+  private readonly recheckList: ((maxAgeMs: number) => Promise<void>) | null
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -323,6 +354,33 @@ export class RemoteRelayPool {
     this.denials = opts.denials ?? new Map()
     this.refusals = opts.refusals ?? new Map()
     this.now = opts.now ?? Date.now
+    this.listedOffline = opts.listedOffline ?? { ids: new Set(), at: 0, asked: 0 }
+    this.recheckList = opts.recheckList ?? null
+  }
+
+  /** The account's machine list was read: these of its machines are offline. null: the list is not the backend's
+   *  (a sign-out, or no read yet), which holds nothing. A machine it no longer shows offline is dialled at its next
+   *  select, whatever backoff its last refusal left: the list is what says it came back. */
+  listed(offline: string[] | null): void {
+    const next = new Set(offline ?? [])
+    for (const machineId of this.listedOffline.ids) {
+      if (next.has(machineId)) continue
+      this.refusals.delete(machineId)
+      this.lastDialFailure.delete(machineId)
+    }
+    this.listedOffline.ids = next
+    this.listedOffline.at = offline ? this.now() : 0
+  }
+
+  /** Whether the machine list says `machineId` is offline, recently enough to answer its select without a dial. */
+  private heldByList(machineId: string): boolean {
+    const listed = this.listedOffline
+    if (!listed.at || !listed.ids.has(machineId) || this.now() - listed.at >= LISTED_TRUST_MS) return false
+    if (this.now() - listed.asked >= LISTED_RECHECK_MS) {
+      listed.asked = this.now()
+      void this.recheckList?.(LISTED_RECHECK_MS).catch(() => { /* the next held select asks again */ })
+    }
+    return true
   }
 
   /** `machineId` denied this machine's key. Drop the pin — unless the device key log says it should
@@ -357,7 +415,8 @@ export class RemoteRelayPool {
     const shelf = this.idleIsolated.get(machineId) ?? []
     const pool = shelf.pop() ?? new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers,
       { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure,
-        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials, refusals: this.refusals, now: this.now })
+        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials, refusals: this.refusals, now: this.now,
+        listedOffline: this.listedOffline, ...(this.recheckList ? { recheckList: this.recheckList } : {}) })
     const session = await pool.acquire(machineId, autonomousEnv, selectFrame, {
       ...sink,
       sendFrame: frame => sink.sendFrame(frame.type === 'connected'
@@ -458,8 +517,16 @@ export class RemoteRelayPool {
     // An explicit redial (`forceReconnect`: the app saw its session die, or a person asked again) is not made to
     // wait out the backoff, only what the backend itself asked for.
     const redial = (selectFrame.payload as { forceReconnect?: unknown } | undefined)?.forceReconnect === true
+    // Not even an explicit redial: the backend, whose list this is, would refuse it. A redial asks the list first.
+    if (this.heldByList(machineId)) {
+      if (!redial || !this.recheckList) return Promise.reject(new RelayConnectError('MACHINE_OFFLINE', 1013))
+      return this.recheckList(REDIAL_RECHECK_MS).catch(() => { /* answered from the list it has */ }).then(() => {
+        if (this.heldByList(machineId)) throw new RelayConnectError('MACHINE_OFFLINE', 1013)
+        return this.connect(machineId, autonomousEnv, selectFrame)
+      })
+    }
     const refused = this.refusals.get(machineId)
-    if (refused && this.now() < refused.until && (refused.asked || !redial)) return Promise.reject(refused.error)
+    if (refused && this.now() < (redial ? refused.askedUntil : refused.until)) return Promise.reject(refused.error)
     const failed = this.lastDialFailure.get(machineId)
     if (failed && this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs) {
       return Promise.reject(failed.error)
@@ -508,10 +575,13 @@ export class RemoteRelayPool {
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
-    const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
+    const offline = error instanceof RelayConnectError && error.message === 'MACHINE_OFFLINE'
+    const backoff = offline
+      ? Math.min(OFFLINE_BACKOFF_MAX_MS, OFFLINE_BACKOFF_FIRST_MS * 2 ** (count - 1))
+      : Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
     const asked = error instanceof RelayConnectError && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
       ? Math.min(Math.max(error.retryAfterMs, 0), RETRY_AFTER_MAX_MS) : 0
-    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, asked: asked > backoff })
+    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, askedUntil: this.now() + asked })
   }
 
   private async dial(machineId: string, autonomousEnv: string, selectFrame: Frame, forceRefresh: boolean): Promise<Entry> {
