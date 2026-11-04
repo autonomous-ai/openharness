@@ -1069,7 +1069,8 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
     const secretPm = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-pm', machineId: 'machine', name: 'Secret PM',
       configuration, lead: true }).result.agentId as string
-    expect(() => f.run(tell(), agentActor(secretPm))).toThrow('cannot read this project')
+    // By username, never email (task #2954).
+    expect(() => f.run(tell(), agentActor(secretPm))).toThrow(/^peer cannot read this project\.$/)
     const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
     const told = f.run(tell(), agentActor(webPm))
     expect(told.messages.map(m => m.conversationId)).toEqual([peerSwarmChat, buddyChatId(f.web.projectId, { id: 'peer', generation: 'first' })])

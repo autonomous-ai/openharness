@@ -112,7 +112,8 @@ describe('built-in Swarm skills', () => {
   const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
   const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
   // The approved mention line (spec/2026-10-24-lead-mentions.md, call 5), the Lead's alone, in both modes.
-  const mention = '- When you need a person to act or decide, tag them in the message.\n'
+  // By @username or id, never email (task #2954).
+  const mention = '- When you need a person to act or decide, tag them in the message by @username or id, never by email.\n'
   // The lost-work and checkpoint lines (Lead's brief for v1 liveness, 2026-10-26; docs: swarm-never-stops): the Lead's and
   // the Builder's alone, in both modes.
   const lost = '- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt\'s pushed branch and last result, not to start over.\n'

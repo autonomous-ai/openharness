@@ -102,7 +102,7 @@ describe('five-part tasks', () => {
     const delivery = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages[0]!
     // The worker runs on another person's machine (host-owner's): the task names whom its pull requests are for (projects.ts
     // requestedByLine, security review 2 of #2492).
-    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner@example.com through Harness.`)
+    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner through Harness.`)
     expect(delivery.recipients).toEqual([worker])
   })
 
@@ -1184,7 +1184,8 @@ describe('route.record and route.override', () => {
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c1', reason: 'Opus quota is needed elsewhere.' }) }])
     expect(effects.messages[0]!.recipients).toEqual([f.lead])
     // What happened and why, never the next step (project instructions, phase 4).
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
+    // By name, never email: the PM reads this row and copied the email into a tag (review of #2954).
+    expect(effects.messages[0]!.text).toBe('owner chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
     expect(effects.messages[0]!.source).toEqual({ kind: 'route-override', decisionId: 'd1', by: 'person' })
   })
   it('refuses an override by an agent, of a closed decision, or of the current choice', () => {
@@ -1468,10 +1469,10 @@ describe('a route that names no pick', () => {
     const command = { type: 'route.override', decisionId: 'd1', candidateId: 'c0', reason: 'Opus for the schema.' } as const
     const effects = f.run(command, undefined, { routeDecision: open() })
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c0' }) }])
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c0. Reason: Opus for the schema.')
+    expect(effects.messages[0]!.text).toBe('owner chose Title c0. Reason: Opus for the schema.')
     const started = open({ final: { kind: 'new', startId: 's', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' } })
     expect(() => f.run({ ...command, candidateId: 'c1' }, undefined, { routeDecision: started })).toThrow(expect.objectContaining({ code: 'ALREADY_CHOSEN' }))
-    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner@example.com chose Title c0 instead of Title c1. Reason: Opus for the schema.')
+    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner chose Title c0 instead of Title c1. Reason: Opus for the schema.')
   })
 
   it('links a start to the candidate a person chose, as before, keeping that candidate in the final', () => {
@@ -4794,12 +4795,12 @@ describe('checks are information', () => {
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
-    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
     const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
-      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
   it('keeps a failed check as a finding', () => {
@@ -5469,6 +5470,12 @@ describe('lead.switch', () => {
     const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
     expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
       text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    // The owner's Buddy reads it: never an email, even one the asker took as their name (review of #2954).
+    const named = lent()
+    named.f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
+    named.f.run(named.request)
+    expect(done(named).messages.find(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')!.text)
+      .toBe('owner moved the PM of Pilot on Studio to your Codex account "Work".')
     const def = lent()
     def.f.run({ ...def.request, profileId: 'default' })
     expect(done(def).messages).toHaveLength(1)

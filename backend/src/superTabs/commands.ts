@@ -4,7 +4,7 @@ import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDD
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
-import { setName, writtenNameOf } from './personNames.js'
+import { agentWrittenNameOf, setName } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -2553,7 +2553,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!projectId || !projectAgent(state, actor, projectId)) fail('FORBIDDEN', 'An agent sends a person a private line, in its own project.', 403)
       const project = projectOf(state, projectId)
       const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
-      if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${to.email} cannot read this project.`, 400)
+      if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${usernameOf(state, to.id)} cannot read this project.`, 400)
       // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
       // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
       // which older apps and the phone still show (spec: Older apps).
@@ -2999,7 +2999,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
       const owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
       if (moved && label && asked && owner && asked !== owner.id) {
-        const who = writtenNameOf(state, asked) ?? state.people.find(p => p.id === asked)?.email ?? 'Someone'
+        // The owner's Buddy reads it: by name, never email (review of #2954).
+        const who = agentWrittenNameOf(state, asked) ?? 'Someone'
         effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: openSwarmBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
           source: { kind: 'pm-switch-notice', machineId: target.machineId },
           text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
@@ -3408,7 +3409,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       effects.routeDecisions.push({ op: 'override', id: decision.id, override: { by: 'person', actorKey: actorKey(actor), candidateId: chosen.id, reason: command.reason } })
       const lead = conversation(state, decision.conversationId).leadId
       message(decision.conversationId,
-        `${sender.name} chose ${chosen.title}${current === undefined ? '' : ` instead of ${routeTitle(decision, current)}`}. Reason: ${command.reason}`,
+        // By name, never email: the PM reads this row (review of #2954).
+        `${agentWrittenNameOf(state, actor.userId) ?? 'Someone'} chose ${chosen.title}${current === undefined ? '' : ` instead of ${routeTitle(decision, current)}`}. Reason: ${command.reason}`,
         lead ? [lead] : [], null, { kind: 'route-override', decisionId: decision.id, by: 'person' })
       break
     }
@@ -3539,7 +3541,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           effects.decisions = drafts
           asked = context.repeatedDecision ?? drafts[0]!.id
         }
-        else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
+        else effects.result.notAsked = `Not asked ${agentWrittenNameOf(state, person(state, personId).id)}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       // A Team agent's push can land on any branch: its Ready reads who pushed (teamWritten.ts, audit H2).
       if (command.status === 'review') marking(group, () => applyPushOrigin(state, group, context.pushOrigin))
@@ -3579,7 +3581,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
-        const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
+        const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${agentWrittenNameOf(state, person(state, command.ask.personId).id)}.`
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status })
         // The server opens no review by itself: the agent whose work is ready opens and assigns it, as the project's instructions

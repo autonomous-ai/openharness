@@ -29,7 +29,8 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 \`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
 - Answer a message once, where it was asked: \`--answers MESSAGE_ID\` puts your answer right below a message in the main chat; \`--reply-to MESSAGE_ID\` puts it in the thread of a message that is in one. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
 - \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
-- \`--mention PERSON\` tags a person by the id or email shown in status (up to 5), when you need them to act or decide; an @username or @email in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- \`--mention PERSON\` tags a person by the username, display name or id shown in status (up to 5), when you need them to act or decide; an @username in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- Never type a person's email: name them by username. A machine's privacy check stops a session whose command holds its owner's email until a person approves it.
 - Quote TEXT so the shell keeps it one argument.
 
 ### Who a post reaches

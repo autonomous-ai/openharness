@@ -2024,9 +2024,9 @@ describe('the morning digest', () => {
     // One shared decision, older than 200 private ones.
     await db.superTabDecision.createMany({ data: [...asked(f.group, 1, 1_000), ...asked(secret, 200, 5_000)] })
     f.clock.now = 3 * 60 * 60_000 - 24 * 60 * 60_000
-    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner$/)
     await db.superTabDecision.createMany({ data: asked(f.group, 200, 10_000) })
-    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 201 for owner@example\.com$/)
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 201 for owner$/)
   })
 
   // groupBy on SuperTabDecision once panicked the Prisma engine on Mongo (review of #1855): the same counts, read without it.
@@ -2044,7 +2044,7 @@ describe('the morning digest', () => {
     await f.leadInbox()
     expect(counted.ops).not.toContain('SuperTabDecision.groupBy')
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
-    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner$/)
     // The Lead's to write up: the people in its chat read the digest it posts, not this request.
     const read = async (asAgentId?: string) => (await f.timed.messages(asAgentId ? host : owner, f.tab, digest.conversationId, {}, asAgentId)).messages.map(m => m.id)
     expect(await read(f.lead)).toContain(digest.id)
@@ -2063,7 +2063,7 @@ describe('the morning digest', () => {
     f.clock.now = 3 * 60 * 60_000 + 2 * 24 * 60 * 60_000
     await f.leadInbox()
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
-    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner$/)
   })
 
   it('lists the decisions waiting, by conversation and person, never their questions', async () => {
@@ -2075,7 +2075,7 @@ describe('the morning digest', () => {
     f.clock.now = 3 * 60 * 60_000
     await f.leadInbox()
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
-    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner$/)
     expect(digest.text).not.toMatch(/Secret launch plan|Price it|Behind a flag/)
   })
 

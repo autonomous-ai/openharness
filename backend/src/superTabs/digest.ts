@@ -4,6 +4,7 @@ import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
 import { workOver } from './decisions.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
+import { agentWrittenNameOf } from './personNames.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
 // digest time its Lead's poll wakes the Lead with the lists below, built from state; the Lead checks each pull request is
@@ -100,10 +101,11 @@ export function decisionLines(state: SuperTabState, project: SwarmProject, waiti
     // None waits where the work is over (decisions.ts workOver).
     if (!group || !asked || workOver(state, group) || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
     const people = counts.get(group.id) ?? new Map<string, number>()
-    counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + count))
+    counts.set(group.id, people.set(asked.id, (people.get(asked.id) ?? 0) + count))
   }
+  // By name, never email: the PM reads this and copies names into what it types (task #2954).
   return groups.filter(g => counts.has(g.id)).map(g => `- ${g === chat ? 'This chat' : `#${g.number} ${g.title}`}: `
-    + [...counts.get(g.id)!].map(([email, n]) => `${n} for ${email}`).join(', '))
+    + [...counts.get(g.id)!].map(([id, n]) => `${n} for ${agentWrittenNameOf(state, id)}`).join(', '))
 }
 
 /** The Lead's wake-up for its project's digest when one is due, or null. The caller records it as sent (store.ts). */

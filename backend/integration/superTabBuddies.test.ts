@@ -362,6 +362,10 @@ describe('a Buddy through the store', () => {
     const theirs = (await f.store.decisions(peer, f.tab, 'open')).decisions
     expect(theirs.map(d => d.question).sort()).toEqual([...routing.map(r => r.question), 'Which week?'].sort())
     expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
+    // An agent reads whom a decision asks by name, never email; the person's own app keeps it (review of #2954).
+    expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions[0]).toMatchObject({ personEmail: null, personName: expect.any(String) })
+    expect(JSON.stringify((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions)).not.toContain(peer.email)
+    expect(theirs.find(d => d.question === 'Which week?')).toMatchObject({ personEmail: peer.email })
     // Left to the PM: the plain one's line reaches the Buddy chat, the proposal's never does, and the Buddy's answered list holds no proposal.
     await f.execute({ type: 'decision.answer', decisionId: routing[0]!.id, delegate: true }, peer)
     await f.execute({ type: 'decision.answer', decisionId: theirs.find(d => d.question === 'Which week?')!.id, delegate: true }, peer)
