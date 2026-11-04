@@ -705,7 +705,11 @@ export class ContributedMachines {
                   continue
                 }
               }
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+              // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
+              // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
+              const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}) },
+                scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
