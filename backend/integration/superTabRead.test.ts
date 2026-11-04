@@ -1246,11 +1246,12 @@ describe('the summary only when it changed (derivedEtag)', () => {
   const read = async (url: string, as: AuthUser) => { clock = Date.now(); return (await get(url, as)).body.data }
   const poll = (tabId: string, cursor: string, as: AuthUser, etag?: string) =>
     read(`/api/super-tabs/${tabId}/changes?cursor=${cursor}${etag ? `&derivedEtag=${etag}` : ''}`, as)
+  /** An open decision asked of peer, written as a row (as `askedBefore` does): a command would leave its notices and wakes
+   *  running into the next tests, whose database-byte counts (group 3b) then count them. */
   const ask = async (tabId: string, conversationId: string, lead: string) => {
-    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
-      payload: { operationId: randomUUID(), asAgentId: lead, command: { type: 'decision.ask', conversationId, personId: peer.sub,
-        questions: [{ question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] } } })
-    expect(response.statusCode).toBe(200)
+    await db.superTabDecision.create({ data: { id: `etag-${randomUUID()}`, tabId, batchId: `${conversationId}-etag`, projectId: 'lead',
+      conversationId, assignmentId: null, personId: peer.sub, askerAgentId: lead, question: 'Ship how?', options: ['Behind a flag', 'To everyone'],
+      recommended: 0, unblocks: 'The release', createdAt: new Date() } })
   }
 
   it('stamps a first load and a change read alike, and an echoed etag gets no summary', async () => {
