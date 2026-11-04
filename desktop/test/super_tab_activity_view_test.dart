@@ -844,6 +844,8 @@ void main() {
         'owner': {'lead': 4},
       };
       await show(tester, await loaded(tester, server));
+      await tester.tap(_key('super-activity-unreads-only'));
+      await tester.pumpAndSettle();
       for (final id in ['mention-1', 'mention-2', 'mention-3']) {
         expect(_key('super-activity-row-mention:$id'), findsOneWidget);
       }

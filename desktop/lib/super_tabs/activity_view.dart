@@ -61,7 +61,10 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   /// to be), or as soon as the reader does anything here. Until then more
   /// arriving may still change it; after, it never moves under their hands.
   bool _settled = false;
-  bool _mentionsUnreadOnly = false;
+
+  /// Mentions opens on what the reader has not read (Diego, #2887): the
+  /// read ones are a switch away.
+  bool _mentionsUnreadOnly = true;
   bool _handledShown = false;
 
   @override
