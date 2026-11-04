@@ -6,6 +6,7 @@ import 'swarm_message_link.dart';
 import 'swarm_message_reads.dart';
 import 'swarm_message_row.dart';
 import 'swarm_reader.dart';
+import 'voice_length.dart';
 
 /// [message]'s author as a link's preview names them: "You" for the reader's
 /// own, else as its Swarm's roster names them, or the name the message was
@@ -89,15 +90,16 @@ class SwarmLinkPreviews extends StatelessWidget {
       );
     }
     final here = link.tabId == tabId && link.conversationId == chatId;
+    final words = swarmQuoteText(message).trim();
     return SwarmQuote(
       key: key,
       author: swarmLinkAuthor(reader, message),
       chat: here
           ? null
           : reader.snapshot?.conversation(link.conversationId)?.label,
-      text: message.text.trim().isEmpty
+      text: words.isEmpty
           ? 'Attachment'
-          : message.text.trim().replaceAll(RegExp(r'\s+'), ' '),
+          : words.replaceAll(RegExp(r'\s+'), ' '),
       label: 'Go to message',
       onTap: () => onOpen(link),
     );
@@ -138,11 +140,11 @@ class SwarmReadQuote extends StatelessWidget {
       final original = read.message;
       return SwarmQuote(
         author: original == null ? null : author(original),
-        text:
-            original?.text ??
-            (read.state == SwarmReadState.gone
-                ? 'The original message is no longer in this chat.'
-                : null),
+        text: original != null
+            ? swarmQuoteText(original)
+            : read.state == SwarmReadState.gone
+            ? 'The original message is no longer in this chat.'
+            : null,
         onTap: onTap,
       );
     },
