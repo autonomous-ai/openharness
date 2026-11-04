@@ -2144,20 +2144,21 @@ export class SuperTabStore {
    * still sends, and says so.
    */
   async readVoice(user: AuthUser, tabId: string, attachmentId: string, lang: string, asAgentId?: string): Promise<{ voice: VoiceFacts }> {
-    if (asAgentId) fail('VOICE_PEOPLE_ONLY', 'Only people send voice messages.', 403)
-    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
-    const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Voice messages cannot be sent to this server.', 503)
-    const voice = this.hooks.voice ?? fail('VOICE_UNAVAILABLE', 'Voice messages are not available on this server.', 503)
     const unavailable = () => fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
+    // Who may reach the Swarm first, as on every person route: one they cannot reach is answered as one that does not exist.
     const row = await transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId, {})
-      const actor = await this.actor(tx, user, state)
+      const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      if (actor.kind === 'agent') fail('VOICE_PEOPLE_ONLY', 'Only people send voice messages.', 403)
       const found = await tx.superTabAttachment.findFirst({ where: { tabId, id: attachmentId } })
       if (!found || found.actorKey !== actorKey(actor) || found.usedBy || found.purpose) unavailable()
       await this.poster(tx, user, tabId, found!.conversationId)
       return found!
     })
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Voice messages cannot be sent to this server.', 503)
+    const voice = this.hooks.voice ?? fail('VOICE_UNAVAILABLE', 'Voice messages are not available on this server.', 503)
     const stored = voiceFacts(row.voice)
     if (stored) return { voice: stored }
     if (!VOICE_TYPES.has(row.mime)) fail('UNSUPPORTED_AUDIO', 'A voice message is a WAV recording.', 415)
