@@ -14,6 +14,14 @@ import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
 export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+/**
+ * What an agent's token also asks for where the repository's installation has granted it, at no more than the granted level
+ * (Scholes, task #2755, Ken approved): push changes to `.github/workflows`, which GitHub refuses without `workflows`, and
+ * read and write issues. Never asked for where not granted: GitHub refuses a token that asks for a permission its
+ * installation has not accepted, and every agent on it would lose its token. Ken accepted the risk: a workflow change runs
+ * in CI with the repository's secrets, and Team-written branches are among the pushers.
+ */
+export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' } as const
 /** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
 /** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
@@ -88,6 +96,8 @@ export type BranchProtection = 'pull_request' | 'classic' | 'none' | 'unknown'
 export interface DefaultBranch { branch: string | null; protection: BranchProtection }
 
 const base64url = (value: string | Buffer) => Buffer.from(value).toString('base64url')
+const samePermissions = (a: TokenPermissions, b: TokenPermissions) =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([name, level]) => b[name] === level)
 const INSTALLATION_TTL_MS = 10 * 60_000
 const NOT_INSTALLED_TTL_MS = 60_000
 /** How often a person's "check again" may make the server ask GitHub again about one repository. */
@@ -129,6 +139,8 @@ export class GitHubApp {
   /** The app's name, as GitHub answers it (botLogin). */
   private slug: string | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
+  /** What each installation has granted, by its id, for [GRANTED_TOKEN_PERMISSIONS]: null when GitHub did not say. */
+  private readonly grants = new Map<number, { permissions: TokenPermissions | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
@@ -321,8 +333,65 @@ export class GitHubApp {
     if (this.renames.get(key)?.repository === null) this.renames.delete(key)
   }
 
-  /** A token for [repository] alone, with TOKEN_PERMISSIONS alone. */
-  async createToken(installationId: number, repository: GitHubRepository, permissions: TokenPermissions = TOKEN_PERMISSIONS): Promise<{ token: string; expiresAt: string }> {
+  /** What [installationId] has granted (GET /app/installations/{id}, with the app's JWT), remembered ten minutes; [fresh]
+   *  asks GitHub again. Null when GitHub does not say, remembered a minute: the token then asks for TOKEN_PERMISSIONS alone. */
+  private async granted(installationId: number, fresh = false): Promise<TokenPermissions | null> {
+    const known = this.grants.get(installationId)
+    if (!fresh && known && known.until > this.now()) return known.permissions
+    let permissions: TokenPermissions | null = null
+    try {
+      const answer = await this.call('GET', `/app/installations/${installationId}`, `Bearer ${this.jwt()}`)
+      if (answer.status === 401) throw this.misconfigured()
+      const listed = (answer.body as Record<string, unknown>).permissions
+      if (answer.status === 200 && listed && typeof listed === 'object' && !Array.isArray(listed)) {
+        permissions = Object.fromEntries(Object.entries(listed as Record<string, unknown>)
+          .filter((entry): entry is [string, 'read' | 'write'] => entry[1] === 'read' || entry[1] === 'write'))
+      } else {
+        // Said every time, as agents then lose workflow pushes and issue writes with nothing else to show why (review 2 of #2956).
+        console.warn(`[github] installation ${installationId}'s permissions unreadable (HTTP ${answer.status}); agent tokens ask for today's set alone`)
+      }
+    } catch (error) {
+      if (!(error instanceof GitHubAppError) || error.code === 'GITHUB_APP_MISCONFIGURED') throw error
+      console.warn(`[github] installation ${installationId}'s permissions unreadable (${error.code}); agent tokens ask for today's set alone`)
+      // GitHub did not answer: today's set, asked again next time.
+      return null
+    }
+    if (this.grants.size >= 1000) this.grants.delete(this.grants.keys().next().value!)
+    this.grants.set(installationId, { permissions, until: this.now() + (permissions ? INSTALLATION_TTL_MS : NOT_INSTALLED_TTL_MS) })
+    return permissions
+  }
+
+  /** An agent's token's permissions on [installationId]: TOKEN_PERMISSIONS, and each of GRANTED_TOKEN_PERMISSIONS the
+   *  installation granted, at the lower of the two levels. */
+  private async agentPermissions(installationId: number, fresh = false): Promise<TokenPermissions> {
+    const granted = await this.granted(installationId, fresh)
+    const permissions: Record<string, 'read' | 'write'> = { ...TOKEN_PERMISSIONS }
+    for (const [name, wanted] of Object.entries(GRANTED_TOKEN_PERMISSIONS)) {
+      const level = granted?.[name]
+      if (level) permissions[name] = level === 'write' && wanted === 'write' ? 'write' : 'read'
+    }
+    return permissions
+  }
+
+  /**
+   * A token for [repository] alone. With [permissions] given, those alone; without, an agent's token: TOKEN_PERMISSIONS and
+   * what of GRANTED_TOKEN_PERMISSIONS its installation granted. A permission refusal of an agent's token reads the grant
+   * again and asks once more when that changes what to ask for: an owner took a permission away within the ten minutes.
+   */
+  async createToken(installationId: number, repository: GitHubRepository, permissions?: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
+    if (permissions) return this.mint(installationId, repository, permissions)
+    const asked = await this.agentPermissions(installationId)
+    try {
+      return await this.mint(installationId, repository, asked)
+    } catch (error) {
+      if (!(error instanceof GitHubAppError) || error.code !== 'GITHUB_APP_PERMISSIONS') throw error
+      const now = await this.agentPermissions(installationId, true)
+      if (samePermissions(asked, now)) throw error
+      return this.mint(installationId, repository, now)
+    }
+  }
+
+  private async mint(installationId: number, repository: GitHubRepository, permissions: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
       { repositories: [repository.name], permissions })
     const body = answer.body as Record<string, unknown>

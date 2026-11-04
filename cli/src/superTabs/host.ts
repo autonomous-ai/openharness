@@ -3,6 +3,7 @@ import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
+import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -282,22 +283,29 @@ function customRole(target: HostAgent): CustomRole | null {
 }
 /** The project instructions the roster names for this agent (project instructions, phase 3), or null: an older backend's row
  *  has no `instructions` key and one in no project has null, and both keep their role files as before. */
-interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string }
+interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string
+  /** The hash of the Swarm's built-in PM schedule the coordinator's read carries (2026-11-04 PM schedule design): it changes
+   *  with backend builds while the document's revision and hash stay. Null for any other agent, and from an older backend. */
+  builtInHash: string | null }
 function rowInstructions(target: HostAgent): RowInstructions | null {
-  const { projectId, revision, hash, coordinatorName } = object(target.instructions)
+  const { projectId, revision, hash, coordinatorName, builtInHash } = object(target.instructions)
   return identifier(projectId) && Number.isSafeInteger(revision) && (revision as number) >= 0 && (hash === null || typeof hash === 'string')
     && typeof coordinatorName === 'string' && coordinatorName !== '' && typeof target.roleName === 'string' && target.roleName !== ''
-    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName } : null
+    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName,
+      builtInHash: typeof builtInHash === 'string' ? builtInHash : null } : null
 }
 /** The instructions text held for one project of a tab, shared by its agents here. A Buddy holds its own: the backend may
- *  refuse it a project its member lost while the project's agents still read it. */
+ *  refuse it a project its member lost while the project's agents still read it. So does the coordinator: only its read
+ *  carries the built-in PM schedule (2026-11-04 PM schedule design), which a worker's shared text must not get, nor lack. */
 const instructionsKey = (tabId: string, projectId: string, buddyId?: string) => JSON.stringify(buddyId ? [tabId, projectId, buddyId] : [tabId, projectId])
 /** What a session's skill comes from: its project's instructions at a revision, in its role (a save is acted on at the next
  *  roster, not the next CLI release); else a built-in mode, or a Custom role's version and name (a rename rewrites the front
  *  matter without a fetch), or nothing (a role gone or unusable). */
 function skillSetOf(target: HostAgent): string {
   const doc = rowInstructions(target)
-  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true])
+  // The built-in PM schedule's hash only when there is one, so an older backend's rows keep the version they had.
+  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true,
+    ...doc.builtInHash ? [doc.builtInHash] : []])
   if (!('role' in target)) return target.skillMode === 'default' ? 'default' : 'orchestration'
   const role = customRole(target)
   return role ? JSON.stringify([role.projectId, role.id, role.version, role.name]) : 'none'
@@ -344,12 +352,16 @@ const DELIVERY_RETRY_MAX_MS = 30_000
 const CLAIM_FAILURE_LOG_MS = 5 * 60_000
 /** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
  *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
- *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
- *  It matches the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read still runs a Lead's time checks. */
-const DELIVERY_FALLBACK_MS = 30_000
-/** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
- *  this process started after the last one), every list is read each second again. */
-const PUSH_LEASE_MS = 10 * 60_000
+ *  names the agent when work waits, and tells again of a delivery still queued after 10 s (backend superTabs/deliveryRepush.ts,
+ *  task #2800: GET deliveries was 84% empty, mostly these reads). An idle worker's list is then read only when told; a Lead's
+ *  still this often, matching the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read runs its time checks. */
+const LEAD_LIST_MS = 30_000
+/** The server renews this lease each minute through Redis (`__deliveries_lease`, backend lib/swarmDeliveryPushes.ts), and
+ *  says it pushes every 4 minutes. An idle worker's list is read only when told (task #2800), so a channel gone silent (Redis
+ *  away, a server rolled back) must end the lease within minutes, not the 10 it was: past this, every list is read each second
+ *  again, and the log says so once (review of #2977, Important 1). It allows one lost renewal. Against a server from before
+ *  the minute renewal, it lapses for 1.5 of every 4 minutes, reading each second then: the cost of an old server only. */
+const PUSH_LEASE_MS = 150_000
 /** Spec 2026-11-02-poll-cost Part 3: a delivery the core refused to write (a running turn, a draft, a dialog) was claimed again
  *  every second for as long as it was held, up to a day (prod 2026-11-02: 414 claim POSTs a minute). The claimed message is
  *  kept and written again on each tick; the claim is renewed only this often, well inside the backend's 10-minute claim quiet
@@ -493,6 +505,8 @@ export class SuperTabHost {
   private readonly stopNotices: () => void
   /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
   private pushUntil = 0
+  /** Whether the log has said the lease lapsed since it was last held: said once per lapse, not each second. */
+  private leaseSaid = true
   /** The agents' lists the server said have work since the last poll took them, by list key; `pushAll` reads every one. */
   private readonly pushes = new Set<string>()
   private pushAll = false
@@ -531,6 +545,7 @@ export class SuperTabHost {
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
+  private readonly configurationRetries = new CommandRetries(() => this.now())
   private nextConfigurationsAt = 0
   private replacementsRunning: Promise<void> | null = null
   private nextReplacementsAt = 0
@@ -563,7 +578,7 @@ export class SuperTabHost {
    *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
    *  revision moves, and dropped once no roster row names the project. */
   private readonly instructionTexts = new Map<string, { revision: number; hash: string | null; text: string
-    history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
+    builtInHash: string | null; builtIn: string | null; history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
@@ -747,8 +762,10 @@ export class SuperTabHost {
       return
     }
     if (notice.type === '__terminal_waiting') { void this.terminal.waiting(); return }
+    if (notice.type === '__deliveries_lease') { this.pushUntil = this.now() + PUSH_LEASE_MS; this.leaseSaid = false; return }
     if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
+    this.leaseSaid = false
     if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
     else this.pushAll = true
     void this.tick()
@@ -1044,17 +1061,22 @@ export class SuperTabHost {
   private async poll(): Promise<void> {
     this.passWait = null
     // Each second, unless the server pushes Swarm changes: then when told, and in full each minute (hostFeed.ts due).
-    const data = (await this.sources.feed.due()).roster
+    const read = await this.sources.feed.due(), data = read.roster
     if (this.stopped) return
     // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
-    const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
+    const lapsed = this.now() >= this.pushUntil
+    if (lapsed && !this.leaseSaid) {
+      this.leaseSaid = true
+      this.log('The server stopped saying it pushes deliveries (Redis away or an older server): reading every agent\'s list each second until it does again.')
+    }
+    const pushes = new Set(this.pushes), pushAll = this.pushAll || lapsed
     this.pushes.clear()
     this.pushAll = false
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
     // shared member. Membership outlives its task, terminal view and host process.
     // Retention only pauses cleanup when it fails; it must never hold up delivery.
     try {
-      retainContributions(this.core.dataDir, this.machineId, data)
+      retainContributions(this.core.dataDir, this.machineId, data, Date.now(), read.assignments)
       this.retentionError = null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1138,7 +1160,10 @@ export class SuperTabHost {
       const listKey = `list:${target.tabId}:${target.agent.id}`
       if (this.backedOff(listKey)) continue
       const last = this.lists.get(listKey)
-      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.now() - last.readAt >= (last.held ? HELD_LIST_MS : DELIVERY_FALLBACK_MS)
+      // A read that failed is due again once its backoff (checked above) ends, told or not: it was no list read.
+      const every = last?.held ? HELD_LIST_MS : row.lead === true ? LEAD_LIST_MS : null
+      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.deliveryRetries.has(listKey)
+        || (every !== null && this.now() - last.readAt >= every)
       if (!due) {
         // Unread this time, its deliveries are as the last read left them: none is taken as gone.
         for (const id of last.ids) seen.add(id)
@@ -1215,7 +1240,8 @@ export class SuperTabHost {
           }
         }
         // Taken after the pass's acknowledgements and writes: an acknowledged delivery and one the pane holds need no read next
-        // second, and the 30 s read below still catches a cancel whose push was lost.
+        // second. A held list (and a Lead's) is still read every 30 s, which catches a cancel whose push was lost; an idle one
+        // is read when told.
         const read = this.lists.get(listKey)
         if (listRead && read) {
           const refused = (item: Json) => identifier(item.id) && !!this.claims.get(item.id)?.refused
@@ -1609,12 +1635,12 @@ export class SuperTabHost {
    *  installs nothing and is tried again later, as a Custom role's text. */
   private async refreshInstructions(target: HostAgent, cwd: string, skill: SwarmSkill, doc: RowInstructions, current: () => boolean): Promise<void> {
     const buddy = skill.role === 'buddy', harnessId = target.agent.harnessId
-    const key = instructionsKey(target.tabId, doc.projectId, buddy ? target.agent.id : undefined)
+    const key = instructionsKey(target.tabId, doc.projectId, buddy || target.lead === true ? target.agent.id : undefined)
     const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
     let held = this.instructionTexts.get(key)
     // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
     // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
-    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
+    if (held?.revision !== doc.revision || held.hash !== doc.hash || held.builtInHash !== doc.builtInHash) {
       const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
       // A newer roster's refresh reads its own revision: this one installs and says nothing.
       if (!current()) { this.skillChecks.delete(harnessId); return }
@@ -1622,7 +1648,8 @@ export class SuperTabHost {
         throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
       }
       // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
-      held = { revision: doc.revision, hash: doc.hash, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
+      held = { revision: doc.revision, hash: doc.hash, text: answer.text, builtInHash: doc.builtInHash,
+        builtIn: typeof answer.builtIn === 'string' && answer.builtIn ? answer.builtIn : null, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
       this.instructionTexts.set(key, held)
     }
     // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
@@ -1644,7 +1671,7 @@ export class SuperTabHost {
     if (!current()) { this.skillChecks.delete(harnessId); return }
     if (unread && this.now() - held.failedSince! < HISTORY_WAIT_MS) { this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS); return }
     const { summary, savedAt } = held.history ?? { summary: null, savedAt: null }
-    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, summary, savedAt,
+    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, builtIn: held.builtIn, summary, savedAt,
       roleName: doc.roleName, coordinatorName: doc.coordinatorName, coordinator: target.lead === true })
     if (!refresh?.owed) return
     if (await this.tellSkill(target, refresh, current)) recordProjectSkillsNotice(cwd, skill, refresh)
@@ -1693,7 +1720,12 @@ export class SuperTabHost {
     } catch (error) {
       // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
       // the same operation id now names a different request. It was delivered once; record it rather than retry forever.
-      if (!(error instanceof SuperTabHostError) || error.code !== 'OPERATION_REUSED') throw error
+      if (error instanceof SuperTabHostError && error.code === 'OPERATION_REUSED') return true
+      // A notice the Swarm refuses for good is settled, not tried every minute: a Buddy session may post only in its own
+      // thread, so its top-level notice was refused once a minute for as long as it ran (Ken, 11-04: 125
+      // BUDDY_SESSION_THREAD refusals in 32 minutes, #2675).
+      if (!permanentRefusal(error)) throw error
+      this.log(`The skills notice for ${id} was refused (${(error as SuperTabHostError).code}); it is not sent again.`)
     }
     return true
   }
@@ -2149,15 +2181,25 @@ export class SuperTabHost {
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
+    const owed: string[] = []
     for (const row of rows) {
       if (this.stopped) return
+      let key: string | undefined
       try {
         const observation = configurationObservation(this.core, this.machineId, row)
-        if (observation) await backend(this.core, 'POST', observation.path, observation.body)
+        if (!observation) continue
+        key = observation.body.operationId
+        owed.push(key)
+        // A reading the Swarm refused for good goes no more; a new reading is a new operation, sent once (#2675).
+        if (!this.configurationRetries.due(key)) continue
+        await backend(this.core, 'POST', observation.path, observation.body)
+        this.configurationRetries.sent(key)
       } catch (error) {
+        if (key) this.configurationRetries.failed(key, error)
         this.log(error instanceof Error ? error.message : String(error))
       }
     }
+    this.configurationRetries.keep(owed)
   }
 
   private async recordReplacements(rows: unknown[]): Promise<void> {

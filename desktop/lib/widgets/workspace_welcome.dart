@@ -208,7 +208,8 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     if (widget.composerBuilder case final composer?) {
       return Material(
         key: const ValueKey('workspace-welcome'),
-        color: grid.AppPalette.windowBg,
+        // The active tab's color, so the tab joins the page it opens.
+        color: grid.AppPalette.swarmWelcome,
         child: composer(
           _withNewTabActions(_withClosedSuperTabs(_desktopSessions())),
         ),
@@ -417,10 +418,16 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
   }
 
+  /// A heading over a list, as a rail's: a label, not one more row.
+  TextStyle get _sectionLabel => grid.AppType.caption(
+    color: grid.AppPalette.textSecondary,
+    fontWeight: FontWeight.w600,
+  );
+
   Widget? _withClosedSuperTabs(Widget? recent) {
     final closed = _closedSuperTabsSection(
       DesktopChrome.control(color: DesktopChrome.muted),
-      DesktopChrome.metadata(),
+      _sectionLabel,
       DesktopChrome.muted,
     );
     if (closed == null) return recent;
@@ -447,7 +454,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: const EdgeInsets.only(bottom: 8, left: 10),
+          padding: const EdgeInsets.only(bottom: 8, left: 8),
           child: Semantics(
             header: true,
             child: Text('Recent Swarms', style: headerStyle),
@@ -462,8 +469,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   foregroundColor: color,
                   backgroundColor: Colors.transparent,
                   alignment: Alignment.centerLeft,
+                  // On the meta row's text edge above.
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
+                    horizontal: 8,
                     vertical: 8,
                   ),
                   shape: RoundedRectangleBorder(
@@ -503,10 +511,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: const EdgeInsets.only(bottom: 8, left: 10),
+          padding: const EdgeInsets.only(bottom: 8, left: 8),
           child: Semantics(
             header: true,
-            child: Text('Recent harnesses', style: DesktopChrome.metadata()),
+            child: Text('Recent harnesses', style: _sectionLabel),
           ),
         ),
         for (final (index, row) in sessions.rows.indexed)
@@ -519,8 +527,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   backgroundColor: Colors.transparent,
                   enabledMouseCursor: SystemMouseCursors.click,
                   alignment: Alignment.centerLeft,
+                  // On the meta row's text edge above.
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
+                    horizontal: 8,
                     vertical: 8,
                   ),
                   shape: RoundedRectangleBorder(

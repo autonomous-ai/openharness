@@ -303,7 +303,7 @@ void main() {
         for (final key in [
           'swarm-title-button',
           'swarm-new-message',
-          'swarm-away',
+          'swarm-need-line',
           'swarm-you-button',
           'swarm-home-search',
           'swarm-project-$tab-p-oh',

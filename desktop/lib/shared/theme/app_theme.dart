@@ -394,8 +394,12 @@ abstract final class AppPalette {
   /// (#E2E2DF) and 2.60 on Mist's (#DCE4EE). This holds 3.36 / 3.40 there and
   /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
   /// [textSecondary] so the three steps still read as three.
-  static Color get textFaint =>
-      AppTheme.pick(const Color(0xFF7A7973), const Color(0xFF6E6E68));
+  static Color get textFaint => textFaintFor(isDark: AppTheme.isDark);
+
+  /// [textFaint] for a theme being built, whose brightness need not be the
+  /// current one. Every field's placeholder is this color.
+  static Color textFaintFor({required bool isDark}) =>
+      isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973);
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -465,10 +469,13 @@ abstract final class AppPalette {
 /// [buildAppTheme] needs the values *before* the global brightness is the one
 /// being built for — see the note at its `scrollbarTheme`. The getters below read
 /// these same four, so there is one set of numbers rather than two that can drift.
-const Color _scrollThumbLight = Color(0xFF787878);
-const Color _scrollThumbDark = Color(0xFF686868);
-const Color _scrollThumbHoverLight = Color(0xFF5E5E5E);
-const Color _scrollThumbHoverDark = Color(0xFF8A8A8A);
+///
+/// Translucent, so one thumb takes the tone of whatever it runs over, a menu or
+/// a page, rather than sitting on it as a foreign gray.
+const Color _scrollThumbLight = Color(0x59000000);
+const Color _scrollThumbDark = Color(0x47FFFFFF);
+const Color _scrollThumbHoverLight = Color(0x80000000);
+const Color _scrollThumbHoverDark = Color(0x70FFFFFF);
 
 /// Surface tokens for the app's chrome — the sidebar's rows, the composer card,
 /// a recessed list column. Depth comes from a hairline rim and a soft shadow; the
@@ -766,7 +773,9 @@ abstract final class AppGlass {
 /// use [styleFor] and the consts; everywhere else use [style] and the getters.
 abstract final class AppMenu {
   static const Color fillLight = Color(0xFFFFFFFF);
-  static const Color fillDark = Color(0xFF262626);
+
+  /// One step above the page (#282828), so a panel lifts off what it opens over.
+  static const Color fillDark = Color(0xFF2E2E2E);
   static Color get fill => AppTheme.pick(fillLight, fillDark);
 
   /// The panel's rim — the same hairline [AppGlass.hair] resolves to, stated as
@@ -845,7 +854,7 @@ abstract final class AppCard {
 
   // card surface
   static Color get base =>
-      AppTheme.pick(const Color(0xFFFFFFFF), const Color(0xFF1E1E1E));
+      AppTheme.pick(const Color(0xFFFFFFFF), const Color(0xFF2E2E2E));
 
   // recessed inner box / list tile
   static Color get inset =>
@@ -1040,10 +1049,12 @@ ThemeData buildAppTheme({
       // another name, and §2 allows exactly one of those.
       trackColor: WidgetStateProperty.all(Colors.transparent),
       trackBorderColor: WidgetStateProperty.all(Colors.transparent),
-      // 6px, radius 3 — a thin capsule rather than the 8px slab, which at this
-      // contrast would read as a chrome element competing with the rows.
-      thickness: WidgetStateProperty.all(6),
-      radius: const Radius.circular(3),
+      // 3px, one clear of the edge: it runs inside the 6px gutter every menu row
+      // and list keeps, so it never covers a row's fill or text.
+      thickness: WidgetStateProperty.all(3),
+      crossAxisMargin: 1,
+      mainAxisMargin: 4,
+      radius: const Radius.circular(1.5),
       // The thumb is only meaningful while there is more list than pane, and
       // fading it in on scroll keeps a short list from wearing furniture.
       thumbVisibility: WidgetStateProperty.all(false),
@@ -1121,15 +1132,8 @@ ThemeData buildAppTheme({
     iconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 18),
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
-        side: WidgetStateProperty.resolveWith(
-          (states) => BorderSide(
-            width: highContrast ? 2 : 1.5,
-            color:
-                !states.contains(WidgetState.disabled) &&
-                    states.contains(WidgetState.focused)
-                ? (isDark ? AppDesktop.focusDark : scheme.primary)
-                : Colors.transparent,
-          ),
+        side: WidgetStatePropertyAll(
+          BorderSide(width: highContrast ? 2 : 1.5, color: Colors.transparent),
         ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
@@ -1171,11 +1175,7 @@ ThemeData buildAppTheme({
       // (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
-      // 75% in light: at 70% the hint sat at 2.999:1 on Mist's panel-toned
-      // fill; this is 3.29 (Mist) / 3.29 (Paper). Dark keeps 70% (3.99:1).
-      hintStyle: _fieldTextStyle(
-        scheme.onSurfaceVariant.withValues(alpha: isDark ? 0.7 : 0.75),
-      ),
+      hintStyle: _fieldTextStyle(AppPalette.textFaintFor(isDark: isDark)),
       // Material builds a field for a phone: its default padding, plus the 48px
       // touch target it gives a prefixIcon, rendered this 48 tall next to a 32px
       // button. That's what these constraints exist to hold back.
@@ -1204,10 +1204,8 @@ ThemeData buildAppTheme({
       ),
       border: _fieldBorder(scheme.outline),
       enabledBorder: _fieldBorder(scheme.outline),
-      focusedBorder: _fieldBorder(
-        isDark ? AppDesktop.focusDark : scheme.primary,
-        width: highContrast ? 2 : 1.5,
-      ),
+      // No colored focus line: a focused field has its caret.
+      focusedBorder: _fieldBorder(scheme.outline),
       errorBorder: _fieldBorder(scheme.error),
       focusedErrorBorder: _fieldBorder(
         scheme.error,
@@ -1381,12 +1379,15 @@ abstract final class AppControl {
 
   /// The minimum height keeps normal-size controls compact. Vertical padding
   /// lets enlarged system text grow the capsule without touching its rim.
+  ///
+  /// One side padding for every button kind: at 14 and 10 a primary, a capsule
+  /// and a dialog button of the same height each held their text differently.
   static const EdgeInsets padding = EdgeInsets.symmetric(
-    horizontal: 14,
+    horizontal: 12,
     vertical: 6,
   );
   static const EdgeInsets paddingSmall = EdgeInsets.symmetric(
-    horizontal: 10,
+    horizontal: 12,
     vertical: 6,
   );
 
@@ -1401,8 +1402,8 @@ abstract final class AppControl {
   ///
   /// Only for `.icon` constructors; a text-only button stays on [paddingSmall].
   static const EdgeInsets paddingSmallIcon = EdgeInsets.only(
-    left: 12,
-    right: 10,
+    left: 14,
+    right: 12,
   );
 
   // — the same numbers, grown with the user's UI size —
@@ -1438,44 +1439,19 @@ abstract final class AppDesktop {
   static const double dialogElevation = 16;
   static const Color shadow = Color(0x3D000000);
 
-  /// The soft shade a right-side pane (a thread, a task, Members) lays over
-  /// the chat along its left edge, as in Slack (Huy, 11-03): a strip
-  /// [paneEdgeShadeWidth] wide, darkest at the pane, fading to nothing over
-  /// the chat. A gradient rather than a blurred shadow: a straight edge needs
-  /// no blur, and a blur is paid on every repaint of the window. Darker in
-  /// dark mode, where a light shade would not show on charcoal.
-  static const double paneEdgeShadeWidth = 12;
-  static LinearGradient get paneEdgeShade {
-    final edge = AppTheme.pick(
-      const Color(0x17000000),
-      const Color(0x66000000),
-    );
-    return LinearGradient(
-      begin: Alignment.centerRight,
-      end: Alignment.centerLeft,
-      colors: [
-        edge,
-        edge.withValues(alpha: edge.a * 0.55),
-        edge.withValues(alpha: edge.a * 0.2),
-        edge.withValues(alpha: 0),
-      ],
-      stops: const [0, 0.3, 0.65, 1],
-    );
-  }
-
   static const double menuRadius = 16;
   static const double rowRadius = 10;
   static const double fieldRadius = 10;
   static const double paneRadius = 10;
   static const double tabRadius = 10;
   static const double tabShoulder = 8;
-  static const double tabTopInset = 6;
+  static const double tabTopInset = 0;
 
   /// A tab's ×: the pane close button's 28pt square target, centred on the
-  /// tab's body (the 40pt row less [tabTopInset]) with one 3pt gap above,
+  /// tab's body (the 40pt row less [tabTopInset]) with one 6pt gap above,
   /// below, and to the body's straight right side, [tabShoulder] in.
   static const double tabCloseSize = 28;
-  static const double tabCloseInset = tabShoulder + 3;
+  static const double tabCloseInset = tabShoulder + 6;
   static const double tabMinWidth = 128;
   static const double tabMaxWidth = 256;
   static const double tabBarTrailingInset = 12;
@@ -1483,6 +1459,15 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the
+  /// phone's corners (`SwarmComposer.cardRadius`), the text [composerTop]
+  /// below the top and [composerSide] in from each side, and [composerRowGap]
+  /// between the text and the row of actions under it.
+  static const double composerRadius = 24;
+  static const double composerTop = 12;
+  static const double composerSide = groupGap;
+  static const double composerRowGap = 12;
 
   /// Between one sidebar row and the next (design system: Geometry).
   static const double listRowGap = 2;
@@ -1514,6 +1499,16 @@ abstract final class AppDesktop {
   static const lightVeil = Color(0xF2FFFFFF);
   static Color veil(Brightness brightness) =>
       brightness == Brightness.dark ? darkVeil : lightVeil;
+
+  /// The chat's picture viewer: a see-through dark veil in both appearances,
+  /// as a picture reads best on dark (River, 11-04), and the ink and control
+  /// fills drawn on it. The one exception to [veil]
+  /// (desktop-design-system.md).
+  static const mediaVeil = Color(0xF2000000);
+  static const mediaInk = Color(0xFFFFFFFF);
+  static const mediaInkMuted = Color(0xB3FFFFFF);
+  static const mediaControl = Color(0x26FFFFFF);
+  static const mediaControlHover = Color(0x40FFFFFF);
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so
@@ -1727,16 +1722,9 @@ WidgetStateProperty<BorderSide> _controlRim(
   bool highContrast = false,
 }) => WidgetStateProperty.resolveWith((states) {
   final disabled = states.contains(WidgetState.disabled);
-  final focused = states.contains(WidgetState.focused) && !disabled;
   return BorderSide(
     width: highContrast ? 2 : 1.5,
-    color: focused
-        ? filled
-              ? scheme.onPrimary
-              : scheme.brightness == Brightness.dark
-              ? AppDesktop.focusDark
-              : scheme.primary
-        : filled
+    color: filled
         ? Colors.transparent
         : scheme.onSurface.withValues(
             alpha: disabled

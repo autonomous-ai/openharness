@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:math' as math;
+
+import 'package:clock/clock.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/widgets/empty_state.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
@@ -20,6 +22,8 @@ import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
+import '../shortcuts/app_keymap.dart' show KeymapRegion;
+import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
@@ -28,6 +32,8 @@ import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_lead.dart';
+import 'personal_lead_card.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
 import 'pull_request_facts.dart';
@@ -38,6 +44,9 @@ import 'composer_newline.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'activity.dart';
+import 'attachment_chips.dart' show superTabShowsInPlace;
+import 'attachment_image.dart';
+import 'reminders.dart';
 import 'activity_view.dart';
 import 'attention.dart';
 import 'controller.dart';
@@ -46,6 +55,9 @@ import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'instructions_panel.dart';
 import 'model.dart';
+import 'agent_details.dart';
+import 'identity.dart' show superTabMachineName;
+import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
@@ -71,9 +83,18 @@ import 'project_status.dart';
 import 'ship_row.dart';
 import 'switch_pm.dart';
 import 'pane_layout.dart';
+import 'composer_actions.dart';
 import 'view_room.dart';
+import 'voice_recorder.dart';
+import 'voice_row.dart';
+import 'voice_send.dart';
+import 'voice_take.dart';
 import 'swarm_type.dart';
 import 'visible_tick.dart';
+import 'buddy_rows.dart';
+import 'task_groups.dart';
+import 'tasks_view.dart';
+import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -99,6 +120,7 @@ class SuperTabView extends StatefulWidget {
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
+    this.voiceRecorder,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -123,6 +145,10 @@ class SuperTabView extends StatefulWidget {
   /// How a message link reaches the account's other Swarms. Without it, and
   /// without an [app], a link into another Swarm is not followed.
   final SwarmLinkSwarms? linkSwarms;
+
+  /// Makes the microphone the composers' mic records with
+  /// ([superTabVoiceRecorder]: macOS and the web); without it, no mic shows.
+  final SuperTabVoiceRecorder Function()? voiceRecorder;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -151,6 +177,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+
+  /// The project's Tasks view holds the main pane (task #2569), as Pull
+  /// requests does for a task.
+  bool _showTasks = false;
 
   bool _showNotifications = false;
 
@@ -275,6 +305,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    c.addListener(_holdVoiceAway);
     c.buddyChatOpener = _openBuddyChat;
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     _registerDial();
@@ -282,6 +313,49 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   bool _chatShown() => _chatIsVisible;
+
+  /// The composers' one voice message (voice_take.dart), the main chat's or
+  /// a thread's, for the chat it was recorded in; none without a recorder.
+  late final SuperTabVoiceTake? _voice = switch (widget.voiceRecorder) {
+    final recorder? => SuperTabVoiceTake(
+      recorder: recorder,
+      post: _postVoice,
+    )..addListener(_voiceChanged),
+    null => null,
+  };
+
+  Future<SuperTabVoicePosted> _postVoice(
+    String conversationId,
+    String? root,
+    SuperTabVoiceClip clip,
+  ) => c.sendVoice(
+    conversationId: conversationId,
+    root: root,
+    wav: clip.wav,
+    // The computer's own language; the server hears English in one it does
+    // not serve.
+    lang: WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+  );
+
+  void _voiceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// A take recording for a chat or thread no longer shown stops and is kept
+  /// for it, Send still there: never sent into the one opened instead.
+  void _holdVoiceAway() {
+    final voice = _voice;
+    if (voice == null ||
+        (voice.state != SuperTabVoiceState.recording &&
+            voice.state != SuperTabVoiceState.starting)) {
+      return;
+    }
+    final root = voice.root;
+    final away = root == null
+        ? c.selectedId != voice.conversationId
+        : c.openedThread?.root != root;
+    if (away) voice.hold();
+  }
 
   @override
   void didChangeDependencies() {
@@ -327,10 +401,14 @@ class _SuperTabViewState extends State<SuperTabView>
       _board = SuperTabProjectBoard(c);
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
+      oldWidget.controller.removeListener(_holdVoiceAway);
+      // A take belongs to the Swarm it was recorded in.
+      _voice?.discard();
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
       }
       c.addListener(_changed);
+      c.addListener(_holdVoiceAway);
       c.buddyChatOpener = _openBuddyChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
@@ -495,6 +573,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
+        _showTasks ||
         _showNotifications ||
         _showManage) {
       return false;
@@ -593,8 +672,41 @@ class _SuperTabViewState extends State<SuperTabView>
   Timer? _historyRetry;
   static const _historyRetryAfter = Duration(seconds: 5);
 
+  /// The band's [today] (the unread bar or the jump pill, or nothing), under
+  /// the row naming [id]'s unread tags in threads when it has any (#2814).
+  Widget? _withThreadTags(String id, Widget? today) {
+    final tags = SuperTabAttention.of(c).threadTagsIn(id);
+    if (tags.isEmpty) return today;
+    final bar = SuperTabThreadTagBar(
+      count: tags.length,
+      onOpen: () => _openThreadTag(tags.first),
+    );
+    if (today == null) return bar;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [bar, today],
+    );
+  }
+
+  /// Opens [tag]'s thread at its reply, lit; opening it reads it, which
+  /// clears the tag from the row and the red number.
+  void _openThreadTag(SuperTabMention tag) {
+    final root = tag.threadId;
+    if (root == null) return;
+    c.openThread(root, at: tag.messageId);
+  }
+
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
+  /// The bar or the pill clicked: the line, with typing back in the composer,
+  /// as after Jump to latest. A click outside the composer takes its focus,
+  /// and a later Esc then reached nothing in the chat.
+  void _jumpToUnreadLine(String id) {
+    _focus.requestFocus();
+    _revealUnreadLine(id);
+  }
+
   void _revealUnreadLine(String id) {
     final messageId = _unread.lineAt(id);
     if (messageId == null) return;
@@ -626,6 +738,16 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Shows the jump pill while the reader is away from a line not yet seen,
   /// and Jump to latest while the list is away from its newest message.
   void _checkUnreadLine() {
+    // A jump outside a frame (Jump to latest, a key, a test) moves the
+    // position before the list lays out again: the line is measured where it
+    // was. Measured again once laid out; a list whose extent then changes said
+    // so by itself, one whose extent stays (the composer's two rows, #2662)
+    // did not, and the bar never showed.
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.idle) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _checkUnreadLine();
+      });
+    }
     final scroll = _scroll[c.selectedId];
     // A jump still landing passes lines it does not stop at: the pill stays
     // as it was until the line is measured where the jump landed.
@@ -638,19 +760,28 @@ class _SuperTabViewState extends State<SuperTabView>
       final view = scroll.position.viewportDimension;
       away = top == null || top < 0 || top > view;
       if (!away) _unread.saw(c.selectedId);
-      // A line not laid out is told by its place in the list; once seen, no
-      // pill needs its direction.
+      // A line not laid out is told by its place in the list, seen or not:
+      // the bar shows whenever it is above.
       below = top != null
           ? top > view
-          : !_unread.seen(c.selectedId) &&
-                _below(c.selectedId, lineAt, scroll.position);
+          : _below(c.selectedId, lineAt, scroll.position);
     }
     final id = c.selectedId;
     final awayFromEnd =
         scroll != null &&
         scroll.hasClients &&
         scroll.position.extentAfter >= 40;
-    if ((away == _unread.away &&
+    // At the end with nothing newer to load, the reader has read everything
+    // a bar would lead back to.
+    final readThrough =
+        scroll != null &&
+        scroll.hasClients &&
+        !awayFromEnd &&
+        !landing &&
+        !c.hasNewer(id) &&
+        _unread.readThrough(id);
+    if ((!readThrough &&
+            away == _unread.away &&
             below == _unread.below &&
             awayFromEnd == _awayFromEnd.contains(id)) ||
         !mounted) {
@@ -672,6 +803,20 @@ class _SuperTabViewState extends State<SuperTabView>
         _awayFromEnd.remove(id);
       }
     });
+  }
+
+  /// Whether [id] shows the bar: its line above the reader, and its message
+  /// still held, since a jump can reach only a held row (the newest page read
+  /// in place of the held copy, or 500 newer, let it go).
+  bool _showsBar(String id) => _unread.offersBar(id) && _newFromLine(id) > 0;
+
+  /// The bar's count: [id]'s messages from others in the main stream, from
+  /// its New messages line on; none while the line's message is not held.
+  int _newFromLine(String id) {
+    final shown = _shownMessages(id);
+    final at = shown.indexWhere((m) => m.id == _unread.lineAt(id));
+    if (at < 0) return 0;
+    return shown.skip(at).where((m) => m.inMainStream && !c.isOwn(m)).length;
   }
 
   /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
@@ -722,16 +867,13 @@ class _SuperTabViewState extends State<SuperTabView>
     return true;
   }
 
-  /// Slack's Option+Shift+Down and Up: the next or previous chat with
-  /// something unread, in the sidebar's order, skipping muted ones. At either
-  /// end nothing moves.
+  /// Slack's Option+Shift+Down and Up (`swarm.next_unread`, `.previous_unread`):
+  /// the next or previous chat with something unread, in the sidebar's order,
+  /// skipping muted ones. At either end nothing moves.
   bool _jumpUnread(int step) {
     final snapshot = c.snapshot;
     if (snapshot == null || c.accessRevoked) return false;
-    final order = superTabSidebarOrder(
-      c,
-      needsHuman: (group) => _needsHuman(group).length,
-    );
+    final order = superTabSidebarOrder(c);
     var at = order.indexOf(c.selectedId);
     if (at < 0) at = step > 0 ? -1 : order.length;
     for (var i = at + step; i >= 0 && i < order.length; i += step) {
@@ -740,7 +882,7 @@ class _SuperTabViewState extends State<SuperTabView>
       widget.onCloseTerminal?.call();
       setState(() {
         _showNotifications = _showManage = false;
-        _showPullRequests = false;
+        _showPullRequests = _showTasks = false;
       });
       unawaited(c.select(group.id));
       return true;
@@ -761,18 +903,40 @@ class _SuperTabViewState extends State<SuperTabView>
       _markAllRead();
       return KeyEventResult.handled;
     }
-    if (keys.isAltPressed && keys.isShiftPressed) {
-      final step = switch (event.logicalKey) {
-        LogicalKeyboardKey.arrowDown => 1,
-        LogicalKeyboardKey.arrowUp => -1,
-        _ => 0,
-      };
-      if (step != 0) {
-        _jumpUnread(step);
-        return KeyEventResult.handled;
-      }
+    // Esc dismisses the bar from anywhere in the chat, as from its box.
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        !keys.isShiftPressed &&
+        !keys.isAltPressed &&
+        _showsBar(c.selectedId) &&
+        _readAll()) {
+      return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
+  }
+
+  /// The region the view sits in (the quick switcher's) with the unread chat
+  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
+  /// Move pane only while the chat has focus.
+  Widget _unreadKeys(Widget child) {
+    final region = KeymapRegion.of(context);
+    return KeymapRegion(
+      contextKind: KeymapContext.swarmChat,
+      actions: {
+        ...?region?.actions,
+        'swarm.next_unread': () => _jumpUnread(1),
+        'swarm.previous_unread': () => _jumpUnread(-1),
+      },
+      composing: region?.composing,
+      keeps: region?.keeps,
+      child: child,
+    );
+  }
+
+  /// The bar's Mark as read: Esc's read, with typing back in the composer as
+  /// after a click on the bar.
+  void _markReadFromBar() {
+    _focus.requestFocus();
+    _readAll();
   }
 
   bool _readAll() {
@@ -784,8 +948,20 @@ class _SuperTabViewState extends State<SuperTabView>
       _unread.clear(id);
       _newAfter.remove(id);
     });
-    c.markRead(id);
+    c.markRead(id, explicit: true);
     return true;
+  }
+
+  /// More ▸ Mark unread: the New messages line goes above [message] at once,
+  /// and back where it was if the server did not keep it.
+  Future<void> _markUnread(SuperTabMessage message) async {
+    final id = message.conversationId;
+    final kept = c.markUnread(id, message);
+    if (c.selectedId == id) setState(() => _unread.placeAt(id, message.id));
+    if (await kept || !mounted) return;
+    if (c.selectedId == id) setState(() => _unread.clear(id));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text("Couldn't mark unread")));
   }
 
   void _jumpToLatest() {
@@ -814,6 +990,8 @@ class _SuperTabViewState extends State<SuperTabView>
     _board.dispose();
     _facts.dispose();
     c.removeListener(_changed);
+    c.removeListener(_holdVoiceAway);
+    _voice?.dispose();
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
     }
@@ -870,6 +1048,13 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
+    // In the person's Personal Swarm a project chat with no Lead starts one
+    // on their computer; the message waits for it (task #2633).
+    final app = widget.app;
+    if (result != null && app != null) {
+      final lead = PersonalLeadStarter.of(app);
+      if (lead.wants(c, id)) unawaited(lead.start(c, id));
+    }
     if (newSession && result != null) _chatSessions.remove(id);
     // Refused for New session, its text is back as the chat's draft: it shows
     // in the box, ready to send without it, unless another chat is shown or
@@ -937,52 +1122,57 @@ class _SuperTabViewState extends State<SuperTabView>
     final chosen = projects
         .where((p) => p.id == _chosenSessionProject())
         .firstOrNull;
-    return PopupMenuButton<String>(
-      key: const ValueKey('super-chat-session-project'),
-      enabled: writable,
-      tooltip: 'Where this session works',
-      initialValue: chosen?.id ?? '',
-      onSelected: c.chooseSessionProject,
-      itemBuilder: (_) => [
-        PopupMenuItem(
-          key: const ValueKey('super-chat-session-any'),
-          value: '',
-          child: Tooltip(
-            message: 'Reads every project you read. Sends no work to a PM.',
-            child: Text(
-              'All projects · ask anything',
-              style: DesktopChrome.control(),
-            ),
+    return AppDropdown(
+      width: 300,
+      children: [
+        Tooltip(
+          message: 'Reads every project you read. Sends no work to a PM.',
+          child: AppMenuItem(
+            key: const ValueKey('super-chat-session-any'),
+            label: 'All projects · ask anything',
+            selected: chosen == null,
+            onPressed: () => c.chooseSessionProject(''),
           ),
         ),
         for (final project in projects)
-          PopupMenuItem(
-            key: ValueKey('super-chat-session-in-${project.id}'),
-            value: project.id,
-            child: Tooltip(
-              message:
-                  'Reads only ${project.name}, and can hand work to its PM.',
-              child: Text(
-                '${project.name} · ask and hand off work',
-                style: DesktopChrome.control(),
-              ),
+          Tooltip(
+            message: 'Reads only ${project.name}, and can hand work to its PM.',
+            child: AppMenuItem(
+              key: ValueKey('super-chat-session-in-${project.id}'),
+              label: '${project.name} · ask and hand off work',
+              selected: chosen?.id == project.id,
+              onPressed: () => c.chooseSessionProject(project.id),
             ),
           ),
       ],
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: grid.AppDesktop.badgeInset,
-          vertical: grid.AppDesktop.listRowGap,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              chosen?.name ?? 'All projects',
-              style: DesktopChrome.metadata(),
+      builder: (context, menu, _) => Tooltip(
+        message: 'Where this session works',
+        child: InkWell(
+          key: const ValueKey('super-chat-session-project'),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          onTap: writable
+              ? () => menu.isOpen ? menu.close() : menu.open()
+              : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.badgeInset,
+              vertical: grid.AppDesktop.listRowGap,
             ),
-            Icon(AppIcons.chevronDown, size: 12, color: DesktopChrome.muted),
-          ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  chosen?.name ?? 'All projects',
+                  style: DesktopChrome.metadata(),
+                ),
+                Icon(
+                  AppIcons.chevronDown,
+                  size: 12,
+                  color: DesktopChrome.muted,
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1634,7 +1824,11 @@ class _SuperTabViewState extends State<SuperTabView>
     onNotifications: _openActivity,
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = _showManage = false);
+      setState(() => _showNotifications = _showManage = _showTasks = false);
+      // Choosing a conversation leaves the Manage pane: its Devices page left
+      // the controller's flag set, so the sidebar's Manage row stayed lit while
+      // a conversation was open.
+      c.leaveDevices();
       c.select(id);
       _closeSidebar();
     },
@@ -1646,9 +1840,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// none yet: the sidebar's way in and ⇧⌘K's
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
+    c.leaveDevices();
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
@@ -1665,7 +1860,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _showNotifications = true;
       _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     if (request.kind != 'mention') return;
     final mention = SuperTabMentions.of(c).waiting
@@ -1680,10 +1875,11 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openActivity({SuperTabController? from}) {
     if (!mounted || (from != null && from != c)) return;
     _closeSidebar();
+    c.leaveDevices();
     setState(() {
       _showNotifications = true;
       _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
   }
@@ -1711,7 +1907,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showManage = true;
-      _showNotifications = _showPullRequests = false;
+      _showNotifications = _showPullRequests = _showTasks = false;
       if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
         _manageTab = SuperTabManageTab.machines;
       }
@@ -1746,7 +1942,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
     });
     c.select(conversationId);
     return true;
@@ -1818,13 +2014,13 @@ class _SuperTabViewState extends State<SuperTabView>
     // A thread reply opens its thread; one shown only there has no row in the
     // chat to scroll to.
     if (message.threadReply) {
-      c.openThread(message.thread!);
+      c.openThread(message.thread!, at: message.id);
       if (!message.inMainStream) return;
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _showNotifications = _showManage = false;
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
       _back = null;
       _target = shownBy;
       _openedAtMessage = id;
@@ -1908,8 +2104,43 @@ class _SuperTabViewState extends State<SuperTabView>
   /// is held is looked in first, then what arrived after it, then older pages,
   /// until the message is among them; one that is not found says so, and the
   /// list stays.
-  Future<void> _openMention(SuperTabMention mention) async {
-    final id = mention.conversationId;
+  Future<void> _openMention(SuperTabMention mention) =>
+      _openAtMessage(mention.conversationId, mention.messageId, answer: true);
+
+  /// More ▸ Remind me: the message comes back in Activity at [when].
+  Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
+    final at = when.from(clock.now());
+    final kept = await SuperTabReminders.of(c).set(message, at);
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          kept
+              ? 'Reminder set for ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(at))}'
+              : "Couldn't set the reminder",
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// A due reminder opened from Activity: its message, which clears it.
+  Future<void> _openReminder(SuperTabReminder reminder) async {
+    unawaited(SuperTabReminders.of(c).open(reminder));
+    await _openAtMessage(
+      reminder.conversationId,
+      reminder.messageId,
+      answer: false,
+    );
+  }
+
+  /// Opens conversation [id] at message [messageId], from Activity; [answer]
+  /// replies to it (a tag).
+  Future<void> _openAtMessage(
+    String id,
+    String messageId, {
+    required bool answer,
+  }) async {
     final request = ++_jumpRequest;
     // A closed or quiet conversation is asked for by id, as a message link does: the tag of a task with no worker is in one,
     // and a row that did nothing left the reader not knowing why it was there.
@@ -1921,7 +2152,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
       return;
     }
-    final message = await _findMessage(id, mention.messageId);
+    final message = await _findMessage(id, messageId);
     if (!mounted || request != _jumpRequest) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -1941,11 +2172,12 @@ class _SuperTabViewState extends State<SuperTabView>
     // A tag in a thread opens the thread; one in a thread reply shown only
     // there is not in the chat to scroll to.
     if (message.thread case final root?) {
-      c.openThread(root);
+      c.openThread(root, at: message.inMainStream ? null : message.id);
       if (!message.inMainStream) return;
     }
     setState(() {
-      if (c.canWrite &&
+      if (answer &&
+          c.canWrite &&
           c.selected?.archived == false &&
           message.thread == null) {
         _replies[id] = message;
@@ -2190,9 +2422,65 @@ class _SuperTabViewState extends State<SuperTabView>
           .toList() ??
       const [];
 
+  /// What the card over [message]'s name or avatar shows, worked out as it
+  /// opens (Huy, 11-04): a person's status and zone; an agent's engine and
+  /// model, machine and task, as its details dialog reads them.
+  SuperTabIdentityFacts _identityFacts(
+    SuperTabMessage message,
+    SuperTabAgent? agent,
+  ) {
+    final name = c.snapshot?.authorName(message) ?? message.authorName;
+    if (agent == null) {
+      if (message.fromAgent) return SuperTabAgentFacts(name);
+      final person = _people[message.authorId];
+      return SuperTabPersonFacts(
+        person?.shownName ?? name,
+        status: person?.statusAt(clock.now()),
+        timeZone: person?.timeZone,
+      );
+    }
+    final info = SuperTabAgentInfo(c, widget.app, agent);
+    final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
+    final device = superTabMap(
+      superTabMap(c.snapshot?.pool(place)?['observation'])['resources'],
+    )['deviceType'];
+    final group = info.taskGroup;
+    return SuperTabAgentFacts(
+      agent.displayName ?? name,
+      engine: agent.engine,
+      model: info.model,
+      machine: superTabMachineName(
+        info.machine ?? widget.machineName(agent.machineId),
+      ),
+      deviceType: device is String ? device : null,
+      task: group == null ? null : _taskLine(info, group),
+      onOpenTask: group == null ? null : () => _openGroup(group.id),
+    );
+  }
+
+  /// What the agent does with [group], its number and title in place of the
+  /// quoted title: "Working on #2605 Chat: a card…".
+  static String _taskLine(SuperTabAgentInfo info, SuperTabConversation group) {
+    final named = switch (group.number) {
+      final number? => '#$number ${group.title}',
+      null => group.title,
+    };
+    final status = info.status;
+    final quoted = '"${group.title}"';
+    return status != null && status.contains(quoted)
+        ? status.replaceFirst(quoted, named)
+        : named;
+  }
+
+  void _openGroup(String id) {
+    setState(() => _showPullRequests = false);
+    c.select(id);
+    c.selectTerminal(id, null);
+  }
+
   void _openAgent(SuperTabAgent agent) {
     setState(() {
-      _showPullRequests = false;
+      _showPullRequests = _showTasks = false;
       _rosterOpen = false;
     });
     widget.onOpenTerminal(agent);
@@ -2242,19 +2530,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
               : 'Choose a project'
-        : c.snapshot!.isProjectLead(group.id)
-        ? '${project!.isPrivate ? '' : '# '}${project.name}'
-        // An older Buddy chat in a project says which, as the menu that opens
-        // it does; the one Buddy chat is the sidebar's # buddy.
-        : c.isEarlierBuddyChat(group)
-        ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
-        : _buddyName(group) == null
-        ? null
-        : group.isSwarmBuddyChat
-        ? 'Buddy'
-        : c.buddy(group.projectId) == null && group.buddyName == null
-        ? 'Your Buddy'
-        : '${_buddyName(group)} · Your Buddy';
+        : _groupName(group);
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
     if (group != null &&
         c.snapshot!.isProjectLead(group.id) &&
@@ -2287,6 +2563,106 @@ class _SuperTabViewState extends State<SuperTabView>
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: style,
+    );
+  }
+
+  /// [group]'s name as the sidebar names it: "# openharness", a Buddy chat's;
+  /// null for a workgroup, named by [SuperTabWorkgroupName].
+  String? _groupName(SuperTabConversation group) =>
+      c.snapshot!.isProjectLead(group.id)
+      ? switch (c.snapshot!.projectFor(group.id)!) {
+          final project => '${project.isPrivate ? '' : '# '}${project.name}',
+        }
+      // An older Buddy chat in a project says which, as the menu that opens
+      // it does; the one Buddy chat is the sidebar's # buddy.
+      : c.isEarlierBuddyChat(group)
+      ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
+      : _buddyName(group) == null
+      ? null
+      : group.isSwarmBuddyChat
+      ? 'Buddy'
+      : c.buddy(group.projectId) == null && group.buddyName == null
+      ? 'Your Buddy'
+      : '${_buddyName(group)} · Your Buddy';
+
+  /// The pictures [messages] show in place, oldest first, each with its
+  /// sender as its row shows them and where it was posted, for the viewer.
+  List<SuperTabImageItem> _images(List<SuperTabMessage> messages) {
+    final group = c.selected;
+    final place = group == null
+        ? null
+        : _groupName(group) ?? SuperTabWorkgroupName.plain(group);
+    return [
+      for (final message in messages)
+        for (final file in message.attachments)
+          if (SuperTabFileRef(
+                file,
+                conversationId: message.conversationId,
+                messageId: message.id,
+                fresh: widget.controller.readFileLink,
+              )
+              case final ref when superTabShowsInPlace(ref))
+            SuperTabImageItem(
+              ref: ref,
+              sender: _shownAuthor(c, message),
+              avatar: superTabMessageAvatar(
+                message,
+                author: _shownAuthor(c, message),
+                agent: message.fromAgent
+                    ? c.snapshot?.agent(message.authorId)
+                    : null,
+                person: message.fromAgent ? null : _people[message.authorId],
+                size: _viewerAvatar,
+              ),
+              postedAt: message.createdAt,
+              place: place,
+              onShowInChat: () =>
+                  unawaited(_openMessage(message.conversationId, message.id)),
+            ),
+    ];
+  }
+
+  static const _viewerAvatar = 32.0;
+
+  /// The pictures open in the viewer, in the conversation (and thread) they
+  /// were opened in; another one closes it.
+  ({
+    String? conversationId,
+    String? thread,
+    List<SuperTabImageItem> images,
+    int index,
+  })?
+  _viewing;
+
+  void _openImages(
+    List<SuperTabImageItem> images,
+    int index, {
+    String? thread,
+  }) => setState(
+    () => _viewing = (
+      conversationId: c.selectedId,
+      thread: thread,
+      images: images,
+      index: index,
+    ),
+  );
+
+  void _closeImages() => setState(() => _viewing = null);
+
+  /// The open viewer, while its conversation and thread still are.
+  Widget? _imageViewer() {
+    final viewing = _viewing;
+    if (viewing == null) return null;
+    if (viewing.conversationId != c.selectedId ||
+        (viewing.thread != null && c.openedThread?.root != viewing.thread)) {
+      _viewing = null;
+      return null;
+    }
+    return SuperTabImageViewer(
+      key: ObjectKey(viewing),
+      images: viewing.images,
+      index: viewing.index,
+      onClose: _closeImages,
     );
   }
 
@@ -2327,101 +2703,88 @@ class _SuperTabViewState extends State<SuperTabView>
     return ((room - 275) / line).floor().clamp(2, 5);
   }
 
-  /// The composer's field and its controls: a row on a wide window. A phone
-  /// gives the field the width and the controls a row below (Huy, 2026-11-02:
-  /// the field had about 40% of the row): [options] and [attach] at the left,
-  /// wrapping if they must, and [send] at the right.
+  /// The composer's field and its controls, as on the phone (Huy and Scholes,
+  /// 11-04): the field on top with the width, and one row under it with
+  /// [attach] (+), [tag] (@ Tag) and [options] (New session) at the left, and
+  /// [trailing] (the mic) and [send] at the right. Send keeps the box's
+  /// bottom-right corner however long the message (Scholes, 11-03).
   Widget _composerLayout({
     required double room,
     required Widget field,
-    required List<Widget> options,
     required Widget attach,
+    required Widget tag,
+    required List<Widget> options,
+    required List<Widget> trailing,
     required Widget send,
+    Widget? voice,
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
-    // up): the actions take the row's end again. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows.
-    if (_phone && room >= _phoneComposerTwoRowsFrom) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(
-              right: grid.AppDesktop.controlGap,
-              bottom: grid.AppDesktop.controlGap,
-            ),
-            child: field,
+    // up): the actions take the row's end. A narrow phone with so little
+    // height gets the squeezed row, which beats a composer that overflows; it
+    // has no room for @ Tag there, and an @ typed still opens the list.
+    final target = _phone ? kFingerTarget : grid.AppControl.height;
+    final row = composerRowInsets(target: target);
+    if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
+      return Padding(
+        padding: EdgeInsets.only(
+          left: grid.AppDesktop.composerSide,
+          right: row.right,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: grid.AppControl.heightFieldScaled,
           ),
-          Row(
-            key: const ValueKey('super-message-composer-actions'),
-            crossAxisAlignment: CrossAxisAlignment.end,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [...options, attach],
-                ),
-              ),
+              Expanded(child: field),
+              attach,
+              ...options,
+              ...trailing,
               send,
             ],
           ),
-        ],
-      );
-    }
-    // A phone with too little height keeps its squeezed row as it was.
-    if (_phone) {
-      return ConstrainedBox(
-        constraints: BoxConstraints(
-          minHeight: grid.AppControl.heightFieldScaled,
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(child: field),
-            ...options,
-            attach,
-            send,
-          ],
         ),
       );
     }
-    // The controls stay at the bottom-right as the message grows, level with
-    // its last line (Scholes, 11-03: centred, they drifted up the box). The
-    // field is padded to the row's height, so one line sits where it did,
-    // centred on the controls, and a longer message's last line keeps that
-    // place.
-    final row = grid.AppControl.heightFieldScaled;
-    // The line of the style the field draws with: a padding measured on
-    // another one left the chips a pixel off the line once the composer took
-    // Slack's 15 px on 22 px lines (#2732).
-    final style = SwarmType.composer(context);
-    final line =
-        MediaQuery.textScalerOf(context).scale(style.fontSize!) * style.height!;
-    final inset = math.max(0.0, (row - line) / 2);
-    return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: row),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: inset),
-              child: field,
-            ),
-          ),
-          // As tall as the row at least, the controls centred in it as before;
-          // taller with larger text.
-          ConstrainedBox(
-            constraints: BoxConstraints(minHeight: row),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [...options, attach, send],
-            ),
-          ),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: composerFieldInsets(target: target),
+          child: field,
+        ),
+        Padding(
+          padding: row,
+          // A voice message under way takes the row's place (#2665).
+          child:
+              voice ??
+              Row(
+                key: const ValueKey('super-message-composer-actions'),
+                children: [
+                  attach,
+                  tag,
+                  Expanded(
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: options,
+                    ),
+                  ),
+                  ...trailing,
+                  send,
+                ],
+              ),
+        ),
+      ],
     );
+  }
+
+  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
+  void _promptTag() {
+    _composer.value = superTabTagPrompt(_composer.value);
+    _composerEdited(_composer.text);
+    _focus.requestFocus();
   }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
@@ -2468,19 +2831,148 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// Whether [group]'s empty chat offers to start its Lead: a Personal
+  /// project with none, read by someone who may write (task #2815).
+  bool _offersLead(SuperTabConversation group) => switch (widget.app) {
+    final app? => c.canWrite && PersonalLeadStarter.of(app).wants(c, group.id),
+    null => false,
+  };
+
+  /// A Personal project's empty chat with no Lead: the card that starts one
+  /// (Huy 11-04, task #2815), and under it what the chat says without it: its
+  /// panes when it holds any, else its plain line.
+  Widget _leadWaiting(SuperTabConversation group) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: grid.AppDesktop.formWidth),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            PersonalLeadStartCard(
+              controller: c,
+              conversationId: group.id,
+              app: widget.app!,
+            ),
+            if (_personalPaneCount(group) > 0)
+              _panesWaiting(group)
+            else
+              Padding(
+                padding: const EdgeInsets.only(
+                  top: grid.AppDesktop.panelPadding,
+                ),
+                child: Text(
+                  'Discuss the plan with '
+                  '${c.snapshot!.coordinatorNameOf(group.projectId)}.',
+                  textAlign: TextAlign.center,
+                  style: DesktopChrome.text(color: DesktopChrome.muted),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+
   /// Opens the group's terminals beside the chat; null when it has none this
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
       _terminalCount(group) > 0 && c.canWrite
       ? () {
-          setState(() => _showPullRequests = false);
+          setState(() => _showPullRequests = _showTasks = false);
           widget.onOpenGroupTerminals?.call();
         }
       : null;
 
   void _openPullRequests() {
     widget.onCloseTerminal?.call();
-    setState(() => _showPullRequests = true);
+    setState(() {
+      _showPullRequests = true;
+      _showTasks = false;
+    });
+  }
+
+  /// Opens [group]'s project's Tasks view; from a task's chat, its project's
+  /// chat is selected under it.
+  void _openTasks(SuperTabConversation group) {
+    final project = c.snapshot?.projectById(group.projectId);
+    if (project == null) return;
+    widget.onCloseTerminal?.call();
+    if (c.selectedId != project.leadConversationId) {
+      unawaited(c.select(project.leadConversationId));
+    }
+    setState(() {
+      _showTasks = true;
+      _showPullRequests = false;
+    });
+  }
+
+  /// A task's chat, opened from its card: read first when it is one of the
+  /// shipped tasks only the Tasks view holds.
+  Future<void> _openTask(String id) async {
+    if (!await c.loadGroup(id) || !mounted) return;
+    _openConversation(id);
+  }
+
+  /// How many of [project]'s tasks need the reader: the Tasks icon's count.
+  int _tasksNeedingYou(SuperTabProject project) => superTabTasksNeedingYouIn(
+    superTabProjectBoard(
+      c,
+      project,
+      now: clock.now(),
+      needsHuman: (g) => _needsHuman(g).length,
+    ),
+  );
+
+  /// The open project's Tasks view, while it holds the pane.
+  Widget _tasksPage() {
+    final project = _showTasks
+        ? c.snapshot?.projectById(c.selected?.projectId ?? '')
+        : null;
+    if (project == null) return const SizedBox.shrink();
+    return SuperTabTasksView(
+      key: ValueKey('super-tasks-${project.id}'),
+      controller: c,
+      project: project,
+      storage: widget.app?.localStore,
+      needsHuman: (g) => _needsHuman(g).length,
+      onOpenTask: (id) => unawaited(_openTask(id)),
+      onOpenProposal: (id) =>
+          _openThreadFromList(project.leadConversationId, id),
+    );
+  }
+
+  /// The Tasks icon of a project's header and of its tasks' (Dee, task
+  /// #2569): selected while the board shows, and in a task opened from it;
+  /// its red count is the tasks that need the reader, none at 0.
+  Widget _tasksButton(SuperTabConversation group, {required bool task}) {
+    final project = c.snapshot!.projectById(group.projectId)!;
+    final selected = task || (_showTasks && !_terminalsVisible);
+    final count = _tasksNeedingYou(project);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        fingerTarget(
+          enabled: _phone,
+          AppIconButton(
+            key: const ValueKey('super-tasks'),
+            icon: AppIcons.squareKanban,
+            size: AppIcons.inlineSize,
+            tooltip: 'Tasks',
+            selected: selected,
+            color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
+            onPressed: () => _openTasks(group),
+          ),
+        ),
+        if (count > 0)
+          SuperTabCountBadge(
+            count,
+            key: const ValueKey('super-tasks-badge'),
+            tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+          ),
+      ],
+    );
   }
 
   /// Members takes the right side from an open thread, as in Slack.
@@ -2541,6 +3033,13 @@ class _SuperTabViewState extends State<SuperTabView>
     // The one Buddy has one chat, as a project does; it has no pull requests.
     final oneBuddy = group?.isSwarmBuddyChat == true;
     final restsOnChat = isProject || oneBuddy;
+    // A project's task: its header leads back to the board it came from.
+    final isTask =
+        group != null &&
+        !isProject &&
+        !oneBuddy &&
+        !group.isBuddyChat &&
+        c.snapshot?.projectById(group.projectId) != null;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -2606,7 +3105,10 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
-            if (!restsOnChat || _terminalsVisible || _showPullRequests)
+            if (!restsOnChat ||
+                _terminalsVisible ||
+                _showPullRequests ||
+                _showTasks)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -2614,12 +3116,13 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: AppIcons.messageSquare,
                   size: AppIcons.inlineSize,
                   tooltip: 'Chat',
-                  selected: !_terminalsVisible && !_showPullRequests,
-                  color: !_terminalsVisible && !_showPullRequests
+                  selected:
+                      !_terminalsVisible && !_showPullRequests && !_showTasks,
+                  color: !_terminalsVisible && !_showPullRequests && !_showTasks
                       ? DesktopChrome.foreground
                       : DesktopChrome.muted,
                   onPressed: () {
-                    setState(() => _showPullRequests = false);
+                    setState(() => _showPullRequests = _showTasks = false);
                     widget.onCloseTerminal?.call();
                     _readVisibleTailAfterFrame();
                     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2644,6 +3147,10 @@ class _SuperTabViewState extends State<SuperTabView>
                   onPressed: _openTerminals(group),
                 ),
               ),
+            ],
+            if (isProject || isTask) ...[
+              const SizedBox(width: 4),
+              _tasksButton(group, task: isTask),
             ],
             if (!isProject) ...[
               if (!_menuNamesViews && !oneBuddy) ...[
@@ -2688,63 +3195,55 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  static const _menuStyle = MenuStyle(
-    minimumSize: WidgetStatePropertyAll(Size(220, 0)),
-    padding: WidgetStatePropertyAll(EdgeInsets.all(grid.AppDesktop.menuInset)),
-  );
+  /// These menus' width.
+  static const double _menuWidth = 220;
 
-  ButtonStyle _menuRowStyle({bool finger = false}) => ButtonStyle(
-    minimumSize: WidgetStatePropertyAll(Size(208, finger ? kFingerTarget : 32)),
-    side: WidgetStatePropertyAll(BorderSide.none),
-    padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-    alignment: Alignment.centerLeft,
-    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  );
-
-  /// A menu's row, a finger's height on a phone.
+  /// A menu's row: the app's one menu row ([AppMenuItem]), a finger's height
+  /// on a phone.
   Widget _menuItem(
     String label,
     VoidCallback? action, {
+    Key? key,
     bool finger = false,
     Widget? trailing,
-  }) => MenuItemButton(
-    style: _menuRowStyle(finger: finger),
-    trailingIcon: trailing,
-    onPressed: action,
-    child: Text(label),
+    bool selected = false,
+  }) => fingerTarget(
+    enabled: finger,
+    AppMenuItem(
+      key: key,
+      label: label,
+      trailing: trailing,
+      selected: selected,
+      onPressed: action,
+    ),
   );
 
   /// The reader's own setting for a chat, kept on every device (Slack's channel
-  /// notifications); a viewer has one too. A row like its menu's others, as
-  /// tall as their [finger] rows (Huy, #2342: the chat menu's had a border).
-  Widget _notifyMenu(SuperTabConversation group, {required bool finger}) =>
-      SubmenuButton(
-        key: const ValueKey('super-notify-menu'),
-        style: _menuRowStyle(finger: finger),
-        submenuIcon: const WidgetStatePropertyAll(
-          Icon(AppIcons.chevronRight, size: 14),
-        ),
-        menuChildren: [
-          for (final (level, label) in const [
-            (SuperTabNotify.all, 'All new messages'),
-            (SuperTabNotify.mentions, 'Mentions only'),
-            (SuperTabNotify.muted, 'Muted'),
-          ])
-            MenuItemButton(
-              key: ValueKey('super-notify-${level.name}'),
-              style: _menuRowStyle(finger: finger),
-              leadingIcon: SizedBox(
-                width: 16,
-                child: c.notifyOf(group.id) == level
-                    ? const Icon(AppIcons.check, size: 14)
-                    : null,
-              ),
-              onPressed: () => unawaited(_setNotify(group.id, level)),
-              child: Text(label),
-            ),
-        ],
-        child: const Text('Notifications'),
-      );
+  /// notifications); a viewer has one too. The app's one submenu row, so it
+  /// opens beside the panel exactly as the Windows ☰'s sections do.
+  Widget _notifyMenu(SuperTabConversation group) => fingerTarget(
+    enabled: _phone,
+    AppSubmenuItem(
+      itemKey: const ValueKey('super-notify-menu'),
+      label: 'Notifications',
+      trailing: const Icon(AppIcons.chevronRight, size: 14),
+      width: _menuWidth,
+      menuChildren: [
+        for (final (level, label) in const [
+          (SuperTabNotify.all, 'All new messages'),
+          (SuperTabNotify.mentions, 'Mentions only'),
+          (SuperTabNotify.muted, 'Muted'),
+        ])
+          _menuItem(
+            label,
+            () => unawaited(_setNotify(group.id, level)),
+            key: ValueKey('super-notify-${level.name}'),
+            finger: _phone,
+            selected: c.notifyOf(group.id) == level,
+          ),
+      ],
+    ),
+  );
 
   /// Until all of the project's closed groups are read, it may have archived
   /// ones: the list reads them when it opens.
@@ -2768,9 +3267,11 @@ class _SuperTabViewState extends State<SuperTabView>
     final owner = project.ownerId == c.accountId;
     Widget item(String label, VoidCallback? action, {Widget? trailing}) =>
         _menuItem(label, action, finger: _phone, trailing: trailing);
-    return MenuAnchor(
-      style: _menuStyle,
-      menuChildren: [
+    return AppDropdown(
+      width: _menuWidth,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: [
         item(
           'Status',
           project.status == null
@@ -2787,8 +3288,8 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Instructions', () => _groupAction('instructions', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group, finger: _phone),
-        const Divider(height: 9),
+        _notifyMenu(group),
+        const AppMenuDivider(),
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -2858,16 +3359,18 @@ class _SuperTabViewState extends State<SuperTabView>
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     Widget item(String label, VoidCallback? action) =>
         _menuItem(label, action, finger: views);
-    return MenuAnchor(
-      style: _menuStyle,
-      menuChildren: [
+    return AppDropdown(
+      width: _menuWidth,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: [
         if (views) ...[
           item(
             'Group terminals (${_terminalCount(group)})',
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),
-          const Divider(height: 9),
+          const AppMenuDivider(),
         ],
         if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any
@@ -2915,7 +3418,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        _notifyMenu(group, finger: views),
+        _notifyMenu(group),
         if (_mayHaveArchived(group.projectId))
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
@@ -2955,6 +3458,49 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabReactionEmoji emoji,
   ) async {
     final failure = await c.react(message, emoji);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
+  /// More ▸ Edit message, saved: a refusal says why, and the row keeps the
+  /// text it had.
+  Future<void> _editMessage(SuperTabMessage message, String text) async {
+    final failure = await c.editMessage(message, text);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
+  /// More ▸ Delete message: asks first, and only Delete sends it.
+  Future<void> _deleteMessage(SuperTabMessage message) async {
+    final confirmed = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        conversationId: message.conversationId,
+        child: AlertDialog(
+          title: const Text('Delete message?'),
+          content: Text("This can't be undone.", style: DesktopChrome.text()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('super-message-delete-confirm'),
+              style: FilledButton.styleFrom(
+                backgroundColor: grid.AppPalette.dangerFill,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final failure = await c.deleteMessage(message);
     if (failure == null || !mounted) return;
     ScaffoldMessenger.maybeOf(context)
         ?.showSnackBar(SnackBar(content: Text(failure)));
@@ -3164,13 +3710,14 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       references: _references,
       onOpenGroup: (id) {
-        setState(() => _showPullRequests = false);
+        setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
         c.selectTerminal(id, null);
       },
       agent: agent,
       person: message.fromAgent ? null : _people[message.authorId],
       member: _member,
+      identity: grouped ? null : () => _identityFacts(message, agent),
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
@@ -3185,6 +3732,18 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       linkTarget: _linkTarget,
       onOpenLink: _openLink,
+      // A reply only in its thread is read with its thread's own mark.
+      onMarkUnread: inThread || !message.inMainStream
+          ? null
+          : () => unawaited(_markUnread(message)),
+      onRemind: (when) => unawaited(_remind(message, when)),
+      // Only the author's own plain message (the server decides).
+      onEdit: c.canChange(message)
+          ? (text) => _editMessage(message, text)
+          : null,
+      onDelete: c.canChange(message)
+          ? () => unawaited(_deleteMessage(message))
+          : null,
       // A message with a thread is answered there; one from before threads
       // keeps the inline reply.
       onReply: !writable || inThread
@@ -3200,6 +3759,9 @@ class _SuperTabViewState extends State<SuperTabView>
       threadTagged:
           thread != null &&
           SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
+      threadFresh: thread == null
+          ? 0
+          : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null
@@ -3277,17 +3839,22 @@ class _SuperTabViewState extends State<SuperTabView>
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
     final byId = {for (final m in rows) m.id: m};
-    return SuperTabThreadPanel(
-      controller: c,
-      root: open.root,
-      row: (message, grouped) =>
-          _message(message, grouped, byId, inThread: true),
-      // The thread panel groups its own rows; one on its way keeps its name.
-      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
-      sessionActivity: (session) =>
-          superTabSessionActivity(c, widget.app, session),
-      machineName: widget.machineName,
-      onScroll: (list) => _threadScroll = list,
+    return SuperTabImageGallery(
+      images: () => _images(rows),
+      thread: open.root,
+      child: SuperTabThreadPanel(
+        controller: c,
+        root: open.root,
+        row: (message, grouped) =>
+            _message(message, grouped, byId, inThread: true),
+        // The thread panel groups its own rows; one on its way keeps its name.
+        outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
+        sessionActivity: (session) =>
+            superTabSessionActivity(c, widget.app, session),
+        machineName: widget.machineName,
+        onScroll: (list) => _threadScroll = list,
+        voice: _voice,
+      ),
     );
   }
 
@@ -3482,9 +4049,14 @@ class _SuperTabViewState extends State<SuperTabView>
         Expanded(child: Divider(color: DesktopChrome.rim)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            MaterialLocalizations.of(context).formatMediumDate(time.toLocal()),
-            style: DesktopChrome.metadata(),
+          // The day pill takes its place once it reaches the pill.
+          child: SuperTabDayLabel(
+            day: time,
+            child: Text(
+              MaterialLocalizations.of(context)
+                  .formatMediumDate(time.toLocal()),
+              style: DesktopChrome.metadata(),
+            ),
           ),
         ),
         Expanded(child: Divider(color: DesktopChrome.rim)),
@@ -3697,7 +4269,18 @@ class _SuperTabViewState extends State<SuperTabView>
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Row(
               children: [
-                Expanded(child: Text(c.error!, style: DesktopChrome.control())),
+                // A Swarm that was read and now cannot be (a backend or this
+                // computer's Harness restarting) keeps what it shows and says
+                // so quietly; it reads again by itself (task #2647).
+                Expanded(
+                  child: c.backendUnreachable && c.snapshot != null
+                      ? Text(
+                          'Reconnecting…',
+                          key: const ValueKey('super-reconnecting'),
+                          style: DesktopChrome.metadata(),
+                        )
+                      : Text(c.error!, style: DesktopChrome.control()),
+                ),
                 if (!c.accessRevoked && !c.updateRequired)
                   TextButton(
                     onPressed: () => unawaited(c.refresh()),
@@ -3737,6 +4320,12 @@ class _SuperTabViewState extends State<SuperTabView>
                     outgoing.isEmpty &&
                     !c.accessRevoked &&
                     group != null &&
+                    _offersLead(group)
+              ? _leadWaiting(group)
+              : messages.isEmpty &&
+                    outgoing.isEmpty &&
+                    !c.accessRevoked &&
+                    group != null &&
                     _personalPaneCount(group) > 0
               ? _panesWaiting(group)
               : messages.isEmpty && outgoing.isEmpty
@@ -3768,23 +4357,33 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _unread.offersJump(c.selectedId)
-                          ? Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                grid.AppDesktop.panelPadding,
-                                grid.AppDesktop.controlGap,
-                                grid.AppDesktop.panelPadding,
-                                0,
-                              ),
-                              child: Center(
-                                child: SuperTabJumpToUnread(
-                                  down: _unread.below,
-                                  onPressed: () =>
-                                      _revealUnreadLine(c.selectedId),
+                      child: _withThreadTags(
+                        c.selectedId,
+                        _showsBar(c.selectedId)
+                            ? SuperTabUnreadBar(
+                                count: _newFromLine(c.selectedId),
+                                more: c.hasNewer(c.selectedId),
+                                onPressed: () =>
+                                    _jumpToUnreadLine(c.selectedId),
+                                onMarkRead: _markReadFromBar,
+                              )
+                            : _unread.offersDown(c.selectedId)
+                            ? Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  grid.AppDesktop.panelPadding,
+                                  grid.AppDesktop.controlGap,
+                                  grid.AppDesktop.panelPadding,
+                                  0,
                                 ),
-                              ),
-                            )
-                          : null,
+                                child: Center(
+                                  child: SuperTabJumpToUnread(
+                                    onPressed: () =>
+                                        _jumpToUnreadLine(c.selectedId),
+                                  ),
+                                ),
+                              )
+                            : null,
+                      ),
                     ),
                     Expanded(
                       child: Stack(
@@ -4008,7 +4607,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 Expanded(
                   child: SuperTabReplyPreview(
                     author: 'Replying to ${_authorName(reply)}',
-                    text: reply.text,
+                    text: superTabQuoteText(reply),
                   ),
                 ),
                 fingerTarget(
@@ -4119,7 +4718,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       24,
                       12,
                       24,
-                      pastedFolders().isEmpty ? 16 : 6,
+                      pastedFolders().isEmpty ? ProjectSidebar.footGap : 6,
                     ),
               child: _phone
                   ? Column(
@@ -4192,7 +4791,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 decoration: BoxDecoration(
                   color: DesktopChrome.field,
                   borderRadius: BorderRadius.circular(
-                    DesktopChrome.controlRadius,
+                    grid.AppDesktop.composerRadius,
                   ),
                   border: Border.all(color: DesktopChrome.rim),
                 ),
@@ -4207,123 +4806,158 @@ class _SuperTabViewState extends State<SuperTabView>
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
                     onTap: writable ? _focus.requestFocus : null,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SuperTabComposerChips(controller: c, files: _files),
-                          ViewRoom(
-                            builder: (context, room) => _composerLayout(
-                              room: room,
-                              field: NewHarnessPasteTarget(
-                                key: _composerFieldKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SuperTabComposerChips(controller: c, files: _files),
+                        ViewRoom(
+                          builder: (context, room) => _composerLayout(
+                            room: room,
+                            field: NewHarnessPasteTarget(
+                              key: _composerFieldKey,
+                              attachments: _files,
+                              enabled: writable && !busy,
+                              focusNode: _focus,
+                              child: TextField(
+                                key: const ValueKey('super-message-composer'),
+                                controller: _composer,
+                                focusNode: _focus,
+                                autofocus: !_terminalsVisible,
+                                enabled: writable,
+                                minLines: 1,
+                                // A phone's keyboard takes the height, so
+                                // its height says nothing about the room
+                                // a draft should have (Huy, 2026-11-02).
+                                maxLines: _phone
+                                    ? _phoneComposerLines(room)
+                                    : MediaQuery.sizeOf(context).height < 600
+                                    ? 3
+                                    : 8,
+                                maxLength: kComposerMaxLength,
+                                inputFormatters: [_tagBackspace],
+                                keyboardType: TextInputType.multiline,
+                                textAlignVertical: TextAlignVertical.center,
+                                style: SwarmType.composer(context),
+                                decoration: InputDecoration(
+                                  // The row centers the line. Inheriting a decorated
+                                  // field's minimum height leaves slack below its text.
+                                  isCollapsed: true,
+                                  constraints: const BoxConstraints(),
+                                  visualDensity: VisualDensity.standard,
+                                  hintStyle: SwarmType.composer(
+                                    context,
+                                    color: DesktopChrome.hint,
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
+                                  hintMaxLines: _phone ? 1 : null,
+                                  hintText: _readsFirst && c.snapshot == null
+                                      ? null
+                                      : group == null
+                                      ? 'Loading conversation…'
+                                      : c.canWrite
+                                      ? _messageHint(group)
+                                      : 'Read-only conversation',
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  disabledBorder: InputBorder.none,
+                                  filled: false,
+                                  counterText: '',
+                                ),
+                                onChanged: _composerEdited,
+                              ),
+                            ),
+                            attach: fingerTarget(
+                              enabled: _phone,
+                              NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                focusNode: _focus,
-                                child: TextField(
-                                  key: const ValueKey('super-message-composer'),
-                                  controller: _composer,
-                                  focusNode: _focus,
-                                  autofocus: !_terminalsVisible,
-                                  enabled: writable,
-                                  minLines: 1,
-                                  // A phone's keyboard takes the height, so
-                                  // its height says nothing about the room
-                                  // a draft should have (Huy, 2026-11-02).
-                                  maxLines: _phone
-                                      ? _phoneComposerLines(room)
-                                      : MediaQuery.sizeOf(context).height < 600
-                                      ? 3
-                                      : 8,
-                                  maxLength: kComposerMaxLength,
-                                  inputFormatters: [_tagBackspace],
-                                  keyboardType: TextInputType.multiline,
-                                  textAlignVertical: TextAlignVertical.center,
-                                  style: SwarmType.composer(context),
-                                  decoration: InputDecoration(
-                                    // The row centers the line. Inheriting a decorated
-                                    // field's minimum height leaves slack below its text.
-                                    isCollapsed: true,
-                                    constraints: const BoxConstraints(),
-                                    visualDensity: VisualDensity.standard,
-                                    hintStyle: SwarmType.composer(
-                                      context,
-                                      color: DesktopChrome.muted,
-                                    ),
-                                    contentPadding: EdgeInsets.zero,
-                                    hintMaxLines: _phone ? 1 : null,
-                                    hintText: _readsFirst && c.snapshot == null
-                                        ? null
-                                        : group == null
-                                        ? 'Loading conversation…'
-                                        : c.canWrite
-                                        ? _messageHint(group)
-                                        : 'Read-only conversation',
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    disabledBorder: InputBorder.none,
-                                    filled: false,
-                                    counterText: '',
-                                  ),
-                                  onChanged: _composerEdited,
-                                ),
+                                icon: AppIcons.plus,
                               ),
-                              options: [
-                                if (c.offersChatSessions)
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionChoice(writable),
-                                  ),
-                                if (c.offersChatSessions &&
-                                    c.selected?.isSwarmBuddyChat == true &&
-                                    _chatSessions.contains(c.selectedId))
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionProject(writable),
-                                  ),
-                              ],
-                              attach: fingerTarget(
-                                enabled: _phone,
-                                NewHarnessAttachButton(
-                                  attachments: _files,
-                                  enabled: writable && !busy,
-                                ),
+                            ),
+                            tag: fingerTarget(
+                              enabled: _phone,
+                              SuperTabComposerTagButton(
+                                key: const ValueKey('super-composer-tag'),
+                                onPressed: writable ? _promptTag : null,
                               ),
-                              send: ListenableBuilder(
-                                listenable: Listenable.merge([
-                                  _composer,
-                                  _files,
-                                ]),
-                                builder: (context, _) => fingerTarget(
+                            ),
+                            options: [
+                              if (c.offersChatSessions)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
+                                  ),
+                                  child: _chatSessionChoice(writable),
+                                ),
+                              if (c.offersChatSessions &&
+                                  c.selected?.isSwarmBuddyChat == true &&
+                                  _chatSessions.contains(c.selectedId))
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
+                                  ),
+                                  child: _chatSessionProject(writable),
+                                ),
+                            ],
+                            trailing: [
+                              if (_voice case final voice?)
+                                fingerTarget(
                                   enabled: _phone,
-                                  AppIconButton(
-                                    icon: AppIcons.arrowUp,
-                                    tooltip: 'Send message',
-                                    color: DesktopChrome.accent,
-                                    onPressed:
-                                        writable &&
-                                            !c.uploading &&
-                                            ((!busy && !c.hasPendingAction) ||
-                                                (_files.isEmpty &&
-                                                    c.canQueueText)) &&
-                                            (_composer.text.trim().isNotEmpty ||
-                                                !_files.isEmpty)
-                                        ? () => unawaited(_send())
+                                  SuperTabComposerMic(
+                                    key: const ValueKey('super-composer-mic'),
+                                    onPressed: writable
+                                        ? () => voice.start(
+                                            conversationId: chatId,
+                                          )
                                         : null,
                                   ),
+                                ),
+                            ],
+                            voice: switch (_voice) {
+                              final voice? when voice.activeIn(chatId, null) =>
+                                SuperTabVoiceRow(
+                                  key: const ValueKey('super-voice-row'),
+                                  take: voice,
+                                ),
+                              _ => null,
+                            },
+                            send: ListenableBuilder(
+                              listenable: Listenable.merge([_composer, _files]),
+                              builder: (context, _) => fingerTarget(
+                                enabled: _phone,
+                                AppIconButton(
+                                  icon: AppIcons.arrowUp,
+                                  tooltip: 'Send message',
+                                  color: DesktopChrome.accent,
+                                  onPressed:
+                                      writable &&
+                                          !c.uploading &&
+                                          ((!busy && !c.hasPendingAction) ||
+                                              (_files.isEmpty &&
+                                                  c.canQueueText)) &&
+                                          (_composer.text.trim().isNotEmpty ||
+                                              !_files.isEmpty)
+                                      ? () => unawaited(_send())
+                                      : null,
                                 ),
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                        if (_voice case final voice?)
+                          SuperTabVoiceNotice(
+                            take: voice,
+                            conversationId: chatId,
+                            padding: const EdgeInsets.fromLTRB(
+                              grid.AppDesktop.composerSide,
+                              0,
+                              grid.AppDesktop.composerSide,
+                              grid.AppDesktop.controlGap,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -4403,7 +5037,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _syncThreadPane();
     return SuperTabFiles(
       fresh: widget.controller.readFileLink,
-      child: _swarm(context),
+      child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
     );
   }
 
@@ -4418,9 +5052,26 @@ class _SuperTabViewState extends State<SuperTabView>
       final wide =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final thread = _threadPanel();
+      final viewer = _imageViewer();
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
       final threadDrawer = thread != null && !wide;
+      // A terminal on screen keeps its chat beside it, in the right pane, as
+      // a thread sits; a thread or Members takes that side, and a narrow
+      // window shows one at a time (Huy, 11-04, #2792).
+      final chatBeside =
+          wide &&
+          thread == null &&
+          !_rosterOpen &&
+          terminal != null &&
+          _terminalsVisible &&
+          !_manageVisible &&
+          !_notificationsVisible &&
+          c.snapshot?.projects.isEmpty != true;
+      final chat = SuperTabImageGallery(
+        images: () => _images(_shownMessages(c.selectedId)),
+        child: _conversation(narrow),
+      );
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
@@ -4439,7 +5090,7 @@ class _SuperTabViewState extends State<SuperTabView>
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
           setState(() {
-            _showPullRequests = false;
+            _showPullRequests = _showTasks = false;
             _rosterOpen = false;
             _showManage = _showNotifications = false;
           });
@@ -4451,14 +5102,14 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onAnswer: (id) {
           setState(() {
-            _showPullRequests = false;
+            _showPullRequests = _showTasks = false;
             _rosterOpen = false;
           });
           unawaited(c.select(id));
         },
         onClose: _closeRoster,
       );
-      return Focus(
+      final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
         onKeyEvent: _attentionKey,
@@ -4471,10 +5122,19 @@ class _SuperTabViewState extends State<SuperTabView>
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
-                right: !wide ? null : thread ?? (_rosterOpen ? roster : null),
-                rightDefault: thread == null
+                right: !wide
+                    ? null
+                    : thread ??
+                          (_rosterOpen
+                              ? roster
+                              : chatBeside
+                              ? chat
+                              : null),
+                rightDefault: thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
+                // Over the chat, beside an open thread, as in Slack.
+                over: wide ? viewer : null,
                 center: Column(
                   children: [
                     _header(c.selected, narrow),
@@ -4503,9 +5163,11 @@ class _SuperTabViewState extends State<SuperTabView>
                             ? 1
                             : _showPullRequests
                             ? 2
+                            : _showTasks
+                            ? 5
                             : 0,
                         children: [
-                          _conversation(narrow),
+                          chatBeside ? const SizedBox.shrink() : chat,
                           terminal ?? const SizedBox.shrink(),
                           _showPullRequests
                               ? SuperTabPullRequests(
@@ -4521,6 +5183,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                       unawaited(_openMention(mention)),
                                   onOpenThread: _openThreadFromList,
                                   onOpenConversation: _openConversation,
+                                  onOpenReminder: (reminder) =>
+                                      unawaited(_openReminder(reminder)),
                                 )
                               : const SizedBox.shrink(),
                           _manageVisible
@@ -4540,6 +5204,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                   facts: _facts,
                                 )
                               : const SizedBox.shrink(),
+                          _tasksPage(),
                         ],
                       ),
                     ),
@@ -4566,7 +5231,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               constraints.maxWidth,
                               max: SuperTabPaneLayout.threadWidth,
                             ),
-                            child: SuperTabRightPane(child: thread),
+                            child: thread,
                           ),
                         ),
                       ),
@@ -4599,7 +5264,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             width: SuperTabPaneLayout.drawerWidth(
                               constraints.maxWidth,
                             ),
-                            child: SuperTabRightPane(child: roster),
+                            child: roster,
                           ),
                         ),
                       ),
@@ -4631,7 +5296,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: DesktopChrome.surface,
+                              color: grid.AppPalette.swarmWelcome,
                               elevation: 8,
                               child: _sidebar(),
                             ),
@@ -4642,9 +5307,13 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
+            // Without a thread beside the chat, over the whole window.
+            if (!wide && viewer != null)
+              Positioned.fill(child: BlockSemantics(child: viewer)),
           ],
         ),
       );
+      return _unreadKeys(view);
     },
   );
 }

@@ -33,6 +33,9 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
+  /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
+   *  installation listed here refuses a token that asks for more, as GitHub does; one not listed answers 404 and mints any. */
+  const grants = new Map<number, Record<string, 'read' | 'write'>>()
   const calls: FakeCall[] = []
   const issued = new Set<string>()
   const revoked: string[] = []
@@ -77,9 +80,19 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const login = decodeURIComponent(match[1]!)
       return control.botId && login.endsWith('[bot]') ? json(200, { login, id: control.botId }) : json(404, { message: 'Not Found' })
     }
+    if (method === 'GET' && (match = /^\/app\/installations\/(\d+)$/.exec(url.pathname))) {
+      if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
+      const granted = grants.get(Number(match[1]))
+      return granted ? json(200, { id: Number(match[1]), permissions: granted }) : json(404, { message: 'Not Found' })
+    }
     if (method === 'POST' && (match = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname))) {
       if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
       if (control.tokenStatus !== 201) return json(control.tokenStatus, { message: control.tokenMessage })
+      const granted = grants.get(Number(match[1]))
+      const asked = ((body as { permissions?: Record<string, string> }).permissions) ?? {}
+      if (granted && Object.entries(asked).some(([name, level]) => !granted[name] || (level === 'write' && granted[name] !== 'write'))) {
+        return json(422, { message: 'The permissions requested are not granted to this installation.' })
+      }
       const token = `ghs_fixture_${++minted}`
       issued.add(token)
       permissions.set(token, (body as { permissions: unknown }).permissions)
@@ -146,7 +159,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */

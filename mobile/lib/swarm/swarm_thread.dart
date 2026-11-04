@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
+
 import 'model.dart';
 import 'swarm_buddy_sessions.dart';
 import 'swarm_conversation.dart';
@@ -10,6 +12,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_uploads.dart';
+import 'swarm_voice_send.dart';
 
 /// Where a thread opens: on one of its messages, or at its first unread
 /// reply — the newest when all are read. Activity, a link and a tag open a
@@ -182,7 +185,9 @@ class SwarmThread extends ChangeNotifier
     if (!identical(_madeFrom?.$1, _rows) ||
         !identical(_madeFrom?.$2, chatRows)) {
       final byId = {
-        for (final m in _rows) m.id: m,
+        // A reply the chat found deleted goes from the thread too.
+        for (final m in _rows)
+          if (!chat.gone(m.id)) m.id: m,
         for (final m in chatRows)
           if (m.thread == root) m.id: m,
       };
@@ -615,7 +620,27 @@ class SwarmThread extends ChangeNotifier
     return done;
   }
 
-  /// The thread's newest page again, over the rows read of it.
+  /// Puts [text] in place of [message]'s ([SwarmConversation.editMessage]),
+  /// then reads the thread's newest page again so it shows here at once.
+  /// Answers why it was refused; null once done or when nothing changed.
+  Future<String?> editMessage(SuperTabMessage message, String text) async {
+    final refused = await chat.editMessage(message, text);
+    if (refused == null && !_disposed && _read) await _reread();
+    return refused;
+  }
+
+  /// Deletes [message] ([SwarmConversation.deleteMessage]), then reads the
+  /// thread's newest page again: a reply leaves it. Answers why it was
+  /// refused; null once done.
+  Future<String?> deleteMessage(SuperTabMessage message) async {
+    final refused = await chat.deleteMessage(message);
+    if (refused == null && !_disposed && _read) await _reread();
+    return refused;
+  }
+
+  /// The thread's newest page again, over the rows read of it: a reply it
+  /// covers and no longer has was deleted, and goes. The root stays; deleted,
+  /// it is the line its replies hang from.
   Future<void> _reread() async {
     final epoch = _epoch;
     try {
@@ -632,9 +657,21 @@ class SwarmThread extends ChangeNotifier
         return;
       }
       final rows = {for (final m in _rows) m.id: m};
+      final read = <SuperTabMessage>[];
       for (final row in answer['messages'] as List) {
         final m = SuperTabMessage.fromJson(superTabMap(row));
-        if (m.conversationId == chat.id && m.thread == root) rows[m.id] = m;
+        if (m.conversationId == chat.id && m.thread == root) read.add(m);
+      }
+      final covers = answer['next'] == null
+          ? 0
+          : read.isEmpty
+          ? null
+          : read.map((m) => m.sequence).reduce((a, b) => a < b ? a : b);
+      if (covers != null) {
+        rows.removeWhere((id, m) => id != root && m.sequence >= covers);
+      }
+      for (final m in read) {
+        rows[m.id] = m;
       }
       _rows = List.unmodifiable(
         rows.values.toList()..sort(superTabMessageOrder),
@@ -649,6 +686,64 @@ class SwarmThread extends ChangeNotifier
     } catch (_) {
       // The counts read before stay; the next open reads them again.
     }
+  }
+
+  /// Sends [take] as a voice message in the thread, alone, as the chat's
+  /// [SwarmConversation.sendVoice] does: what is typed stays in the box.
+  Future<SwarmVoicePosted> sendVoice(VoiceTake take, String lang) async {
+    if (uploading || _disposed || !canPost || chat.conversation == null) {
+      return (sent: false, notice: null);
+    }
+    final epoch = _epoch;
+    bool current() => !_disposed && epoch == _epoch;
+    final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    error = null;
+    final up = await _uploads.upload([clip]);
+    if (!current()) return (sent: false, notice: null);
+    if (up.failure case final failure?) {
+      if (failure is! SuperTabFailure || !_refusedChat(failure)) {
+        error = swarmUploadError(failure, 1);
+        _tell();
+      }
+      return (sent: false, notice: null);
+    }
+    final ids = up.ids;
+    if (ids == null) return (sent: false, notice: null);
+    final read = await swarmReadVoice(
+      reader.request,
+      tabId: reader.tabId,
+      attachmentId: ids.single,
+      lang: lang,
+    );
+    final voice = read.voice;
+    if (!current() || voice == null) return (sent: false, notice: read.refused);
+    final operationId = superTabOperationId();
+    final post = SwarmPost(
+      body: {
+        'operationId': operationId,
+        'command': {
+          'type': 'message.send',
+          'conversationId': chat.id,
+          'text': '',
+          'replyTo': root,
+          'recipientIds': const <String>[],
+          'attachmentIds': ids,
+          if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
+        },
+      },
+      messageId: superTabMessageId(
+        tabId: reader.tabId,
+        accountId: reader.accountId,
+        operationId: operationId,
+      ),
+      files: [clip],
+      voice: voice,
+    );
+    final outcome = await _outbox.add(post);
+    _answered(post, outcome, current);
+    final sent =
+        outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
+    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
   }
 
   /// Sends the draft to the thread's root, to the agents it names and tagging

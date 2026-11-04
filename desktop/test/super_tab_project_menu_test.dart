@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/project_status.dart';
 
@@ -35,7 +36,7 @@ ConversationServer swarm({bool status = true, String owner = 'owner'}) {
 }
 
 Finder get menu => find.byTooltip('Project options');
-Finder item(String label) => find.widgetWithText(MenuItemButton, label);
+Finder item(String label) => find.widgetWithText(AppMenuItem, label);
 
 Future<void> open(WidgetTester tester) async {
   await tester.tap(menu);
@@ -84,9 +85,7 @@ void main() {
             .getTopLeft(
               find.ancestor(
                 of: find.text(label),
-                matching: find.byWidgetPredicate(
-                  (w) => w is MenuItemButton || w is SubmenuButton,
-                ),
+                matching: find.byWidgetPredicate((w) => w is AppMenuItem),
               ),
             )
             .dy,
@@ -155,7 +154,7 @@ void main() {
   ) async {
     await showView(tester, swarm(status: false));
     await open(tester);
-    expect(tester.widget<MenuItemButton>(item('Status')).onPressed, isNull);
+    expect(tester.widget<AppMenuItem>(item('Status')).onPressed, isNull);
   });
 
   testWidgets('Pull requests opens the view, and the chat button comes back', (

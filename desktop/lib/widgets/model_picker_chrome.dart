@@ -21,7 +21,7 @@ import 'resting_section.dart' show kUnavailableOpacity;
 
 /// The panel's own width. Narrower than a row list, because every row here is two lines and the
 /// eye reads a column better than a stripe.
-const double kModelPickerWidth = 376;
+const double kModelPickerWidth = 340;
 
 /// The avatar's side, and the gutter its column occupies on every row.
 const double kModelAvatarSize = 34;
@@ -98,11 +98,11 @@ class ModelPickerSearch extends StatelessWidget {
           cursorColor: DesktopChrome.accent,
           decoration: InputDecoration(
             hintText: 'Search models or machines',
-            hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
+            hintStyle: DesktopChrome.control(color: DesktopChrome.hint),
             prefixIcon: Icon(
               AppIcons.search,
               size: 16,
-              color: DesktopChrome.muted,
+              color: DesktopChrome.hint,
             ),
             prefixIconConstraints: const BoxConstraints(
               minWidth: 36,

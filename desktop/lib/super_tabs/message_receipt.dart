@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'personal_lead.dart';
 
 /// How long a queued delivery's claims fail before its sender is told, and how
 /// long a queued message waits with no claim fields before the same (prod 10-30,
@@ -55,15 +56,26 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    widget.app?.addListener(_changed);
+    _listen(widget.app);
+  }
+
+  /// [app], and the Lead its Personal project starts (personal_lead.dart).
+  void _listen(AppNotifier? app) {
+    app?.addListener(_changed);
+    if (app != null) PersonalLeadStarter.of(app).addListener(_changed);
+  }
+
+  void _unlisten(AppNotifier? app) {
+    app?.removeListener(_changed);
+    if (app != null) PersonalLeadStarter.of(app).removeListener(_changed);
   }
 
   @override
   void didUpdateWidget(SuperTabMessageReceipt oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.app != widget.app) {
-      oldWidget.app?.removeListener(_changed);
-      widget.app?.addListener(_changed);
+      _unlisten(oldWidget.app);
+      _listen(widget.app);
     }
   }
 
@@ -99,7 +111,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
   @override
   void dispose() {
     _timer?.cancel();
-    widget.app?.removeListener(_changed);
+    _unlisten(widget.app);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -196,8 +208,23 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         c.selected?.leadId == null &&
         // A Buddy chat has no Lead: its Buddy takes the message.
         c.selected?.isBuddyChat != true) {
-      title = 'Not sent · this chat has no Lead';
-      actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
+      // In a Personal Swarm this Desktop starts the project's Lead, which the
+      // server keeps the message for (task #2633); else, or when it could
+      // not start, Add a Lead.
+      final app = widget.app;
+      final start = app == null
+          ? null
+          : PersonalLeadStarter.of(app).statusOf(c, message.conversationId);
+      if (start != null && !start.failed) {
+        color = DesktopChrome.muted;
+        title = 'Starting a Lead…';
+        sending = true;
+      } else {
+        title = start == null
+            ? 'Not sent · this chat has no Lead'
+            : 'Couldn’t start a Lead: ${start.reason}';
+        actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
+      }
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
     } else if (delivery?.pending == true && offline) {

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
+
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
@@ -13,6 +15,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_uploads.dart';
+import 'swarm_voice_send.dart';
 
 /// One conversation on the phone: its messages and what the person posts to
 /// it — the desktop's `SuperTabController` messages and composer, for one
@@ -317,6 +320,13 @@ class SwarmConversation extends ChangeNotifier
   /// (true) or taking back: counted in [reactionsOf] until the backend has
   /// them.
   final _reacting = <(String, SuperTabReactionEmoji), bool>{};
+
+  /// The messages a read found deleted since they were shown: a thread's
+  /// own rows of them go too ([gone]).
+  final _gone = <String>{};
+
+  /// Message [id] was shown here and a read since found it deleted.
+  bool gone(String id) => _gone.contains(id);
 
   /// Moves when what was read is dropped: a read asked for before then
   /// answers nothing.
@@ -656,6 +666,7 @@ class SwarmConversation extends ChangeNotifier
     _readingOlder = null;
     _rereading = null;
     _reactionSeq = null;
+    _gone.clear();
     _dropReceipt();
   }
 
@@ -830,6 +841,33 @@ class SwarmConversation extends ChangeNotifier
         byId[m.id] = m;
         changed = true;
       }
+      // The page read again is the backend's word on every message it
+      // covers: one shown there that it no longer has was deleted (backend
+      // messageEdits.ts). Earlier pages it does not reach keep theirs.
+      if (again && tail != null) {
+        final covers = answer['next'] == null
+            ? 0
+            : incoming.isEmpty
+            ? null
+            : incoming.map((m) => m.sequence).reduce((a, b) => a < b ? a : b);
+        if (covers != null) {
+          final read = {for (final m in incoming) m.id};
+          final gone = [
+            for (final m in byId.values)
+              if (m.sequence >= covers &&
+                  m.sequence <= tail &&
+                  !read.contains(m.id))
+                m.id,
+          ];
+          for (final id in gone) {
+            byId.remove(id);
+          }
+          if (gone.isNotEmpty) {
+            _gone.addAll(gone);
+            changed = true;
+          }
+        }
+      }
       if (changed) {
         messages = List.unmodifiable(
           byId.values.toList()..sort(superTabMessageOrder),
@@ -943,6 +981,59 @@ class SwarmConversation extends ChangeNotifier
   }
 
   String? _startedRoot;
+
+  /// Sends [take] as a voice message, alone, as a reply to [replyingTo] when
+  /// there is one: its clip goes up, the backend reads it once in [lang], and
+  /// the post names that file. What is typed stays in the box. Not sent, the
+  /// take is the voice row's to keep; a post whose answer was lost is the
+  /// outbox's, sent again from where it shows like any other.
+  Future<SwarmVoicePosted> sendVoice(VoiceTake take, String lang) async {
+    final group = conversation;
+    if (uploading || _disposed || !canPost || group == null) {
+      return (sent: false, notice: null);
+    }
+    final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    // A failure says itself in the chat, as a file's does.
+    final ids = await _uploadAll([clip]);
+    if (ids == null || _disposed) return (sent: false, notice: null);
+    final read = await swarmReadVoice(
+      reader.request,
+      tabId: reader.tabId,
+      attachmentId: ids.single,
+      lang: lang,
+    );
+    final voice = read.voice;
+    if (_disposed || voice == null) return (sent: false, notice: read.refused);
+    final operationId = superTabOperationId();
+    final post = SwarmPost(
+      body: {
+        'operationId': operationId,
+        'command': {
+          'type': 'message.send',
+          'conversationId': id,
+          'text': '',
+          'replyTo': _replyingTo?.id,
+          'recipientIds': const <String>[],
+          'attachmentIds': ids,
+          if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
+        },
+      },
+      messageId: superTabMessageId(
+        tabId: reader.tabId,
+        accountId: reader.accountId,
+        operationId: operationId,
+      ),
+      files: [clip],
+      voice: voice,
+    );
+    _replyingTo = null;
+    error = null;
+    final outcome = await _outbox.add(post);
+    _answered(post, outcome);
+    final sent =
+        outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
+    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+  }
 
   /// The thread whose session the last post started, once the backend took
   /// it; read once.
@@ -1085,6 +1176,125 @@ class SwarmConversation extends ChangeNotifier
     if (refused != null) error = refused;
     notifyListeners();
     return refused == null;
+  }
+
+  /// The person may edit and delete [message]: their own plain post (no
+  /// note the server wrote in their name), not deleted, where they may post.
+  /// The backend decides again (messageEdits.ts); this only hides the menu.
+  bool mayChange(SuperTabMessage message) =>
+      canPost &&
+      message.author['kind'] == 'person' &&
+      message.authorId == reader.accountId &&
+      message.source.isEmpty &&
+      !message.deleted;
+
+  /// Puts [text], trimmed, in place of [message]'s (backend `message.edit`):
+  /// the chat shows it, "(edited)", once the backend has it. Answers why it
+  /// was refused, the old text staying; null once done, or when nothing
+  /// changed and nothing was sent.
+  Future<String?> editMessage(SuperTabMessage message, String text) async {
+    final trimmed = text.trim();
+    if (trimmed == message.text) return null;
+    if (trimmed.isEmpty && message.attachments.isEmpty) {
+      return 'Write something, or delete the message.';
+    }
+    return _change(message, {
+      'type': 'message.edit',
+      'conversationId': id,
+      'messageId': message.id,
+      'text': trimmed,
+    }, 'Your edit did not go through. Try again.');
+  }
+
+  /// Deletes [message] for everyone (backend `message.delete`): it leaves the
+  /// chat, or, as the root of a thread with replies, reads "This message was
+  /// deleted." over them. Answers why it was refused; null once done.
+  Future<String?> deleteMessage(SuperTabMessage message) => _change(message, {
+    'type': 'message.delete',
+    'conversationId': id,
+    'messageId': message.id,
+  }, 'The message was not deleted. Try again.');
+
+  /// Sends the person's change to [message], then reads the page shown again
+  /// so it shows at once; one before that page is read by itself.
+  Future<String?> _change(
+    SuperTabMessage message,
+    Map<String, dynamic> command,
+    String failed,
+  ) async {
+    if (_disposed || !mayChange(message)) return failed;
+    final epoch = _epoch;
+    SuperTabMessage? shown() =>
+        messages.where((m) => m.id == message.id).firstOrNull;
+    final before = shown();
+    Object? answer;
+    try {
+      answer = await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {'operationId': superTabOperationId(), 'command': command},
+      );
+    } on SuperTabFailure catch (failure) {
+      return failure.message;
+    } catch (_) {
+      return failed;
+    }
+    if (_disposed || epoch != _epoch) return null;
+    // Deleted with no replies to keep it: gone at once, before any read.
+    final result = answer is Map ? answer['result'] : null;
+    if (command['type'] == 'message.delete' &&
+        result is Map &&
+        result['kept'] == false) {
+      _drop(message.id);
+    }
+    unawaited(reader.refresh());
+    // A read of the page begun before the backend had it would not show it.
+    if (_rereading case final reading?) await reading;
+    await _reread();
+    if (_disposed || epoch != _epoch) return null;
+    // Not on the page read again (one read back, or a thread's): by itself.
+    if (shown() case final now? when identical(now, before)) {
+      await _readBack(message.id);
+    }
+    return null;
+  }
+
+  /// Takes message [id] out of the chat: deleted.
+  void _drop(String id) {
+    if (!messages.any((m) => m.id == id)) return;
+    messages = List.unmodifiable(messages.where((m) => m.id != id));
+    _gone.add(id);
+    notifyListeners();
+  }
+
+  /// Reads message [id] by itself, after the person changed it where the
+  /// page read again does not reach: its row as the backend has it now, or
+  /// gone. A failed read keeps the row shown until the next read of it.
+  Future<void> _readBack(String messageId) async {
+    final epoch = _epoch;
+    try {
+      final answer = superTabMap(
+        await reader.request(
+          'GET',
+          '$messagesPath?messageId=${Uri.encodeQueryComponent(messageId)}',
+        ),
+      );
+      if (_disposed || epoch != _epoch) return;
+      final fresh = [
+        for (final row in answer['messages'] as List)
+          SuperTabMessage.fromJson(superTabMap(row)),
+      ].where((m) => m.id == messageId && m.conversationId == id).firstOrNull;
+      final at = messages.indexWhere((m) => m.id == messageId);
+      if (at < 0) return;
+      if (fresh == null) {
+        _drop(messageId);
+      } else if (!_same(messages[at], fresh)) {
+        messages = List.unmodifiable([...messages]..[at] = fresh);
+        notifyListeners();
+      }
+    } catch (_) {
+      // Shown as it was; the next read of its page brings it.
+    }
   }
 
   /// The delivery a person's answer is on its way for, and the answer
@@ -1232,6 +1442,8 @@ class SwarmConversation extends ChangeNotifier
       a.replyTo == b.replyTo &&
       a.authorName == b.authorName &&
       a.createdAt == b.createdAt &&
+      a.editedAt == b.editedAt &&
+      a.deletedAt == b.deletedAt &&
       a.attachments.length == b.attachments.length &&
       _sameReactions(a.reactions, b.reactions) &&
       _sameDeliveries(a, b);

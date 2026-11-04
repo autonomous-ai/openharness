@@ -1,14 +1,18 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { createGunzip } from 'node:zlib'
 import { z } from 'zod'
+import type { VoiceFacts } from './voiceMessages.js'
 
 /** Metadata as a message stores it. The bytes stay in the bucket. `url` is the file's public address on the CDN: it names the
  *  object, and apps from before signed links open it, until the bucket is no longer public (docs/swarms.md, "Chat file
  *  links"). Each read adds `link`, a short-lived signed link of that read, and `expiresAt` (epoch ms), when it stops opening
  *  (fileLinks.ts). A read that could not sign one says so with `unlinked: true` instead, so an app asks again rather than
  *  open the public address; only a file with neither comes from a server from before links. None of the three is stored. */
-export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true }
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true
+  /** A voice message's length, waveform and whether it has words (voiceMessages.ts); its words are the message's text. */
+  voice?: VoiceFacts }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
@@ -120,6 +124,34 @@ export function served(name: string, mime: string): { contentType: string; conte
   const inline = INLINE.has(mime)
   return { contentType: inline ? mime : 'application/octet-stream',
     contentDisposition: `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}` }
+}
+
+/** A form file's bytes as they were before the client packed them. A client may gzip a form file and say so with
+ * `contentEncoding: gzip` before it (task #2737): a gateway's content filter in front of the backend refused a handoff full
+ * of shell lines as text, and cannot read packed bytes. The store then sees, sizes and caps the original bytes, so a small
+ * packed file that unpacks past the cap is refused like any other. The request stream's own failure reaches the result. */
+export function formFileBody(file: Readable, encoding: 'gzip' | null): Readable {
+  if (encoding === null) return file
+  const unpacked = createGunzip()
+  // Not stream.pipeline: stopping the unpacking must not destroy the request's file stream, which the route drains.
+  file.once('error', error => unpacked.destroy(error))
+  // Bad gzip can fail before the store starts reading (it checks access first): kept on `errored` for the reader, never
+  // thrown as an unheard 'error' event that would end the process.
+  unpacked.on('error', () => {})
+  return file.pipe(unpacked)
+}
+
+/** Stops unpacking `body` once the store is done with it, so a packed file past the cap is never inflated to its end. */
+export function stopUnpacking(file: Readable, body: Readable): void {
+  if (body === file) return
+  file.unpipe(body as unknown as NodeJS.WritableStream)
+  body.destroy()
+}
+
+/** Whether `body` failed because its packed bytes were not gzip: the client's fault, never the bucket's. */
+export const unpackFailed = (body: Readable): boolean => {
+  const code = body.errored && typeof body.errored === 'object' && 'code' in body.errored ? body.errored.code : null
+  return typeof code === 'string' && code.startsWith('Z_')
 }
 
 /** The raster type the first bytes really are, or null. */

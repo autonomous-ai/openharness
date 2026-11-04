@@ -57,6 +57,7 @@ Task and group commands:
 - \`{"type":"work.define","conversationId":"GROUP","task":{...},"checks":[...]}\` sets or replaces the task of a group already open (same shape).
 - \`{"type":"conversation.agent","conversationId":"GROUP","agentId":"AGENT","present":true,"lead":false}\` adds an agent to a group (\`present\` false removes it).
 - \`{"type":"conversation.requester","conversationId":"GROUP","personId":"PERSON"}\` names who asked for a group already open (null clears).
+- \`{"type":"work.queue","conversationId":"GROUP","after":"GROUP"}\` places an open task right after another in its project's Next up (\`"after":null\` for the top). \`"notBefore":"2026-12-04"\` marks a day it should not start before (null clears it); send either or both. Only a person or the project's coordinator may send it.
 - \`{"type":"work.assign","conversationId":"GROUP","agentId":"AGENT","routeDecisionId":"DECISION"}\` assigns a group's task. \`routeDecisionId\` names the route's decision when you assign one of its candidates, so it records what ran.
 - \`{"type":"work.status","conversationId":"GROUP","assignmentId":"current","status":"working","result":null}\` is your status for the Swarm. status: \`working\` (add a one-line note in result of what is done and next), \`review\` (ready for review: result holds the revision and the pull request link; send it once per new head), \`done\` (result: exact revision, evidence, deliverable links), \`blocked\` (result: why, and what would unblock you), \`needs_human\` (result: one short question), \`stopped\`. Set working again once it moves. A work.status \`done\` or \`stopped\` carries the session's token totals by itself.
 - \`needs_human\` may carry \`"ask":{"personId":"PERSON","options":["A","B"],"recommended":0,"unblocks":"what the answer unblocks"}\`: 2 to 5 options, opened as a decision for that person. Keep working on your recommendation, marked provisional, until a notice says it was answered; then read the answer with \`decisions --answered\`. The notice carries none of it.
@@ -120,7 +121,7 @@ Many people talk at once; answers in the main chat bury each other. Answer a mes
 
 ## GitHub
 - An agent on another person's machine, and every agent in a Team account, gets git and gh through the Swarm's GitHub App for its task: clone, fetch, push branches, open, update and comment on pull requests, read checks. Nobody signs in for it.
-- The App cannot comment on or label issues. Work that needs more runs on the project owner's own machine, in their account, with their sign-in.
+- Issues and changes to .github/workflows: the token writes issues (comment, label) and pushes workflow changes only where the repository's installation of the App granted it; elsewhere GitHub refuses them. Work that needs more runs on the project owner's own machine, in their account, with their sign-in.
 - Never ask for a token in the chat or in a file. When a person must give access, they sign in on their own machine.
 - Ask a person only for what no agent can do: allowing a prompt in their own session, a physical device, adding a machine to the Swarm, approving a repository for the GitHub App, a decision. One step at a time, with the exact words to click or type.
 

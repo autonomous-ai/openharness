@@ -94,7 +94,7 @@ describe('setup script', () => {
     const script = buildSetupScript(input())
     const order = [
       'owned_by_root "$dir"', 'dscl . -create "/Users/$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
-      'as_owner /bin/sh -c', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+      'sh "$SENTINEL"', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
       'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
       'install -o 0 -g 0 -m 0644 "$STAGE/team.plist" "$PLIST"', 'launchctl bootstrap system "$PLIST"',
     ].map((needle) => at(script, needle))
@@ -178,7 +178,9 @@ describe('the team account\'s own engines', () => {
     expect(run.stdout).toContain('harness: installed @anthropic-ai/claude-code for the team account')
     expect(run.stderr).toContain('harness: could not install @openai/codex for the team account; harness team setup tries again')
     const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split('|'))
-    expect(calls).toHaveLength(2)
+    // Both in one run first (one download phase, Scholes 2026-11-04); one refused, so each alone.
+    expect(calls.map(([, , args]) => args!.split(' ').filter((a) => a.startsWith('@')))).toEqual([
+      ['@anthropic-ai/claude-code', '@openai/codex'], ['@anthropic-ai/claude-code'], ['@openai/codex']])
     for (const [path, cwd, args] of calls) {
       expect(path!.split(':')[0]).toBe(bin)
       expect(cwd).toBe(home)
@@ -188,6 +190,52 @@ describe('the team account\'s own engines', () => {
     const bare = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', join(root, 'nobody'), 'node-v1', '@openai/codex'], { encoding: 'utf8' })
     expect(bare.status).toBe(0)
     expect(bare.stderr).toContain('has no npm')
+  })
+})
+
+describe('the team account\'s engines, on a slow network', () => {
+  // Scholes, 2026-11-04: a new Mac waited about 7 minutes after the password, nothing on screen saying why. Claude
+  // Code and Codex are ~320 MB from npm with an empty cache, and nothing bounded it.
+  it('stops an install that outlasts its time, says the engines are missing and how to add them, and goes on', () => {
+    const root = temp()
+    const home = join(root, 'home'), bin = join(home, '.harness', 'runtime', 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const pids = join(root, 'npm.pids')
+    // A stand-in npm that never ends, holding the output open as a real download would.
+    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho $$ >> '${pids}'\nexec sleep 30\n`, { mode: 0o755 })
+    const started = Date.now()
+    const run = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', home, 'node-v1', '@anthropic-ai/claude-code', '@openai/codex'],
+      { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HARNESS_TEAM_ENGINE_SECONDS: '2' }, timeout: 20_000 })
+    expect(run.status).toBe(0)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(run.stderr).toContain('harness: Claude Code and Codex did not finish installing in 2 seconds; the Harness Team account works without them, and harness team setup installs them')
+    // Nothing tried after the time ran out, and nothing left running.
+    const npms = readFileSync(pids, 'utf8').trim().split('\n')
+    expect(npms).toHaveLength(1)
+    expect(spawnSync('/bin/kill', ['-0', npms[0]!]).status).not.toBe(0)
+  })
+
+  it('ends at once when npm does: a quick install does not wait out its time', () => {
+    const root = temp()
+    const home = join(root, 'home'), bin = join(home, '.harness', 'runtime', 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const started = Date.now()
+    const run = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', home, 'node-v1', '@anthropic-ai/claude-code', '@openai/codex'],
+      { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+    expect(run.status).toBe(0)
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(run.stdout).toContain('harness: installed @openai/codex for the team account')
+  })
+
+  it('says each step, as the owner, in the stage the owner\'s Harness reads, before the step runs', () => {
+    const script = buildSetupScript(input())
+    expect(script).toContain(`step() { printf '%s\\n' "$1" | as_owner /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$STAGE/progress" >/dev/null 2>&1 || true; }`)
+    const order = ['account', 'home', 'privacy', 'runtime', 'engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name}\n`))
+    for (const at of order) expect(at).toBeGreaterThan(0)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    expect(order[4]).toBeLessThan(script.indexOf(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)}`))
+    parses(script)
   })
 })
 
@@ -594,6 +642,21 @@ describe('Linux', () => {
       expect(script).not.toMatch(/dscl|launchctl|plutil|stat -f|\/Library\/|\/Users\//)
     })
 
+    // Task #2686, after Scholes's new member waited ~7 minutes with no sign of progress (#2921 did the Mac).
+    it('says each step, as the owner, in the stage the owner\'s Harness reads, before the step runs', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain(`step() { printf '%s\\n' "$1" | as_owner /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$STAGE/progress" >/dev/null 2>&1 || true; }`)
+      const order = ['account', 'home', 'privacy', 'runtime', 'engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name}\n`))
+      for (const at of order) expect(at).toBeGreaterThan(0)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      expect(order[0]).toBeLessThan(at(script, 'useradd -m'))
+      expect(order[4]).toBeLessThan(script.indexOf(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)}`))
+      expect(order[6]).toBeLessThan(at(script, 'systemctl enable --now "$UNIT_NAME"'))
+      // The engines go through the same bounded install as a Mac's (8 minutes, one run, missing engines said).
+      expect(script).toContain(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" '@anthropic-ai/claude-code' '@openai/codex' || true`)
+      parses(script)
+    })
+
     it('makes a standard listed user with a locked password, and never a sudoer', () => {
       const script = buildLinuxSetupScript(linuxInput())
       expect(script).toContain('useradd -m -d "$TEAM_HOME" -g "$TEAM_GROUP" -s /bin/bash -c "$TEAM_NAME" "$TEAM"')
@@ -709,7 +772,7 @@ describe('Linux', () => {
       const script = buildLinuxSetupScript(linuxInput())
       const order = [
         'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', OWNER_HOME_PRIVATE,
-        'as_owner /bin/sh -c', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+        'sh "$SENTINEL"', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
         'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
         'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
         'install -o 0 -g 0 -m 0644 "$STAGE/team.service" "$UNIT"', 'systemctl daemon-reload', 'systemctl enable --now "$UNIT_NAME"',
@@ -817,3 +880,31 @@ describe('Linux', () => {
     })
   })
 })
+
+describe("the macOS root script trusts no PATH of the owner's (#2765)", () => {
+  it.each([
+    ['setup', () => buildSetupScript(input())],
+    // Security review 2: removal runs as root too, with sudo in the owner's terminal, which keeps their PATH.
+    ['removal', () => buildRemoveScript({ user: 'harnessteam', home: '/Users/harnessteam', ownerHome: OWNER_HOME })],
+  ])('the %s script pins PATH to system folders before its first command', (_, build) => {
+    const lines = build().split('\n')
+    const pin = lines.indexOf('PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH')
+    expect(pin).toBeGreaterThan(0)
+    // Only the shell's own settings come before it.
+    expect(lines.slice(0, pin).filter((l) => l && !l.startsWith('#'))).toEqual(['set -eu'])
+  })
+
+  it.runIf(process.platform === 'darwin')('checks that / is root\'s with a GNU stat first on the PATH (micromamba)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-path-'))
+    try {
+      // GNU stat's -f means the file system, and prints no owner: what Darren-MacBook's PATH put first.
+      writeFileSync(join(dir, 'stat'), '#!/bin/sh\nprintf \'  File: "%s"\\n    ID: 0 Namelen: 255 Type: apfs\\n\' "$3"\n', { mode: 0o755 })
+      const script = buildSetupScript(input())
+      const head = script.slice(0, script.indexOf('\n[ "$(id -u)" = 0 ] || die "run as root"'))
+      const run = spawnSync('/bin/sh', ['-c', `${head}\nowned_by_root /\necho checked`], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } })
+      expect(run.stderr).toBe('')
+      expect(run.stdout.trim()).toBe('checked')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+

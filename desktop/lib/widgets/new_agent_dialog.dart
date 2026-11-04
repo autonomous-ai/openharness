@@ -1643,7 +1643,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         decoration: InputDecoration(
           hintText: 'Tell your agent what to do first.',
           // Readable, not faint: the hint says what the field is for.
-          hintStyle: boxMonoStyle(color: kBoxFaint),
+          hintStyle: boxMonoStyle(color: kBoxHint),
           // One line, so an empty box is exactly a tile tall at any width.
           hintMaxLines: 1,
           errorText: tooLong

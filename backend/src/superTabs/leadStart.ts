@@ -5,7 +5,7 @@
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
-  slotCounter, teamWorkRefusal, type ContributedMachine } from './machines.js'
+  slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -87,8 +87,10 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
     candidates = [named]
   } else {
     const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
+    // Its owner lets teammates' work run in their own account there (machines.ts ownAccountWork): the Mac itself, as its owner.
+    if (ownAccountWork(named)) candidates = [named]
     // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
-    if (named.teamAccountOnly) {
+    else if (named.teamAccountOnly) {
       const pool = team ?? named
       const why = refusal(pool)
       if (why) failTeamWork(why)
@@ -227,4 +229,31 @@ export function leadStartFailed(state: SuperTabState, start: AgentStart, reason:
   // can name a folder on the machine or a token problem (startFailure.ts). Its asker reads those on the start.
   Object.assign(placement, { status: 'failed', reason: publicReason(reason) })
   return failureNotice(start.request.name, reason)
+}
+
+/** How long a person's message in their Personal Swarm's project chat with no Lead waits for its Lead (task #2633, Huy 11-04):
+ *  one sent longer before the Lead joins is not delivered to it. */
+export const LEAD_WAIT_MS = 30 * 60_000
+/** At most this many messages wait for a project's Lead, the newest. */
+export const MAX_LEAD_WAITING = 20
+/** How long one Desktop's claim to start a project's Lead (lead.claim) holds off another machine's: past it, that start is
+ *  taken as lost. A native start takes a few minutes at most, an engine's install included. */
+export const LEAD_CLAIM_MS = 10 * 60_000
+
+/** Records message [id] as waiting for [project]'s Lead, dropping what waited too long, keeping the newest. */
+export function leadWaits(project: SwarmProject, id: string, now: number): void {
+  project.leadWaiting = [...(project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS), { id, at: now }].slice(-MAX_LEAD_WAITING)
+}
+
+/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it, as a
+ *  Buddy's waiting messages are (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
+ *  and the claim end. */
+export function leadArrived(state: SuperTabState, project: SwarmProject, agentId: string, now: number) {
+  const waiting = (project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS)
+  delete project.leadWaiting
+  delete project.leadClaim
+  const owner = state.people.find(p => p.id === project.ownerId)
+  if (!owner) return []
+  return waiting.map(w => ({ messageId: w.id, conversationId: project.leadConversationId, agentId, lead: true as const,
+    author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
 }

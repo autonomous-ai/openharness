@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
 import 'agent_model_controller.dart';
@@ -45,7 +46,8 @@ Future<void> showAgentModelSheet(
   // and the sheet's own context is gone by then.
   final messenger = ScaffoldMessenger.maybeOf(context);
   return showModalBottomSheet<void>(
-    context: context,
+    // The app's sheet even over a terminal's page — see [TerminalLook.outside].
+    context: TerminalLook.outside(context),
     useRootNavigator: true,
     showDragHandle: true,
     backgroundColor: AppPalette.panelBg,

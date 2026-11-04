@@ -66,8 +66,13 @@ import '../state/app_state.dart';
 import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
 import '../widgets/in_window_menu_bar.dart'
-    show LinuxTitleBar, linuxTitleBarActions;
+    show
+        InWindowMenuBar,
+        LinuxTitleBar,
+        appMenuButtonWidth,
+        linuxTitleBarActions;
 import '../widgets/account_menu.dart';
+import '../widgets/account_profile_sheet.dart';
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
@@ -140,6 +145,7 @@ import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_form.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/window_chrome.dart';
 import '../widgets/account_device_history.dart';
 import '../widgets/desktop_search_panel.dart';
 import '../widgets/machine_picker_extras.dart';
@@ -207,6 +213,7 @@ class SwarmScreen extends StatefulWidget {
     this.experimentalFeatures,
     this.chrome,
     this.statusTray,
+    this.appMenuButton,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -232,6 +239,12 @@ class SwarmScreen extends StatefulWidget {
 
   /// Extra tab-bar controls from a host composition (the web build's menu).
   final WorkspaceChrome? chrome;
+
+  /// Draws the compact app menu at the strip's left. Defaults to following the
+  /// host: Windows, where the menu strip above the workspace is gone
+  /// (desktop/design/windows-app-menu.md). A test seam, like [chrome], because
+  /// a widget test cannot make \`RuntimePlatform.isWindows\` true.
+  final bool? appMenuButton;
 
   /// The Windows tray (`harness/status_menu`): the macOS status menu's rows,
   /// fed from the same payload. A test passes its own; null off Windows.
@@ -264,6 +277,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final SwarmMenuBus _menuBus = widget.nativeTabs == true
       ? SwarmMenuBus.forChannel()
       : swarmMenuBus;
+
+  /// Whether the strip draws the compact app menu's ☰: Windows, where no menu
+  /// row sits above the workspace, or a test that asked for it.
+  bool get _appMenuButton =>
+      widget.appMenuButton ??
+      (RuntimePlatform.isWindows && !kIsWeb && !kUnderTest);
+
+  /// Whether this host hides the system caption and lets the tab strip be the
+  /// title row (Windows). The window's own buttons join the strip's end, and
+  /// its empty space drags the window (`widgets/window_chrome.dart`).
+  bool get _windowsCaption =>
+      RuntimePlatform.isWindows && !kIsWeb && !kUnderTest;
 
   /// The tab the middle button went down on, so an up that slid onto another
   /// tab closes nothing. Null between presses.
@@ -3491,6 +3516,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
     if (!mounted) return;
     switch (choice) {
+      case AccountMenuChoice.profile:
+        await _dialog(
+          () => showAccountProfileSheet(
+            context,
+            app,
+            swarm: accountProfileSwarm(app),
+          ),
+        );
       case AccountMenuChoice.addPhone:
         await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.devices:
@@ -7383,42 +7416,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         topInset: _native ? 0 : _tabBarHeight,
         onOpened: onOpened,
         ownsPointer: (position) => _owns(_notificationsButtonKey, position),
-        onOpen: (row) async {
-          final destination = swarmDestinations(app)
-              .where(
-                (item) =>
-                    item.machineId == row.machineId &&
-                    item.agentId == row.agentId,
-              )
-              .firstOrNull;
-          if (destination == null) return false;
-          final readToken = app.agentUnread.readTokenFor(
-            row.machineId,
-            row.agentId,
-          );
-          final questionId = app
-              .questionFor(row.machineId, row.agentId)
-              ?.requestId;
-          final opened = await activateSwarmDestination(
-            app,
-            destination,
-            destinationSwarmId: app.activeSwarmId,
-          );
-          // Opening acknowledges this notification. Its question stays pending
-          // until the daemon confirms an answer, independently of unread state.
-          if (opened &&
-              app.agentUnread.readTokenFor(row.machineId, row.agentId) ==
-                  readToken &&
-              app.questionFor(row.machineId, row.agentId)?.requestId ==
-                  questionId) {
-            app.readAgentNotification(
-              row.machineId,
-              row.agentId,
-              readToken: readToken,
-            );
-          }
-          return opened;
-        },
+        onOpen: (row) => openInboxNotification(app, row),
       ),
     );
   }
@@ -8421,10 +8419,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                             app.panes.isEmpty ||
                                                 app.activeSwarm.isSuperTab
                                             ? EdgeInsets.zero
-                                            : const EdgeInsets.fromLTRB(
-                                                kWorkspaceInset,
-                                                kWorkspaceInset,
-                                                kWorkspaceInset,
+                                            : EdgeInsets.fromLTRB(
+                                                kPaneInset,
+                                                kPaneInset,
+                                                kPaneInset,
                                                 0,
                                               ),
                                         child: SuperTabWorkspace(
@@ -8750,9 +8748,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
   // Include the pane's former bottom gutter in this row, so its controls sit
   // halfway between the pane edge and window bottom. Pane height is unchanged.
   // Keep inventory controls discoverable on the first, empty welcome screen.
+  // Windows draws the row at its controls' own height: the extra gutter left
+  // ~10pt of empty band above and below one line of text there (owner,
+  // 2026-11-03), and its caption row is already the app's only other bar.
   double get _statusBarHeight => app.activeSwarm.isSuperTab
       ? 0
-      : workspaceBarControlHeight(context) + kWorkspaceInset;
+      : workspaceBarControlHeight(context) +
+            (_windowsCaption ? 0 : kWorkspaceInset);
 
   Widget _statusBar() {
     final compactFooter = widget.chrome?.compactFooter;
@@ -9121,16 +9123,30 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // Sign in or the avatar always stays; see [_accountControl]. Search and
       // notifications beside it; none of it here when the title bar holds them.
       final accountWidth = _accountControlWidth(context);
+      // Windows has search and no bell ([_windowsCaption]).
       final actionsWidth = _titleBarActions
           ? 0.0
-          : cell.width * 8 + accountWidth;
+          : cell.width * (_windowsCaption ? 4 : 8) + accountWidth;
+      // The app menu's ☰, where the host keeps no menu row above the
+      // workspace: it comes out of the tabs' budget like any other control.
+      // The button is 8 + 16 + 8 wide of its own, and two cells of the bar
+      // font are less than that on Windows — a narrower slot silently squashes
+      // the glyph (10px at 26, 0px at 16), so the slot never drops below it.
+      final menuWidth = _appMenuButton
+          ? math.max(cell.width * 2, appMenuButtonWidth)
+          : 0.0;
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -
             cell.width * 5 -
-            grid.AppDesktop.tabBarTrailingInset -
+            // The strip's end: the window's own buttons on Windows. Left out of
+            // the sum, enough tabs pushed them off the window.
+            (_windowsCaption
+                ? 3 * WindowCaptionButtons.buttonWidth
+                : grid.AppDesktop.tabBarTrailingInset) -
             actionsWidth -
-            (_slotShown ? 44 : 0),
+            (_slotShown ? 44 : 0) -
+            menuWidth,
       );
       _tabWidths = List.filled(
         labels.length,
@@ -9145,39 +9161,58 @@ class _SwarmScreenState extends State<SwarmScreen> {
             (arrows ? cell.width * kWorkspaceTabArrowCells * 2 : 0),
       );
       _revealSelectedTab(tabsWidth);
+      final barHeight = math.max(
+        _tabBarHeight,
+        MediaQuery.textScalerOf(context).scale(13) * 1.25 + 20,
+      );
       return Material(
         key: const ValueKey('workspace-tab-bar'),
         color: grid.AppPalette.swarmTabBar,
         child: SizedBox(
-          height: math.max(
-            _tabBarHeight,
-            MediaQuery.textScalerOf(context).scale(13) * 1.25 + 20,
-          ),
-          child: Row(
+          height: barHeight,
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              SizedBox(width: cell.width),
-              _withTabArrows(
-                arrows,
-                color: theme.foreground,
-                child: SizedBox(
-                  width: tabsWidth,
-                  child: ReorderableListView.builder(
-                    scrollController: _tabScroll,
-                    itemExtentBuilder: (index, _) => _tabWidths[index],
-                    scrollDirection: Axis.horizontal,
-                    shrinkWrap: true,
-                    buildDefaultDragHandles: false,
-                    itemCount: shown.length,
-                    onReorderItem: (old, to) =>
-                        app.reorderSwarm(shown[old].id, to),
-                    itemBuilder: (context, index) {
-                      final swarm = shown[index];
-                      final selected = app.activeSwarmId == swarm.id;
-                      final activity = activities[index];
-                      final tags = tabWaiting(app, swarm);
-                      // A status cell animates only while its tab is in view.
-                      Widget tabStatus(Widget Function(bool visible) mark) =>
-                          ListenableBuilder(
+              // Windows hides the system caption, so this row IS the caption:
+              // the space between controls drags the window and a double-click
+              // restores it. Behind the row, never around it, so no button
+              // waits on the double-tap arena.
+              if (_windowsCaption)
+                const Positioned.fill(child: WindowCaptionDragArea()),
+              Row(
+                children: [
+                  SizedBox(width: cell.width),
+                  if (_appMenuButton)
+                    SizedBox(
+                      width: menuWidth,
+                      child: const Align(
+                        alignment: Alignment.centerLeft,
+                        child: InWindowMenuBar(compact: true),
+                      ),
+                    ),
+                  _withTabArrows(
+                    arrows,
+                    color: theme.foreground,
+                    child: SizedBox(
+                      width: tabsWidth,
+                      child: ReorderableListView.builder(
+                        scrollController: _tabScroll,
+                        itemExtentBuilder: (index, _) => _tabWidths[index],
+                        scrollDirection: Axis.horizontal,
+                        shrinkWrap: true,
+                        buildDefaultDragHandles: false,
+                        itemCount: shown.length,
+                        onReorderItem: (old, to) =>
+                            app.reorderSwarm(shown[old].id, to),
+                        itemBuilder: (context, index) {
+                          final swarm = shown[index];
+                          final selected = app.activeSwarmId == swarm.id;
+                          final activity = activities[index];
+                          final tags = tabWaiting(app, swarm);
+                          // A status cell animates only while its tab is in view.
+                          Widget tabStatus(
+                            Widget Function(bool visible) mark,
+                          ) => ListenableBuilder(
                             listenable: _tabScroll,
                             builder: (context, _) {
                               final left = _tabWidths
@@ -9192,175 +9227,196 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               );
                             },
                           );
-                      return ReorderableDragStartListener(
-                        key: ValueKey(swarm.id),
-                        index: index,
-                        child: Listener(
-                          onPointerDown: (event) {
-                            _middleDownTab = event.buttons == kTertiaryButton
-                                ? swarm.id
-                                : null;
-                          },
-                          onPointerUp: (event) {
-                            final armed = _middleDownTab;
-                            _middleDownTab = null;
-                            if (armed == swarm.id) {
-                              unawaited(app.requestCloseSwarm(swarm.id));
-                            }
-                          },
-                          child: Builder(
-                            builder: (context) {
-                              final nameHint = workspaceTabTooltip(
-                                labels[index],
-                                swarm.name,
-                                clipped:
-                                    DesktopWorkspaceTab.naturalWidth(
-                                      context,
-                                      labels[index],
-                                      shortcutHint: _keymap.hint(
-                                        'swarm.select_${index + 1}',
-                                      ),
-                                      hasActivity: activity != null,
-                                      sharedCount: shares[index].count,
-                                    ) >
-                                    _tabWidths[index],
-                              );
-                              final share = shares[index];
-                              final tabHint = [
-                                ?nameHint,
-                                if (share.count case final count?)
-                                  'Shared tab, $count '
-                                      '${count == 1 ? 'harness' : 'harnesses'}',
-                                ?activity?.label,
-                              ].join('\n');
-                              final menus = _shortcutsEnabled;
-                              return DesktopWorkspaceTab(
-                                id: swarm.id,
-                                showShortcuts: _tabShortcutHints,
-                                shortcutHint: _keymap.hint(
-                                  'swarm.select_${index + 1}',
-                                ),
-                                onRename: () => _rename(swarm.id),
-                                onPauseNewWork:
-                                    menus &&
+                          return ReorderableDragStartListener(
+                            key: ValueKey(swarm.id),
+                            index: index,
+                            child: Listener(
+                              onPointerDown: (event) {
+                                _middleDownTab =
+                                    event.buttons == kTertiaryButton
+                                    ? swarm.id
+                                    : null;
+                              },
+                              onPointerUp: (event) {
+                                final armed = _middleDownTab;
+                                _middleDownTab = null;
+                                if (armed == swarm.id) {
+                                  unawaited(app.requestCloseSwarm(swarm.id));
+                                }
+                              },
+                              child: Builder(
+                                builder: (context) {
+                                  final nameHint = workspaceTabTooltip(
+                                    labels[index],
+                                    swarm.name,
+                                    clipped:
+                                        DesktopWorkspaceTab.naturalWidth(
+                                          context,
+                                          labels[index],
+                                          shortcutHint: _keymap.hint(
+                                            'swarm.select_${index + 1}',
+                                          ),
+                                          hasActivity: activity != null,
+                                          sharedCount: shares[index].count,
+                                        ) >
+                                        _tabWidths[index],
+                                  );
+                                  final share = shares[index];
+                                  final tabHint = [
+                                    ?nameHint,
+                                    if (share.count case final count?)
+                                      'Shared tab, $count '
+                                          '${count == 1 ? 'harness' : 'harnesses'}',
+                                    ?activity?.label,
+                                  ].join('\n');
+                                  final menus = _shortcutsEnabled;
+                                  return DesktopWorkspaceTab(
+                                    id: swarm.id,
+                                    showShortcuts: _tabShortcutHints,
+                                    shortcutHint: _keymap.hint(
+                                      'swarm.select_${index + 1}',
+                                    ),
+                                    onRename: () => _rename(swarm.id),
+                                    onPauseNewWork:
+                                        menus &&
+                                            swarm.superTabId != null &&
+                                            app.superTabs
+                                                    .peek(swarm.superTabId!)
+                                                    ?.canWrite ==
+                                                true
+                                        ? () => unawaited(
+                                            _pauseSuperTab(swarm.id),
+                                          )
+                                        : null,
+                                    newWorkPaused:
                                         swarm.superTabId != null &&
                                         app.superTabs
                                                 .peek(swarm.superTabId!)
-                                                ?.canWrite ==
-                                            true
-                                    ? () => unawaited(_pauseSuperTab(swarm.id))
-                                    : null,
-                                newWorkPaused:
-                                    swarm.superTabId != null &&
-                                    app.superTabs
-                                            .peek(swarm.superTabId!)
-                                            ?.snapshot
-                                            ?.paused ==
-                                        true,
-                                label: labels[index],
-                                selected: selected,
-                                tooltip: tabHint.isEmpty ? null : tabHint,
-                                activityLabel:
-                                    tabWaitingLabel(app, swarm) ??
-                                    activity?.label,
-                                sharedCount: share.count,
-                                onInvitePeople: menus && share.invite
-                                    ? () => unawaited(_invitePeople(swarm.id))
-                                    : null,
-                                onShowAgentMessages:
-                                    menus && app.agentMessagesOffered(swarm.id)
-                                    ? () => unawaited(
-                                        _showAgentMessages(swarm.id),
-                                      )
-                                    : null,
-                                onStopSharing: menus && share.stop
-                                    ? () => unawaited(_stopSharingTab(swarm.id))
-                                    : null,
-                                onMoveHere: menus && share.moveHere
-                                    ? () => unawaited(_moveTabHere(swarm.id))
-                                    : null,
-                                onLeave: menus && share.leave
-                                    ? () => unawaited(_leaveTab(swarm.id))
-                                    : null,
-                                onSelect: _shortcutsEnabled
-                                    ? () => app.selectSwarm(swarm.id)
-                                    : null,
-                                onClose: _shortcutsEnabled
-                                    ? () => unawaited(
-                                        app.requestCloseSwarm(swarm.id),
-                                      )
-                                    : null,
-                                attention: tags > 0,
-                                // A Swarm's tab is its name alone (Quiet Swarm, screen 0).
-                                activity:
-                                    swarm.isSuperTab ||
-                                        activity == null ||
-                                        activity.mark.isEmpty
-                                    ? null
-                                    : tabStatus(
-                                        (visible) => ActivityMark(
-                                          key: ValueKey(
-                                            'tab-activity:${swarm.id}',
+                                                ?.snapshot
+                                                ?.paused ==
+                                            true,
+                                    label: labels[index],
+                                    selected: selected,
+                                    tooltip: tabHint.isEmpty ? null : tabHint,
+                                    activityLabel:
+                                        tabWaitingLabel(app, swarm) ??
+                                        activity?.label,
+                                    sharedCount: share.count,
+                                    onInvitePeople: menus && share.invite
+                                        ? () =>
+                                              unawaited(_invitePeople(swarm.id))
+                                        : null,
+                                    onShowAgentMessages:
+                                        menus &&
+                                            app.agentMessagesOffered(swarm.id)
+                                        ? () => unawaited(
+                                            _showAgentMessages(swarm.id),
+                                          )
+                                        : null,
+                                    onStopSharing: menus && share.stop
+                                        ? () => unawaited(
+                                            _stopSharingTab(swarm.id),
+                                          )
+                                        : null,
+                                    onMoveHere: menus && share.moveHere
+                                        ? () =>
+                                              unawaited(_moveTabHere(swarm.id))
+                                        : null,
+                                    onLeave: menus && share.leave
+                                        ? () => unawaited(_leaveTab(swarm.id))
+                                        : null,
+                                    onSelect: _shortcutsEnabled
+                                        ? () => app.selectSwarm(swarm.id)
+                                        : null,
+                                    onClose: _shortcutsEnabled
+                                        ? () => unawaited(
+                                            app.requestCloseSwarm(swarm.id),
+                                          )
+                                        : null,
+                                    attention: tags > 0,
+                                    // A Swarm's tab is its name alone (Quiet Swarm, screen 0).
+                                    activity:
+                                        swarm.isSuperTab ||
+                                            activity == null ||
+                                            activity.mark.isEmpty
+                                        ? null
+                                        : tabStatus(
+                                            (visible) => ActivityMark(
+                                              key: ValueKey(
+                                                'tab-activity:${swarm.id}',
+                                              ),
+                                              activity: activity,
+                                              color: activityColor(
+                                                activity,
+                                                theme,
+                                                color: prefs.color,
+                                              ),
+                                              emphasized: selected,
+                                              tooltip: false,
+                                              visible: visible,
+                                            ),
                                           ),
-                                          activity: activity,
-                                          color: activityColor(
-                                            activity,
-                                            theme,
-                                            color: prefs.color,
-                                          ),
-                                          emphasized: selected,
-                                          tooltip: false,
-                                          visible: visible,
-                                        ),
-                                      ),
-                              );
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              chrome?.newTabControl?.call(context, _workspaceCommands) ??
-                  _statusToolIcon(
-                    'new-tab',
-                    'New Tab',
-                    _newTab,
-                    AppIcons.plus,
-                    Size(cell.width * 3, toolHeight),
-                    theme,
-                    tooltip: _commandTooltip('New Tab', 'swarm.new'),
-                  ),
-              if (_tabActivityOffered)
-                ListenableBuilder(
-                  listenable: _tabActivity,
-                  builder: (context, _) {
-                    final label = _tabActivity.isOpen(app.activeSwarmId)
-                        ? 'Hide Tab Activity'
-                        : 'Show Tab Activity';
-                    return _statusToolIcon(
-                      'tab-activity',
-                      label,
-                      _toggleTabActivity,
-                      AppIcons.panelLeft,
-                      Size(cell.width * 3, toolHeight),
-                      theme,
-                      tooltip: _commandTooltip(
-                        label,
-                        'agent_messages.activity',
+                                  );
+                                },
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
-              const Spacer(),
-              if (!_titleBarActions) ...[
-                _searchButton(theme),
-                _notificationsButton(theme),
-                ..._accountControl(),
-              ],
-              if (kIsWeb && _slotShown) _daemonTabButton(),
-              const SizedBox(width: grid.AppDesktop.tabBarTrailingInset),
+                    ),
+                  ),
+                  chrome?.newTabControl?.call(context, _workspaceCommands) ??
+                      _statusToolIcon(
+                        'new-tab',
+                        'New Tab',
+                        _newTab,
+                        AppIcons.plus,
+                        Size(cell.width * 3, toolHeight),
+                        theme,
+                        tooltip: _commandTooltip('New Tab', 'swarm.new'),
+                      ),
+                  if (_tabActivityOffered)
+                    ListenableBuilder(
+                      listenable: _tabActivity,
+                      builder: (context, _) {
+                        final label = _tabActivity.isOpen(app.activeSwarmId)
+                            ? 'Hide Tab Activity'
+                            : 'Show Tab Activity';
+                        return _statusToolIcon(
+                          'tab-activity',
+                          label,
+                          _toggleTabActivity,
+                          AppIcons.panelLeft,
+                          Size(cell.width * 3, toolHeight),
+                          theme,
+                          tooltip: _commandTooltip(
+                            label,
+                            'agent_messages.activity',
+                          ),
+                        );
+                      },
+                    ),
+                  const Spacer(),
+                  if (!_titleBarActions) ...[
+                    // Windows' title row ends with search and the account against
+                    // the window's own buttons, and no bell: the sidebar's Activity
+                    // row is the way to notifications there, and a second way in
+                    // the caption was one icon too many (owner, 2026-11-03). Every
+                    // other host keeps the strip's own order, search first.
+                    if (!_windowsCaption) ...[
+                      _searchButton(theme),
+                      _notificationsButton(theme),
+                    ],
+                    if (_windowsCaption) _searchButton(theme),
+                    ..._accountControl(),
+                  ],
+                  if (kIsWeb && _slotShown) _daemonTabButton(),
+                  if (_windowsCaption)
+                    WindowCaptionButtons(height: barHeight)
+                  else
+                    const SizedBox(width: grid.AppDesktop.tabBarTrailingInset),
+                ],
+              ),
             ],
           ),
         ),

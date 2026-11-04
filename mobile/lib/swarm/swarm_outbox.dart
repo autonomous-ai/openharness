@@ -44,6 +44,7 @@ class SwarmPost {
     required this.body,
     required this.messageId,
     this.files = const [],
+    this.voice,
     this.held,
   });
 
@@ -56,6 +57,10 @@ class SwarmPost {
 
   /// The files that went with it, already uploaded.
   final List<SwarmOutgoingFile> files;
+
+  /// A voice message's facts, as the backend read its one file: how it shows
+  /// while on its way. Not kept across a restart, when it shows as its file.
+  final SuperTabVoice? voice;
 
   /// What the composer held when it left (draft, mentions, reply): a refusal
   /// puts it back.

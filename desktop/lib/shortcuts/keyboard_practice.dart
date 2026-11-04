@@ -532,9 +532,9 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
   InputDecoration _fieldDecoration(String hint, {bool search = false}) =>
       InputDecoration(
         hintText: hint,
-        hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
+        hintStyle: DesktopChrome.control(color: DesktopChrome.hint),
         prefixIcon: search
-            ? Icon(AppIcons.search, size: 18, color: DesktopChrome.muted)
+            ? Icon(AppIcons.search, size: 18, color: DesktopChrome.hint)
             : null,
         filled: true,
         fillColor: DesktopChrome.field,
@@ -554,7 +554,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-          borderSide: BorderSide(color: DesktopChrome.accent, width: 1.5),
+          borderSide: BorderSide(color: DesktopChrome.rim),
         ),
       );
 

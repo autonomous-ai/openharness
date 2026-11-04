@@ -11,3 +11,4 @@ export { DORMANT_PAGE, insertParts, lastChangedAt, loadActive, loadAll, loadChan
 export type { SwarmDelta } from './load.js'
 export { loadLight, loadLightGroups } from './light.js'
 export { guardedWrite, PartConflict, type PartWrite } from './write.js'
+export type { DeltaRows } from './load.js'

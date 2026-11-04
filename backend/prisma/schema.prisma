@@ -152,7 +152,7 @@ model User {
   externalId      String    @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
   stagExternalId  String? // staging SSO subject; authentication still keys by email
   passwordHash    String? // legacy only; SSO users have none
-  name            String?
+  name            String? // from SSO once, while empty; later sign-ins never overwrite it (UserService.upsertFromSso)
   role            String    @default("user") // user | admin
   // Which Autonomous account plane this user signs in against. Existing rows are backfilled to
   // staging because they were created while the app used staging globally; new users default prod.
@@ -1127,6 +1127,11 @@ model SuperTabMessage {
   /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
   /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
   buddyProject    String?
+  /// When its author last edited its text (superTabs/messageEdits.ts); no earlier text is kept.
+  editedAt        DateTime?
+  /// When its author deleted it while replies hung under it: its text is then DELETED_TEXT and its files are gone. A deleted
+  /// message with no replies is removed, row and all.
+  deletedAt       DateTime?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
@@ -1232,10 +1237,34 @@ model SuperTabReadMark {
   conversationId String
   sequence       Int
   updatedAt      DateTime
+  /// When the person's Mark unread moved the mark back (readMarks.ts lowerReadMark); set with updatedAt in that write and
+  /// cleared by a read that raises it, so the mark's last move was a Mark unread while the two are equal. Unset otherwise.
+  loweredAt      DateTime?
 
   @@index([tabId, personId, updatedAt])
-  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  /// A mark untouched for 180 days goes: by this index's expiry (superTabs/readMarks.ts ensureReadMarkExpiry), or where the
+  /// database refuses it, by the worker's sweep (startReadMarkSweep). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
+}
+
+/// A person's reminder of one message (superTabs/reminders.ts): bring it back to them at `dueAt`, in Activity's Reminders. Their
+/// own, never shown to others. One row per person and message: setting it again replaces its time, and opening it deletes it.
+/// At most REMINDER_CAP pending per person and Swarm; the worker's hourly sweep deletes those due more than REMINDER_EXPIRY_MS
+/// (30 days) ago, and a Swarm's purge its rows.
+model SuperTabReminder {
+  /// stableId(tabId, personId, messageId).
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  messageId      String
+  dueAt          DateTime
+  createdAt      DateTime
+
+  /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
+  @@index([tabId, personId, dueAt])
+  /// The sweep's reminders due more than 30 days ago (reminders.ts sweepReminders); no TTL option, which the app user cannot set.
+  @@index([dueAt])
 }
 
 /// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
@@ -1260,6 +1289,23 @@ model SuperTabThreadMark {
   @@index([tabId, personId, updatedAt])
   /// The sweep's marks untouched for 180 days (readMarks.ts sweepThreadMarks); no TTL option, which the app user cannot set.
   @@index([updatedAt])
+}
+
+/// A project chat's Buddy proposal roots not yet seen answered (superTabs/proposals.ts), read by the Tasks view's Proposals in place
+/// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
+/// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
+/// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
+model SuperTabOpenProposal {
+  /// The root message's id, or the chat's seed mark.
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  /// The root's sequence in its chat; -1 for the seed mark.
+  sequence       Int
+  createdAt      DateTime @default(now())
+
+  /// A chat's open roots, newest first (proposals.ts databaseProposalReads listed).
+  @@index([tabId, conversationId, sequence])
 }
 
 /// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the
@@ -1316,6 +1362,8 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
+  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (overdueDecisions.ts).
+  overdue        Boolean?
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
@@ -1329,6 +1377,8 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
   /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
+  /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
+  @@index([answeredAt, createdAt], map: "decision_waiting_created")
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1347,11 +1397,22 @@ model SuperTabAttachment {
   proposedBy     String?
   /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
   purpose        String?
+  /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
+  /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
+  voice          Json?
+  /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
+  /// is taken over.
+  voiceSince     DateTime?
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
   /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
   @@index([purpose, createdAt])
+  /// Unused uploads by age, for the hourly unused-upload sweep (lib/attachmentSweep.ts): its claim (usedBy and proposedBy
+  /// null, purpose, createdAt) and its remove step (usedBy alone). Performance Advisor's suggestion of 11-04 with its first
+  /// two keys swapped, so the remove step's read is bounded too (#2676). Built by the backend release's schema push: a
+  /// production write that needs Ken's go.
+  @@index([usedBy, proposedBy, purpose, createdAt])
 }
 
 /// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
@@ -1916,6 +1977,9 @@ model SwarmMachine {
   /// The last write of its own reading alone (a report every 15 s): readers of changes see it, while `changedAt`, and so the
   /// Swarm's newest change, stays at the last change of anything else (Stability Roadmap 2.2).
   readAt          DateTime?
+  /// The last reading that changed more than its volatile fields (parts/commit.ts machineContentChanged): a client that asks gets
+  /// a line for any other reading, not the part (read/changes.ts). Overwritten in place, and gone with its row. Absent before 2026-11-04.
+  contentAt       DateTime?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])

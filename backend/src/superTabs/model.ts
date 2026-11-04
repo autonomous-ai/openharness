@@ -20,6 +20,9 @@ export interface Person {
   generation: string
   /** Their own short status (profile.ts); only Swarm members read it. */
   status?: import('./profile.js').PersonStatus
+  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
+   *  Only Swarm members read it, for the local time on a person's card. */
+  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
@@ -235,7 +238,10 @@ export interface Check {
   verdicts?: CheckVerdict[]
 }
 /** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
-export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
+  /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
+   *  (#2656). Absent on verdicts given before. */
+  name?: string }
 export interface Assignment {
   id: string
   agentId: string
@@ -392,6 +398,10 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
+  queueRank?: number
+  /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
+  notBefore?: string
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -593,6 +603,8 @@ export const NOTICE_READERS = {
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // The coordinator's wake for its built-in schedule (pmSchedule.ts).
+  'schedule-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
@@ -604,7 +616,10 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
@@ -687,13 +702,16 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
+  messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
-  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string } }>
+  /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
+  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
@@ -952,6 +970,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens
@@ -997,6 +1016,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const project of visible.projects ?? []) {
       const lead = project.lead
       if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+      // Which of its person's machines starts the Lead of a Personal project (leadStart.ts) is a machine too.
+      delete project.leadClaim
     }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules

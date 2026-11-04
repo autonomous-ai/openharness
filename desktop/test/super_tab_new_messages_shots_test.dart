@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,8 +21,8 @@ const _updates = [
   'Pushed the branch; the checks are running.',
 ];
 
-/// The chat opened at its New messages line, and scrolled on to the end: the
-/// line was seen, so no pill jumps back to it.
+/// The chat opened at its New messages line, read on past it (the bar leads
+/// back), then through to the end (the bar goes).
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -82,16 +83,29 @@ void main() {
       }
 
       await shot('line');
-      final list = tester
-          .widget<ScrollView>(
-            find.byKey(const PageStorageKey('super-messages-tab-lead')),
-          )
-          .controller!
-          .position;
+      final messages = find.byKey(
+        const PageStorageKey('super-messages-tab-lead'),
+      );
+      // On past the line in wheel steps, as a reader scrolls.
+      for (var step = 0; step < 6; step++) {
+        tester.binding.handlePointerEvent(
+          PointerScrollEvent(
+            position: tester.getCenter(messages),
+            scrollDelta: const Offset(0, 100),
+          ),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      // The line is above the screen now: the bar is the way back.
+      expect(find.byKey(const ValueKey('super-jump-unread')), findsOne);
+      await shot('read-on');
+      final list = tester.widget<ScrollView>(messages).controller!.position;
       list.jumpTo(list.maxScrollExtent);
       await tester.pumpAndSettle();
+      // Read through to the end: no bar, and the line stays above.
       expect(find.byKey(const ValueKey('super-jump-unread')), findsNothing);
-      await shot('read-on');
+      await shot('read-through');
       // Reading to the end saves the read mark a moment later (controller.dart `_saveSoon`).
       await tester.pump(const Duration(milliseconds: 300));
     });

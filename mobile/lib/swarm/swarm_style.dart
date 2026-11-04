@@ -796,6 +796,126 @@ class SwarmButton extends StatelessWidget {
   }
 }
 
+/// A choice of a few, side by side, that takes effect on the tap — Settings'
+/// Theme: System | Dark | Light.
+///
+/// Swarm's chips (Activity's filters) drawn as one control: a pill track in the
+/// search surface, the chosen segment filled in the primary ink with the
+/// page's ground for its words, the others in the secondary ink. A segment is
+/// a compact control ([AppControl.heightSmall]) with a control's words
+/// ([AppType.label]); it is pressed across 44 points of height though it draws
+/// 28, so the track sits in a 56-point row as the − + stepper does.
+class SwarmSegments<T> extends StatelessWidget {
+  const SwarmSegments({
+    super.key,
+    required this.values,
+    required this.selected,
+    required this.label,
+    required this.onSelected,
+  });
+
+  final List<T> values;
+  final T selected;
+  final String Function(T value) label;
+
+  /// A segment tapped that is not [selected] already.
+  final ValueChanged<T> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        color: AppPalette.swarmSearchSurface,
+        shape: const StadiumBorder(),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.xs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final value in values)
+              _SwarmSegment(
+                label: label(value),
+                selected: value == selected,
+                onTap: () => onSelected(value),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SwarmSegment extends StatelessWidget {
+  const _SwarmSegment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    // The chosen one is already chosen: no click, nothing sent.
+    final VoidCallback? choose = selected
+        ? null
+        : () {
+            HapticFeedback.selectionClick();
+            onTap();
+          };
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      // Its children's semantics are excluded, the InkWell's tap with them: a
+      // screen reader taps through this node (review of #2920).
+      onTap: choose,
+      excludeSemantics: true,
+      child: TouchTarget(
+        child: Material(
+          color: selected ? AppPalette.textPrimary : Colors.transparent,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: choose,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: AppControl.heightSmall,
+                minWidth: minTouchTarget,
+              ),
+              child: Padding(
+                // Three at the label size, System the longest, fit a 375-point
+                // phone's row beside its title without shrinking.
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+                child: Center(
+                  widthFactor: 1,
+                  heightFactor: 1,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    style: AppType.label(
+                      color: selected
+                          ? AppPalette.windowBg
+                          : AppPalette.textSecondary,
+                      fontWeight: selected ? AppFont.semibold : AppFont.medium,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A round 44-point button holding one glyph: the drawer's close, the top
 /// bar's menu and back ([size] 24 there).
 class SwarmIconButton extends StatelessWidget {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -14,6 +15,19 @@ import 'package:harness/shared/widgets/app_icon_button.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_members.dart';
+
+/// Adds a project named [name] whose chat is `other-chat`.
+void _secondProject(ConversationServer server, String name) {
+  server.state['projects'] = [
+    ...(server.state['projects'] as List?) ??
+        [projectFixture('lead', server.state['name'] as String, 'lead')],
+    projectFixture('other', name, 'other-chat'),
+  ];
+  (server.state['conversations'] as List).add({
+    ...conversationFixture('other-chat', 'Lead'),
+    'projectId': 'other',
+  });
+}
 
 void main() {
   testWidgets('rapid pending rows have independent identity and dimmed text', (
@@ -155,9 +169,7 @@ void main() {
       Future<void> openList() async {
         await tester.tap(find.byTooltip('Project options'));
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.widgetWithText(MenuItemButton, 'Project settings…'),
-        );
+        await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Archived conversations'));
         await tester.pumpAndSettle();
@@ -216,7 +228,7 @@ void main() {
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();
@@ -256,6 +268,9 @@ void main() {
     final server = ConversationServer();
     (server.state['conversations'] as List)[1]['title'] =
         'Offline editing across mobile and desktop';
+    // A second project with a long name: the sidebar lists projects, not
+    // tasks (task #2569).
+    _secondProject(server, 'Offline editing across mobile and desktop');
     final controller = server.controller();
     await controller.refresh();
     await tester.pumpWidget(
@@ -283,12 +298,10 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-other-chat')));
     await tester.pumpAndSettle();
-    // A workgroup with no work is in The rest, which starts folded (#2309).
-    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    expect(controller.selectedId, 'other-chat');
+    await controller.select('offline');
     await tester.pumpAndSettle();
     expect(controller.selectedId, 'offline');
     expect(find.text('New group'), findsNothing);
@@ -340,6 +353,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(600, 520));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final server = ConversationServer();
+      _secondProject(server, 'second-project');
       final controller = server.controller();
       await controller.refresh();
       await tester.pumpWidget(
@@ -375,16 +389,9 @@ void main() {
       expect(server.posts, isEmpty);
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-other-chat')));
       await tester.pumpAndSettle();
-      // A workgroup with no work is in The rest, which starts folded (#2309).
-      await tester.tap(
-        find.byKey(const ValueKey('super-task-group-lead-rest')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-group-offline')));
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'other-chat');
       expect(field.focusNode!.hasFocus, isTrue);
       expect(controller.draft('lead'), 'Keep this draft');
       expect(tester.takeException(), isNull);
@@ -630,7 +637,8 @@ void main() {
   );
 
   testWidgets(
-    'native terminals fill the middle, preserve both sidebars, and return to chat',
+    'native terminals fill the middle with their chat beside them, preserve '
+    'both sidebars, and return to chat',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -655,9 +663,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Native terminal fixture'), findsOneWidget);
-      expect(find.text('Review this result.'), findsNothing);
+      // Wide, the chat stays beside the terminal (Huy, #2792), in the right
+      // pane where a thread sits.
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-right-pane')),
+          matching: find.text('Review this result.'),
+        ),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      // The right column stays closed at rest beside the terminals too.
+      // Members stays closed at rest beside the terminals too.
       expect(find.byType(SuperTabRoster), findsNothing);
       expect(
         tester
@@ -678,6 +694,8 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();
       expect(find.text('Native terminal fixture'), findsOneWidget);
+      // Narrow, one at a time: the terminal holds the middle alone.
+      expect(find.text('Review this result.'), findsNothing);
       await tester.tap(find.byTooltip('Chat'));
       expect(closed, isTrue);
       expect(

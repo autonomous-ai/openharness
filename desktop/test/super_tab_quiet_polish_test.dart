@@ -4,7 +4,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 
 import 'super_tab_activity_lists_test.dart'
-    show finish, swarm, unreadThread, wait;
+    show swarm, unreadThread, wait;
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
 
@@ -40,23 +40,27 @@ Map<String, dynamic> _said(int sequence, String text) => {
 
 void main() {
   group('project rows', () {
-    testWidgets('a project waiting on a person shows no question mark; its '
-        'task still does', (tester) async {
+    testWidgets('a project waiting on a person shows no question mark, open '
+        'or not', (tester) async {
       final server = swarm();
       wait(server);
       await showView(tester, server);
       expect(find.text('?'), findsNothing);
       await tester.tap(find.text('web-project').first);
       await tester.pumpAndSettle();
-      expect(find.text('?'), findsOneWidget);
+      // Its task is in the Tasks view, not listed under it (task #2569).
+      expect(find.text('?'), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
     });
 
     testWidgets("a project's red number ends where Activity's does", (
       tester,
     ) async {
+      // Activity's number is what was asked of the reader: a decision. The
+      // project row counts it with the tag, and both numbers end at one edge.
       final server = swarm()..followedThreads = null;
       server.tag('message-1');
+      server.ask(['Ship it?'], conversationId: 'lead');
       await showView(tester, server);
       final activity = find.descendant(
         of: _key('super-activity'),
@@ -172,21 +176,30 @@ void main() {
         'read': [],
         'more': false,
       };
-      finish(server, DateTime.now());
       await showView(tester, server);
       await tester.tap(_key('super-activity'));
       await tester.pumpAndSettle();
       for (final glyph in ['↳', '✓', '◐']) {
         expect(find.text(glyph), findsNothing);
       }
-      expect(find.byIcon(AppIcons.check), findsOneWidget);
-      expect(find.byIcon(AppIcons.reply), findsOneWidget);
+      // A thread row says who replied in words, not with a reply mark.
+      expect(find.textContaining('Lead replied'), findsOneWidget);
+      expect(find.byIcon(AppIcons.reply), findsNothing);
     });
 
     testWidgets("today's time reads as the chat's", (tester) async {
       final server = swarm()..followedThreads = null;
       final now = DateTime.now();
-      finish(server, DateTime(now.year, now.month, now.day, 20, 8));
+      server.tag(
+        'message-1',
+        createdAt: DateTime(
+          now.year,
+          now.month,
+          now.day,
+          20,
+          8,
+        ).toUtc().toIso8601String(),
+      );
       await showView(tester, server);
       await tester.tap(_key('super-activity'));
       await tester.pumpAndSettle();
@@ -198,17 +211,22 @@ void main() {
     ) async {
       final server = swarm();
       server.followedThreads = {
-        'unread': [unreadThread('message-1')],
+        'unread': [
+          {
+            ...unreadThread('message-1'),
+            'lastReplyAt': DateTime.now().toUtc().toIso8601String(),
+          },
+          unreadThread('message-2', text: 'Older root'),
+        ],
         'read': [],
         'more': false,
       };
-      finish(server, DateTime.now());
       await showView(tester, server);
       await tester.tap(_key('super-activity'));
       await tester.pumpAndSettle();
       double y(String text) => tester.getCenter(find.text(text)).dy;
-      final under = y('Root text') - y('New replies');
-      final over = y('Done today') - y('Root text');
+      final under = y('Older root') - y('Earlier');
+      final over = y('Earlier') - y('Lead: Root text');
       expect(under, lessThan(over));
     });
   });

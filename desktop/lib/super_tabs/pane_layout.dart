@@ -21,6 +21,7 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
+    this.over,
   });
 
   static const storageKey = 'super-tab-pane-widths';
@@ -50,6 +51,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The right pane's width until a person sets one by its divider (that
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
+
+  /// Drawn over the left and centre panes, leaving the right one as it is:
+  /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
+  final Widget? over;
 
   @override
   State<SuperTabPaneLayout> createState() => _SuperTabPaneLayoutState();
@@ -166,7 +171,7 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                 SizedBox(
                   key: const ValueKey('super-right-pane'),
                   width: right,
-                  child: SuperTabRightPane(child: widget.right!),
+                  child: widget.right,
                 ),
             ],
           ),
@@ -225,44 +230,16 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                 ],
               ),
             ),
+          if (widget.over case final over?)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: width - right,
+              child: over,
+            ),
         ],
       );
     },
   );
-}
-
-/// A pane on the right of a Swarm chat (a thread, a task, Members), beside it
-/// or over it as a drawer. Along its left edge it lays the design system's
-/// pane shade over the chat, so the two read as separate surfaces, as in
-/// Slack (Huy, 11-03). The pane is drawn after the chat, so the shade lies on
-/// the chat; it takes no pointer, so the chat beneath it still gets clicks.
-class SuperTabRightPane extends StatelessWidget {
-  const SuperTabRightPane({super.key, required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return Stack(
-      fit: StackFit.passthrough,
-      clipBehavior: Clip.none,
-      children: [
-        child,
-        Positioned(
-          top: 0,
-          bottom: 0,
-          left: -grid.AppDesktop.paneEdgeShadeWidth,
-          width: grid.AppDesktop.paneEdgeShadeWidth,
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: grid.AppDesktop.paneEdgeShade,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 }

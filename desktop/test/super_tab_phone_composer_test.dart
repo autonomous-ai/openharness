@@ -117,16 +117,20 @@ void main() {
     await unmountPhoneSuperTab(tester, c);
   });
 
-  testWidgets('a wider window keeps one row', (tester) async {
+  // Huy and Scholes, 11-04: a wide window lays the composer out as the phone
+  // does, the field on top and its actions on a row under it.
+  testWidgets('a wider window has the phone\'s row under the field', (
+    tester,
+  ) async {
     final (_, c) = await mountPhoneSuperTab(
       tester,
       const Size(1280, 800),
       desktop: true,
     );
-    expect(_actions, findsNothing);
+    expect(_actions, findsOneWidget);
     final field = tester.getRect(_field), send = tester.getRect(_send);
-    expect(send.left, greaterThanOrEqualTo(field.right));
-    expect(send.center.dy, closeTo(field.center.dy, 12));
+    expect(send.top, greaterThanOrEqualTo(field.bottom));
+    expect(send.right, greaterThan(field.center.dx));
     await unmountPhoneSuperTab(tester, c);
   });
 

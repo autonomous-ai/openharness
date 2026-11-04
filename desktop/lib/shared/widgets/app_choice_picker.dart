@@ -361,9 +361,7 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
             ).copyWith(
               side: WidgetStateProperty.resolveWith(
                 (states) => BorderSide(
-                  color: states.contains(WidgetState.focused)
-                      ? AppPalette.accentOnSurface
-                      : widget.compact
+                  color: widget.compact
                       ? (selected
                             ? AppPalette.accentOnSurface.withValues(alpha: .6)
                             : AppGlass.hair)

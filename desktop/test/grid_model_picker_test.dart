@@ -709,8 +709,8 @@ void main() {
         .width;
     expect(
       width,
-      greaterThan(340),
-      reason: 'a row longer than the minimum asks for more',
+      greaterThanOrEqualTo(340),
+      reason: 'a long id still has the room a status clears',
     );
     expect(
       width,

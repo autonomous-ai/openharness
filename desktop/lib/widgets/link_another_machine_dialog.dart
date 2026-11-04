@@ -711,7 +711,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
                                 textAlignVertical: TextAlignVertical.center,
                                 decoration: InputDecoration(
                                   hintText: 'find a machine / desktop / SSH',
-                                  hintStyle: boxMonoStyle(color: kBoxFaint),
+                                  hintStyle: boxMonoStyle(color: kBoxHint),
                                   border: InputBorder.none,
                                   enabledBorder: InputBorder.none,
                                   focusedBorder: InputBorder.none,

@@ -10,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_thread_page.dart';
+import 'package:harness_mobile/swarm/swarm_threads_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_activity_fixture.dart';
@@ -95,6 +96,28 @@ void main() {
       );
       expect(tester.getSize(pill).height, greaterThanOrEqualTo(44));
     }
+  });
+
+  testWidgets("the tab's top bar has Threads before You, where Home's Threads "
+      'tile was (anh Dee, 2026-11-04); a tap opens the followed threads', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      activityBackend(page: activityPage),
+      home: const Scaffold(body: SwarmActivityView()),
+    );
+
+    final threads = tester.getRect(key('swarm-activity-threads'));
+    final you = tester.getRect(key('swarm-you-button'));
+    expect(threads.right, lessThanOrEqualTo(you.left));
+    expect(threads.center.dy, closeTo(you.center.dy, 0.5));
+    expect(threads.height, greaterThanOrEqualTo(44));
+    expect(find.bySemanticsLabel('Threads'), findsWidgets);
+
+    await tester.tap(key('swarm-activity-threads'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SwarmThreadsPage), findsOneWidget);
   });
 
   testWidgets('Needs you: where and who over the ask, Approve on a decision, '

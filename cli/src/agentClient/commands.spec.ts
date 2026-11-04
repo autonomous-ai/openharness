@@ -2122,6 +2122,96 @@ describe('harness watch', () => {
   })
 })
 
+describe('a Buddy passes its owner\'s words to their own harnesses on this Mac (#2626)', () => {
+  const asked = (over: { error?: [string, string] } = {}) => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => {
+      calls.push([target.machineId, payload])
+      if (over.error) throw new RefusedError(over.error[0], over.error[1])
+      return { id: 'm0000001', state: 'queued' }
+    }
+    return { calls, record }
+  }
+  // A Swarm session here (the Swarm started it: an agent, no starter on this machine), the person's own harnesses, one an
+  // agent here started, and one on another of the owner's machines.
+  const scene = () => {
+    const d = new FakeDaemon(), far = new FakeDaemon('m2')
+    d.frames = [frame('buddy', { engine: 'claude', startedBy: 'agent' }), frame('web'), frame('kid', { startedBy: 'agent', parentAgentId: 'web' })]
+    far.frames = [frame('far')]
+    return { d, far }
+  }
+  const buddyIn = (d: FakeDaemon, far: FakeDaemon, record: Rpc) => {
+    const h = harness(d, { record, pane: '%buddy', others: { m2: far } })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    return h
+  }
+  beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
+
+  it('tell and reply ask this machine, from the Buddy\'s pane: the machine decides whose the harness is', async () => {
+    const { d, far } = scene()
+    const r = asked()
+    let h = buddyIn(d, far, r.record)
+    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], h.deps)).toBe(EXIT.ok)
+    h = buddyIn(d, far, r.record)
+    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([
+      ['m', { action: 'tell', pane: '%buddy', machine: 'studio', agentId: 'web', text: 'Builders are done.' }],
+      ['m', { action: 'tell', pane: '%buddy', machine: 'studio', agentId: 'web', text: 'Yes, go ahead.', reply: true }],
+    ])
+  })
+
+  it('is refused, never asked of a machine, for another Mac\'s harness and for one an agent started', async () => {
+    const { d, far } = scene()
+    const r = asked()
+    for (const argv of [['--machine', 'office', 'far', '--', 'x'], ['kid', '--', 'x']]) {
+      let h = buddyIn(d, far, r.record)
+      expect(await tellCommand(argv, h.deps), argv.join(' ')).toBe(EXIT.refused)
+      h = buddyIn(d, far, r.record)
+      expect(await replyCommand(argv, h.deps), argv.join(' ')).toBe(EXIT.refused)
+    }
+    expect(r.calls).toEqual([])
+  })
+
+  it('finds a harness it did not start by its exact name or id only, and refuses naming no other harness (security review 2)', async () => {
+    const { d, far } = scene()
+    d.frames.push(frame('web-two'), frame('webhook', { status: 'stopped' }), frame('cloudy', { location: 'cloud' }))
+    const r = asked()
+    for (const name of ['we', 'webh', 'cloudy', 'nothing']) {
+      for (const run of [tellCommand, replyCommand]) {
+        const h = buddyIn(d, far, r.record)
+        expect(await run([name, '--', 'x'], h.deps), name).toBe(EXIT.refused)
+        expect(h.err.join('\n'), name).toBe('That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.')
+      }
+    }
+    expect(r.calls).toEqual([])
+    // By its exact name, or its id: asked of the machine, and no wait or show is suggested, which a Buddy cannot run.
+    const h = buddyIn(d, far, r.record)
+    expect(await tellCommand(['web-two', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).not.toContain('harness wait')
+    expect(await tellCommand([frame('web').id, '--', 'x'], buddyIn(d, far, r.record).deps)).toBe(EXIT.ok)
+    expect(r.calls.map(([, p]) => p.agentId)).toEqual(['web-two', 'web'])
+  })
+
+  it('still finds the harnesses it started by any part of their name', async () => {
+    const { d, far } = scene()
+    d.frames.push(frame('child-one', { startedBy: 'agent', parentAgentId: 'buddy' }))
+    const r = asked()
+    const h = buddyIn(d, far, r.record)
+    started(h.ledger, 'buddy', 'child-one')
+    expect(await tellCommand(['child', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls.map(([, p]) => p.agentId)).toEqual(['child-one'])
+  })
+
+  it('says the machine\'s refusal as it said it, and records nothing', async () => {
+    const { d, far } = scene()
+    const r = asked({ error: ['NOT_YOURS', 'That harness is another person\'s. A Buddy passes words only to harnesses its owner started on this Mac. Nothing was sent.'] })
+    const h = buddyIn(d, far, r.record)
+    expect(await tellCommand(['web', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('another person\'s')
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'buddy' }, { machineId: 'm', agentId: 'web' })).toBeNull()
+  })
+})
+
 describe('harness reply to a harness in a pane (a program acting for the person)', () => {
   const replied = (over: { state?: string; error?: [string, string] } = {}) => {
     const calls: Array<[string, Record<string, unknown>]> = []

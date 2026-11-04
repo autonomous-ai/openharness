@@ -34,6 +34,19 @@ describe('preparation tokens', () => {
   })
 })
 
+// Task #2755: an agent's task token carries workflows and issues where its installation granted them; preparation never does.
+describe('agent tokens and the installation\'s grant', () => {
+  it('carry workflows and issues where granted, and the preparation token stays read-only', async () => {
+    const { tokens, github } = setup()
+    github.grants.set(77, { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', workflows: 'write', issues: 'write' })
+    await tokens.prepare(repository)
+    await tokens.issue(request())
+    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+    expect(minted).toEqual([{ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } },
+      { repositories: ['app'], permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', workflows: 'write', issues: 'write' } }])
+  })
+})
+
 // A repository renamed on GitHub (2026-10-27: autonomous-harness → openharness): the project keeps the old name, which
 // GitHub still answers for git, and the app is installed on the repository under its new one.
 describe('a repository renamed on GitHub', () => {

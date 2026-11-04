@@ -368,10 +368,10 @@ void main() {
       .data;
   bool rowEnabled(WidgetTester tester, String id) =>
       tester
-          .widget<MenuItemButton>(
+          .widget<AppMenuItem>(
             find.descendant(
               of: leadRow(id),
-              matching: find.byType(MenuItemButton),
+              matching: find.byType(AppMenuItem),
             ),
           )
           .onPressed !=
@@ -610,7 +610,7 @@ void main() {
       );
       await openMachines(tester);
       SemanticsNode node(String id) => tester.getSemantics(
-        find.descendant(of: leadRow(id), matching: find.byType(MenuItemButton)),
+        find.descendant(of: leadRow(id), matching: find.byType(AppMenuItem)),
       );
       expect(
         node('laptop'),
@@ -1180,7 +1180,7 @@ void main() {
                 .getSemantics(
                   find.descendant(
                     of: leadRow(id),
-                    matching: find.byType(MenuItemButton),
+                    matching: find.byType(AppMenuItem),
                   ),
                 )
                 .getSemanticsData()

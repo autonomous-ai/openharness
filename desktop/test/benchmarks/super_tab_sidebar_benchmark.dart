@@ -79,11 +79,7 @@ void main() {
           }
         }
         final controller = server.controller(
-          initial: {
-            'tabId': 'tab',
-            'accountId': 'owner',
-            'expandedProjects': ids,
-          },
+          initial: {'tabId': 'tab', 'accountId': 'owner'},
         );
         await controller.refresh();
 

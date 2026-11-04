@@ -15,6 +15,9 @@ import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 export interface ProjectDoc {
   revision: number; text: string; summary: string | null; roleName: string; coordinatorName: string; coordinator: boolean
   savedAt?: number | null
+  /** The Swarm's built-in PM schedule, which only the coordinator's read carries (2026-11-04 PM schedule design): not part of
+   *  the document, so it follows it. Null or absent for anyone else, and from an older backend. */
+  builtIn?: string | null
 }
 /** `tools` and `instructions` are the two files' paths; `tools` is '' for a Buddy, which has no tools skill. `version` names
  *  what the files hold and `change` counts their rewrites: the notice's operation id is made of both. */
@@ -27,7 +30,8 @@ export function instructionsSkillText(doc: ProjectDoc): string {
   const role = doc.coordinator
     ? `You are this project's ${doc.roleName}, its coordinator: people talk to you when they address no one, and you receive the server's notices.`
     : `You are this project's ${doc.roleName}. ${doc.coordinatorName} is the project's coordinator.`
-  return `---\nname: swarm-instructions\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n${role}\n\nInstructions revision ${doc.revision}:\n\n${doc.text}`
+  const builtIn = doc.coordinator && doc.builtIn ? `\n\n${doc.builtIn}` : ''
+  return `---\nname: swarm-instructions\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n${role}\n\nInstructions revision ${doc.revision}:\n\n${doc.text}${builtIn}`
 }
 
 /** What the two files hold (each by its text's sha256; `tools` is '' for a Buddy), the revision and role they were written

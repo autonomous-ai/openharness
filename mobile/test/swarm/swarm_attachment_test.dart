@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_attachment.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
+import 'package:harness_mobile/swarm/swarm_file_download.dart';
 
 import 'swarm_attachment_fakes.dart';
 
@@ -334,6 +335,31 @@ void main() {
     expect(viewer, findsNothing);
     expect(preview, findsOneWidget);
 
+    await closed(tester);
+  });
+
+  testWidgets('Download hands the picture to the share sheet under its own '
+      'name', (tester) async {
+    final shareSheet = swarmShareSheet;
+    addTearDown(() => swarmShareSheet = shareSheet);
+    final shared = <({String name, List<int> bytes})>[];
+    swarmShareSheet = (params) async {
+      final copy = File(params.files!.single.path);
+      shared.add((
+        name: copy.uri.pathSegments.last,
+        bytes: copy.readAsBytesSync(),
+      ));
+    };
+    await pump(tester);
+    await until(tester, () => drawn(tester));
+    await tester.tap(preview);
+    await tester.pumpAndSettle();
+
+    await tester.tap(key('swarm-file-download'));
+    await until(tester, () => shared.isNotEmpty);
+
+    expect(shared.single.name, 'screen.png');
+    expect(shared.single.bytes, storage.bytes);
     await closed(tester);
   });
 

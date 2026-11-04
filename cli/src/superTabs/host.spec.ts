@@ -577,6 +577,53 @@ describe('Super Tab native delivery handoff', () => {
     host.stop(); release()
     await Promise.resolve()
   })
+  // Ken's prod scan (11-04): 615 agent.configuration refusals in 32 minutes, AGENT_UNAVAILABLE, about 19 a minute: a host
+  // re-posts every 5 s an observation the Swarm will never take (an agent that must be shared again, or is gone).
+  describe('a configuration report the Swarm refuses (#2675)', () => {
+    const refusing = (t: ReturnType<typeof setup>, status: number, code: string) => {
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@high')
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const sent: string[] = []
+      vi.mocked(t.call).mockImplementation(async (...args) => {
+        const body = args[2] as { operationId?: string; command?: { type?: string } } | undefined
+        if (args[1].endsWith('/commands') && body?.command?.type === 'agent.configuration') {
+          sent.push(body.operationId!)
+          return { status, body: { success: false, error: { code, message: 'Refused.' } } }
+        }
+        return original(...args)
+      })
+      return sent
+    }
+    const passes = async (host: SuperTabHost, t: ReturnType<typeof setup>, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await host.tick()
+        await new Promise(resolve => setImmediate(resolve))
+        t.wait(5_000)
+      }
+    }
+
+    it('is not sent again after a permanent refusal, and a new reading is reported once', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 400, 'AGENT_UNAVAILABLE')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(1)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@high')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(2)
+      expect(new Set(sent).size).toBe(2)
+    })
+
+    it('backs off after a passing failure instead of sending every 5 seconds', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 503, 'BACKEND_UNAVAILABLE')
+      // Two minutes of passes: 24 at the old pace.
+      await passes(host, t, 24)
+      expect(sent.length).toBeGreaterThanOrEqual(2)
+      expect(sent.length).toBeLessThanOrEqual(6)
+    })
+  })
+
   it('retires a human-resolved journal entry without resubmitting its native input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()
@@ -1354,6 +1401,17 @@ describe('a delivery poll or claim that keeps failing', () => {
     t.wait(1); await host.tick()
     expect(lists.n).toBe(3)
   })
+})
+
+// Task #2744: Tern's last group was archived, so its roster row no longer kept it from the idle cleanup when its next task came.
+it('keeps a harness its poll lists an assignment for, though its groups are archived', async () => {
+  const t = setup()
+  vi.mocked(t.core.account.backend).mockImplementation(async () => ({ status: 200, body: { data: hostForm([], { assignments: [
+    { tabId: 'tab', assignmentId: 'work-1', harnessId: 'tern' }] }) } }))
+  const host = t.open()
+  await host.tick()
+  expect([...retainedHarnesses(t.dir)]).toEqual(['tern'])
+  host.stop()
 })
 
 it('confirms a stopped assignment only with fresh native evidence, including after contribution removal', async () => {
@@ -2900,8 +2958,9 @@ describe('a Lead\'s terminal requests', () => {
       { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
   })
 
-  // Spec 2026-11-02-poll-cost Part 4.2: picked up on the server's word, polled every 8 s while it pushes, every 3 s without.
-  it('picks one up at once when the server says one waits, and polls every 8 s only while the server pushes', async () => {
+  // Spec 2026-11-02-poll-cost Part 4.2 and task #2800: picked up on the server's word, which the sender's wait repeats while
+  // the request waits; asked for on a timer only without it, every 3 s.
+  it('picks one up at once when the server says one waits, and asks only when told while the server pushes', async () => {
     const t = setup()
     Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
       screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
@@ -2910,13 +2969,12 @@ describe('a Lead\'s terminal requests', () => {
     t.idle()
     t.push({ type: 'super_tab_deliveries' })
     await host.tick()
-    await vi.waitFor(() => expect(pickups()).toBe(1))
     t.wait(3_000); await host.tick()
-    expect(pickups()).toBe(1)
+    expect(pickups()).toBe(0)
     t.push({ type: '__terminal_waiting', tabId: 'tab', agentId: 'agent' })
-    await vi.waitFor(() => expect(pickups()).toBe(2))
-    t.wait(8_000); await host.tick()
-    await vi.waitFor(() => expect(pickups()).toBe(3))
+    await vi.waitFor(() => expect(pickups()).toBe(1))
+    for (let i = 0; i < 6; i++) { t.wait(10_000); await host.tick() }
+    expect(pickups()).toBe(1)
   })
 })
 
@@ -3282,7 +3340,7 @@ describe('built-in skill text after a CLI update', () => {
     let inFlight = 0
     /** A notice the backend refuses (an older backend, an outage), and every refused request. */
     let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
-    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
+    const refused: Array<{ operationId: string; asAgentId?: string; command: Record<string, any> }> = []
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
@@ -3466,6 +3524,18 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent).toHaveLength(3)
   })
 
+  // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes. A Buddy session's notice is
+  // a top-level post the backend refuses (a session answers only in its own thread), and the host tried it every minute.
+  it('stops a skill notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.asAgentId === 'a-builder' ? { status: 403, body: { success: false,
+      error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
+    const host = await f.pass()
+    for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
+    expect(f.refused.filter(r => r.asAgentId === 'a-builder')).toHaveLength(1)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-lead', 'a-reviewer'])
+  })
+
   it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
     const f = syncFixture()
     f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
@@ -3621,6 +3691,8 @@ describe('project instructions from the roster', () => {
      *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
     const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
     let lag: number | undefined, history = true
+    /** The built-in PM schedule the backend serves its coordinator's read (2026-11-04 PM schedule design). */
+    let builtIn = '## Built-in PM schedule (from the Swarm)\n\nThe Swarm wakes you for these jobs.'
     /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
     let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
     const rows = () => agents.map(agent => {
@@ -3655,7 +3727,7 @@ describe('project instructions from the roster', () => {
         }
         const at = saves[(lag ?? saves.length) - 1]!
         return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
-          coordinatorName: 'Product Manager', notesRevision: 1,
+          coordinatorName: 'Product Manager', notesRevision: 1, ...(read[2] === 'a-pm' ? { builtIn } : {}),
           ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
       }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
@@ -3685,10 +3757,33 @@ describe('project instructions from the roster', () => {
       /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
       template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
         doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
-      setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+      setDoc: (next: typeof doc) => { doc = next }, setBuiltIn: (text: string) => { builtIn = text }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
   }
   const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  // 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, which changes with backend
+  // builds while the document's revision and hash stay; the roster's builtInHash says when.
+  it('rereads when the built-in hash moves', async () => {
+    const f = docFixture(['pm'])
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-1' })
+    const host = await f.pass()
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('The Swarm wakes you for these jobs.')
+    f.setBuiltIn('## Built-in PM schedule (from the Swarm)\n\nEvery 30 minutes, the open-task sweep.')
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-2' })
+    await f.pass(host, 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(2)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('Every 30 minutes, the open-task sweep.')
+  })
+
+  it('caches the coordinator\'s read apart from a worker\'s', async () => {
+    const f = docFixture(['pm', 'tester'])
+    await f.pass()
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(1)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('## Built-in PM schedule (from the Swarm)')
+    expect(readFileSync(f.file('tester'), 'utf8')).not.toContain('Built-in PM schedule')
+  })
 
   // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
   // the daemon restarted. The template's hash moves with each backend build that changes it.
@@ -3892,12 +3987,13 @@ describe('project instructions from the roster', () => {
   it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
     const f = docFixture(['pm', 'tester'])
     const host = await f.pass()
-    expect(f.reads).toEqual([instructionsRead('a-pm'), historyRead('a-pm')])
+    // The coordinator's read carries the built-in PM schedule, so it is its own; the project's other agents share one.
+    expect([...f.reads].sort()).toEqual([instructionsRead('a-pm'), historyRead('a-pm'), instructionsRead('a-tester'), historyRead('a-tester')].sort())
     expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
     expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
     f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
     await f.pass(host, 1_000)
-    expect(f.reads).toHaveLength(4)
+    expect(f.reads).toHaveLength(8)
     expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
     expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
   })
@@ -5031,8 +5127,9 @@ describe('a machine its owner removed from a Swarm', () => {
 })
 
 // Stability roadmap 2.4 (2026-10-28): every running agent's host read its delivery list each second, which kept a 5-pod
-// backend busy with almost nothing waiting. The server now says over the daemon socket when an agent has work; the read
-// every 30 s stays as the safety net, and the read each second comes back whenever the server has not said it pushes.
+// backend busy with almost nothing waiting. The server now says over the daemon socket when an agent has work, and tells
+// again of what is still queued (task #2800); a Lead's read every 30 s stays, and the read each second comes back whenever
+// the server has not said it pushes.
 describe('deliveries the server pushes', () => {
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
     .filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
@@ -5051,8 +5148,29 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(11)
   })
 
-  it('reads an idle agent\'s list every 30 s once the server pushes', async () => {
+  // Task #2800 (Watch Production): GET deliveries was 84% empty, mostly these 30 s reads. While the server pushes, it also tells
+  // again of a delivery still queued after 10 s (backend superTabs/deliveryRepush.ts), so an idle worker's list is read only
+  // when told: a push, the server's 4-minute repeat, a reconnect.
+  it('reads an idle worker\'s list only when told once the server pushes', async () => {
     const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    // The server renews the lease each minute (backend lib/swarmDeliveryPushes.ts): that reads nothing.
+    for (let minute = 0; minute < 3; minute++) {
+      await seconds(t, host, 60)
+      t.push({ type: '__deliveries_lease' })
+    }
+    expect(reads(t)).toBe(1)
+    t.push(announced)
+    await host.tick()
+    expect(reads(t)).toBe(2)
+  }, 20_000)
+
+  // A Lead's poll runs its project's time checks (backend liveness.ts SWEEP_EVERY_MS): it keeps its 30 s read.
+  it('still reads a Lead\'s list every 30 s', async () => {
+    const t = setup(), host = t.open()
+    t.row.lead = true
     t.idle()
     t.push(announced)
     await host.tick()
@@ -5060,6 +5178,20 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(1)
     await seconds(t, host, 1)
     expect(reads(t)).toBe(2)
+  })
+
+  // A read that failed is not a list read: it is tried again after its backoff, told or not.
+  it('reads again after a failed read\'s backoff, without waiting to be told', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    t.revoke()
+    await host.tick()
+    expect(reads(t)).toBe(1)
+    t.revoke(false)
+    t.send()
+    await seconds(t, host, 30)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
 
   it('reads the agent\'s list at once when the server says work waits, and types it', async () => {
@@ -5086,17 +5218,20 @@ describe('deliveries the server pushes', () => {
     await vi.waitFor(() => expect(t.core.turns.deliver).toHaveBeenCalledTimes(1))
   })
 
-  // The Lead's rule for this change: a lost push never loses work.
-  it('still types work whose push was lost, within 30 s', async () => {
+  // The Lead's rule for this change: a lost push never loses work. The server tells again within 25 s (deliveryRepush.ts);
+  // the host types it at once then, and reads nothing on a timer meanwhile.
+  it('types work whose push was lost as soon as the server tells again', async () => {
     const t = setup(), host = t.open()
     t.idle()
     t.push(announced)
     await host.tick()
     t.wait(500)
     t.send()
-    await seconds(t, host, 29)
+    await seconds(t, host, 60)
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    await seconds(t, host, 1)
+    expect(reads(t)).toBe(1)
+    t.push(waiting)
+    await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
 
@@ -5116,16 +5251,31 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(settled)
   })
 
-  it('goes back to reading each second once the server has not said it pushes for 10 minutes', async () => {
+  // Review of #2977 (Important 1): with Redis silent no push comes, and an idle worker is read only when told, so the lease
+  // must lapse within minutes. The server renews it each minute (backend lib/swarmDeliveryPushes.ts).
+  it('goes back to reading each second, and says so once, when the server has not renewed its lease for 2.5 minutes', async () => {
     const t = setup(), host = t.open()
     t.idle()
     t.push(announced)
     await host.tick()
-    t.wait(10 * 60_000)
+    t.wait(150_000)
     await host.tick()
     await seconds(t, host, 2)
     expect(reads(t)).toBe(4)
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('stopped saying it pushes deliveries'))).toHaveLength(1)
   })
+
+  it('keeps the lease on the server\'s minute word without reading any list', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    for (let minute = 0; minute < 10; minute++) {
+      await seconds(t, host, 60)
+      t.push({ type: '__deliveries_lease' })
+    }
+    expect(reads(t)).toBe(1)
+  }, 20_000)
 
   it('reads nothing more for a push naming an agent that does not run here', async () => {
     const t = setup(), host = t.open()
@@ -5212,7 +5362,8 @@ describe('a delivery held by a busy pane', () => {
     await seconds(t, host, 1)
     await seconds(t, host, 60)
     expect(writes(t)).toBe(30)
-    expect(reads(t)).toBe(4)
+    // Held, its list was read every 30 s; once the cancel is read it is idle, read only when told (task #2800).
+    expect(reads(t)).toBe(2)
   })
 
   it('an acked message costs no extra list read', async () => {
@@ -5479,4 +5630,39 @@ describe('the account a Buddy\'s grant holds for', () => {
     host.stop()
     expect(account()).toBeNull()
   })
+})
+
+// Task #2800's measure: what one idle agent and its machine ask the backend per minute over 10 minutes while the server
+// pushes, nothing waiting. Printed for the pull request; run against main's host.ts and terminal.ts for the before numbers.
+describe('requests per idle agent and machine per minute while the server pushes (task #2800)', () => {
+  async function measure(lead: boolean) {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+    t.row.lead = lead
+    const host = t.open()
+    t.idle()
+    t.push({ type: 'super_tab_deliveries' })
+    await host.tick()
+    vi.mocked(t.call).mockClear()
+    // The server's minute lease and its 4-minute word that it pushes (backend lib/swarmDeliveryPushes.ts). A daemon from
+    // before #2800 drops the `__` lease frame.
+    for (let second = 1; second <= 600; second++) {
+      t.wait(1_000)
+      if (second % 60 === 0) t.push({ type: '__deliveries_lease' } as BackendNotice)
+      if (second % 240 === 0) t.push({ type: 'super_tab_deliveries' })
+      await host.tick()
+    }
+    const calls = vi.mocked(t.call).mock.calls
+    const perMinute = (match: (method: string, path: string) => boolean) => calls.filter(([method, path]) => match(method, path)).length / 10
+    return { lists: perMinute((method, path) => method === 'GET' && path.endsWith('/deliveries')),
+      pickups: perMinute((method, path) => method === 'POST' && path.endsWith('/terminal')) }
+  }
+
+  it('an idle worker: list reads only on the repeat, no terminal pickups; a Lead: a list read every 30 s', async () => {
+    const worker = await measure(false), lead = await measure(true)
+    process.stderr.write(`[#2800 measure] per minute: worker list GETs ${worker.lists}, Lead list GETs ${lead.lists}, machine terminal pickups ${worker.pickups}\n`)
+    expect(worker).toEqual({ lists: 0.2, pickups: 0 })
+    expect(lead.lists).toBe(2)
+  }, 60_000)
 })

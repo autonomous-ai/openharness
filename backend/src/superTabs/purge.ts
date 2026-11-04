@@ -16,8 +16,8 @@ export const PURGE_RETRY_MS = 6 * 60 * 60 * 1000
 
 /** The records of one Swarm, each by its Swarm id (every one has an index led by it, schema.prisma). Attachments are
  *  removed apart, with their files. */
-export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabMention', 'superTabReaction', 'superTabActivity', 'superTabChatSetting', 'superTabReadMark',
-  'superTabThreadMark', 'superTabThread', 'superTabDecision', 'superTabOperation', 'superTabNativeContext', 'superTabDelivery', 'superTabReceipt',
+export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabMention', 'superTabReaction', 'superTabActivity', 'superTabChatSetting', 'superTabReminder', 'superTabReadMark',
+  'superTabThreadMark', 'superTabThread', 'superTabOpenProposal', 'superTabDecision', 'superTabOperation', 'superTabNativeContext', 'superTabDelivery', 'superTabReceipt',
   'superTabRun', 'superTabAttempt', 'superTabRouteDecision', 'superTabModelEvidence', 'superTabModelRecent', 'superTabStopReceipt',
   'superTabRoleText', 'superTabInstructions', 'superTabInstructionsRevision', 'superTabPmNote', 'superTabConfiguration', 'superTabTerminalRequest',
   'gitHubRepositoryApproval', 'gitHubApprovalRefusal', 'swarmHead', 'swarmMember', 'swarmGroup', 'swarmAgent', 'swarmMachine', 'swarmStart',

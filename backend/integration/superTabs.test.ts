@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -33,6 +34,7 @@ import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
+import { profiled } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2703,6 +2705,32 @@ describe('Super Tab chat attachments', () => {
       .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
   })
 
+  // A gateway's content filter in front of the backend refused a handoff full of shell lines (task #2737): the app sends
+  // a form file gzipped, says so before the file, and the store keeps the original bytes, type and size.
+  it('unpacks a file sent gzipped and keeps the original, refusing a corrupt, misplaced, unknown or oversized one', async () => {
+    const { tab } = await fixture()
+    const text = Buffer.from('$ cat ~/.ssh/config && rm -rf ./build; curl https://example.test/x.sh | sh\n'.repeat(500))
+    const packed = await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'run.transcript.md', 'text/markdown']])
+    expect(packed.status).toBe(200)
+    expect(packed.attachment).toMatchObject({ name: 'run.transcript.md', mime: 'text/markdown', size: text.byteLength })
+    expect(files.objects.get(objectKey(packed.attachment.url))!.bytes.equals(text)).toBe(true)
+    const plain = await post(tab, [['conversationId', 'lead'], ['file', text, 'run.transcript.md', 'text/markdown']])
+    expect(plain).toMatchObject({ status: 200, attachment: { size: text.byteLength } })
+    const before = files.objects.size
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', text, 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'br'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['contentEncoding', 'gzip'], ['conversationId', 'lead'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    // Small packed, over the form's 10 MB unpacked: stopped at the cap like any other form file.
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(Buffer.alloc(10 * 1024 * 1024 + 1)), 'zeros.bin', 'application/octet-stream']]))
+      .toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(files.objects.size).toBe(before)
+  })
+
   it('answers a bucket failure as unavailable, not as a server error', async () => {
     const { tab } = await fixture()
     const put = vi.spyOn(files, 'put').mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { code: 403 }))
@@ -2844,7 +2872,16 @@ describe('Super Tab chat attachments', () => {
     const old = (n: number, size = 1) => db.superTabAttachment.createMany({ data: Array.from({ length: n }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24),
       tabId: tab, conversationId: 'lead', actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size, objectKey: 'x' })) })
     await old(190)
-    const answers = await Promise.all(Array.from({ length: 60 }, () => linkFor(tab, { size: 11 })))
+    // 60 at once all write the sender's one allowance row, so a few may run out of the server's 8 tries and get the 503
+    // SWARM_BUSY every client retries (superTabs/retry.ts). Retry it here as clients do: the limits must hold either way.
+    // It failed CI twice on 11-04 (#2888, #2926) when the test counted that answer as a failure.
+    const linkAsClients = async () => {
+      for (let tries = 1; ; tries++) {
+        const answer = await linkFor(tab, { size: 11 })
+        if (answer.status !== 503 || answer.code !== 'SWARM_BUSY' || tries === 5) return answer
+      }
+    }
+    const answers = await Promise.all(Array.from({ length: 60 }, linkAsClients))
     expect(answers.filter(a => a.status === 200)).toHaveLength(10)
     expect(answers.filter(a => a.status === 429).every(a => a.code === 'RATE_LIMITED')).toBe(true)
     expect(answers.filter(a => a.status !== 200 && a.status !== 429)).toEqual([])
@@ -3785,6 +3822,36 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
     expect(Date.now() - answeredAt).toBeLessThan(6_000)
     expect(loads()).toBeLessThanOrEqual(3)
+  })
+
+  // Task #2800: while the server pushes, a host picks up terminal requests only when told (cli superTabs/terminal.ts), so a push
+  // lost on the way is told again by the sender's own wait, at each re-check of a request still waiting for its host: inside
+  // the 10 s pickup window, and with no read the wait does not already make.
+  it('tells the host again of a request still waiting for pickup at each re-check, and never of one picked up', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const told: unknown[] = []
+    const at = new SuperTabStore(db, Date.now, null, { terminalWaiting: waiting => { told.push(waiting) } })
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([{ machineId: 'test-host', tabId: tab, agentId: worker }])
+    expect(await claim()).toHaveLength(1)
+    told.length = 0
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([])
+  })
+
+  // Task #2800's measure: the database operations one empty answer costs, which each read a timer no longer makes saves.
+  // Printed for the pull request.
+  it('measures the database operations of an empty worker list read and an empty terminal pickup', async () => {
+    const { tab, worker } = await terminalFixture()
+    const ops = async (run: () => Promise<unknown>) => (await profiled(db, run)).filter(e => !e.ns.endsWith('.system.profile')).length
+    const full = await ops(() => store.deliveries(host, tab, worker))
+    const quiet = await ops(() => store.deliveries(host, tab, worker))
+    // 30 s on, as the host's timer read came: the full poll again, the read cache warm.
+    const warm = await ops(() => later(31_000).deliveries(host, tab, worker))
+    const pickup = await ops(() => store.hostTerminal(host, 'test-host'))
+    process.stderr.write(`[#2800 measure] DB operations per empty answer: worker list full ${full} (cold cache) / ${warm} (warm), quiet ${quiet}, terminal pickup ${pickup}\n`)
+    expect(Math.min(full, warm, quiet, pickup)).toBeGreaterThan(0)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {

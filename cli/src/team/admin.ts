@@ -35,8 +35,21 @@ export interface AdminScript {
 /** How root is asked for: the administrator prompt (a dialog), or sudo in this terminal, which asks for the password there. */
 export type AdminVia = 'prompt' | 'sudo'
 
-/** Builds the script once the staging folder exists (the script names it), then runs it as root. */
-export type RunAdmin = (build: (stageDir: string) => AdminScript, prompt: string, via?: AdminVia) => Promise<AdminResult>
+/** Builds the script once the staging folder exists (the script names it), then runs it as root. [progress] hears each
+ *  step the script says it is on ([readProgress]), while it runs. */
+export type RunAdmin = (build: (stageDir: string) => AdminScript, prompt: string, via?: AdminVia, progress?: (step: string) => void) => Promise<AdminResult>
+
+/** The file a setup script writes its step in, in its staging folder (./script.ts `step`). */
+export const PROGRESS_FILE = 'progress'
+const STEP = /^[a-z][a-z-]{0,23}$/
+
+/** The step the script last wrote, or null: anything but a step's name is ignored. */
+function readProgress(stageDir: string): string | null {
+  try {
+    const step = readFileSync(join(stageDir, PROGRESS_FILE), 'utf8').trim()
+    return STEP.test(step) ? step : null
+  } catch { return null }
+}
 
 export interface AdminDeps {
   runner?: GuestRunner
@@ -46,6 +59,8 @@ export interface AdminDeps {
   platform?: NodeJS.Platform
   /** Linux: whether `pkexec` and a desktop session to show its dialog in are there. */
   graphical?: boolean
+  /** How often the script's step is read while it runs. */
+  progressEveryMs?: number
 }
 
 /** Linux: whether polkit's dialog can be shown from this process (pkexec and a desktop session to show it in), as the
@@ -165,8 +180,14 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
   const removeStage = deps.removeStage ?? ((dir: string) => rmSync(dir, { recursive: true, force: true }))
   const platform = deps.platform ?? 'darwin'
   const graphical = () => deps.graphical ?? adminPromptShows()
-  return async (build, prompt, via = 'prompt') => {
+  return async (build, prompt, via = 'prompt', progress) => {
     const stageDir = makeStage()
+    // The script's step, read while it runs (osascript hands back its output only at the end), each new one said once.
+    let said: string | null = null
+    const watch = progress ? setInterval(() => {
+      const step = readProgress(stageDir)
+      if (step && step !== said) { said = step; progress(step) }
+    }, deps.progressEveryMs ?? 1_000) : null
     try {
       if (platform === 'win32') return await runElevatedOnWindows(runner, stageDir, build)
       chmodSync(stageDir, 0o700)
@@ -212,6 +233,7 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
       }
       return { ok: true, stdout: result.stdout }
     } finally {
+      if (watch) clearInterval(watch)
       removeStage(stageDir)
     }
   }

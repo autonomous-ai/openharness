@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -13,6 +14,7 @@ import '../phone_navigation.dart' show phoneRoute;
 import '../settings_row.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'saved_wifi.dart';
 import 'setup_hotspot.dart';
 
 /// Settings ▸ Set up Intern 3: a Harness with no screen (a box, a mini PC) put on the person's
@@ -185,7 +187,18 @@ class _Line extends StatelessWidget {
 
 class _AddDevicePageState extends State<AddDevicePage> {
   late final SetupHotspot _hotspot = widget.hotspot ?? SetupHotspot();
+  final _saved = const SavedWifi();
   final _ssid = TextEditingController();
+
+  /// The Wi-Fi password was filled in from the last setup on that Wi-Fi ([SavedWifi]).
+  bool _filled = false;
+
+  /// iOS's own join did not work, and the person joins the hotspot in Settings instead: the app only
+  /// waits to reach the device, as on a phone that never joins by itself.
+  bool _manual = false;
+
+  /// The app joins the hotspot itself, rather than the person in Settings.
+  bool get _auto => SetupHotspot.joinsByItself && !_manual;
   final _password = TextEditingController();
   final _name = TextEditingController();
 
@@ -286,6 +299,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
   void dispose() {
     _poll?.cancel();
     _tick?.cancel();
+    _again?.cancel();
     _backWatch?.cancel();
     unawaited(_hotspot.leave());
     _ssid.dispose();
@@ -383,7 +397,19 @@ class _AddDevicePageState extends State<AddDevicePage> {
     // that failed), so a new one now, while this phone is on its own Wi-Fi again. Sent again, the old
     // one came back "This ticket was already used or has expired".
     if (_ticketSent && !await _freshTicket()) return;
-    if (SetupHotspot.joinsByItself) {
+    if (_auto) {
+      // With the phone's Wi-Fi off, iOS never answers the join: the spinner would turn for ever.
+      if (!await _hotspot.wifiOn()) {
+        if (!mounted) return;
+        _show(
+          _Step.join,
+          error: Platform.isIOS
+              ? 'This phone is not on Wi-Fi. Turn Wi-Fi on in Settings ▸ Wi-Fi, then tap Try again.'
+              : 'This phone\'s Wi-Fi is off. Turn it on, then tap Try again.',
+        );
+        return;
+      }
+      if (!mounted) return;
       // Back for a device that did not come online: as long as Android looks for its hotspot.
       if (_retrying) _countdown(_hotspotSearch);
       // The same device again once it has started: only its own name in Android's list.
@@ -409,12 +435,33 @@ class _AddDevicePageState extends State<AddDevicePage> {
               ? 'Intern 3 did not come online${ssid.isEmpty ? '' : ' on "$ssid"'}, and its Wi-Fi '
                     '"Harness-…" did not come back. It may be on the Wi-Fi without being signed in: '
                     'check its screen, then tap Try again.'
+              : Platform.isIOS
+              ? 'This phone could not join Intern 3. Check it is plugged in and nearby: its '
+                    'Wi-Fi is named "Harness-…". Or join it in Settings instead.'
               : 'Intern 3 was not chosen. Check it is plugged in and nearby: its Wi-Fi is named "Harness-…".',
         );
         return;
       }
     }
-    // Joined by Android, or by the person in Settings: wait for the page to answer.
+    _awaitPage();
+  }
+
+  /// iOS's own join did not work: the person picks `Harness-…` in Settings ▸ Wi-Fi and comes back,
+  /// and the app waits to reach the device. Not on Android: a hotspot joined in Settings, with no
+  /// Internet, is soon left again for a Wi-Fi that has it, and the app's own join is the way there.
+  void _joinInSettings() {
+    _manual = true;
+    _show(_Step.join);
+    setState(() {
+      _busy = true;
+      _progress = _Progress.choosing;
+      _address = null;
+    });
+    _awaitPage();
+  }
+
+  /// Joined by the phone, or by the person in Settings: wait for the device's page to answer.
+  void _awaitPage() {
     _poll?.cancel();
     _poll = Timer.periodic(
       const Duration(seconds: 2),
@@ -657,18 +704,26 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   // -- 3. the person's Wi-Fi --
 
-  void _choose(SetupNetwork? network) {
+  Future<void> _choose(SetupNetwork? network) async {
     _chosen = network;
     _ssid.text = network?.ssid ?? '';
     _password.clear();
+    _filled = false;
     // The same Wi-Fi again after it failed: why, over the password being typed again.
     final failed = _failed;
-    _show(
-      _Step.password,
-      error: failed != null && network != null && failed.ssid == network.ssid
-          ? failed.why
-          : '',
-    );
+    final again =
+        failed != null && network != null && failed.ssid == network.ssid;
+    _show(_Step.password, error: again ? failed.why : '');
+    // The password a device came online with last time on this Wi-Fi. Not after it just failed
+    // there: the Wi-Fi's password may have changed since.
+    if (network == null || !network.secure || again) return;
+    final saved = await _saved.password(network.ssid);
+    if (!mounted || saved == null || _chosen != network) return;
+    if (_password.text.isNotEmpty) return;
+    setState(() {
+      _password.text = saved;
+      _filled = true;
+    });
   }
 
   Future<void> _send() async {
@@ -815,6 +870,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
           : online;
       if (settled) {
         _poll?.cancel();
+        // Online with it: the password is right, and the next setup on this Wi-Fi fills it in.
+        if (ssid.isNotEmpty && _password.text.isNotEmpty) {
+          unawaited(_saved.remember(ssid, _password.text));
+        }
         // Named after its Wi-Fi, `Harness-XXXX`, the name the person just picked it by; a device
         // that was here already keeps its own.
         final machine = _machine;
@@ -828,9 +887,18 @@ class _AddDevicePageState extends State<AddDevicePage> {
         _poll?.cancel();
         // Not online by now: the Wi-Fi most likely failed and the device is back on its hotspot with
         // the reason. Android goes back to it by itself; elsewhere the person rejoins it.
-        if (SetupHotspot.joinsByItself) {
-          _retrying = true;
-          unawaited(_join());
+        // Said first, as an end (owner, 2026-11-04): the bar ran out and the page went back to
+        // step 2 with no word, as if nothing had been tried. A few seconds, then the setup again.
+        if (_auto) {
+          _show(
+            _Step.waiting,
+            error:
+                'The setup did not finish: Intern 3 did not come online on "$ssid". '
+                'Most often its Wi-Fi password was not right.',
+          );
+          setState(() => _againSoon = true);
+          _again?.cancel();
+          _again = Timer(const Duration(seconds: 5), _setUpAgain);
           return;
         }
         _show(
@@ -841,6 +909,18 @@ class _AddDevicePageState extends State<AddDevicePage> {
         );
       }
     });
+  }
+
+  /// After a setup that did not finish: back to the device's hotspot, which shows why it failed.
+  bool _againSoon = false;
+  Timer? _again;
+
+  void _setUpAgain() {
+    _again?.cancel();
+    if (!mounted || !_againSoon) return;
+    _againSoon = false;
+    _retrying = true;
+    unawaited(_join());
   }
 
   // -- the page --
@@ -918,7 +998,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         ];
       case _Step.join:
         return [
-          if (SetupHotspot.joinsByItself)
+          if (_auto)
             say(
               'Choose Intern 3, "Harness-…", from the Wi-Fi list. Then wait here.',
             )
@@ -950,7 +1030,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
             done: _progress.index > _Progress.choosing.index,
             text: _progress.index > _Progress.choosing.index
                 ? 'Joined Intern 3\'s Wi-Fi${_address == null ? '' : ' · address $_address'}'
-                : SetupHotspot.joinsByItself
+                : _auto
                 ? 'Choose "Harness-…" from the list…'
                 : 'Waiting for this phone to join "Harness-…"…',
           ),
@@ -1016,12 +1096,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
                   title: network.ssid,
                   value: network.secure ? 'Locked' : 'Open',
                   detail: _bars(network.signal),
-                  onTap: () => _choose(network),
+                  onTap: () => unawaited(_choose(network)),
                 ),
               SettingsRow(
                 key: const Key('add-device-wifi-other'),
                 title: 'Other network…',
-                onTap: () => _choose(null),
+                onTap: () => unawaited(_choose(null)),
               ),
             ],
           ),
@@ -1040,7 +1120,11 @@ class _AddDevicePageState extends State<AddDevicePage> {
             ),
             const SizedBox(height: 12),
           ] else
-            say('The password for "${_chosen!.ssid}". It is case-sensitive.'),
+            say(
+              _filled
+                  ? 'The password for "${_chosen!.ssid}", filled in from your last setup on it.'
+                  : 'The password for "${_chosen!.ssid}". It is case-sensitive.',
+            ),
           if (_chosen?.secure ?? true) ...[
             const SizedBox(height: 8),
             TtyField(
@@ -1070,7 +1154,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
       case _Step.waiting:
         return [
           say(
-            _error.isNotEmpty
+            _againSoon
+                ? 'Setting it up again: this phone finds Intern 3 in a few seconds, and it says what '
+                      'went wrong.'
+                : _error.isNotEmpty
                 ? ''
                 : _ssid.text.trim().isEmpty
                 ? '$name is on a cable: it is signing in to your account. '
@@ -1120,12 +1207,18 @@ class _AddDevicePageState extends State<AddDevicePage> {
         ];
       case _Step.join:
         return [
-          if (_error.isNotEmpty || !SetupHotspot.joinsByItself)
+          if (_error.isNotEmpty || !_auto)
             TtyPrimaryButton(
               key: const Key('add-device-retry-join'),
-              label: SetupHotspot.joinsByItself ? 'Try again' : 'I joined it',
-              onPressed: () =>
-                  unawaited(SetupHotspot.joinsByItself ? _join() : _reach()),
+              label: _auto ? 'Try again' : 'I joined it',
+              onPressed: () => unawaited(_auto ? _join() : _reach()),
+            ),
+          // iOS's own join did not work: Settings ▸ Wi-Fi still does.
+          if (Platform.isIOS && _auto && _error.isNotEmpty)
+            TtyTextButton(
+              key: const Key('add-device-join-in-settings'),
+              label: 'Join it in Settings instead',
+              onPressed: _joinInSettings,
             ),
           if (_unlocked)
             TtyTextButton(
@@ -1186,7 +1279,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
         ];
       case _Step.waiting:
         return [
-          if (_error.isNotEmpty)
+          if (_againSoon)
+            TtyPrimaryButton(
+              key: const Key('add-device-again'),
+              label: 'Set up again now',
+              onPressed: _setUpAgain,
+            )
+          else if (_error.isNotEmpty)
             TtyPrimaryButton(
               key: const Key('add-device-rejoin'),
               label: 'Join Intern 3 again',

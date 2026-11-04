@@ -4,38 +4,14 @@
  * readers show it inside its task. No step name means anything to the server.
  */
 import { describe, expect, it } from 'vitest'
-import { applyCommand, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
-import { agent, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { PAIR_CHAIN_LIMIT, type Command } from './commands.js'
+import { agent, type Actor } from './model.js'
 import { extracted } from './parts/write.js'
+import { owner, stepsFixture } from './steps.test-support.js'
 import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
 import { QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
-
-const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
-const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-
-export function stepsFixture() {
-  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
-  let sequence = 0, now = 1000
-  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
-    state = effects.state
-    return effects
-  }
-  const add = (harnessId: string, group = 'lead', lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
-    name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-  const lead = add('pm', 'lead', true)
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.',
-    checks: [{ description: 'Signs in offline', independent: true }] }, as(lead)).result.conversationId as string
-  const dev = add('dev', task)
-  run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
-  const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>
-    run({ type: 'conversation.create', title: name, brief: `${name} it.`, reviewOf: on, step: name, checks } as Command, actor).result.conversationId as string
-  const group = (id: string) => state.conversations.find(c => c.id === id)!
-  return { run, add, as, lead, task, dev, step, group, tick: (ms: number) => { now += ms }, get now() { return now }, get state() { return state } }
-}
 
 describe('opening a step', () => {
   it('opens on a task of its project, numbered, its opener in the task', () => {
@@ -599,8 +575,8 @@ describe('checks with several checkers', () => {
     check(reviewer, true, 'Diff reads right')
     expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline\nlog' })
     expect(read().verdicts).toEqual([
-      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000 },
-      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now },
+      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000, name: expect.any(String) },
+      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now, name: expect.any(String) },
     ])
   })
 
@@ -640,6 +616,96 @@ describe('checks with several checkers', () => {
     check(reviewer, true, 'Still right')
     expect(read().verdicts!.map(v => [v.by, v.passed, v.evidence])).toEqual([
       [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
+  })
+
+  // Diego, 2026-11-04 (#2656): a check failed by a checker who then left the Swarm could never pass again in that attempt.
+  // A later pass by the task's PM or an owner clears departed checkers' failures; nobody else's does.
+  describe('a failure by a checker who left the Swarm', () => {
+    const departed = () => {
+      const c = checkers()
+      c.check(c.reviewer, false, 'Drops the session')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const second = c.f.add('reviewer-2', c.f.task)
+      c.check(second, true, 'Session kept')
+      return { ...c, second }
+    }
+
+    it('stays failed after another checker passes it', () => {
+      const { f, check, read } = departed()
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      check(f.dev, true, 'Fixed it')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+    })
+
+    it('is cleared by the owner\'s pass, which then names the check\'s passer and evidence', () => {
+      const { f, second, read } = departed()
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Reviewer left; Reviewer 2 passed it' } as Command)
+      expect(read()).toMatchObject({ passedBy: 'person:owner', evidence: 'Reviewer left; Reviewer 2 passed it' })
+      expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${second}`, true], ['person:owner', true]])
+    })
+
+    it('is cleared by the task\'s PM\'s pass', () => {
+      const { f, check, read } = departed()
+      check(f.lead, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${f.lead}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
+    // Review of #2916 (Alder2878): removing a PM clears its lead on every task it led, so "the task's PM" is the project's
+    // coordinator now, not the task's lead.
+    it('is cleared by a new PM\'s pass after the PM who opened the task was replaced', () => {
+      const { f, check, read } = departed()
+      // As a PM switch lands (commands.ts, leadFor.switchId): the new agent leads the project chat, then the old one goes.
+      const pm = f.add('pm-2')
+      f.group('lead').leadId = pm
+      f.run({ type: 'agent.remove', agentId: f.lead } as Command)
+      expect(f.group(f.task).leadId).toBeNull()
+      f.run({ type: 'conversation.agent', conversationId: f.task, agentId: pm, present: true, lead: false } as Command)
+      check(pm, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${pm}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
+    // Security reviews 1 and 2 of #2916 (Heron2639, Grebe2639): a cleared failure must stay on the record, and only an owner
+    // among people clears.
+    const ownerCheck = (f: ReturnType<typeof departed>['f'], actor: Actor, evidence: string) => f.run({ type: 'work.check',
+      conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence } as Command, actor)
+
+    it('leaves a line in the task naming the departed checker, its evidence and who cleared it', () => {
+      const c = checkers()
+      const name = c.f.state.agents.find(a => a.id === c.reviewer)!
+      c.check(c.reviewer, false, 'Drops the session\nfull log')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const effects = ownerCheck(c.f, owner, 'Reviewer left; passed on the second review')
+      expect(effects.messages).toContainEqual(expect.objectContaining({ conversationId: c.f.task, recipients: [],
+        text: `owner@example.com cleared ${name.displayName ?? name.name}'s failure of “Signs in offline”, as they left the Swarm: Drops the session` }))
+    })
+
+    it('stays failed after a collaborator\'s pass: only an owner among people clears it', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      const effects = ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Looks fine')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      expect(effects.messages.filter(m => m.text.includes('cleared'))).toEqual([])
+    })
+
+    it('is cleared by the project\'s owner who doesn\'t own the Swarm', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      f.state.projects = [{ id: 'lead', name: 'Pilot', ownerId: 'peer', leadConversationId: 'lead', visibility: 'public', members: [], updateMinutes: 5 }]
+      ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Reviewer left; I own this project')
+      expect(read()).toMatchObject({ passedBy: 'person:peer', evidence: 'Reviewer left; I own this project' })
+    })
+
+    it('leaves a live checker\'s failure standing, whoever passes', () => {
+      const { f, tester, check, read } = departed()
+      check(tester, false, 'Crashes offline')
+      check(f.lead, true, 'Looks fine')
+      f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+        checkId: read().id, passed: true, evidence: 'Looks fine' } as Command)
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+      expect(read().verdicts!.map(v => v.by)).toEqual(expect.arrayContaining([`agent:${tester}`]))
+    })
   })
 
   it('a new attempt starts with no verdicts', () => {

@@ -13,6 +13,7 @@ import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
+import { groupView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -1574,6 +1575,34 @@ describe('message attachments', () => {
     const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
       { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: '', attachments: [file] } })
     expect(resent.messages[0]).toMatchObject({ recipients: [lead], attachments: [file] })
+  })
+})
+
+describe('voice messages', () => {
+  const voice = { durationMs: 81_000, waveform: new Array(48).fill(7), transcribed: true }
+  const clip = { id: 'voice-1', name: 'Voice message.wav', mime: 'audio/wav', size: 2_592_044, url: 'https://cdn.example.test/super-tabs/tab/abc/Voice_message.wav', voice }
+  const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
+  const send = (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
+  it('makes the clip\'s words the message\'s text, and keeps its facts on the file', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': 'Ship the parser today.' } })
+    expect(sent.messages).toEqual([expect.objectContaining({ text: 'Ship the parser today.', attachments: [clip], recipients: [lead] })])
+  })
+  it('sends a clip with no words with an empty text', () => {
+    const f = fixture()
+    const quiet = { ...clip, voice: { ...voice, transcribed: false, failure: 'limit' as const } }
+    expect(f.run(send(['voice-1']), owner, { attachments: [quiet] }).messages[0]).toMatchObject({ text: '', attachments: [quiet] })
+  })
+  it('sends a voice message alone: no typed text, tags or other files with it', () => {
+    const f = fixture()
+    expect(() => f.run(send(['voice-1'], 'and also this'), owner, { attachments: [clip] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE', status: 400 }))
+    expect(() => f.run(send(['voice-1', 'file-1']), owner, { attachments: [clip, file] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE' }))
+  })
+  it('removes a credential spoken in it, as from typed text', () => {
+    const f = fixture()
+    const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+    const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': `the token is ${token}` } })
+    expect(sent.messages[0]!.text).toBe(`the token is ${CREDENTIAL_MARKER}`)
   })
 })
 
@@ -3190,7 +3219,8 @@ describe('machine.remove', () => {
   })
 
   // Diego's Mac, 2026-10-28: a host that keeps reporting but never confirms held its machine 'Cleaning up' for a day.
-  it('drops the machine\'s records after 30 minutes without an acknowledgement, says so in the project\'s chat, and keeps the cleanup for its host', () => {
+  // anh Dee, 11-04 (#2742): the Machines list shows which machines are in the Swarm; no chat says one left.
+  it('drops the machine\'s records after 30 minutes without an acknowledgement, says nothing in any chat, and keeps the cleanup for its host', () => {
     const { f, removalId } = cleaning()
     const day = 30 * 60_000
     // Its host keeps reporting, so only the fallback can expire it.
@@ -3198,9 +3228,7 @@ describe('machine.remove', () => {
     expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 }).messages).toEqual([])
     expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
     expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
-    expect(f.run({ type: 'tab.rename', name: 'Half an hour later' }, owner, { now: 1000 + day }).messages).toEqual([
-      expect.objectContaining({ conversationId: 'lead', source: { kind: 'machine-left', machine: 'Studio' },
-        text: 'Studio left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.' })])
+    expect(f.run({ type: 'tab.rename', name: 'Half an hour later' }, owner, { now: 1000 + day }).messages).toEqual([])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
@@ -3280,20 +3308,11 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
-  it('tells each project\'s chat that the machine left once its host confirmed the cleanup', () => {
+  it('says nothing in any project\'s chat once its host confirmed the cleanup', () => {
     const { f, removalId } = cleaning()
-    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { conversationId: string }
-    expect(f.run(cleaned(removalId)).messages).toEqual(['lead', docs.conversationId].map(conversationId => expect.objectContaining({
-      conversationId, source: { kind: 'machine-left', machine: 'Studio' }, recipients: [], text: 'Studio left the Swarm: its host confirmed its cleanup.' })))
-  })
-
-  it('writes the line only in the chats of projects its machine owner can open', () => {
-    const f = fixture()
-    f.invite()
-    contribute(f, 'peer')
-    f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })
-    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }, peer).result.removalId as string
-    expect(f.run(cleaned(removalId), peer).messages.map(m => [m.conversationId, m.author.id])).toEqual([['lead', 'peer']])
+    f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })
+    expect(f.run(cleaned(removalId)).messages).toEqual([])
+    expect(f.state.machines).toEqual([])
   })
 
   it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
@@ -3304,8 +3323,7 @@ describe('machine.remove', () => {
       expect(visibleState(f.state, owner).machines).toHaveLength(1)
       const effects = f.run({ type: 'machine.remove', machineId: 'host' })
       const removalId = effects.result.removalId as string
-      expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'machine-left', machine: 'Studio' },
-        text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
+      expect(effects.messages.filter(m => m.source?.kind === 'machine-left')).toEqual([])
       expect(f.state.machines).toEqual([])
       expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
       expect(visibleState(f.state, owner).machines).toEqual([])
@@ -3342,9 +3360,8 @@ describe('machine.remove', () => {
     expect(visibleState(f.state, owner, later).machines).toEqual([])
     expect(visibleState(f.state, owner, later).machineCleanups).toBeUndefined()
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host' })])
-    // The next change applies the same rule, says why, and keeps the cleanup for its host.
-    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([expect.objectContaining({
-      conversationId: 'lead', text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
+    // The next change applies the same rule, says nothing, and keeps the cleanup for its host.
+    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     f.run(cleaned(removalId))
@@ -4268,19 +4285,92 @@ describe('agent.stopRefused', () => {
 })
 
 describe('archiving unfinished work', () => {
-  /** A task Peer asked for, its worker's attempt left at [status]. */
-  function task(status: 'lost' | 'stopped' | 'cancelled' | 'done') {
+  /** A task Peer asked for (or, with [asked] false, the owner opened for themselves), its worker's attempt left at [status],
+   *  in the Swarm's first project or in [project] when given (a project Peer creates, so its owner is not the Swarm owner). */
+  function task(status: 'lost' | 'stopped' | 'cancelled' | 'done' | 'working', { asked = true, peerProject = false } = {}) {
     const f = fixture()
     f.invite()
-    const group = f.run({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs.', requesterId: 'peer',
-      checks: [{ description: 'Closed tabs leave the dial.', independent: false }] }).result.conversationId as string
+    const projectId = peerProject ? f.run({ type: 'project.create', name: 'Dial', visibility: 'public', brief: '' }, peer).result.projectId as string : undefined
+    const group = f.run({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs.', ...(asked ? { requesterId: 'peer' } : {}),
+      ...(projectId ? { projectId } : {}), checks: [{ description: 'Closed tabs leave the dial.', independent: false }] }).result.conversationId as string
     const worker = f.add('worker', 'owner', group)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
     if (status === 'cancelled') f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Superseded by the dial rewrite.' })
-    else f.state.conversations.find(c => c.id === group)!.assignment!.status = status
+    else if (status !== 'working') f.state.conversations.find(c => c.id === group)!.assignment!.status = status
     return { f, group, assignmentId }
   }
-  const archive = (t: ReturnType<typeof task>) => t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true })
+  const archive = (t: ReturnType<typeof task>, actor: Actor = owner) => t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true }, actor)
+  const cancel = (t: ReturnType<typeof task>, actor: Actor) =>
+    t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId: t.assignmentId, reason: 'Nobody can finish it here.' }, actor)
+  const at = (t: ReturnType<typeof task>) => t.f.state.conversations.find(c => c.id === t.group)!
+  const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can cancel it.'
+  const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can cancel work in progress. Ask the project\'s coordinator.'
+
+  // Diego, 2026-11-04 (#2639, a regression from #1903): a member who is not the Swarm owner could neither archive nor cancel a
+  // dead task they asked for, so it stayed in the Swarm for good.
+  it.each(['lost', 'stopped'] as const)('lets the requester cancel a %s task with a reason, which then archives and tags nobody', status => {
+    const t = task(status)
+    const cancelled = cancel(t, peer)
+    expect(at(t).assignment).toMatchObject({ status: 'cancelled', result: 'Nobody can finish it here.' })
+    // Nobody is left to tell: its worker stopped or lost the task already.
+    expect(cancelled.messages.filter(m => m.conversationId === t.group)).toEqual([expect.objectContaining({ recipients: [],
+      text: 'peer cancelled this task: Nobody can finish it here.' })])
+    // A retry keeps the first reason and says nothing more.
+    expect(t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId: t.assignmentId, reason: 'Again.' }, peer).messages).toEqual([])
+    expect(at(t).assignment!.result).toBe('Nobody can finish it here.')
+    expect(archive(t, peer).messages).toEqual([])
+    expect(at(t).archived).toBe(true)
+  })
+
+  it('lets a project\'s owner who is not the Swarm owner cancel a lost task in their project', () => {
+    const t = task('lost', { asked: false, peerProject: true })
+    cancel(t, peer)
+    expect(at(t).assignment!.status).toBe('cancelled')
+    // The owner asked for it, and hears that it closed without shipping.
+    expect(archive(t, peer).messages).toEqual([expect.objectContaining({ mentions: ['owner'] })])
+    expect(at(t).archived).toBe(true)
+  })
+
+  it('still refuses a collaborator who did not ask for a task, working or lost, and says who can cancel it', () => {
+    const working = task('working', { asked: false })
+    expect(() => cancel(working, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: WHO_CANCELS_LIVE }))
+    expect(at(working).assignment!.status).toBe('working')
+    const lost = task('lost', { asked: false })
+    expect(() => cancel(lost, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: WHO_CANCELS_ENDED }))
+    expect(at(lost).assignment!.status).toBe('lost')
+  })
+
+  it('refuses the requester while its agent still works on it, and another project\'s owner on a lost one', () => {
+    const working = task('working')
+    expect(() => cancel(working, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: WHO_CANCELS_LIVE }))
+    expect(at(working).assignment!.status).toBe('working')
+    const lost = task('lost', { asked: false })
+    lost.f.run({ type: 'project.create', name: 'Elsewhere', visibility: 'public', brief: '' }, peer)
+    expect(() => cancel(lost, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(at(lost).assignment!.status).toBe('lost')
+  })
+
+  // Security review 2 of #2907: a collaborator who did not ask could name themselves its requester, then cancel it. Among
+  // people only an owner names who asked; agents still name the person they opened it for.
+  it('refuses a collaborator who names themselves requester of a lost task, so they still cannot cancel it', () => {
+    const t = task('lost', { asked: false })
+    expect(() => t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: 'peer' }, peer))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.' }))
+    expect(() => t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: null }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(at(t).requesterId).toBe('owner')
+    expect(() => cancel(t, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(at(t).assignment!.status).toBe('lost')
+    // The owner of the task's project still names them, and then they may close it.
+    t.f.run({ type: 'conversation.requester', conversationId: t.group, personId: 'peer' })
+    cancel(t, peer)
+    expect(at(t).assignment!.status).toBe('cancelled')
+  })
+
+  it('names who can cancel when it refuses to archive unfinished work', () => {
+    const t = task('lost', { asked: false })
+    expect(() => archive(t, peer)).toThrow(expect.objectContaining({ code: 'WORK_UNFINISHED',
+      message: `This task did not finish. Hand it on, or cancel it with a reason, before archiving. ${WHO_CANCELS_ENDED}` }))
+  })
 
   it.each(['lost', 'stopped'] as const)('refuses to archive a %s task by hand, so nothing unfinished closes silently', status => {
     const t = task(status)
@@ -5215,5 +5305,131 @@ describe('lead.switch', () => {
     s.f.run(s.request)
     const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'signed out.\nplease\tretry.. ' }, s.as)
     expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: signed out. please retry. It is back on Codex.")
+  })
+})
+
+// A project's Next up (Tasks view, #2569): a person or the project's PM orders it, one sparse rank per task, and the PM marks a
+// promise with a not-before date.
+describe('the Next-up queue (work.queue)', () => {
+  function queued() {
+    const f = routed()
+    const open = (title: string, projectId?: string) => f.run({ type: 'conversation.create', ...projectId ? { projectId } : {}, title, brief: `${title}.`, checks: [] })
+      .result.conversationId as string
+    const [a, b, c] = [open('Drafts'), open('Sync'), open('Search')] as [string, string, string]
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    const queue = (conversationId: string, fields: { after?: string | null; notBefore?: string | null }) =>
+      commandSchema.parse({ type: 'work.queue', conversationId, ...fields })
+    return { f, a, b, c, open, task, queue }
+  }
+
+  it('moves a task after another for a person, between the two around it', () => {
+    const { f, a, b, c, task, queue } = queued()
+    f.run(queue(c, { after: a }))
+    expect(task(c).queueRank).toBeGreaterThan(task(a).number!)
+    expect(task(c).queueRank).toBeLessThan(task(b).number!)
+    // Only the task moved is written.
+    expect(task(a).queueRank).toBeUndefined()
+    expect(task(b).queueRank).toBeUndefined()
+    f.run(queue(b, { after: null }))
+    expect(task(b).queueRank).toBeLessThan(task(a).number!)
+    expect(groupView(task(c), new Set())).toMatchObject({ queueRank: task(c).queueRank })
+  })
+
+  it('takes the PM\'s not-before date, and clears it with null', () => {
+    const { f, a, task, queue } = queued()
+    f.run(queue(a, { notBefore: '2026-12-04' }), f.leadActor)
+    expect(task(a).notBefore).toBe('2026-12-04')
+    expect(task(a).queueRank).toBeUndefined()
+    expect(groupView(task(a), new Set())).toMatchObject({ notBefore: '2026-12-04' })
+    f.run(queue(a, { notBefore: null }), f.leadActor)
+    expect(task(a)).not.toHaveProperty('notBefore')
+  })
+
+  it('is refused to any other agent of the project', () => {
+    const { f, a, b, queue } = queued()
+    const engineer: Actor = { kind: 'agent', agentId: f.add('engineer'), machineOwnerId: 'host-owner' }
+    const before = structuredClone(f.state)
+    expect(() => f.run(queue(b, { after: a }), engineer)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    expect(() => f.run(queue(b, { notBefore: '2026-12-04' }), f.workerActor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    expect(f.state).toEqual(before)
+  })
+
+  it('refuses to place a task after one that is not an open task of its project, or after itself', () => {
+    const { f, a, b, c, open, queue } = queued()
+    const other = f.run({ type: 'project.create', name: 'Firmware', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const elsewhere = open('Flash', other.projectId)
+    const archived = open('Old')
+    f.run({ type: 'conversation.archive', conversationId: archived, archived: true })
+    const step = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: a, step: 'Review', checks: [] }).result.conversationId as string
+    const before = structuredClone(f.state)
+    for (const after of [elsewhere, other.conversationId, archived, step, b, 'lead', 'no-such-task']) {
+      expect(() => f.run(queue(b, { after })), after).toThrow(expect.objectContaining({ code: 'QUEUE_UNKNOWN', status: 400,
+        message: 'Name an open task of this project to place it after, or null for the top.' }))
+    }
+    // Nor does anything but an open task of the project move: its chat or a step.
+    for (const moved of ['lead', step]) expect(() => f.run(queue(moved, { after: c })), moved).toThrow(expect.objectContaining({ code: 'QUEUE_UNKNOWN', status: 400 }))
+    expect(() => f.run(queue(archived, { after: c }))).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+    f.state.conversations.push({ id: 'private', title: 'Private', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null,
+      lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
+    // A Chat with PM from before Buddies is nobody's to read now (buddies.test.ts), so it reads as missing.
+    expect(() => f.run(queue('private', { after: c }))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    f.state.conversations.pop()
+    expect(f.state).toEqual(before)
+  })
+
+  it('refuses a malformed date, and a move with neither field', () => {
+    const parse = (fields: Record<string, unknown>) => commandSchema.safeParse({ type: 'work.queue', conversationId: 'task', ...fields }).success
+    for (const notBefore of ['2026-12-4', '2026-02-30', '2026-13-01', 'Dec 4', '2026-12-04T00:00:00Z', '']) expect(parse({ notBefore }), notBefore).toBe(false)
+    expect(parse({})).toBe(false)
+    expect(parse({ after: 'other', notBefore: '2028-02-29' })).toBe(true)
+    expect(parse({ after: null })).toBe(true)
+    expect(parse({ notBefore: null })).toBe(true)
+  })
+
+  it('does the work once when the same operation comes again', () => {
+    const { f, a, c, task, queue } = queued()
+    f.run(queue(c, { after: a, notBefore: '2026-12-04' }), owner, { operationId: 'move' })
+    const once = structuredClone(f.state)
+    expect(task(c)).toMatchObject({ queueRank: expect.any(Number), notBefore: '2026-12-04' })
+    f.run(queue(c, { after: a, notBefore: '2026-12-04' }), owner, { operationId: 'move' })
+    expect(f.state).toEqual(once)
+  })
+})
+
+// 11-04 13:57 VN on the Mac Studio: the CLI's idle cleanup closed Tern, its machine's next reading listed the session
+// stopped, and six seconds after the close the PM assigned Tern a task, which was lost at once (task #2744).
+describe('assigning an agent whose session was closed', () => {
+  /** A worker on machine 'host', whose reading at [receivedAt] lists [running] and [stopped], and of those [cleaned] as closed
+   *  by its idle cleanup. */
+  function closed(running: string[], stopped: string[], receivedAt = 1000, cleaned: string[] = stopped) {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId: 'owner', membershipGeneration: f.state.people.find(p => p.id === 'owner')!.generation,
+      generation: 'g1', cwd: '/repo', engines: ['codex'], maxAgents: 4, paused: false, observation: { generation: 'g1', receivedAt,
+        resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(cleaned.length ? { closedHarnessIds: cleaned } : {}) } }]
+    return { f, group, worker }
+  }
+
+  it('is refused, saying to start a new agent, and changes nothing', () => {
+    const { f, group, worker } = closed([], ['worker'])
+    const before = JSON.stringify(f.state)
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker }))
+      .toThrow(expect.objectContaining({ code: 'AGENT_CLOSED', message: expect.stringContaining('session was closed. Start a new agent') }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // The review of #2953: Change agent stops the old terminal before the rebind moves the member to its new one, and a host
+  // mid-restart lists its sessions stopped for a moment. Either is stopped, never closed by the cleanup, and keeps its task.
+  it('goes ahead when the reading lists it running, is stale, lists it stopped but not closed, or cannot prove a resumed session stopped', () => {
+    for (const { f, group, worker } of [closed(['worker'], []), closed(['worker'], ['worker']), closed([], ['worker'], -100_000), closed([], ['worker'], 1000, [])]) {
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: worker, status: 'working' })
+    }
+    // A reservation renewed by a resume: an older host lists the earlier run stopped and cannot say which (closedAgents.ts).
+    const resumed = closed([], ['worker'])
+    resumed.f.state.harnessReservations = [{ machineId: 'host', harnessId: 'worker', generation: 'g2', renewed: true } as never]
+    resumed.f.run({ type: 'work.assign', conversationId: resumed.group, agentId: resumed.worker })
+    expect(resumed.f.state.conversations.find(c => c.id === resumed.group)!.assignment).toMatchObject({ agentId: resumed.worker })
   })
 })

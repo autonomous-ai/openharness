@@ -43,6 +43,10 @@ export interface SwarmProject {
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
   /** A person turned the digest off (project.digest with time null), so the default is not filled in again. */
   digestOff?: true
+  /** The last 30-minute slot of the built-in PM schedule in which its coordinator's poll found something to sweep
+   *  (pmSchedule.ts), woken or held back, and the message that last carried a wake (its own, an update request or a notice
+   *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it. */
+  schedule?: { lastSlot: number; wakeId?: string }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
@@ -57,6 +61,11 @@ export interface SwarmProject {
   roles?: ProjectRole[]
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
+  /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
+   *  (leadStart.ts leadWaits). Ids and times only, at most MAX_LEAD_WAITING; cleared when a Lead joins. */
+  leadWaiting?: Array<{ id: string; at: number }>
+  /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
+  leadClaim?: { id: string; machineId: string; at: number }
   /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
    *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
   reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>

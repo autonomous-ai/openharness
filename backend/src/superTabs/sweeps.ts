@@ -13,6 +13,7 @@ import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
+import { sweepReminders } from './reminders.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -194,19 +195,35 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
+/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
+export async function reminderRows(db: PrismaClient, now: number) {
+  try {
+    return { expired: await sweepReminders(db, now) }
+  } catch (error) {
+    logger.warn('[swarm-sweeps] reminders failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
     tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
-    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now) }
+    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals
  *  did not all run (workspaceStore.ts SwarmWorkspaces.finishRemovals); it needs the store, so the worker passes it in. */
-export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>): () => void {
+export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>,
+  leaveOverdueDecisions?: (now: number) => Promise<unknown>): () => void {
   // The worker names indexes as servers do: listed before each pass, so a pass after the schema push names them.
   const run = () => void listNamedIndexes(db).catch(error => logger.warn('[swarm-sweeps] listing indexes failed', { error: error instanceof Error ? error.message : String(error) }))
     .then(() => sweepSwarms(db)).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
+    // A decision left 24 hours goes to the PM (spec: Diego, 2026-11-04). Its failure is loud and never stops the rest of the pass.
+    .then(async result => ({ ...result, overdue: await leaveOverdueDecisions?.(Date.now()).catch(error => {
+      logger.error('[swarm-sweeps] overdue decisions failed', { error: error instanceof Error ? error.message : String(error) })
+      return { failed: true as const }
+    }) }))
     .then(result => logger.info('[swarm-sweeps] done', result))
     .catch(error => logger.warn('[swarm-sweeps] failed', { error: error instanceof Error ? error.message : String(error) }))
   run()

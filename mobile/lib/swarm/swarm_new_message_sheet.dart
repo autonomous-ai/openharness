@@ -9,6 +9,8 @@ import 'package:unorm_dart/unorm_dart.dart' as unorm;
 import 'package:harness_mobile/core/project_folder.dart' show foldDiacritics;
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/phone/voice_language_store.dart';
+import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
@@ -37,6 +39,7 @@ import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_voice.dart';
+import 'swarm_voice_send.dart' show SwarmVoicePosted;
 
 /// A chat New message can post to: chat [chatId] of Swarm [swarmId].
 typedef SwarmChatPick = ({String swarmId, String chatId});
@@ -287,21 +290,8 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     _visible = TickerMode.valuesOf(context).enabled;
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
-        _voice = SwarmVoice(
-          create: create,
-          dictation: SwarmScope.dictationOf(context),
-          draft: () => _text.text,
-          write: (text) {
-            if (_locked || _closing) return;
-            _text.value = TextEditingValue(
-              text: text,
-              selection: TextSelection.collapsed(offset: text.length),
-            );
-          },
-          post: () {
-            if (mounted && _canSend) unawaited(_send());
-          },
-        )..addListener(_redraw);
+        _voice = SwarmVoice(recorder: create, post: _sendVoice)
+          ..addListener(_redraw);
       }
     }
     // A covered sheet hears nothing: its take goes with it.
@@ -501,6 +491,37 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     chat.shown = true;
     _close(pick);
     setState(() {});
+  }
+
+  /// Posts [take] as a voice message to the chat picked, through that chat's
+  /// own send, its words heard in the mic's language; what is typed stays.
+  /// Taken, the sheet closes with it, as a typed post's does.
+  Future<SwarmVoicePosted> _sendVoice(VoiceTake take) async {
+    final pick = _picked;
+    if (pick == null || _find(pick) == null || _closing || _locked) {
+      return (sent: false, notice: null);
+    }
+    final reader = _inbox.reader(pick.swarmId);
+    if (reader == null || reader.accessRevoked) {
+      return (sent: false, notice: null);
+    }
+    if (_chat case final held?
+        when held.reader != reader || held.id != pick.chatId) {
+      _forgetChat();
+    }
+    final chat = _chat ??= SwarmConversation(reader, pick.chatId, shown: false)
+      ..composer.addListener(_redraw);
+    setState(() => _error = _note = null);
+    final posted = await chat.sendVoice(take, voiceLanguageStore.value);
+    if (!mounted || _closing || _chat != chat) return posted;
+    if (!posted.sent) {
+      setState(() => _error = chat.error);
+      return posted;
+    }
+    chat.shown = true;
+    _close(pick);
+    setState(() {});
+    return posted;
   }
 
   @override
@@ -713,7 +734,7 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     final canSend = _canSend;
     final locked = _locked;
     final voice = _voice;
-    final talking = voice?.face != null;
+    final talking = voice?.active ?? false;
     Widget note(String text, String key, Color color) => Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -739,12 +760,6 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
             note(text, 'swarm-new-message-attach-note', tty.yellow),
           if (_voice?.notice case final notice?)
             note(notice, 'swarm-new-message-voice-note', tty.yellow),
-          if (_voice?.stopped case final stopped?)
-            note(
-              stopped,
-              'swarm-new-message-voice-stopped',
-              AppPalette.textSecondary,
-            ),
           Flexible(
             child: SwarmComposerCard(
               focus: _focus,
@@ -887,50 +902,6 @@ class _PickCircle extends StatelessWidget {
       child: picked
           ? Icon(LucideIcons.check, size: 16, color: AppInk.onFill)
           : null,
-    );
-  }
-}
-
-/// Home's New message: a round + in the accent, the screen's primary
-/// action, floating at its bottom right over the list (Tony, 10-30: as
-/// Slack Mobile has it; desktop design system, Phone).
-class SwarmNewMessageButton extends StatelessWidget {
-  const SwarmNewMessageButton({super.key, required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  /// Its round, wider than a target, as a floating action is drawn.
-  static const double size = 56;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: 'New message',
-      excludeSemantics: true,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: AppSurface.shadow,
-        ),
-        child: Material(
-          color: AppPalette.accent,
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: onPressed,
-            child: SizedBox.square(
-              dimension: size,
-              child: Icon(
-                LucideIcons.plus,
-                size: AppIconSize.standalone,
-                color: AppInk.onFill,
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

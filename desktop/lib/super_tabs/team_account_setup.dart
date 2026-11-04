@@ -21,12 +21,14 @@ Future<void> showTeamAccountSetup(
   AppNotifier app, {
   bool asked = false,
   String? operatingSystem,
+  String? missing,
 }) => showAppDialog<void>(
   context: context,
   barrierDismissible: false,
   builder: (context) => _TeamAccountSetup(
     app: app,
     asked: asked,
+    missing: missing,
     words: _Words.of(operatingSystem ?? RuntimePlatform.operatingSystem),
   ),
 );
@@ -141,6 +143,14 @@ class _Words {
   static const _computerLead =
       'This computer joined a Swarm, so it needs Harness Team before you go on.';
 
+  /// The dialog's title when it repairs (#2765): "Repair Harness Team on this Mac".
+  String get repairTitle => title.replaceFirst('Set up', 'Repair');
+
+  /// What it says first when it repairs: what is missing, and that Repair runs the setup again.
+  String unfinished(String missing) => missing.isEmpty
+      ? 'Harness Team is not finished on $here. Repair runs its setup again.'
+      : 'Harness Team is not finished on $here: $missing. Repair runs its setup again.';
+
   /// Once Remove was refused: Not now is the way on, and it says so instead
   /// of asking for Remove again.
   String get notNowWhy =>
@@ -187,6 +197,49 @@ class _Words {
   /// "this Mac", or "this computer": what Remove takes out of the Swarms.
   final String here;
 
+  /// The steps setup says after the password, in order (cli/src/team/script.ts
+  /// `step`, then cli/src/team/command.ts `report`).
+  static const steps = [
+    'account',
+    'home',
+    'privacy',
+    'runtime',
+    'engines',
+    'sign-in',
+    'daemon',
+    'report',
+  ];
+
+  /// What setup is doing at [step], or null for the password (or a step this
+  /// app does not know), which [waiting] says.
+  String? doing(String? step) => switch (step) {
+    'account' => 'Making the Harness Team account.',
+    'home' => 'Making the Harness Team account\'s home folder.',
+    'privacy' => 'Making your home folder private.',
+    'runtime' => 'Copying Harness into the Harness Team account.',
+    'engines' =>
+      'Installing Claude Code and Codex for Harness Team. '
+          'On a new ${here.replaceFirst('this ', '')} this can take several minutes.',
+    'sign-in' => 'Signing Harness Team in.',
+    'daemon' => 'Starting Harness Team.',
+    'report' => 'Checking that Harness Team cannot read your files.',
+    _ => null,
+  };
+
+  /// The line under it: the step's number once one is said, and the time so
+  /// far.
+  static String sofar(String? step, Duration elapsed) {
+    final seconds = elapsed.inSeconds;
+    final time = seconds < 60
+        ? '$seconds s'
+        : '${seconds ~/ 60} min ${seconds % 60} s';
+    final at = steps.indexOf(step ?? '');
+    return at < 0
+        ? '$time so far.'
+        : 'Step ${at + 1} of ${steps.length} · $time so far. '
+              'Harness opens when it is done.';
+  }
+
   /// What Remove asks before it removes anything (security review of #2779):
   /// it deletes this computer from each Swarm in [swarms], which it names.
   String confirmRemove(List<String> swarms) {
@@ -210,11 +263,16 @@ class _TeamAccountSetup extends StatefulWidget {
     required this.app,
     required this.asked,
     required this.words,
+    this.missing,
   });
 
   final AppNotifier app;
   final bool asked;
   final _Words words;
+
+  /// The account is there and these parts are not (cli/src/team/autoSetup.ts `missingDetail`, #2765): the dialog
+  /// repairs instead of setting up. Empty for a part it could not name.
+  final String? missing;
 
   @override
   State<_TeamAccountSetup> createState() => _TeamAccountSetupState();
@@ -266,9 +324,10 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
     final muted = body.copyWith(color: Theme.of(context).hintColor);
     final outcome = _outcome;
     final words = widget.words;
+    final missing = widget.missing;
     return AlertDialog(
       key: const Key('team-account-setup'),
-      title: Text(words.title),
+      title: Text(missing == null ? words.title : words.repairTitle),
       content: SizedBox(
         width: 420,
         child: outcome != null
@@ -281,7 +340,10 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(words.account, style: body),
+                  Text(
+                    missing == null ? words.account : words.unfinished(missing),
+                    style: body,
+                  ),
                   const SizedBox(height: 12),
                   Text(words.prompt, style: body),
                   const SizedBox(height: 12),
@@ -310,7 +372,7 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
               FilledButton(
                 key: const Key('team-account-setup-continue'),
                 onPressed: _busy ? null : _continue,
-                child: const Text('Continue'),
+                child: Text(missing == null ? 'Continue' : 'Repair'),
               ),
             ],
     );
@@ -379,6 +441,10 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   Timer? _read;
   DateTime? _since;
 
+  /// While it waits: the step setup said, and how long it has run.
+  String? _setupStep;
+  Duration? _elapsed;
+
   @override
   void initState() {
     super.initState();
@@ -415,6 +481,8 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     _outcome = _removeError = null;
     _busy = false;
     _confirming = false;
+    _setupStep = null;
+    _elapsed = null;
   }
 
   void _show(_LockStep step, String outcome) {
@@ -436,6 +504,8 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       switch (await widget.app.setUpTeamAccount()) {
         case 'started' || 'running':
           _since = DateTime.now();
+          _setupStep = null;
+          _elapsed = Duration.zero;
           _show(_LockStep.waiting, words.waiting);
           _scheduleRead();
         case 'exists':
@@ -468,7 +538,7 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
 
   Future<void> _readSetup() async {
     _read = null;
-    final setup = await widget.app.teamSetupStatus();
+    final setup = await widget.app.teamSetupProgress();
     if (!mounted || _step != _LockStep.waiting) return;
     switch (setup?.state) {
       case 'exists':
@@ -490,6 +560,37 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       case 'declined':
         _show(_LockStep.cancelled, _words.cancelled);
         return;
+      // It ended with the account there and a part not (#2765): said, and Try again repairs it.
+      case 'incomplete':
+        final missing = setup?.detail?.trim();
+        _show(
+          _LockStep.retry,
+          missing == null || missing.isEmpty
+              ? 'Setup ended, but Harness Team is not finished. Try again.'
+              : 'Setup ended, but Harness Team is not finished: ${_sentence(missing)} Try again.',
+        );
+        return;
+      case 'running':
+        final since = _since;
+        setState(() {
+          _setupStep = setup?.step;
+          _elapsed =
+              setup?.elapsed ??
+              (since == null ? null : DateTime.now().difference(since));
+          _outcome = _words.doing(_setupStep) ?? _words.waiting;
+        });
+      case null:
+        // No answer (the daemon restarting): read again, until the limit.
+        break;
+      default:
+        // Anything else once it stopped running ('none': it ended with no
+        // account and nothing remembered, or the daemon restarted): the
+        // wait is over, and it says so (Scholes, 2026-11-04).
+        _show(
+          _LockStep.retry,
+          'Setup stopped before the Harness Team account was made. Try again.',
+        );
+        return;
     }
     final since = _since;
     if (since != null && DateTime.now().difference(since) > _setupLimit) {
@@ -497,6 +598,26 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       return;
     }
     _scheduleRead();
+  }
+
+  /// Try again while it waits: reads the status first, and starts setup
+  /// again only when none is running.
+  Future<void> _tryAgainWaiting() async {
+    setState(() {
+      _busy = true;
+      _removeError = null;
+    });
+    final setup = await widget.app.teamSetupProgress();
+    if (!mounted || _step != _LockStep.waiting) return;
+    switch (setup?.state) {
+      case 'running':
+        setState(() => _busy = false);
+      case 'exists':
+        await widget.app.teamAccountMade();
+        if (mounted) setState(() => _busy = false);
+      default:
+        await _start();
+    }
   }
 
   static String _sentence(String text) =>
@@ -640,6 +761,14 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       ),
                     ],
                   ),
+                  if (_step == _LockStep.waiting && _elapsed != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _Words.sofar(_setupStep, _elapsed!),
+                      key: const Key('team-account-lock-elapsed'),
+                      style: muted,
+                    ),
+                  ],
                   if (_confirming) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -687,7 +816,18 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       child: const Text('Continue'),
                     ),
                   ],
-                  _LockStep.waiting => const [],
+                  // Never without a way on (Scholes, 2026-11-04): Remove
+                  // asks first, and Try again starts nothing while setup
+                  // runs.
+                  _LockStep.waiting => [
+                    remove,
+                    FilledButton(
+                      key: const Key('team-account-lock-retry'),
+                      autofocus: true,
+                      onPressed: _busy ? null : _tryAgainWaiting,
+                      child: const Text('Try again'),
+                    ),
+                  ],
                   _LockStep.retry => [retry],
                   _LockStep.cancelled => [
                     if (removeError != null) notNow,

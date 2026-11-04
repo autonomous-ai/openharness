@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/state/harness_attachments.dart';
@@ -86,9 +87,11 @@ class SwarmPartsBackend {
           'otherProjectsWork',
           'githubApp',
           'readMarks',
+          'unreadMarks',
           'threadMarks',
           'chatSettings',
           'activityDigest',
+          'remindersDigest',
           'teamAccounts',
           'threadSessions',
           'sessionsFromChat',
@@ -179,10 +182,17 @@ class SwarmPartsBackend {
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
+    // The reader's marks whose last move was a Mark unread (backend
+    // readMarks.ts lowerReadMark), absent when none.
+    if ((state['unreadMarks'] as Map?)?[reader ?? 'owner'] case final Map marks
+        when marks.isNotEmpty)
+      'unreadMarks': Map<String, dynamic>.from(marks),
     // Their own Activity digest and chat settings (backend activity.ts,
     // chatSettings.ts): every setting on every read, which the app keeps.
     if (state['activityDigest'] != null)
       'activityDigest': state['activityDigest'],
+    if (state['remindersDigest'] != null)
+      'remindersDigest': state['remindersDigest'],
     if ((state['chatSettings'] as Map?)?[reader ?? 'owner'] case final Map set
         when set.isNotEmpty)
       'chatSettings': Map<String, dynamic>.from(set),
@@ -654,6 +664,14 @@ class ConversationServer {
     if (!agent) group['lastPersonSequence'] = revision;
   }
 
+  /// Each project's unanswered Buddy proposals, as the backend's proposals
+  /// read answers them (task #2569), by project id; [proposalReads] records
+  /// each read's path. With [proposalsUnsupported], it answers 404 as a
+  /// backend from before the read does.
+  final proposals = <String, List<Map<String, dynamic>>>{};
+  final proposalReads = <String>[];
+  bool proposalsUnsupported = false;
+
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
 
@@ -679,8 +697,88 @@ class ConversationServer {
           reader,
           () => <String, dynamic>{},
         ) as Map;
-    final kept = max(marks[conversationId] as int? ?? 0, sequence);
-    return marks[conversationId] = kept;
+    final held = marks[conversationId] as int? ?? 0;
+    // A mark moved forward is no longer one Mark unread left.
+    if (sequence > held) _unreadMarksOf(reader).remove(conversationId);
+    return marks[conversationId] = max(held, sequence);
+  }
+
+  Map _unreadMarksOf(String reader) =>
+      ((state['unreadMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+        reader,
+        () => <String, dynamic>{},
+      ) as Map;
+
+  /// The reader's reminders (backend reminders.ts), as its list answers each;
+  /// its read lists those due by `clock.now()` and the next time after.
+  final reminders = <Map<String, dynamic>>[];
+
+  /// Whether the server has reminders: without, each route answers 404.
+  bool remindersServed = true;
+  final reminderReads = <String>[];
+
+  /// Every reminder set or cleared, in order: {method, conversationId,
+  /// messageId, at}.
+  final reminderWrites = <Map<String, dynamic>>[];
+  int _reminderTurn = 0;
+
+  /// [message] as a reminder due [at] lists it.
+  Map<String, dynamic> remindOf(Map<String, dynamic> message, DateTime at) {
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == message['conversationId']);
+    final thread = message['thread'] as String?;
+    return {
+      'id': 'reminder-${message['id']}',
+      'conversationId': message['conversationId'],
+      'conversationTitle': group['title'],
+      'projectName': 'Harness',
+      'messageId': message['id'],
+      'messageSequence': message['sequence'],
+      'threadId': thread != null && thread != message['id'] ? thread : null,
+      'author': message['author'],
+      'text': message['text'],
+      'dueAt': at.toUtc().toIso8601String(),
+    };
+  }
+
+  /// A reminder of [messageId] the reader set on another device, due [at].
+  void remindElsewhere(String messageId, DateTime at) {
+    reminders.add(
+      remindOf(messages.firstWhere((m) => m['id'] == messageId), at),
+    );
+    state['remindersDigest'] = 'r${++_reminderTurn}';
+  }
+
+  /// The Mark unread writes this device sent, in order: {conversationId,
+  /// sequence} with the message's own sequence.
+  final unreadPosts = <Map<String, dynamic>>[];
+
+  /// Every Mark unread write fails, as offline.
+  bool failUnread = false;
+
+  /// [reader] marked [conversationId] unread from message [sequence] on
+  /// another device, as the backend keeps it.
+  void markUnreadElsewhere(
+    String conversationId,
+    int sequence, {
+    String reader = 'owner',
+  }) => _lowerReadMark(conversationId, sequence, reader);
+
+  /// The backend's Mark unread (readMarks.ts lowerReadMark): the mark goes to
+  /// just before the message, never forward.
+  int _lowerReadMark(String conversationId, int sequence, String reader) {
+    final marks =
+        ((state['readMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+          reader,
+          () => <String, dynamic>{},
+        ) as Map;
+    final held = marks[conversationId] as int?;
+    final target = sequence - 1;
+    if (held != null && held <= target) return held;
+    marks[conversationId] = target;
+    _unreadMarksOf(reader)[conversationId] = target;
+    return target;
   }
 
   /// The thread marks this device sent, in order: {conversationId, root,
@@ -864,6 +962,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.timeZone')
+              'timeZone': command['timeZone']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
             else if (command['type'] == 'member.name')
@@ -908,6 +1008,48 @@ class ConversationServer {
     group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
     revision++;
     return true;
+  }
+
+  /// An edit as the backend keeps it (messageEdits.ts): the new text, when it
+  /// changed, and the group's `reactionSeq` moved. False for the same text.
+  bool editMessage(String messageId, String text) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    if (message['text'] == text) return false;
+    message
+      ..['text'] = text
+      ..['editedAt'] = '2026-10-18T00:05:00Z';
+    _messageChanged(message['conversationId'] as String);
+    return true;
+  }
+
+  /// A delete as the backend keeps it (messageEdits.ts): a message with
+  /// replies stays as its tombstone, any other goes from every page. Whether
+  /// it was kept.
+  bool deleteMessage(String messageId) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    final kept = messages.any(
+      (m) => m['thread'] == messageId && m['id'] != messageId,
+    );
+    if (kept) {
+      message
+        ..['text'] = 'This message was deleted.'
+        ..['deletedAt'] = '2026-10-18T00:06:00Z'
+        ..['attachments'] = <dynamic>[]
+        ..['mentions'] = <dynamic>[]
+        ..['reactions'] = <dynamic>[];
+    } else {
+      messages.remove(message);
+    }
+    _messageChanged(message['conversationId'] as String);
+    return kept;
+  }
+
+  void _messageChanged(String conversationId) {
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == conversationId);
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    revision++;
   }
 
   /// What the backend does with a file sent to its upload route.
@@ -965,6 +1107,57 @@ class ConversationServer {
         : null;
     if (read != null) {
       return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
+    final reminder = RegExp(
+      r'/conversations/([^/]+)/messages/([^/]+)/reminder$',
+    ).firstMatch(path);
+    // A POST, as the daemon forwards only GET and POST: a time sets it, none
+    // clears it.
+    if (reminder != null && method == 'POST') {
+      final conversationId = Uri.decodeComponent(reminder.group(1)!);
+      final messageId = Uri.decodeComponent(reminder.group(2)!);
+      final clears = body?['at'] == null;
+      reminderWrites.add({
+        'method': clears ? 'clear' : 'set',
+        'conversationId': conversationId,
+        'messageId': messageId,
+        if (body?['at'] case final at?) 'at': at,
+      });
+      if (!remindersServed) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      final id = 'reminder-$messageId';
+      final held = reminders.indexWhere((r) => r['id'] == id);
+      if (clears) {
+        if (held >= 0) reminders.removeAt(held);
+        state['remindersDigest'] = 'r${++_reminderTurn}';
+        return {'cleared': held >= 0};
+      }
+      final message = messages.firstWhere((m) => m['id'] == messageId);
+      final row = remindOf(message, DateTime.parse(body!['at'] as String));
+      if (held >= 0) {
+        reminders[held] = row;
+      } else {
+        reminders.add(row);
+      }
+      state['remindersDigest'] = 'r${++_reminderTurn}';
+      return {'id': id, 'dueAt': row['dueAt']};
+    }
+    final unread = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/unread$').firstMatch(path)
+        : null;
+    if (unread != null) {
+      final id = Uri.decodeComponent(unread.group(1)!);
+      final sequence = body!['sequence'] as int;
+      unreadPosts.add({'conversationId': id, 'sequence': sequence});
+      if (failUnread) {
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      return {'sequence': _lowerReadMark(id, sequence, reader ?? 'owner')};
     }
     final threadRead = method == 'POST'
         ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/read$')
@@ -1125,6 +1318,7 @@ class ConversationServer {
           output['startId'] = operationId;
         }
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.timeZone' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||
@@ -1132,6 +1326,14 @@ class ConversationServer {
         _profile(command, reader ?? 'owner');
       } else if (command['type'] == 'message.react') {
         output['changed'] = _react(command, reader ?? 'owner');
+      } else if (command['type'] == 'message.edit') {
+        output['changed'] = editMessage(
+          command['messageId'] as String,
+          command['text'] as String,
+        );
+      } else if (command['type'] == 'message.delete') {
+        output['changed'] = true;
+        output['kept'] = deleteMessage(command['messageId'] as String);
       } else if (command['type'] == 'decision.answer') {
         final id = command['decisionId'] as String;
         if (command['delegate'] == true) {
@@ -1373,6 +1575,20 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.claim') {
+        // One start of a project's Lead (backend commands.ts lead.claim):
+        // another machine's claim is the one; the same machine claims again.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        final held = project?['leadClaim'];
+        if (held is Map && held['machineId'] != command['machineId']) {
+          output['leadStart'] = 'waiting';
+        } else {
+          project?['leadClaim'] = {'machineId': command['machineId']};
+          output['leadStart'] = 'start';
+        }
       } else if (command['type'] == 'lead.start') {
         if (leadRefusal case final refusal?) {
           leadRefusal = null;
@@ -1419,6 +1635,38 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'work.queue') {
+        // As backend taskQueue.ts places it: right after `after` among the
+        // project's open tasks, by rank or else number; null for the top.
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final task = groups.firstWhere(
+          (g) => g['id'] == command['conversationId'],
+        );
+        num key(Map<String, dynamic> g) =>
+            (g['queueRank'] ?? g['number'] ?? 0) as num;
+        final siblings =
+            groups
+                .where(
+                  (g) =>
+                      g['projectId'] == task['projectId'] &&
+                      g['archived'] != true &&
+                      g['number'] != null &&
+                      g['id'] != task['id'],
+                )
+                .toList()
+              ..sort((a, b) => key(a).compareTo(key(b)));
+        final after = command['after'];
+        if (after == null) {
+          task['queueRank'] = siblings.isEmpty ? 1 : key(siblings.first) - 1;
+        } else {
+          final i = siblings.indexWhere((g) => g['id'] == after);
+          final next = i + 1 < siblings.length ? siblings[i + 1] : null;
+          task['queueRank'] = next == null
+              ? key(siblings[i]) + 1
+              : (key(siblings[i]) + key(next)) / 2;
+        }
+        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()
@@ -1528,6 +1776,15 @@ class ConversationServer {
       }
       return {'attachment': await answer(uri.pathSegments.last)};
     }
+    if (uri.pathSegments.last == 'proposals') {
+      proposalReads.add(path);
+      if (proposalsUnsupported) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return {
+        'proposals': [...?proposals[uri.queryParameters['projectId']]],
+      };
+    }
     if (uri.pathSegments.last == 'threads' ||
         uri.pathSegments.last == 'inbox') {
       threadListReads.add(path);
@@ -1546,6 +1803,28 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
       return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'reminders' && method == 'GET') {
+      reminderReads.add(path);
+      if (!remindersServed) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      final now = clock.now();
+      DateTime due(Map r) => DateTime.parse(r['dueAt'] as String);
+      final listed = [
+        for (final r in reminders)
+          if (!due(r).isAfter(now)) r,
+      ]..sort((a, b) => due(b).compareTo(due(a)));
+      final later = [
+        for (final r in reminders)
+          if (due(r).isAfter(now)) due(r),
+      ]..sort();
+      return jsonDecode(
+        jsonEncode({
+          'due': listed,
+          'next': later.firstOrNull?.toUtc().toIso8601String(),
+        }),
+      ) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'activity') {
       activityReads.add(path);
@@ -1785,6 +2064,8 @@ class ConversationServer {
         'question': question,
         'options': ['Behind a flag', 'To everyone'],
         'recommended': recommended,
+        // As the backend says it: a recommended option that exists.
+        'pmTakesOver': recommended >= 0 && recommended < 2,
         'unblocks': 'The release',
         'createdAt': '2026-10-27T05:00:00Z',
         'answeredAt': null,

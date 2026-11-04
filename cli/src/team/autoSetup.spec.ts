@@ -26,11 +26,13 @@ afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: 
 
 describe('the Harness Team account, set up on its own', () => {
   it('starts setup as the person joins or adds this Mac, once at a time, and answers at once', async () => {
-    const f = fake()
+    let made = false
+    const f = fake({ accountExists: vi.fn(async () => made) })
     let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
     ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     expect(await f.auto.offer('join')).toEqual({ state: 'started' })
     expect(await f.auto.offer('contribute')).toEqual({ state: 'running' })
+    made = true
     finish({ code: 0, result: { ok: true } })
     await f.auto.settled()
     expect(f.deps.setup).toHaveBeenCalledTimes(1)
@@ -92,7 +94,10 @@ describe('the Harness Team account, set up on its own', () => {
     const threw = fake({ setup: vi.fn(async () => { throw new Error('osascript missing') }) })
     await threw.auto.offer('join'); await threw.auto.settled()
     expect(threw.decision()).toMatchObject({ state: 'failed', detail: 'osascript missing' })
-    const slow = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, privacy: null } })) })
+    // The account was made: only the report is late.
+    let slowMade = false
+    const slow = fake({ setup: vi.fn(async () => { slowMade = true; return { code: 1, result: { ok: false, privacy: null } } }),
+      accountExists: vi.fn(async () => slowMade) })
     await slow.auto.offer('join'); await slow.auto.settled()
     expect(slow.decision()).toBeNull()
     expect(slow.log.join('\n')).toContain('harness team status')
@@ -100,6 +105,61 @@ describe('the Harness Team account, set up on its own', () => {
       writeDecision: vi.fn(() => { throw new Error('read-only') }) })
     await unreadable.auto.offer('join'); await unreadable.auto.settled()
     expect(unreadable.log.join('\n')).toContain('could not remember')
+  })
+
+  // Scholes, 2026-11-04: a setup that ended without the account, for a reason outside MADE_NOTHING (osascript's
+  // 15 minutes, a code this CLI does not know, no answer at all), remembered nothing, so Desktop's status read `none`
+  // and its lock could not say why.
+  it('remembers why whenever a setup ends without the account, whatever it answered', async () => {
+    const cases: Array<[{ code: number; result: Record<string, unknown> | null }, string]> = [
+      [{ code: 1, result: { ok: false, code: 'SOMETHING_NEW', message: 'The script stopped (exit null).' } }, 'The script stopped (exit null).'],
+      [{ code: 1, result: { ok: false, privacy: null } }, 'Setup ended (exit 1) without making the Harness Team account.'],
+      [{ code: 1, result: null }, 'Setup ended (exit 1) without making the Harness Team account.'],
+      [{ code: 0, result: { ok: true } }, 'Setup ended (exit 0) without making the Harness Team account.'],
+    ]
+    for (const [outcome, detail] of cases) {
+      const f = fake({ setup: vi.fn(async () => outcome) })
+      await f.auto.offer('join'); await f.auto.settled()
+      expect(f.decision(), detail).toMatchObject({ state: 'failed', detail })
+      expect(await f.auto.status()).toEqual({ state: 'failed', detail })
+    }
+    // A cancel is still a no, and an account that is there is no failure.
+    const cancelled = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, code: 'CANCELLED' } })) })
+    await cancelled.auto.offer('join'); await cancelled.auto.settled()
+    expect(cancelled.decision()).toMatchObject({ state: 'declined' })
+    let made = false
+    const ok = fake({ setup: vi.fn(async () => { made = true; return { code: 0, result: { ok: true } } }), accountExists: vi.fn(async () => made) })
+    await ok.auto.offer('join'); await ok.auto.settled()
+    expect(ok.decision()).toBeNull()
+  })
+
+  it('says the step a running setup is on and how long it has run, for Desktop\'s waiting screen', async () => {
+    let now = 1_000_000
+    let step: (name: string) => void = () => {}
+    let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
+    const f = fake({ now: () => now, setup: vi.fn((progress?: (name: string) => void) => {
+      step = progress ?? (() => {})
+      return new Promise<{ code: number; result: Record<string, unknown> | null }>((resolve) => { finish = resolve })
+    }) })
+    await f.auto.offer('manual')
+    expect(await f.auto.status()).toEqual({ state: 'running', elapsedMs: 0 })
+    now += 95_000
+    step('engines')
+    expect(await f.auto.status()).toEqual({ state: 'running', step: 'engines', elapsedMs: 95_000 })
+    finish({ code: 0, result: { ok: true } })
+    await f.auto.settled()
+    expect((await f.auto.status()).step).toBeUndefined()
+  })
+
+  it('says in its log when the account was made without Claude Code or Codex, and how to add them', async () => {
+    let made = false
+    const f = fake({ accountExists: vi.fn(async () => made), setup: vi.fn(async () => {
+      made = true
+      return { code: 0, result: { ok: true, engines: { checkedAt: 1, claude: { installed: false, signedIn: null }, codex: { installed: true, signedIn: false } } } }
+    }) })
+    await f.auto.offer('join'); await f.auto.settled()
+    expect(f.log.join('\n')).toContain('Claude Code is not installed in the Harness Team account: harness team setup installs it')
+    expect(f.decision()).toBeNull()
   })
 
   it('tells its own Desktop why there is no account: cancelled, failed with the reason, still running, or nothing yet', async () => {
@@ -112,7 +172,7 @@ describe('the Harness Team account, set up on its own', () => {
     let finish: (value: { code: number; result: Record<string, unknown> | null }) => void = () => {}
     ;(f.deps.setup as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     await f.auto.offer('manual')
-    expect(await f.auto.status()).toEqual({ state: 'running' })
+    expect(await f.auto.status()).toEqual({ state: 'running', elapsedMs: 0 })
     finish({ code: 0, result: { ok: true } })
     await f.auto.settled()
     // Made since: whatever was remembered before no longer explains anything.
@@ -219,3 +279,48 @@ describe('the Harness Team account, set up on its own', () => {
     }
   })
 })
+
+describe('a half-finished setup is repaired, not taken for done (#2765, Darren-MacBook)', () => {
+  it('with the account but no daemon, Set up runs setup again; the automatic moments ask for nothing', async () => {
+    const missing = vi.fn(async () => ['daemon'] as const)
+    const f = fake({ accountExists: vi.fn(async () => true), missing } as Partial<AutoSetupDeps>)
+    for (const reason of ['startup', 'join', 'contribute'] as const) {
+      expect(await f.auto.offer(reason, async () => true), reason).toEqual({ state: 'incomplete' })
+    }
+    expect(f.deps.setup).not.toHaveBeenCalled()
+    // Desktop's explanation first, then the person's Set up: the repair runs.
+    expect(await f.auto.offer('manual', async () => true, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledTimes(1)
+  })
+
+  it('a remembered cancel or failure does not stop Set up from repairing', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon'] } as Partial<AutoSetupDeps>)
+    f.setDecision({ state: 'failed', at: 1_000_000 - 1 })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+  })
+
+  it('status names what is missing, for the machine row', async () => {
+    const daemon = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon'] } as Partial<AutoSetupDeps>)
+    expect(await daemon.auto.status()).toEqual({ state: 'incomplete', missing: ['daemon'], detail: 'the team daemon is not running' })
+    const privacy = fake({ accountExists: vi.fn(async () => true), missing: async () => ['privacy'] } as Partial<AutoSetupDeps>)
+    expect(await privacy.auto.status()).toEqual({ state: 'incomplete', missing: ['privacy'], detail: 'its privacy check has not passed' })
+    const both = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon', 'privacy'] } as Partial<AutoSetupDeps>)
+    expect((await both.auto.status()).detail).toBe('the team daemon is not running, and its privacy check has not passed')
+  })
+
+  it('with every part in place it is done: exists, and nothing runs', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
+    expect(await f.auto.offer('manual')).toEqual({ state: 'exists' })
+    expect(await f.auto.status()).toEqual({ state: 'exists' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+  })
+
+  it('a part it cannot read counts as missing, so Set up can still repair it', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => { throw new Error('launchctl timed out') } } as Partial<AutoSetupDeps>)
+    expect(await f.auto.status()).toMatchObject({ state: 'incomplete', missing: ['daemon'] })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+  })
+})
+

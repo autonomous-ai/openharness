@@ -10,7 +10,9 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
+import 'composer_newline.dart';
 import 'identity.dart';
+import 'identity_card.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'message_link.dart';
 import 'message_link_preview.dart';
@@ -19,7 +21,41 @@ import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
+import 'reminders.dart';
 import 'swarm_type.dart';
+import 'voice_length.dart';
+
+/// The face [message]'s row shows for its sender, shown as [author]: the
+/// [agent] or [person] who wrote it, while they are in the Swarm.
+Widget superTabMessageAvatar(
+  SuperTabMessage message, {
+  required String author,
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+  double size = SuperTabMessageRow.avatarSize,
+}) {
+  const radius = grid.AppDesktop.messageAvatarRadius;
+  if (agent != null) {
+    return SuperTabAvatar.agent(
+      agent,
+      name: author,
+      size: size,
+      engineBadge: false,
+      radius: radius,
+    );
+  }
+  if (person != null && !message.fromAgent) {
+    return SuperTabAvatar.person(person, size: size, radius: radius);
+  }
+  // Someone no longer in the Swarm keeps the face their recorded name gives.
+  return SuperTabAvatar(
+    identity: '${message.author['kind']}:${message.authorId}',
+    name: message.fromAgent ? author : superTabPersonName(message.authorName),
+    size: size,
+    pattern: message.fromAgent,
+    radius: radius,
+  );
+}
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -53,6 +89,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.threadTagged = false,
+    this.threadFresh = 0,
     this.onOpenThread,
     this.threadTrailing,
     this.threadEnd,
@@ -60,9 +97,18 @@ class SuperTabMessageRow extends StatefulWidget {
     this.link,
     this.linkTarget,
     this.onOpenLink,
+    this.identity,
+    this.onMarkUnread,
+    this.onRemind,
+    this.onEdit,
+    this.onDelete,
   });
 
   final SuperTabMessage message;
+
+  /// Who wrote it, for the card hovering or focusing its name or avatar shows
+  /// (Huy, 11-04); without it the avatar keeps its tooltip.
+  final SuperTabIdentityFacts Function()? identity;
 
   /// The live card [message] is (live_card.dart), drawn in place of its pull
   /// request links; null for a plain message.
@@ -74,6 +120,10 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// Whether an unread reply in [thread] tags the reader.
   final bool threadTagged;
+
+  /// How many of [thread]'s replies are new to the reader; 0 when none, or
+  /// not known.
+  final int threadFresh;
 
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
@@ -139,6 +189,26 @@ class SuperTabMessageRow extends StatefulWidget {
   /// open it. Without them a link stays plain text.
   final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
   final ValueChanged<SwarmMessageLink>? onOpenLink;
+
+  /// The More menu's Mark unread: the chat reads as unread from this message
+  /// on. Null where it is not offered.
+  final VoidCallback? onMarkUnread;
+
+  /// The More menu's Remind me, with when. Null where it is not offered.
+  final ValueChanged<SuperTabRemindIn>? onRemind;
+
+  /// The More menu's Edit message: the text turns into a field here, and
+  /// this sends what it says once changed. Null where it is not offered (it
+  /// is only the author's, on their own plain message).
+  final Future<void> Function(String text)? onEdit;
+
+  /// The More menu's Delete message, which asks first. Null where it is not
+  /// offered.
+  final VoidCallback? onDelete;
+
+  /// What a deleted message that keeps its thread reads as (backend
+  /// messageEdits.ts `DELETED_TEXT`).
+  static const deletedText = 'This message was deleted.';
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -222,13 +292,145 @@ class SuperTabMessageRow extends StatefulWidget {
 
 class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   final _focus = FocusNode(debugLabel: 'Swarm message actions');
+  final _editFocus = FocusNode(debugLabel: 'Swarm message edit');
   bool _hovered = false, _focused = false;
+
+  /// The text being edited, while Edit message is open; [_saving] while it
+  /// is on its way.
+  TextEditingController? _editing;
+  bool _saving = false;
 
   @override
   void dispose() {
     _focus.dispose();
+    _editFocus.dispose();
+    _editing?.dispose();
     super.dispose();
   }
+
+  void _startEdit() {
+    _editing?.dispose();
+    final text = widget.message.text;
+    setState(
+      () =>
+          _editing = TextEditingController(text: text)
+            ..selection = TextSelection.collapsed(offset: text.length),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _editFocus.requestFocus();
+    });
+  }
+
+  void _stopEdit() {
+    final editing = _editing;
+    if (editing == null) return;
+    setState(() {
+      _editing = null;
+      _saving = false;
+    });
+    // Disposed after the frame that drops its field.
+    WidgetsBinding.instance.addPostFrameCallback((_) => editing.dispose());
+    widget.onReturnToComposer();
+  }
+
+  /// Saves the field: unchanged text only closes it. A refusal is told by
+  /// [SuperTabMessageRow.onEdit]'s caller; the row shows the text it has.
+  Future<void> _saveEdit() async {
+    final editing = _editing, save = widget.onEdit;
+    if (editing == null || save == null || _saving || !_canSave) return;
+    final text = editing.text.trim();
+    if (text == widget.message.text) return _stopEdit();
+    setState(() => _saving = true);
+    await save(text);
+    if (mounted && identical(_editing, editing)) _stopEdit();
+  }
+
+  /// Text, or files to stand without it (backend messageEdits.ts).
+  bool get _canSave =>
+      (_editing?.text.trim().isNotEmpty ?? false) ||
+      widget.message.attachments.isNotEmpty;
+
+  /// The in-place editor: the text in a field, Cancel and Save. Enter saves
+  /// and Shift+Enter writes another line, as in the composer; Esc cancels.
+  Widget _editor(BuildContext context, TextEditingController editing) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      DecoratedBox(
+        decoration: BoxDecoration(
+          color: DesktopChrome.field,
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+          border: Border.all(color: DesktopChrome.rim),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
+          child: Focus(
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.escape) {
+                _stopEdit();
+                return KeyEventResult.handled;
+              }
+              switch (composerEnter(
+                event,
+                focused: _editFocus.hasFocus,
+                value: editing.value,
+              )) {
+                case ComposerEnter.ignore:
+                  return KeyEventResult.ignored;
+                case ComposerEnter.newline:
+                  insertComposerNewline(editing, (_) => setState(() {}));
+                  return KeyEventResult.handled;
+                case ComposerEnter.send:
+                  unawaited(_saveEdit());
+                  return KeyEventResult.handled;
+              }
+            },
+            child: TextField(
+              key: ValueKey('super-message-edit-${widget.message.id}'),
+              controller: editing,
+              focusNode: _editFocus,
+              enabled: !_saving,
+              minLines: 1,
+              maxLines: 12,
+              maxLength: kComposerMaxLength,
+              keyboardType: TextInputType.multiline,
+              style: SwarmType.composer(context),
+              decoration: const InputDecoration(
+                isCollapsed: true,
+                constraints: BoxConstraints(),
+                contentPadding: EdgeInsets.zero,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                filled: false,
+                counterText: '',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: grid.AppDesktop.controlGap),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          TextButton(
+            onPressed: _saving ? null : _stopEdit,
+            child: const Text('Cancel'),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          FilledButton(
+            key: ValueKey('super-message-edit-save-${widget.message.id}'),
+            onPressed: _saving || !_canSave
+                ? null
+                : () => unawaited(_saveEdit()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ],
+  );
 
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.message.text));
@@ -240,6 +442,52 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
       ),
     );
   }
+
+  /// The More menu's choices, in Slack's order.
+  List<SuperTabMoreAction> get _moreActions => [
+    if (widget.link case final link?)
+      (
+        label: 'Copy link to message',
+        icon: AppIcons.link2,
+        onPressed: () => unawaited(_copyLink(link)),
+        choices: const [],
+      ),
+    if (widget.onMarkUnread case final markUnread?)
+      (
+        label: 'Mark unread',
+        icon: AppIcons.mail,
+        onPressed: markUnread,
+        choices: const [],
+      ),
+    if (widget.onRemind case final remind?)
+      (
+        label: 'Remind me',
+        icon: AppIcons.clock,
+        onPressed: null,
+        choices: [
+          for (final when in SuperTabRemindIn.values)
+            (label: when.label, onPressed: () => remind(when)),
+        ],
+      ),
+  ];
+
+  /// The author's own changes, under the menu's rule.
+  List<SuperTabMoreChange> get _changes => [
+    if (widget.onEdit != null)
+      (
+        label: 'Edit message',
+        icon: AppIcons.pencil,
+        onPressed: _startEdit,
+        danger: false,
+      ),
+    if (widget.onDelete case final delete?)
+      (
+        label: 'Delete message',
+        icon: AppIcons.trash2,
+        onPressed: delete,
+        danger: true,
+      ),
+  ];
 
   Future<void> _copyLink(SwarmMessageLink link) async {
     await Clipboard.setData(ClipboardData(text: link.url));
@@ -265,30 +513,49 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
-  Widget _avatar(SuperTabMessage message) {
-    const size = SuperTabMessageRow.avatarSize;
-    const radius = grid.AppDesktop.messageAvatarRadius;
-    if (widget.agent case final agent?) {
-      return SuperTabAvatar.agent(
-        agent,
-        name: widget.author,
-        size: size,
-        engineBadge: false,
-        radius: radius,
-      );
+  Widget _avatar(SuperTabMessage message) => superTabMessageAvatar(
+    message,
+    author: widget.author,
+    agent: widget.agent,
+    person: widget.person,
+  );
+
+  /// The sender's name: opens the agent when it is one, and shows the card
+  /// on hover or keyboard focus, so a person's name takes focus too.
+  Widget _name(TextStyle style, bool finger) {
+    final name = fingerTarget(
+      enabled: finger,
+      Align(
+        alignment: Alignment.centerLeft,
+        widthFactor: 1,
+        heightFactor: 1,
+        child: Text(widget.author, style: style),
+      ),
+    );
+    final identity = widget.identity;
+    if (identity == null) {
+      return InkWell(onTap: widget.onOpenAgent, child: name);
     }
-    if (widget.person case final person? when !message.fromAgent) {
-      return SuperTabAvatar.person(person, size: size, radius: radius);
-    }
-    // Someone no longer in the Swarm keeps the face their recorded name gives.
-    return SuperTabAvatar(
-      identity: '${message.author['kind']}:${message.authorId}',
-      name: message.fromAgent
-          ? widget.author
-          : superTabPersonName(message.authorName),
-      size: size,
-      pattern: message.fromAgent,
-      radius: radius,
+    return SuperTabHoverCard(
+      facts: identity,
+      child: widget.onOpenAgent == null
+          ? Focus(
+              child: Builder(
+                builder: (context) => DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Focus.of(context).hasFocus
+                            ? DesktopChrome.focusRing
+                            : Colors.transparent,
+                      ),
+                    ),
+                  ),
+                  child: name,
+                ),
+              ),
+            )
+          : InkWell(onTap: widget.onOpenAgent, child: name),
     );
   }
 
@@ -340,6 +607,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final message = widget.message;
+    final voiceMessage = superTabVoiceOf(message) != null;
     final active = _hovered || _focused;
     // A message that tags the reader stands out, as Slack marks one that
     // names you: an accent bar on its edge over a wash of the accent.
@@ -432,10 +700,16 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           child: widget.grouped
                               ? _groupedTime(context, active)
                               : ExcludeSemantics(
-                                  child: Tooltip(
-                                    message: _identityDetails,
-                                    child: _avatar(message),
-                                  ),
+                                  child: switch (widget.identity) {
+                                    final identity? => SuperTabHoverCard(
+                                      facts: identity,
+                                      child: _avatar(message),
+                                    ),
+                                    null => Tooltip(
+                                      message: _identityDetails,
+                                      child: _avatar(message),
+                                    ),
+                                  },
                                 ),
                         ),
                         const SizedBox(width: SuperTabMessageRow.avatarGap),
@@ -452,21 +726,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
-                                      InkWell(
-                                        onTap: widget.onOpenAgent,
-                                        child: fingerTarget(
-                                          enabled: finger,
-                                          Align(
-                                            alignment: Alignment.centerLeft,
-                                            widthFactor: 1,
-                                            heightFactor: 1,
-                                            child: Text(
-                                              widget.author,
-                                              style: authorStyle,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
+                                      _name(authorStyle, finger),
                                       if (message.fromAgent)
                                         Tooltip(
                                           message: _identityDetails,
@@ -530,11 +790,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         widget.replyAuthor ??
                                         widget.reply?.authorName ??
                                         'Earlier message',
-                                    text:
-                                        widget.reply?.text ??
-                                        (widget.replyGone
-                                            ? 'The original message is no longer in this conversation.'
-                                            : 'The original message isn’t loaded.'),
+                                    text: switch (widget.reply) {
+                                      final reply? => superTabQuoteText(reply),
+                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
+                                      null =>
+                                        'The original message isn’t loaded.',
+                                    },
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
@@ -548,7 +809,27 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              if (message.text.isNotEmpty)
+                              if (message.deleted)
+                                Text(
+                                  SuperTabMessageRow.deletedText,
+                                  key: ValueKey(
+                                    'super-message-deleted-${message.id}',
+                                  ),
+                                  style: SwarmType.body(
+                                    context,
+                                    color: DesktopChrome.muted,
+                                  ).copyWith(fontStyle: FontStyle.italic),
+                                )
+                              else if (_editing case final editing?)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 960,
+                                  ),
+                                  child: _editor(context, editing),
+                                )
+                              // A voice message's text is its words, shown
+                              // under its bubble from →A.
+                              else if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: ConstrainedBox(
@@ -566,35 +847,51 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     ),
                                   ),
                                 ),
-                              if (message.attachments.isNotEmpty)
+                              if (message.editedAt != null &&
+                                  !message.deleted &&
+                                  _editing == null)
+                                Text(
+                                  '(edited)',
+                                  key: ValueKey(
+                                    'super-message-edited-${message.id}',
+                                  ),
+                                  style: SwarmType.time(context),
+                                ),
+                              if (message.attachments.isNotEmpty &&
+                                  !message.deleted)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: Padding(
                                     padding: EdgeInsets.only(
-                                      top: message.text.isEmpty ? 0 : 8,
+                                      top: message.text.isEmpty || voiceMessage
+                                          ? 0
+                                          : 8,
                                     ),
                                     child: SuperTabAttachments(
                                       message.attachments,
                                       conversationId: message.conversationId,
                                       messageId: message.id,
+                                      words: message.text,
                                     ),
                                   ),
                                 ),
-                              widget.card ??
-                                  SuperTabPullRequestLinks(message.text),
-                              if (widget.linkTarget case final resolve?)
-                                if (widget.onOpenLink case final open?)
-                                  SuperTabMessageLinkPreviews(
-                                    message.text,
-                                    resolve: resolve,
-                                    onOpen: open,
-                                  ),
-                              SuperTabReactionBar(
-                                message: message,
-                                readerId: widget.readerId,
-                                nameOf: widget.reactorName ?? (_, id) => id,
-                                onReact: widget.onReact,
-                              ),
+                              if (!message.deleted) ...[
+                                widget.card ??
+                                    SuperTabPullRequestLinks(message.text),
+                                if (widget.linkTarget case final resolve?)
+                                  if (widget.onOpenLink case final open?)
+                                    SuperTabMessageLinkPreviews(
+                                      message.text,
+                                      resolve: resolve,
+                                      onOpen: open,
+                                    ),
+                                SuperTabReactionBar(
+                                  message: message,
+                                  readerId: widget.readerId,
+                                  nameOf: widget.reactorName ?? (_, id) => id,
+                                  onReact: widget.onReact,
+                                ),
+                              ],
                               if ((widget.thread, widget.onOpenThread) case (
                                 final thread?,
                                 final open?,
@@ -606,6 +903,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   thread: thread,
                                   unread: widget.threadUnread,
                                   tagged: widget.threadTagged,
+                                  fresh: widget.threadFresh,
                                   onOpen: open,
                                   member: widget.member,
                                   trailing: widget.threadTrailing,
@@ -618,65 +916,64 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                       ],
                     ),
                   ),
-                  Positioned(
-                    top: 0,
-                    right: 12,
-                    child: Opacity(
-                      opacity: active ? 1 : 0,
-                      alwaysIncludeSemantics: true,
-                      child: Material(
-                        color: DesktopChrome.surface,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            DesktopChrome.controlRadius,
+                  // A deleted message has nothing left to act on, and one
+                  // being edited has its own buttons.
+                  if (!message.deleted && _editing == null)
+                    Positioned(
+                      top: 0,
+                      right: 12,
+                      child: Opacity(
+                        opacity: active ? 1 : 0,
+                        alwaysIncludeSemantics: true,
+                        child: Material(
+                          color: DesktopChrome.surface,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              DesktopChrome.controlRadius,
+                            ),
+                            side: BorderSide(color: DesktopChrome.rim),
                           ),
-                          side: BorderSide(color: DesktopChrome.rim),
-                        ),
-                        // A phone's actions are a finger's size each.
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (widget.onReact case final react?)
-                              SuperTabReactionPicker(onReact: react),
-                            if (widget.onReply != null)
+                          // A phone's actions are a finger's size each.
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (widget.onReact case final react?)
+                                SuperTabReactionPicker(onReact: react),
+                              if (widget.onReply != null)
+                                fingerTarget(
+                                  enabled: phone,
+                                  AppIconButton(
+                                    icon: AppIcons.reply,
+                                    tooltip: 'Reply',
+                                    onPressed: widget.onReply,
+                                  ),
+                                ),
                               fingerTarget(
                                 enabled: phone,
                                 AppIconButton(
-                                  icon: AppIcons.reply,
-                                  tooltip: 'Reply',
-                                  onPressed: widget.onReply,
+                                  icon: AppIcons.copy,
+                                  tooltip: 'Copy message',
+                                  onPressed: _copy,
                                 ),
                               ),
-                            fingerTarget(
-                              enabled: phone,
-                              AppIconButton(
-                                icon: AppIcons.copy,
-                                tooltip: 'Copy message',
-                                onPressed: _copy,
-                              ),
-                            ),
-                            if (widget.link case final link?)
-                              fingerTarget(
-                                enabled: phone,
-                                SuperTabMessageMoreMenu(
-                                  key: ValueKey(
-                                    'super-message-more-${message.id}',
-                                  ),
-                                  actions: [
-                                    (
-                                      label: 'Copy link to message',
-                                      icon: AppIcons.link2,
-                                      onPressed: () =>
-                                          unawaited(_copyLink(link)),
+                              if ((_moreActions, _changes)
+                                  case (final actions, final changes)
+                                  when actions.isNotEmpty || changes.isNotEmpty)
+                                fingerTarget(
+                                  enabled: phone,
+                                  SuperTabMessageMoreMenu(
+                                    key: ValueKey(
+                                      'super-message-more-${message.id}',
                                     ),
-                                  ],
+                                    actions: actions,
+                                    changes: changes,
+                                  ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   if (taggedYou)
                     Positioned(
                       left: 0,
@@ -845,12 +1142,17 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.unread,
     required this.onOpen,
     this.tagged = false,
+    this.fresh = 0,
     this.member,
     this.trailing,
     this.end,
   });
 
   final SuperTabThread thread;
+
+  /// How many replies are new to the reader, said after the count while
+  /// [unread]; 0 says nothing.
+  final int fresh;
 
   /// Drawn after the line's link, outside it: a thread session's mark.
   final Widget? trailing;
@@ -904,13 +1206,18 @@ class SuperTabThreadLine extends StatelessWidget {
       );
     }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
+    final newWords = unread && fresh > 0 ? '$fresh new' : null;
     final last = thread.lastAt;
     final lastReply = last == null
         ? null
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
-      label: [count, if (unread) 'unread', if (tagged) '@ you'].join(', '),
+      label: [
+        count,
+        if (unread) newWords ?? 'unread',
+        if (tagged) '@ you',
+      ].join(', '),
       onTap: onOpen,
       builder: (active) => Row(
         children: [
@@ -936,6 +1243,15 @@ class SuperTabThreadLine extends StatelessWidget {
                         ),
                   ),
                 ),
+                if (newWords != null) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Text(
+                    newWords,
+                    key: ValueKey('super-thread-new-${thread.id}'),
+                    style: DesktopChrome.metadata(color: DesktopChrome.accent)
+                        .copyWith(fontWeight: grid.AppFont.semibold),
+                  ),
+                ],
                 if (tagged) ...[
                   const SizedBox(width: grid.AppDesktop.controlGap),
                   Text(

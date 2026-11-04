@@ -295,7 +295,8 @@ void main() {
     test('a body that says nothing keeps the plain words', () {
       expect(
         superTabUploadRefusal(answer(500, 'oops')).message,
-        'Could not upload the file. Try again.',
+        'The Harness server could not take the file just now. Try again in '
+        'a minute.',
       );
     });
 

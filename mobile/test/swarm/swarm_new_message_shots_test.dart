@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
@@ -19,7 +18,7 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of New message (Tony, 10-30: as Slack Mobile starts
-/// one): Home with its floating +, the sheet it opens, narrowed by To:, a
+/// one): Home with its + in the top bar, the sheet it opens, narrowed by To:, a
 /// chat picked with a message typed, and a send refused — in both phone
 /// themes, 390 points wide and on a small phone, 320, from made-up Swarm
 /// data only, to the folder `SWARM_NEW_MESSAGE_SHOTS` names. On the small
@@ -161,11 +160,7 @@ void main() {
           notices: SilentSystemNotices(),
           features: features,
           readMarks: MemoryKeyValueStore(),
-          voice: () => VoiceInputController(
-            transcriber: FakeTranscriber().call,
-            recorder: FakeVoiceRecorder(),
-            language: ValueNotifier('en'),
-          ),
+          voice: () => FakeVoiceRecorder(),
         )..foreground = false;
         final boundary = GlobalKey();
         await tester.pumpWidget(

@@ -8,13 +8,16 @@ import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './ter
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
-function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[] } = {}) {
+function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
+  refuse?: (command: Record<string, any>) => { status: number; code: string } | null } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
   let pending = options.requests ?? []
   const backend: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     if (path === '/api/super-tabs/hosts/m1/terminal') { const rows = pending; pending = []; return { status: 200, body: { success: true, data: rows } } }
     sent.push({ path, body: body as Record<string, any> })
+    const refused = options.refuse?.((body as Record<string, any>).command)
+    if (refused) return { status: refused.status, body: { success: false, error: { code: refused.code, message: 'Refused.' } } }
     return { status: 200, body: { success: true, data: { result: {} } } }
   })
   let screen = options.screen ?? (() => ({ ok: true as const, text: '> ', hold: null }))
@@ -137,32 +140,26 @@ describe('a host serving its Lead\'s terminal requests', () => {
 
 // Spec 2026-11-02-poll-cost Part 4.2: every host of a Swarm agent asked every 3 s, almost always for nothing (prod 2026-11-02:
 // 305 a minute, each a transaction). A server that pushes deliveries also says when a terminal request waits for this
-// machine (`__terminal_waiting`); the backend still gives up on a pickup after 10 s, so the fallback stays under it.
+// machine (`__terminal_waiting`). Task #2800: the 8 s fallback that followed was still almost all empty; the sender's wait now
+// tells the machine again at each re-check while the request waits (backend store.ts terminalResult), inside the 10 s pickup,
+// so with the push lease the host asks only when told.
 describe('terminal requests the server pushes', () => {
-  it('with the push lease, polls every 8 s and picks up at once on __terminal_waiting', async () => {
+  it('with the push lease, asks only when told, and at once on __terminal_waiting', async () => {
     let pushing = true
     const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => pushing })
-    await host.tick([row()])
-    expect(t.polls()).toBe(1)
-    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
-    expect(t.polls()).toBe(1)
-    t.wait(1_000); await host.tick([row()])
-    expect(t.polls()).toBe(2)
+    for (let second = 0; second < 60; second++) { await host.tick([row()]); t.wait(1_000) }
+    expect(t.polls()).toBe(0)
     // Told a request waits: answered now, before the backend's 10 s are out.
     t.request(screenRequest())
-    t.wait(1_000)
     await host.waiting()
-    expect(t.polls()).toBe(3)
+    expect(t.polls()).toBe(1)
     expect(t.sent.map(s => s.body.command.type)).toEqual(['agent.screenResult'])
-    // The next fallback poll counts from that pickup.
-    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
-    expect(t.polls()).toBe(3)
-    t.wait(1_000); await host.tick([row()])
-    expect(t.polls()).toBe(4)
+    for (let second = 0; second < 60; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(1)
     // The lease lapses: every 3 s again.
     pushing = false
     t.wait(3_000); await host.tick([row()])
-    expect(t.polls()).toBe(5)
+    expect(t.polls()).toBe(2)
   })
 
   it('without it, polls every 3 s', async () => {
@@ -181,7 +178,8 @@ describe('terminal requests the server pushes', () => {
 
   it('picks up once more after a push that came during a pickup', async () => {
     const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
-    const first = host.tick([row()])
+    await host.tick([row()])
+    const first = host.waiting()
     const pushed = host.waiting()
     await first; await pushed
     await vi.waitFor(() => expect(t.polls()).toBe(2))
@@ -191,6 +189,27 @@ describe('terminal requests the server pushes', () => {
 describe('the stuck and usage-limit alerts', () => {
   const prompt = (): SuperTabScreen => ({ ok: true, text: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', hold: 'permission_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+
+  // Ken's prod scan (11-04): 116 agent.alert refusals in 32 minutes, AGENT_UNAVAILABLE: an alert the Swarm will never take
+  // (its agent gone or to be shared again) was tried again on every 15-second read.
+  it('does not send again an alert the Swarm refused for good (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 400, code: 'AGENT_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toHaveLength(1)
+    for (let i = 0; i < 20; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts()).toHaveLength(1)
+  })
+
+  it('backs off an alert the backend could not take for now (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 503, code: 'BACKEND_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    // Ten minutes of reads: 40 tries at the old pace.
+    for (let i = 0; i < 40; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts().length).toBeGreaterThanOrEqual(2)
+    expect(t.alerts().length).toBeLessThanOrEqual(8)
+  })
 
   it('alerts once when a prompt has waited 3 minutes, and ends the episode when it is answered', async () => {
     const t = setup({ screen: prompt })

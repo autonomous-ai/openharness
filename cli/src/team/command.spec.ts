@@ -91,7 +91,7 @@ describe('harness team', () => {
   it('prints its help, and refuses an unknown verb', async () => {
     const f = fake()
     expect(await teamCommand([], f.deps)).toBe(0)
-    expect(f.out[0]).toContain('Usage: harness team <setup | status | model | remove | on | off>')
+    expect(f.out[0]).toContain('Usage: harness team <setup | status | model | logs | sign-in | remove | on | off>')
     expect(await teamCommand(['frobnicate'], f.deps)).toBe(2)
   })
 })
@@ -118,6 +118,21 @@ describe('harness team setup', () => {
     expect(text).toContain('✓ Private')
     // The engines setup installed in the team account, and how to sign them in (none were reported in this run).
     expect(text).toContain('engines     ? not reported yet')
+  })
+
+  // Scholes, 2026-11-04: a new member waited about 7 minutes after the password with no sign of progress. Setup says
+  // which step it is on: the password first, then each step the script reports, then the team daemon's report.
+  it('says each step as it goes: the password, the script\'s own steps, then the team daemon\'s report', async () => {
+    const steps: string[] = []
+    const f = fake({ statusAfter: reported, progress: (step) => steps.push(step) })
+    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
+      build('/private/var/folders/aa/T/harness-team-stage')
+      expect(steps).toEqual(['password'])
+      progress?.('account'); progress?.('engines')
+      return { ok: true, stdout: 'harness: handed a sign-in to the team account\n' }
+    })
+    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
+    expect(steps).toEqual(['password', 'account', 'engines', 'report'])
   })
 
   it('asks to create the account on a Mac without one, and to repair it on a Mac that has it', async () => {
@@ -923,6 +938,20 @@ describe('on Windows', () => {
     expect(text).toContain('✓ Private')
   })
 
+  // Task #2686: on Windows the sign-in and the daemon's start come after the elevated script, from the owner.
+  it('setup says the sign-in and the daemon steps around the handover, then waits for the report', async () => {
+    const handed: string[] = []
+    const steps: string[] = []
+    const f = onWindows({ handedOver: handed, progress: (step) => steps.push(step), readStatus: () => handed.length ? reported(1_000_000) : null })
+    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
+      build(`${WIN_HOME}\\AppData\\Local\\Temp\\harness-team-stage`)
+      progress?.('account'); progress?.('engines')
+      return { ok: true, stdout: '' }
+    })
+    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
+    expect(steps).toEqual(['password', 'account', 'engines', 'sign-in', 'daemon', 'report'])
+  })
+
   it('setup starts the task again up to five times, and keeps a sign-in already there unless asked again', async () => {
     let tries = 0
     const f = onWindows({ statusAfter: reported, startTeamTask: vi.fn(async () => ++tries >= 3) })
@@ -1008,3 +1037,34 @@ describe('parseLaunchctlPrint', () => {
     expect(parseLaunchctlPrint(113, 'Could not find service')).toEqual({ loaded: false, pid: null, state: null })
   })
 })
+
+describe('harness team logs and sign-in', () => {
+  const config = { version: 1, user: 'harnessteam', realName: 'Harness Team', home: '/Users/harnessteam', owner: 'owner',
+    ownerHome: '/Users/owner', sentinel: '/Users/owner/.harness-team-privacy', port: 18493, label: 'ai.autonomous.harness.team',
+    plist: '/Library/LaunchDaemons/ai.autonomous.harness.team.plist', statusFile: '/Library/Application Support/Harness/Team/status.json',
+    node: '/Users/harnessteam/.harness/runtime/node/bin/node', cli: '/Users/harnessteam/.harness/cli/cli.js', env: {},
+    createdAt: '2026-10-27T10:37:42.635Z' }
+
+  it('reads the team log through the one administrator prompt, and says when there is no account', async () => {
+    const f = fake({ readConfig: () => config as never, adminResult: { ok: true, stdout: '2026-11-03 14:23:01 [agent] create pane open\n' } })
+    expect(await teamCommand(['logs'], f.deps)).toBe(0)
+    expect(f.built[0]!.script).toContain("tail -n 40 '/Users/harnessteam/.harness/cli/data/harness.log'")
+    expect(f.out.join('\n')).toContain('create pane open')
+    const none = fake()
+    expect(await teamCommand(['logs'], none.deps)).toBe(1)
+    expect(none.err.join('\n')).toContain('No Harness Team account')
+  })
+
+  it('refuses the sign-in where it cannot run, naming what to do instead', async () => {
+    const windows = fake({ platform: 'win32', readConfig: () => config as never })
+    expect(await teamCommand(['sign-in', 'claude'], windows.deps)).toBe(1)
+    expect(windows.err.join('\n')).toContain('On Windows, sign in from Harness')
+    const noTerminal = fake({ readConfig: () => config as never, interactive: false })
+    expect(await teamCommand(['sign-in', 'codex'], noTerminal.deps)).toBe(1)
+    expect(noTerminal.err.join('\n')).toContain('Run it in a terminal')
+    const wrong = fake({ readConfig: () => config as never, interactive: true })
+    expect(await teamCommand(['sign-in', 'vim'], wrong.deps)).toBe(1)
+    expect(wrong.err.join('\n')).toContain('Name claude or codex')
+  })
+})
+
