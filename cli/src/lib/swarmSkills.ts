@@ -1,6 +1,7 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { buddyLaunchFile, buddyReadsOf, revokeBuddyWide } from './buddyGuard.js'
+import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
@@ -770,6 +771,10 @@ function ignoreBuddyFiles(root: string): void {
  * relay to its owner's own sessions reads it (messages/service.ts, #2626).
  */
 function prepareBuddyFolder(root: string, key: string): void {
+  // A relaunch (a restart, a model switch, a move) never passes the start's own-machine check (superTabs/start.ts
+  // buddyOnOwnMachine), and a Buddy saved in an older mode relaunches in full mode: in a Harness Team account, which is never
+  // its owner's own, it is held before anything is written or launched (security review 1 of #2832).
+  if (isTeamAccount()) throw new Error(BUDDY_NOT_HERE)
   const claude = join(root, '.claude'), guard = join(claude, 'buddy-guard.mjs'), settings = join(claude, 'settings.local.json')
   const locked = isPlainFile(guard)
   if (locked) {
@@ -794,6 +799,8 @@ function prepareBuddyFolder(root: string, key: string): void {
   writeFileSync(launchFile, `${randomUUID()}\n`, { mode: 0o600 })
   ignoreBuddyFiles(root)
 }
+/** Why a Buddy is not prepared in a Harness Team account: the server's own words (backend buddyContract.ts). */
+const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine. It is not started in a Harness Team account.'
 const isPlainFile = (path: string) => { try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false } }
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
