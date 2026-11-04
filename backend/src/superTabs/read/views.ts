@@ -137,7 +137,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
-    return [pool.machineId, { availableSlots: availableSlots(stored, slots(stored)),
+    return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
