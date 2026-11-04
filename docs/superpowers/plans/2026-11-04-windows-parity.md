@@ -67,11 +67,18 @@
 - [ ] Add the check, for Buddy skills only, with an injected lookup for tests.
 - [ ] Run the spec; passes.
 
+### Task 4b: The GitHub App on Windows
+
+**Files:** Modify `cli/src/lib/swarmGitHub.ts`, its spec, `docs/swarm-github-app.md`.
+
+`swarmGitHubLaunch` returned null on Windows, saying its git does not run shell scripts. Tried on the PC: Git for Windows runs the helper, the hooks and the identity, with a space in the path. Remove the check.
+
 ### Task 5: Ship PR A
 
 - [ ] Run `test:portability`, `test:core`, `test:super-tabs`; record them in the PR. Push once. Wait for `ci/required`.
-- [ ] Merge, release the CLI, deploy the backend.
-- [ ] Update the PC to the release. Start a real Buddy on it in the autonomous-ai Swarm, message it, read its reply.
+- [ ] Windows first (owner, 2026-11-04): no public release before this works. Test with a signed Desktop candidate (`make release-desktop ARGS="--prepare"`) and the CLI bundle on the PC. Other members release Mac and Linux.
+- [ ] Merge, then release; the backend change is what a real Buddy on Windows needs live.
+- [ ] On the PC. Start a real Buddy on it in the autonomous-ai Swarm, message it, read its reply.
 - [ ] From a real Swarm pane on the PC: `harness git-credential` answers for a task's repository.
 - [ ] `Get-AuthenticodeSignature` on the installed `harness.exe` says Valid. Only if not, find why `harness update` left it.
 

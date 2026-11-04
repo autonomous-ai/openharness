@@ -242,7 +242,7 @@ describe('a session\'s gh login and trailers', () => {
 describe('a Swarm session\'s launch', () => {
   it('names the session\'s gh folder and Harness\'s git settings, clears inherited GitHub tokens, and starts with no gh login', () => {
     const dataDir = fresh('launch')
-    const launch = swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'linux')!
+    const launch = swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })!
     const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-abc')!
     expect(launch.env).toEqual({
       GIT_CONFIG_PARAMETERS: gitConfigParameters(join(dataDir, 'swarm-github', 'bin', 'git-credential'), join(dataDir, 'swarm-github', 'hooks'), join(dir, 'gitconfig')),
@@ -252,15 +252,24 @@ describe('a Swarm session\'s launch', () => {
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
     // A relaunch keeps a login the daemon has written since.
     writeSessionGitHub(dir, 'ghs_fixtureToken0000002')
-    swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'linux')
+    swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toContain('ghs_fixtureToken0000002')
   })
 
-  it('does not apply on Windows or to a key unfit for a path', () => {
+  it('does not apply to a key unfit for a path', () => {
     const dataDir = fresh('none')
-    expect(swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'win32')).toBeNull()
-    expect(swarmGitHubLaunch('../escape', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'darwin')).toBeNull()
+    expect(swarmGitHubLaunch('../escape', { dataDir, command: 'harness', port: 18473, machineId: 'm1' })).toBeNull()
     expect(existsSync(join(dataDir, 'swarm-github'))).toBe(false)
+  })
+
+  // Off, a Windows Team account's agents had no way to push: its owner's git login is not there, and no helper was.
+  it('applies on Windows too', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const launch = swarmGitHubLaunch('harness-codex-win', { dataDir: fresh('windows'), command: 'harness', port: 18473, machineId: 'm1' })
+      expect(launch?.env.GIT_CONFIG_PARAMETERS).toContain('git-credential')
+    } finally { Object.defineProperty(process, 'platform', platform) }
   })
 })
 
