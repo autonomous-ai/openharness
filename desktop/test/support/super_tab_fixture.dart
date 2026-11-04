@@ -1980,6 +1980,33 @@ class ConversationServer {
               )
               .toList()
             ..sort(order);
+      // A jump (backend store.ts, task #2911): the page before that time and
+      // the page from it; `next` names the oldest row, `newer` the newest
+      // when more follow.
+      if (int.tryParse(query['at'] ?? '') case final at?) {
+        final from = rows.indexWhere(
+          (m) =>
+              DateTime.parse(m['createdAt'] as String).millisecondsSinceEpoch >=
+              at,
+        );
+        final split = from < 0 ? rows.length : from;
+        final start = max(0, split - messagePage);
+        final end = min(rows.length, split + messagePage);
+        final window = rows.sublist(start, end);
+        Map<String, dynamic> cursor(Map<String, dynamic> m) => {
+          'sequence': m['sequence'],
+          'id': m['id'],
+        };
+        return jsonDecode(
+          jsonEncode({
+            'messages': window,
+            'next': start > 0 ? cursor(window.first) : null,
+            'newer': end < rows.length ? cursor(window.last) : null,
+            'threads': _threads(conversationId, window),
+            'reactionSeq': 0,
+          }),
+        ) as Map<String, dynamic>;
+      }
       if (after == null) rows = rows.reversed.toList();
       final page = rows.take(messagePage).toList();
       final next = rows.length > messagePage
