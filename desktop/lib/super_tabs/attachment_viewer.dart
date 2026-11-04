@@ -104,11 +104,23 @@ class AttachmentViewerActions extends StatefulWidget {
     required this.file,
     required this.url,
     this.ref,
+    this.close = true,
+    this.more,
+    this.ink,
   });
 
   final SuperTabAttachment file;
   final Uri url;
   final SuperTabFileRef? ref;
+
+  /// Whether Close is offered; the picture viewer closes by its own ×.
+  final bool close;
+
+  /// After the buttons: the picture viewer's More.
+  final Widget? more;
+
+  /// The buttons' and the outcome's ink, on the picture viewer's veil.
+  final Color? ink;
 
   @override
   State<AttachmentViewerActions> createState() =>
@@ -160,26 +172,45 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
   }
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      if (_outcome != null) Text(_outcome!, style: DesktopChrome.metadata()),
-      const Spacer(),
-      // A browser cannot write to a chosen path; Open in browser saves there.
-      if (!kIsWeb)
+  Widget build(BuildContext context) {
+    final ink = widget.ink;
+    final style = ink == null
+        ? null
+        : TextButton.styleFrom(foregroundColor: ink);
+    return Row(
+      children: [
+        if (_outcome != null)
+          Flexible(
+            child: Text(
+              _outcome!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(color: ink),
+            ),
+          ),
+        const Spacer(),
+        // A browser cannot write to a chosen path; Open in browser saves there.
+        if (!kIsWeb)
+          TextButton(
+            style: style,
+            onPressed: _saving ? null : _download,
+            child: const Text('Download'),
+          ),
         TextButton(
-          onPressed: _saving ? null : _download,
-          child: const Text('Download'),
+          style: style,
+          onPressed: _openInBrowser,
+          child: const Text('Open in browser'),
         ),
-      TextButton(
-        onPressed: _openInBrowser,
-        child: const Text('Open in browser'),
-      ),
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Close'),
-      ),
-    ],
-  );
+        if (widget.close)
+          TextButton(
+            style: style,
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ?widget.more,
+      ],
+    );
+  }
 }
 
 /// The picture at [url], read through [attachmentFetcher] like any chat file:

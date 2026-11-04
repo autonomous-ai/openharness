@@ -92,5 +92,5 @@
 ### Task 3: Screenshots and Ready
 
 - [ ] `super_tab_image_viewer_shots_test.dart` (light and dark, a thread open beside the chat) writes the before shots on main and the after shots on the branch with `SUPER_TAB_IMAGE_SHOTS`; attach them to the PR.
-- [ ] Run the whole Desktop unit suite once, the guard tests (`check-ui-style`, `laid_out_list_test`), `flutter analyze`, and a web build compile.
+- [ ] Run the changed tests, the guard tests (`check-ui-style`, `laid_out_list_test`), `flutter analyze`, and a web build compile. The whole Desktop suite runs in the PR's CI once it is ready; that green run is the suite evidence (instructions revision 56).
 - [ ] Red/green evidence in a PR comment; mark Ready; add the review and test steps.

@@ -211,7 +211,7 @@ void main() {
         find.byKey(const ValueKey('super-attachment-inline:a1')),
       );
       await tester.pumpAndSettle();
-      final viewer = find.byKey(const ValueKey('super-attachment-viewer:a1'));
+      final viewer = find.byKey(const ValueKey('super-attachment-viewer'));
       expect(viewer, findsOneWidget);
       expect(tester.getSize(viewer), const Size(1100, 800));
       expect(
@@ -220,7 +220,7 @@ void main() {
       );
       expect(find.text('Download'), findsOneWidget);
       expect(find.text('Open in browser'), findsOneWidget);
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byKey(const ValueKey('super-image-close')));
       await tester.pumpAndSettle();
       expect(viewer, findsNothing);
       await close(tester, c);
