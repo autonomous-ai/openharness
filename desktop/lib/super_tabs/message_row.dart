@@ -21,6 +21,38 @@ import 'pull_requests.dart';
 import 'reactions.dart';
 import 'swarm_type.dart';
 
+/// The face [message]'s row shows for its sender, shown as [author]: the
+/// [agent] or [person] who wrote it, while they are in the Swarm.
+Widget superTabMessageAvatar(
+  SuperTabMessage message, {
+  required String author,
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+  double size = SuperTabMessageRow.avatarSize,
+}) {
+  const radius = grid.AppDesktop.messageAvatarRadius;
+  if (agent != null) {
+    return SuperTabAvatar.agent(
+      agent,
+      name: author,
+      size: size,
+      engineBadge: false,
+      radius: radius,
+    );
+  }
+  if (person != null && !message.fromAgent) {
+    return SuperTabAvatar.person(person, size: size, radius: radius);
+  }
+  // Someone no longer in the Swarm keeps the face their recorded name gives.
+  return SuperTabAvatar(
+    identity: '${message.author['kind']}:${message.authorId}',
+    name: message.fromAgent ? author : superTabPersonName(message.authorName),
+    size: size,
+    pattern: message.fromAgent,
+    radius: radius,
+  );
+}
+
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
   const SuperTabMessageRow({
@@ -265,32 +297,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
-  Widget _avatar(SuperTabMessage message) {
-    const size = SuperTabMessageRow.avatarSize;
-    const radius = grid.AppDesktop.messageAvatarRadius;
-    if (widget.agent case final agent?) {
-      return SuperTabAvatar.agent(
-        agent,
-        name: widget.author,
-        size: size,
-        engineBadge: false,
-        radius: radius,
-      );
-    }
-    if (widget.person case final person? when !message.fromAgent) {
-      return SuperTabAvatar.person(person, size: size, radius: radius);
-    }
-    // Someone no longer in the Swarm keeps the face their recorded name gives.
-    return SuperTabAvatar(
-      identity: '${message.author['kind']}:${message.authorId}',
-      name: message.fromAgent
-          ? widget.author
-          : superTabPersonName(message.authorName),
-      size: size,
-      pattern: message.fromAgent,
-      radius: radius,
-    );
-  }
+  Widget _avatar(SuperTabMessage message) => superTabMessageAvatar(
+    message,
+    author: widget.author,
+    agent: widget.agent,
+    person: widget.person,
+  );
 
   /// A grouped message's time, shown at its left while it is hovered or
   /// focused, as Slack does: its hour and minute on its first line,

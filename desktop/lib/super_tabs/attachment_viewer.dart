@@ -107,6 +107,7 @@ class AttachmentViewerActions extends StatefulWidget {
     this.close = true,
     this.more,
     this.ink,
+    this.fill,
   });
 
   final SuperTabAttachment file;
@@ -121,6 +122,9 @@ class AttachmentViewerActions extends StatefulWidget {
 
   /// The buttons' and the outcome's ink, on the picture viewer's veil.
   final Color? ink;
+
+  /// The buttons' fill there, the same in both appearances.
+  final Color? fill;
 
   @override
   State<AttachmentViewerActions> createState() =>
@@ -176,7 +180,11 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
     final ink = widget.ink;
     final style = ink == null
         ? null
-        : TextButton.styleFrom(foregroundColor: ink);
+        : TextButton.styleFrom(
+            foregroundColor: ink,
+            backgroundColor: widget.fill,
+            side: BorderSide.none,
+          );
     return Row(
       children: [
         if (_outcome != null)

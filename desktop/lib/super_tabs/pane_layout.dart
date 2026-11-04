@@ -21,6 +21,7 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
+    this.over,
   });
 
   static const storageKey = 'super-tab-pane-widths';
@@ -50,6 +51,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The right pane's width until a person sets one by its divider (that
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
+
+  /// Drawn over the left and centre panes, leaving the right one as it is:
+  /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
+  final Widget? over;
 
   @override
   State<SuperTabPaneLayout> createState() => _SuperTabPaneLayoutState();
@@ -224,6 +229,14 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                   ),
                 ],
               ),
+            ),
+          if (widget.over case final over?)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: width - right,
+              child: over,
             ),
         ],
       );

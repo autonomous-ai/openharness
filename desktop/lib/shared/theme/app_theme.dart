@@ -1519,7 +1519,7 @@ abstract final class AppDesktop {
   /// as a picture reads best on dark (River, 11-04), and the ink and control
   /// fills drawn on it. The one exception to [veil]
   /// (desktop-design-system.md).
-  static const mediaVeil = Color(0xD9000000);
+  static const mediaVeil = Color(0xF2000000);
   static const mediaInk = Color(0xFFFFFFFF);
   static const mediaInkMuted = Color(0xB3FFFFFF);
   static const mediaControl = Color(0x26FFFFFF);

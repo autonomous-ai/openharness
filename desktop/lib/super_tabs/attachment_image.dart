@@ -124,8 +124,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
           key: ValueKey('super-attachment-inline:${file.id}'),
           borderRadius: radius,
           mouseCursor: SystemMouseCursors.click,
-          onTap: () =>
-              superTabOpenImages(context, [SuperTabImageItem(ref: _ref)], 0),
+          onTap: () => superTabOpenImage(context, _ref),
           child: ConstrainedBox(
             constraints: const BoxConstraints(
               maxWidth: SuperTabInlineImage.maxSide,
@@ -183,22 +182,86 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   );
 }
 
-/// Opens [images] at [index] over the whole window.
-void superTabOpenImages(
-  BuildContext context,
-  List<SuperTabImageItem> images,
-  int index,
-) => unawaited(
-  showGeneralDialog<void>(
-    context: context,
-    barrierColor: Colors.transparent,
-    pageBuilder: (context, _, _) => SuperTabImageViewer(
-      images: images,
-      index: index,
-      onClose: () => Navigator.pop(context),
+/// The pictures of one chat or thread, oldest first, for the viewer to page
+/// through: the chat view puts one above each list of rows.
+class SuperTabImageGallery extends InheritedWidget {
+  const SuperTabImageGallery({
+    super.key,
+    required this.images,
+    this.thread,
+    required super.child,
+  });
+
+  /// Read when a picture is opened, not on every build.
+  final List<SuperTabImageItem> Function() images;
+
+  /// The thread's root, for a thread's pictures.
+  final String? thread;
+
+  static SuperTabImageGallery? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<SuperTabImageGallery>();
+
+  @override
+  bool updateShouldNotify(SuperTabImageGallery old) => false;
+}
+
+/// Where the viewer is drawn: the chat view shows it over the chat, beside
+/// an open thread.
+class SuperTabImageStage extends InheritedWidget {
+  const SuperTabImageStage({
+    super.key,
+    required this.open,
+    required super.child,
+  });
+
+  final void Function(
+    List<SuperTabImageItem> images,
+    int index, {
+    String? thread,
+  })
+  open;
+
+  static SuperTabImageStage? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<SuperTabImageStage>();
+
+  @override
+  bool updateShouldNotify(SuperTabImageStage old) => false;
+}
+
+/// Opens the picture [ref] among its gallery's, on the stage; with neither
+/// above [context], it alone over the whole window.
+void superTabOpenImage(BuildContext context, SuperTabFileRef ref) {
+  final gallery = SuperTabImageGallery.maybeOf(context);
+  final images = [...?gallery?.images()];
+  var index = images.indexWhere(
+    (image) =>
+        image.ref.messageId == ref.messageId && image.file.id == ref.file.id,
+  );
+  if (index < 0) {
+    images
+      ..clear()
+      ..add(SuperTabImageItem(ref: ref));
+    index = 0;
+  } else {
+    // The row's own ref may hold a fresher link than the gallery's.
+    images[index] = images[index].withRef(ref);
+  }
+  if (SuperTabImageStage.maybeOf(context) case final stage?) {
+    stage.open(images, index, thread: gallery?.thread);
+    return;
+  }
+  unawaited(
+    showGeneralDialog<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      pageBuilder: (context, _, _) => SuperTabImageViewer(
+        images: images,
+        index: index,
+        onClose: () => Navigator.pop(context),
+      ),
     ),
-  ),
-);
+  );
+}
 
 /// One picture the viewer pages through: the file, and who posted it, when
 /// and where, as the chat names them.
@@ -227,6 +290,15 @@ class SuperTabImageItem {
   final VoidCallback? onShowInChat;
 
   SuperTabAttachment get file => ref.file;
+
+  SuperTabImageItem withRef(SuperTabFileRef ref) => SuperTabImageItem(
+    ref: ref,
+    sender: sender,
+    avatar: avatar,
+    postedAt: postedAt,
+    place: place,
+    onShowInChat: onShowInChat,
+  );
 }
 
 /// How long ago a picture was posted, in words: "just now", "5 minutes ago",
@@ -267,6 +339,10 @@ class SuperTabImageViewer extends StatefulWidget {
 class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
   late int _index = widget.index.clamp(0, widget.images.length - 1);
   final _zoom = TransformationController();
+  final _focus = FocusScopeNode(debugLabel: 'Image viewer');
+
+  /// What had the keys before it opened, given them back as it closes.
+  FocusNode? _before;
   int _turns = 0;
   Size _viewport = Size.zero;
 
@@ -283,6 +359,12 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
     super.initState();
     _zoom.addListener(_zoomed);
     _load();
+    // Its keys are its own, whatever had them: Esc closes it, not what is
+    // under it, and nothing typed reaches the composer.
+    _before = FocusManager.instance.primaryFocus;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
   }
 
   @override
@@ -290,6 +372,13 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
     _zoom
       ..removeListener(_zoomed)
       ..dispose();
+    _focus.dispose();
+    final before = _before;
+    if (before != null && before.context != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (before.context != null) before.requestFocus();
+      });
+    }
     super.dispose();
   }
 
@@ -511,6 +600,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
               inactiveTrackColor: grid.AppDesktop.mediaControlHover,
               thumbColor: _ink,
               overlayColor: grid.AppDesktop.mediaControl,
+              tickMarkShape: SliderTickMarkShape.noTickMark,
             ),
             child: Slider(
               key: const ValueKey('super-image-zoom'),
@@ -550,6 +640,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
                   ref: item.ref,
                   close: false,
                   ink: _ink,
+                  fill: grid.AppDesktop.mediaControl,
                   more: switch (item.onShowInChat) {
                     final show? => SuperTabMessageMoreMenu(
                       color: grid.AppDesktop.mediaInkMuted,
@@ -578,6 +669,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return FocusScope(
+      node: _focus,
       autofocus: true,
       onKeyEvent: _key,
       child: Material(

@@ -365,7 +365,7 @@ void main() {
       expect(
         find.descendant(
           of: viewer,
-          matching: find.textContaining(' ago in Lead · a1.png'),
+          matching: find.textContaining(' ago in # Pilot · a1.png'),
         ),
         findsOneWidget,
       );
@@ -418,7 +418,9 @@ void main() {
       final c = await chat(tester);
       await tester.tap(inline('a2'));
       await settle(tester);
-      await tester.tap(find.byTooltip('More'));
+      await tester.tap(
+        find.descendant(of: viewer, matching: find.byTooltip('More')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Show in chat'));
       await settle(tester);
