@@ -1,7 +1,7 @@
 import { declaredHttpClient } from '../superTabs/refusalLog.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
-import { prisma } from '../lib/prisma.js'
+import { prisma, prismaSecondary } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
 import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
@@ -249,8 +249,10 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
     import('./harnessLinks.js'), import('../lib/voiceQuota.js'), import('../lib/deepgramWav.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
-    // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
-    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+    // Older history pages and the costs report read the secondaries (lib/prisma.ts, task #2970).
+    { replica: prismaSecondary,
+      // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
+      workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,

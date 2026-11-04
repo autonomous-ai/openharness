@@ -52,8 +52,11 @@ export type SlowSummary = { count: number; unreadable: number; totalSeconds: num
   top: { ns: string; op: string; shape: string; count: number; seconds: number }[] }
 export type Sizes = { primary: string; readFrom: string; dataBytes: number; indexBytes: number
   collections: { name: string; count: number; dataBytes: number; storageBytes: number; indexBytes: number; nindexes: number }[] }
+/** A secondary's process CPU (user + kernel) over the day, by its process id: where the reads moved off the primary land
+ *  (task #2970). */
+export type SecondaryCpu = { process: string; cpu: Stat }
 export type Summary = { label: string; takenAt: string; skipped: string[]; failed: string[]; primaryProcess?: string
-  primary?: Record<string, Stat>; units?: Record<string, string>; slowOps?: SlowSummary; sizes?: Sizes }
+  primary?: Record<string, Stat>; units?: Record<string, string>; secondaries?: SecondaryCpu[]; slowOps?: SlowSummary; sizes?: Sizes }
 
 /* ---------- safety ---------- */
 
@@ -223,8 +226,12 @@ async function snapshotAtlas(get: ReturnType<typeof atlasClient>, groupId: strin
     }
   }
   const primaryProcess = processes.find(p => p.typeName === 'REPLICA_PRIMARY') ?? processes[0]!
+  const secondaries = processes.filter(p => p.id !== primaryProcess.id).sort((a, b) => a.id.localeCompare(b.id)).flatMap(p => {
+    const cpu = summarizeMeasurements(measurements[p.id] ?? []).primary.PROCESS_CPU
+    return cpu ? [{ process: p.id, cpu }] : []
+  })
   return { processes, measurements, slow, primaryProcess: primaryProcess.id, ...summarizeMeasurements(measurements[primaryProcess.id] ?? []),
-    slowOps: summarizeSlow(Object.values(slow).flat(), unreadable) }
+    secondaries, slowOps: summarizeSlow(Object.values(slow).flat(), unreadable) }
 }
 
 /* ---------- sizes from a secondary ---------- */
@@ -271,6 +278,10 @@ function markdown(summary: Summary): string {
       const f = label.includes('MB') ? (BYTES[summary.units?.[name] ?? ''] ?? 1) * factor : factor
       lines.push(`| ${label} | ${fmt(s.average * f)} | ${fmt(s.peak * f)} | ${fmt(s.latest * f)} |`)
     }
+    // Each secondary by its host's name, without the domain the primary's row already names.
+    for (const { process, cpu } of summary.secondaries ?? []) {
+      lines.push(`| Secondary CPU (%), ${process.split(/[.:]/)[0]} | ${fmt(cpu.average)} | ${fmt(cpu.peak)} | ${fmt(cpu.latest)} |`)
+    }
     lines.push('')
   }
   if (summary.slowOps) {
@@ -303,7 +314,8 @@ export async function runSnapshot({ env, out, label, now = Date.now(), print = c
   else {
     try {
       const atlas = await snapshotAtlas(atlasClient(base, auth), env.ATLAS_GROUP_ID, env.ATLAS_CLUSTER, now)
-      Object.assign(summary, { primaryProcess: atlas.primaryProcess, primary: atlas.primary, units: atlas.units, slowOps: atlas.slowOps })
+      Object.assign(summary, { primaryProcess: atlas.primaryProcess, primary: atlas.primary, units: atlas.units, secondaries: atlas.secondaries,
+        slowOps: atlas.slowOps })
       files['measurements.json'] = { processes: atlas.processes, measurements: atlas.measurements }
       files['slow-queries.json'] = atlas.slow
     } catch (error) {
@@ -340,6 +352,11 @@ export function compareSnapshots(before: Summary, after: Summary): string {
       const b = before.primary?.[name]?.[key], a = after.primary?.[name]?.[key]
       if (b !== undefined || a !== undefined) rows.push([`${label}, ${key}`, b === undefined ? b : b * f, a === undefined ? a : a * f])
     }
+  }
+  // Secondaries in host order: a failover can swap which member is which, so compare them by place.
+  const secondaries = Math.max(before.secondaries?.length ?? 0, after.secondaries?.length ?? 0)
+  for (let i = 0; i < secondaries; i++) {
+    for (const key of ['average', 'peak'] as const) rows.push([`Secondary ${i + 1} CPU (%), ${key}`, before.secondaries?.[i]?.cpu[key], after.secondaries?.[i]?.cpu[key]])
   }
   rows.push(['Slow operations, seconds', before.slowOps?.totalSeconds, after.slowOps?.totalSeconds],
     ['Slow operations, worst minute (s)', before.slowOps?.peakSecondsPerMinute, after.slowOps?.peakSecondsPerMinute],

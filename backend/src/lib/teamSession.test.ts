@@ -30,7 +30,7 @@ const m = vi.hoisted(() => {
     bus: { changed: vi.fn(), listChanged: vi.fn(), presence: vi.fn() },
   }
 })
-vi.mock('./prisma.js', () => ({ prisma: m.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
+vi.mock('./prisma.js', () => ({ prisma: m.prisma, prismaSecondary: m.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 // `pub`: the Swarm routes' store shares its delivery poll memory through it (routes/superTabs.ts); these tests never poll.
 vi.mock('./bus.js', () => ({ publishShareChanged: m.bus.changed, publishDeviceMachineListChanged: m.bus.listChanged, getAgentPresenceMany: m.bus.presence,
   pub: {} }))

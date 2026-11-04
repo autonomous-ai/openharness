@@ -504,7 +504,8 @@ export class SwarmReads {
       const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
       const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      const names = await profileNames(tx, state.people.map(p => p.id))
+      // Names change rarely and show on a board: read on the secondary (task #2970).
+      const names = await profileNames(this.store.replica, state.people.map(p => p.id))
       // Which machines the reader sees, with the daily rows no other read carries.
       const machines = (visibleState(state, actor, now).machines ?? [])
         .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
