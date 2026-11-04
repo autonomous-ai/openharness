@@ -439,6 +439,10 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
+  /// Where the ask at each thread's root stands, by root: what the backend's
+  /// summaries say (threads.ts).
+  final threadAsks = <String, String>{};
+
   /// Whether messages are written with threads, as backends from threads on
   /// write them (backend threads.ts).
   bool threads = false;
@@ -446,6 +450,9 @@ class ConversationServer {
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
+
+  /// Fails, as if offline, each read whose path holds this.
+  String? failReadsOf;
 
   /// Names a person's message as the backend does: a hash of the Swarm, the
   /// sender and the send's receipt id (backend model.ts `stableId`, used by
@@ -795,6 +802,7 @@ class ConversationServer {
           case final thread when thread.length > 1)
         {
           'id': root,
+          'ask': ?threadAsks[root],
           'replies': thread.length - 1,
           'lastSequence': thread.last['sequence'],
           'lastAt': thread.last['createdAt'],
@@ -1498,6 +1506,9 @@ class ConversationServer {
     }
     if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
+    if (failReadsOf case final part? when path.contains(part)) {
+      throw StateError('Offline');
+    }
     final uri = Uri.parse(path);
     if (uri.pathSegments.length > 5 &&
         uri.pathSegments[3] == 'projects' &&

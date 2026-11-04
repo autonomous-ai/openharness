@@ -17,7 +17,7 @@ final shots = Platform.environment['SUPER_TAB_PLAIN_WORK_SHOTS'];
 
 /// Plain chat proposals and tasks (task #2294) as the PR shows them, in both
 /// appearances: the project chat with a Buddy's proposal and a task the PM
-/// opened, each one ordinary "Let's build" message, and the proposal's thread
+/// opened, each one ordinary message with its tag, and the proposal's thread
 /// with its details and the PM's replies, in the server's own words.
 void main() {
   setUpAll(() async {
@@ -32,6 +32,12 @@ void main() {
       final bytes = ByteData.sublistView(await File(font.$2).readAsBytes());
       await (FontLoader(font.$1)..addFont(Future.value(bytes))).load();
     }
+    // The sans stack's last face, standing in for the fallback a Mac does by
+    // itself: a widget test has no such registry.
+    final emoji = ByteData.sublistView(
+      await File('/System/Library/Fonts/Apple Color Emoji.ttc').readAsBytes(),
+    );
+    await (FontLoader('Arial')..addFont(Future.value(emoji))).load();
   });
 
   const diego = {'kind': 'person', 'id': 'owner', 'name': 'diego@example.com'};
@@ -151,6 +157,27 @@ void main() {
           minutesAgo: 39,
           source: {'kind': 'system'},
         );
+        // Each state of an ask, as Dee's mockup shows them (#2552).
+        server.threadAsks['message-1'] = 'shipped';
+        server.threadAsks['message-6'] = 'on-it';
+        say(
+          "Desktop chat: in a task with steps, your next message reads as the step agent's",
+          diego,
+          minutesAgo: 30,
+          source: {'kind': 'buddy-proposal', 'personId': 'owner'},
+        );
+        say(
+          'Goal: the next message keeps its own name.',
+          buddy,
+          thread: 'message-9',
+          minutesAgo: 30,
+        );
+        server.threadAsks['message-9'] = 'proposal';
+        say(
+          'sidebar looks heavy, can we make it lighter?',
+          diego,
+          minutesAgo: 10,
+        );
         final c = server.controller();
         addTearDown(c.dispose);
         await c.refresh();
@@ -179,7 +206,7 @@ void main() {
         c.select('offline');
         await tester.pumpAndSettle();
         expect(
-          find.text("Let's build: Hub reports hide an item from everyone"),
+          find.text('Hub reports hide an item from everyone'),
           findsOneWidget,
         );
         // Replies stay in their threads, out of the chat.

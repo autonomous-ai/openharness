@@ -10,7 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 
-// Plain chat (task #2294; docs/plans/2026-11-03-plain-chat-work-plan.md): each task is one ordinary "Let's build" message in
+// Plain chat (task #2294; docs/plans/2026-11-03-plain-chat-work-plan.md): each task is one ordinary message, its title alone, in
 // its project chat, never edited, with the PM's replies in its thread as it moves, none for its steps, and a private
 // project's only for that project's readers. Through the store and a fresh loopback replica set, as the people's apps read it.
 let replica: MongoMemoryReplSet
@@ -65,10 +65,10 @@ describe('a task\'s one message in its project chat', () => {
     const P = await s.add('Coordinator', 'lead', true)
     const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', requesterId: owner.sub, brief: 'Keep drafts.', checks: [] })).result.conversationId)
     const first = await s.page('lead')
-    expect(first.lines).toEqual([expect.objectContaining({ text: "Let's build: Offline drafts", recipientIds: [] })])
+    expect(first.lines).toEqual([expect.objectContaining({ text: 'Offline drafts', recipientIds: [] })])
     const root = first.lines[0]!.id
     const readThread = () => store.messages(owner, s.tab, 'lead', { thread: root })
-    expect((await readThread()).messages.map(m => m.text)).toEqual(["Let's build: Offline drafts", 'Keep drafts.'])
+    expect((await readThread()).messages.map(m => m.text)).toEqual(['Offline drafts', 'Keep drafts.'])
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })
@@ -83,7 +83,7 @@ describe('a task\'s one message in its project chat', () => {
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
     const thread = await readThread()
-    expect(thread.messages.map(m => m.text)).toEqual(["Let's build: Offline drafts", 'Keep drafts.', expect.stringMatching(/^On it: \S+ is building it\.$/),
+    expect(thread.messages.map(m => m.text)).toEqual(['Offline drafts', 'Keep drafts.', expect.stringMatching(/^On it: \S+ is building it\.$/),
       'Ready for review: PR #7', 'Merged: PR #7. Ships in the next release.'])
     expect(thread.messages.filter(m => m.id !== root).every(m => m.thread === root && m.replyTo === root && (m.author as { id: string }).id === P
       && m.recipientIds.length === 0)).toBe(true)
@@ -124,7 +124,7 @@ describe('a task\'s one message in its project chat', () => {
     const reviewing = String((await s.as(E)({ type: 'work.assign', conversationId: R, agentId: V })).result.assignmentId)
     await s.as(V)({ type: 'work.status', conversationId: R, assignmentId: reviewing, status: 'done', result: 'Ready to merge: Yes.' })
     const { lines } = await s.page('lead')
-    expect(lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, "Let's build: Offline drafts"]])
+    expect(lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, 'Offline drafts']])
   })
 
   it('shows a private project\'s task line only to that project\'s readers', async () => {
@@ -137,7 +137,7 @@ describe('a task\'s one message in its project chat', () => {
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })
 
     const mine = await s.page(created.conversationId)
-    expect(mine.lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, "Let's build: Hidden work"]])
+    expect(mine.lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, 'Hidden work']])
     const lineId = mine.lines[0]!.id
     // A Swarm member outside the project: no line on the chats they read, and neither the private chat nor the line by id.
     expect((await s.page('lead', peer)).lines).toEqual([])

@@ -329,6 +329,46 @@ describe('dormant groups on demand (design 4.5)', () => {
   })
 })
 
+describe('what a reader can tell of a task\'s merge (task #2558)', () => {
+  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser, asAgentId: string) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
+      payload: { operationId: randomUUID(), command, asAgentId } })
+    return { status: response.statusCode, body: response.json() as unknown }
+  }
+  // Backlog sorts on these: shippedAt says only that the task reached Done; a pull request card's mergedAt says it merged.
+  it('a Done task with an open pull request reads as shipped with no merge, and only a recorded merge sets one', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const pullRequest = 'https://github.com/example/app/pull/7'
+    const read = async () => (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
+    const { assignment } = await read()
+    const done = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId: assignment.id, status: 'done',
+      result: `Ready: ${pullRequest}` }, owner, s.worker)
+    expect(done.status, JSON.stringify(done.body)).toBe(200)
+    const unmerged = await read()
+    expect(unmerged.shippedAt).toEqual(expect.any(Number))
+    expect(unmerged.pullRequestUrls).toEqual([pullRequest])
+    expect(unmerged.cards?.pullRequests?.some((card: { mergedAt?: number }) => card.mergedAt !== undefined) ?? false).toBe(false)
+    const merged = await post(s.tabId, { type: 'conversation.merged', conversationId: s.web, pullRequestUrl: pullRequest }, owner, s.lead)
+    expect(merged.status, JSON.stringify(merged.body)).toBe(200)
+    const card = (await read()).cards.pullRequests.find((c: { url: string }) => c.url === pullRequest)
+    expect(card.mergedAt).toEqual(expect.any(Number))
+  })
+
+  it('a merge recorded on a batch pull request makes a merged card on the task, whatever became of its own', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const [own, batch] = ['https://github.com/example/app/pull/7', 'https://github.com/example/app/pull/8']
+    const read = async () => (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
+    const { assignment } = await read()
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId: assignment.id, status: 'done', result: `Ready: ${own}` }, owner, s.worker)
+    await post(s.tabId, { type: 'conversation.merged', conversationId: s.web, pullRequestUrl: batch }, owner, s.lead)
+    const cards = (await read()).cards.pullRequests as Array<{ url: string; mergedAt?: number }>
+    expect(cards.find(c => c.url === batch)?.mergedAt).toEqual(expect.any(Number))
+    expect(cards.find(c => c.url === own)?.mergedAt).toBeUndefined()
+  })
+})
+
 describe('a dormant group\'s required machines', () => {
   it('names to each reader only the machines that reader sees, in the dormant list and read by id', async () => {
     const s = await scene((f, ids) => {

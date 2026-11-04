@@ -3161,6 +3161,9 @@ class _SuperTabViewState extends State<SuperTabView>
             },
       thread: thread,
       threadUnread: thread != null && c.threadUnread(thread),
+      threadTagged:
+          thread != null &&
+          SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null
@@ -3371,22 +3374,30 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [SuperTabMessageRow.groupLimit] to a group. Groups are counted from the
   /// list's dividing row both ways, so a page read in above regroups none of
   /// the rows already shown.
-  static Set<String> _joined(
-    List<SuperTabMessage> messages,
-    SuperTabMessage? split,
-  ) {
+  Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
+    bool tagged(SuperTabMessage m) =>
+        c.thread(m.conversationId, m.id)?.askTag != null;
     final at = split == null
         ? -1
         : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
-    if (at <= 0) return SuperTabMessageRow.consecutiveUpdates(messages);
-    final joined = SuperTabMessageRow.consecutiveUpdates(messages.sublist(at));
+    if (at <= 0) {
+      return SuperTabMessageRow.consecutiveUpdates(messages, tagged: tagged);
+    }
+    final joined = SuperTabMessageRow.consecutiveUpdates(
+      messages.sublist(at),
+      tagged: tagged,
+    );
     // Above it, upward: each group, newest first, keeps the name on its
     // oldest row.
     var group = [at - 1];
     for (var i = at - 2; i >= -1; i--) {
       if (i >= 0 &&
           group.first - i < SuperTabMessageRow.groupLimit &&
-          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i])) {
+          SuperTabMessageRow.groupsWith(
+            messages[i + 1],
+            messages[i],
+            tagged: tagged,
+          )) {
         group.add(i);
         continue;
       }
@@ -3539,6 +3550,11 @@ class _SuperTabViewState extends State<SuperTabView>
           ? c.snapshot?.agent(message.authorId)
           : null;
       final previous = index > 0 ? entries[index - 1].message : null;
+      // Grouping is decided on the task's own rows; a step's row drawn between
+      // two of them still ends the group, or the next would read as its agent's.
+      final joined =
+          grouped.contains(message.id) &&
+          previous?.conversationId == message.conversationId;
       final time = message.createdAt;
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
@@ -3567,7 +3583,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       ? _outgoingRow(
                           pendingById[message.id]!,
                           byId,
-                          grouped: grouped.contains(message.id),
+                          grouped: joined,
                         )
                       : entry.interruptions > 0
                       ? SuperTabRecordingNotice(
@@ -3580,7 +3596,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         )
                       : _message(
                           message,
-                          grouped.contains(message.id),
+                          joined,
                           byId,
                           showReceipt: message.id == latestOwn?.id,
                         ),

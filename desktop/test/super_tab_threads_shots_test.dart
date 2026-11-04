@@ -112,6 +112,7 @@ void main() {
         minutesAgo: 2,
       );
       say('Morning digest is up for review.', ken, minutesAgo: 1);
+      server.tag('message-2', threadId: 'message-1', messageSequence: 2);
       // A chat with a Lead, so messages read as sent.
       ((server.state['conversations'] as List)[0] as Map)['leadId'] = 'pm';
       final c = server.controller(account: 'dee');
