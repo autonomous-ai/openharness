@@ -28,6 +28,7 @@ import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_lead.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
 import 'pull_request_facts.dart';
@@ -870,6 +871,13 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
+    // In the person's Personal Swarm a project chat with no Lead starts one
+    // on their computer; the message waits for it (task #2633).
+    final app = widget.app;
+    if (result != null && app != null) {
+      final lead = PersonalLeadStarter.of(app);
+      if (lead.wants(c, id)) unawaited(lead.start(c, id));
+    }
     if (newSession && result != null) _chatSessions.remove(id);
     // Refused for New session, its text is back as the chat's draft: it shows
     // in the box, ready to send without it, unless another chat is shown or

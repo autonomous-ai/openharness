@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -73,9 +72,8 @@ Future<SuperTabController> _swarm(
 }
 
 /// The project chat the desk's pane belongs to.
-String _games(SuperTabController c) => c.snapshot!.projects
-    .firstWhere((p) => p.id != 'lead')
-    .leadConversationId;
+String _games(SuperTabController c) =>
+    c.snapshot!.projects.firstWhere((p) => p.id != 'lead').leadConversationId;
 
 List<Map> _commands(SuperTabLaunchFixture f, String type) => [
   for (final post in f.connection.server.posts)
@@ -110,33 +108,47 @@ void main() {
 
   test('a message in a project with no repo starts its Lead in a new folder '
       'of the Harness projects folder', () async {
-    final f = SuperTabLaunchFixture();
+    // This computer makes the folder itself: a fixture one, never the disk's.
+    final asked = <ProjectFolderRequest>[];
+    final f = SuperTabLaunchFixture(
+      prepareFolder: (request) async {
+        asked.add(request);
+        return '/fixture/Harness/${request.folderName}';
+      },
+    );
     _desk(f, cwd: '/Users/huy/scratch');
     final c = await _swarm(f);
     final games = _games(c);
     await PersonalLeadStarter.of(f.app).start(c, games);
-    final create = _create(f);
-    expect(create['projectSource'], 'new');
-    expect(create.containsKey('cwd'), isFalse);
+    // Named after the project, numbered past a folder of that name already
+    // there rather than refused, as a suggested name is.
+    expect(asked.single.folderName, 'Games');
+    expect(asked.single.isGenerated, isTrue);
+    expect(_create(f)['cwd'], '/fixture/Harness/Games');
     expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
   });
 
-  test('a failed start says why, and starts again on the next message', () async {
-    final f = SuperTabLaunchFixture();
-    _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
-    final c = await _swarm(f);
-    final games = _games(c);
-    final starter = PersonalLeadStarter.of(f.app);
-    f.connection.failCreation = true;
-    await starter.start(c, games);
-    final status = starter.statusOf(c, games)!;
-    expect(status.failed, isTrue);
-    expect(status.reason, 'Fixture engine unavailable');
-    expect(f.connection.joins, isEmpty);
-    f.connection.failCreation = false;
-    await starter.start(c, games);
-    expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
-  });
+  test(
+    'a failed start says why, and starts again on the next message',
+    () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
+      final c = await _swarm(f);
+      final games = _games(c);
+      final starter = PersonalLeadStarter.of(f.app);
+      f.connection
+        ..failCreation = true
+        ..failCreationCode = 'ENGINE_LAUNCH_REFUSED';
+      await starter.start(c, games);
+      final status = starter.statusOf(c, games)!;
+      expect(status.failed, isTrue);
+      expect(status.reason, 'Fixture engine unavailable');
+      expect(f.connection.joins, isEmpty);
+      f.connection.failCreation = false;
+      await starter.start(c, games);
+      expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
+    },
+  );
 
   test('two quick messages start one Lead', () async {
     final f = SuperTabLaunchFixture();
@@ -164,7 +176,10 @@ void main() {
     project['leadClaim'] = {'machineId': 'laptop'};
     final starter = PersonalLeadStarter.of(f.app);
     await starter.start(c, games);
-    expect(f.connection.calls.where((call) => call.$1 == 'agent_create'), isEmpty);
+    expect(
+      f.connection.calls.where((call) => call.$1 == 'agent_create'),
+      isEmpty,
+    );
     expect(starter.statusOf(c, games)?.failed, isFalse);
   });
 

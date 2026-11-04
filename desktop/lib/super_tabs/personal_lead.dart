@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
-import '../core/models.dart';
 import '../core/project_folder.dart';
 import '../state/app_state.dart';
 import '../state/new_harness.dart' show kLeadModel;
@@ -86,12 +85,57 @@ class PersonalLeadStarter extends ChangeNotifier {
   /// Whether a message sent in [conversationId] of [c] starts its project's
   /// Lead: the signed-in person's own Personal Swarm, a project's chat, and no
   /// Lead there.
-  bool wants(SuperTabController c, String conversationId) => false;
+  bool wants(SuperTabController c, String conversationId) {
+    if (!PersonalProjects.of(app).eligible(c)) return false;
+    final snapshot = c.snapshot!;
+    final group = snapshot.conversation(conversationId);
+    if (group == null || group.archived || group.isBuddyChat) return false;
+    if (!snapshot.isProjectLead(conversationId)) return false;
+    final project = snapshot.projectFor(conversationId);
+    return project != null && snapshot.leadOf(project.id) == null;
+  }
 
   /// Starts [conversationId]'s Lead after a message there, once: a start
   /// already running here, or one another of the person's machines claimed,
   /// is the one.
-  Future<void> start(SuperTabController c, String conversationId) async {}
+  Future<void> start(SuperTabController c, String conversationId) async {
+    final key = _key(c, conversationId);
+    if (statusOf(c, conversationId) case final status? when !status.failed) {
+      return;
+    }
+    _set(key, PersonalLeadStatus.starting(clock.now()));
+    try {
+      final project = c.snapshot?.projectFor(conversationId);
+      if (project == null) {
+        throw const SuperTabFailure(
+          'PROJECT_UNAVAILABLE',
+          'this project is no longer available',
+        );
+      }
+      final plan = planFor(c, conversationId);
+      final claim = await c.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'lead.claim',
+            'projectId': project.id,
+            'machineId': plan.machineId,
+          },
+        },
+      );
+      // Another of the person's machines starts it: its join ends the note.
+      if (superTabMap(claim['result'])['leadStart'] == 'waiting') return;
+      await (launchForTest ?? _launch)(c, conversationId, plan);
+      // Starting until the chat reads its Lead and the message's delivery.
+      unawaited(c.refresh().catchError((Object _) {}));
+    } on SuperTabFailure catch (failure) {
+      _set(key, PersonalLeadStatus.failed(_reason(failure)));
+    } catch (error) {
+      _set(key, PersonalLeadStatus.failed(_trim('$error')));
+    }
+  }
 
   /// Where [conversationId]'s Lead starts, or throws why it cannot: the repo's
   /// folder on this computer, else on the person's computer whose pane holds
@@ -194,11 +238,7 @@ class PersonalLeadStarter extends ChangeNotifier {
       await integration.resume!();
       return;
     }
-    final prompt = await integration.prepare(
-      plan.machineId,
-      '',
-      plan.engine,
-    );
+    final prompt = await integration.prepare(plan.machineId, '', plan.engine);
     final attempt = AgentCreationAttempt(
       background: true,
       beforeSubmit: integration.beforeSubmit,
@@ -213,8 +253,14 @@ class PersonalLeadStarter extends ChangeNotifier {
       plan.machineId,
       engine: plan.engine,
       folder: plan.folder,
+      // A suggested name: a folder of it already there (an earlier start's)
+      // is numbered past, not refused.
       projectFolder: plan.folder == null
-          ? ProjectFolderRequest.newProject(name: plan.projectName)
+          ? ProjectFolderRequest.generated(
+              label: 'Lead',
+              at: clock.now(),
+              name: plan.projectName,
+            )
           : null,
       swarmId: tab.id,
       permissionMode: integration.forcedPermissionMode,
@@ -237,8 +283,7 @@ class PersonalLeadStarter extends ChangeNotifier {
 
   /// A failure in the receipt's words: an older server that does not know the
   /// claim says so, any other its own reason, without a final full stop.
-  String _reason(SuperTabFailure failure) =>
-      failure.code == 'VALIDATION_ERROR'
+  String _reason(SuperTabFailure failure) => failure.code == 'VALIDATION_ERROR'
       ? 'this Swarm’s server needs an update'
       : _trim(failure.message);
 
