@@ -22,7 +22,7 @@ import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, may
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, type PageDelivery, type ThreadFacet } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, type PageDelivery, type ThreadFacet } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -336,6 +336,9 @@ async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabSt
 }
 
 export interface SuperTabStoreHooks {
+  /** The client for reads that tolerate a few seconds of lag (lib/prisma.ts prismaSecondary, task #2970): older history
+   *  pages and the costs report. Without it they read the store's own client. */
+  replica?: PrismaClient
   /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
    *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
   workEnded?: (tabId: string, ended: WorkHold[]) => void
@@ -594,6 +597,8 @@ async function outsiderRefusal(state: SuperTabState, userId: string, check: () =
 }
 
 export class SuperTabStore {
+  /** Where lag-tolerant reads go (SuperTabStoreHooks.replica); the store's own client without one. */
+  readonly replica: PrismaClient
   readonly native: SuperTabNativeStore
   readonly workspaces: SwarmWorkspaces
   /** Where avatars are kept, whose links member reads carry (read/service.ts); null when avatar uploads are off. */
@@ -608,6 +613,7 @@ export class SuperTabStore {
 
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
+    this.replica = hooks.replica ?? db
     this.fileLinks = attachments ? new FileLinks(attachments.store, attachments.publicBase, attachments.prefix) : null
     this.polls = hooks.polls ?? localPollMemory(now)
     this.autoJoins = hooks.autoJoins ?? localAutoJoinMemory(now)
@@ -3001,8 +3007,14 @@ export class SuperTabStore {
     // only about what is still missing (nextBatch): one hidden row once cost a whole second batch of 101.
     const rows: SuperTabMessage[] = []
     let batches = 0, decoded = 0
+    // An older page reads its rows on the secondary (task #2970): history before a row the reader holds does not change as
+    // new messages arrive. A batch whose edge the secondary does not hold yet is read on the primary (pageReads.ts heldPast),
+    // and so is the rest of the page's rows then. The access checks above and the hidden-row checks stay on the primary.
+    let replica = !forward && start !== undefined && !cursor.messageId && this.replica !== this.db
     for (let edge = start, size = PAGE_BATCH; rows.length < PAGE_BATCH;) {
-      const batch = await messagesPast(tx, at, edge, forward, size)
+      const held = replica && edge ? await heldPast(this.replica, at, edge, size) : null
+      if (!held) replica = false
+      const batch = held ?? await messagesPast(tx, at, edge, forward, size)
       batches++
       decoded += batch.length
       // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
@@ -3016,8 +3028,9 @@ export class SuperTabStore {
     recordMessageRead({ reader: readerKind(actor, buddy), cursor: read, session: sessionKind(user) }, batches, decoded, page.length)
     const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
     if (!forward) page.reverse()
-    const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
-    const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
+    const rowsOf = replica ? this.replica : tx
+    const reactions = page.length ? reactionCounts(state, await pageReactions(rowsOf, tabId, page.map(m => m.id))) : new Map()
+    const deliveries = page.length ? await pageDeliveries(rowsOf, tabId, page.map(m => m.id)) : []
     // What the page's rows point at that this reader may not see (an agent-only note to someone else; for a Buddy, a routing
     // row): such a reply reads as a message of its own, with no thread or reply-to naming it and no reply line for it
     // (review 1 of #2168). Rows on the page are readable already; the rest are read by id, at most two per row.
@@ -3029,7 +3042,7 @@ export class SuperTabStore {
     const hidden = new Set(pointedRows.filter(m => !readable(m) || pointedCopies.has(m.id)).map(m => m.id))
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread && !hidden.has(m.thread) ? [m.thread] : []))]
-    const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
+    const threadRows = roots.length ? await pageThreads(rowsOf, tabId, conversationId, roots) : []
     // The main Buddy counts none of a session thread's replies, as it reads none (buddySessions.ts).
     const counted = buddy ? threadRows.filter(r => !r.routing && (own || !(isBuddyChat(group) && r.session))) : threadRows
     const summaries = counted.length ? threadSummaries(state, group, counted) : []
@@ -3209,7 +3222,8 @@ export class SuperTabStore {
    *  The decisions are read first, by index, so only the groups they name are loaded. */
   async costSummary(user: AuthUser, tabId: string, days: number, asAgentId?: string) {
     const until = this.now(), since = until - days * 24 * 60 * 60_000
-    const { rows, truncated } = await costRows(this.db, tabId, since)
+    // A report over days: its decisions are read on the secondary (task #2970), who may read them on the primary.
+    const { rows, truncated } = await costRows(this.replica, tabId, since)
     // Through the read cache, as every read: only what the Swarm's stamp says changed is read again (task #2596).
     const { state } = await this.readLoad(user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
     const actor = await this.actor(this.db, user, state, asAgentId)

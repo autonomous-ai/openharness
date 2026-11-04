@@ -160,6 +160,24 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
 }
 
 /**
+ * Up to `limit` messages before `edge`, newest first, as the client `tx` holds them, or null when it does not hold the row
+ * at `edge` yet: an older page read on a secondary (task #2970). One read of `sequence <= edge`, so the row the reader
+ * pages from and the rows before it come from one member at once. A member that holds the edge holds every row before it:
+ * a Swarm's messages are numbered in the write that stores them, one write at a time, and a secondary reads whole applied
+ * writes. More than one row at the edge's sequence (one command's rows from before the store by parts) is left to the
+ * primary, as is an edge with no row, so a page never skips a row the primary has.
+ */
+export async function heldPast(tx: Transaction, at: { tabId: string; conversationId: string; thread?: string }, edge: MessageEdge,
+  limit: number): Promise<SuperTabMessage[] | null> {
+  const rows = (await readBy(tx, 'SuperTabMessage', at.thread ? 'thread' : 'sequence', [
+    { $match: { tabId: at.tabId, conversationId: at.conversationId, ...at.thread ? { thread: at.thread } : {}, sequence: { $lte: edge.sequence } } },
+    { $sort: { sequence: -1, _id: -1 } }, { $limit: limit + 1 }])).map(row => prismaRow<SuperTabMessage>('SuperTabMessage', row))
+  const atEdge = rows.filter(m => m.sequence === edge.sequence)
+  if (atEdge.length !== 1 || (edge.id !== undefined && atEdge[0]!.id !== edge.id)) return null
+  return rows.filter(m => m.sequence < edge.sequence)
+}
+
+/**
  * The messages of one conversation with these ids, by the id index: what a page's rows name as their thread or reply-to but
  * the page does not hold (store.ts messages), so what this reader may see of them can be checked. Named, not Prisma's `id in`,
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).

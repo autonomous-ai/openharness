@@ -7,7 +7,8 @@ import { secondaryReadsUrl } from '../src/lib/databaseUrl.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { planDatabase } from './plans.test-support.js'
+import { heldPast } from '../src/superTabs/pageReads.js'
+import { plan, planDatabase, profiled, reads } from './plans.test-support.js'
 
 // Task #2970: the reads that tolerate a few seconds of lag go to the secondary client, everything that must see the latest
 // write stays on the primary. A single-node replica set: the secondary client's `secondaryPreferred` reads its one member,
@@ -82,7 +83,7 @@ describe('older history pages', () => {
     expect(pageBatches(s.secondary).length).toBeGreaterThan(0)
     expect(pageBatches(s.primary)).toEqual([])
     // What decides what this reader may see: the Swarm and its parts, read on the primary only.
-    expect(models(s.secondary).every(m => ['SuperTabDelivery', 'SuperTabMessage', 'SuperTabReaction', 'SuperTabThread'].includes(m))).toBe(true)
+    expect(models(s.secondary).filter(m => !['SuperTabDelivery', 'SuperTabMessage', 'SuperTabReaction', 'SuperTabReceipt', 'SuperTabThread'].includes(m))).toEqual([])
     expect(models(s.primary).length).toBeGreaterThan(0)
 
     // The oldest page, which reaches the end, and a thread's older page read the same way.
@@ -116,6 +117,30 @@ describe('older history pages', () => {
     expect(ids(older)).toEqual(ids(await only.messages(owner, tab, 'lead', { before: newest.next!.sequence, beforeId: newest.next!.id })))
     expect(ids(older)).toHaveLength(100)
     expect(pageBatches(s.primary).length).toBeGreaterThan(0)
+  })
+})
+
+describe('the edge check', () => {
+  it('reads the page and its edge through the conversation\'s sequence index, about the rows it returns', async () => {
+    const s = stores()
+    const { tab } = await fixture(s.store)
+    const entries = await profiled(db, () => heldPast(db, { tabId: tab, conversationId: 'lead' }, { sequence: 1200, id: `${tab}-m0200` }, 101))
+    const rows = reads(entries, 'SuperTabMessage', ['sequence'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, conversationId: 1, sequence: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(102)
+  })
+
+  it('leaves to the primary an edge whose row it lacks, a row at the edge that is not the reader\'s, and two rows at one sequence', async () => {
+    const s = stores()
+    const { tab } = await fixture(s.store)
+    const at = { tabId: tab, conversationId: 'lead' }
+    expect(await heldPast(db, at, { sequence: 5000 }, 10)).toBeNull()
+    expect(await heldPast(db, at, { sequence: 1200, id: `${tab}-m0199` }, 10)).toBeNull()
+    await db.superTabMessage.create({ data: { id: `${tab}-twin`, tabId: tab, conversationId: 'lead', sequence: 1200,
+      author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' }, text: 'twin', recipientIds: [], mentions: [] } })
+    expect(await heldPast(db, at, { sequence: 1200, id: `${tab}-twin` }, 10)).toBeNull()
+    expect((await heldPast(db, at, { sequence: 1100, id: `${tab}-m0100` }, 10))!.map(m => m.sequence)).toEqual([1099, 1098, 1097, 1096, 1095, 1094, 1093, 1092, 1091, 1090])
   })
 })
 
