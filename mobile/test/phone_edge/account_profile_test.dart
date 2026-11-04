@@ -125,14 +125,15 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('an empty or too long name is refused here, and nothing is sent', (tester) async {
+    testWidgets('an empty name is refused here, a long one is held to 60, and nothing is sent', (tester) async {
       await open(tester);
-      for (final name in ['   ', 'x' * 61]) {
-        await tester.enterText(field('account-profile-name'), name);
-        await save(tester);
-        expect(find.text('Use 1 to 60 characters, with no hidden ones.'), findsOneWidget, reason: name);
-      }
+      await tester.enterText(field('account-profile-name'), '   ');
+      await save(tester);
+      expect(find.text('Use 1 to 60 characters, with no hidden ones.'), findsOneWidget);
       expect(api.names, isEmpty);
+      await tester.enterText(field('account-profile-name'), 'x' * 61);
+      await frames(tester);
+      expect(tester.widget<TextField>(field('account-profile-name')).controller!.text.length, 60);
       await close(tester);
     });
 
