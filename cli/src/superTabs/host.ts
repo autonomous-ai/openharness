@@ -356,9 +356,12 @@ const CLAIM_FAILURE_LOG_MS = 5 * 60_000
  *  task #2800: GET deliveries was 84% empty, mostly these reads). An idle worker's list is then read only when told; a Lead's
  *  still this often, matching the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read runs its time checks. */
 const LEAD_LIST_MS = 30_000
-/** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
- *  this process started after the last one), every list is read each second again. */
-const PUSH_LEASE_MS = 10 * 60_000
+/** The server renews this lease each minute through Redis (`__deliveries_lease`, backend lib/swarmDeliveryPushes.ts), and
+ *  says it pushes every 4 minutes. An idle worker's list is read only when told (task #2800), so a channel gone silent (Redis
+ *  away, a server rolled back) must end the lease within minutes, not the 10 it was: past this, every list is read each second
+ *  again, and the log says so once (review of #2977, Important 1). It allows one lost renewal. Against a server from before
+ *  the minute renewal, it lapses for 1.5 of every 4 minutes, reading each second then: the cost of an old server only. */
+const PUSH_LEASE_MS = 150_000
 /** Spec 2026-11-02-poll-cost Part 3: a delivery the core refused to write (a running turn, a draft, a dialog) was claimed again
  *  every second for as long as it was held, up to a day (prod 2026-11-02: 414 claim POSTs a minute). The claimed message is
  *  kept and written again on each tick; the claim is renewed only this often, well inside the backend's 10-minute claim quiet
@@ -502,6 +505,8 @@ export class SuperTabHost {
   private readonly stopNotices: () => void
   /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
   private pushUntil = 0
+  /** Whether the log has said the lease lapsed since it was last held: said once per lapse, not each second. */
+  private leaseSaid = true
   /** The agents' lists the server said have work since the last poll took them, by list key; `pushAll` reads every one. */
   private readonly pushes = new Set<string>()
   private pushAll = false
@@ -757,8 +762,10 @@ export class SuperTabHost {
       return
     }
     if (notice.type === '__terminal_waiting') { void this.terminal.waiting(); return }
+    if (notice.type === '__deliveries_lease') { this.pushUntil = this.now() + PUSH_LEASE_MS; this.leaseSaid = false; return }
     if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
+    this.leaseSaid = false
     if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
     else this.pushAll = true
     void this.tick()
@@ -1057,7 +1064,12 @@ export class SuperTabHost {
     const read = await this.sources.feed.due(), data = read.roster
     if (this.stopped) return
     // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
-    const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
+    const lapsed = this.now() >= this.pushUntil
+    if (lapsed && !this.leaseSaid) {
+      this.leaseSaid = true
+      this.log('The server stopped saying it pushes deliveries (Redis away or an older server): reading every agent\'s list each second until it does again.')
+    }
+    const pushes = new Set(this.pushes), pushAll = this.pushAll || lapsed
     this.pushes.clear()
     this.pushAll = false
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
@@ -1228,7 +1240,8 @@ export class SuperTabHost {
           }
         }
         // Taken after the pass's acknowledgements and writes: an acknowledged delivery and one the pane holds need no read next
-        // second, and the 30 s read below still catches a cancel whose push was lost.
+        // second. A held list (and a Lead's) is still read every 30 s, which catches a cancel whose push was lost; an idle one
+        // is read when told.
         const read = this.lists.get(listKey)
         if (listRead && read) {
           const refused = (item: Json) => identifier(item.id) && !!this.claims.get(item.id)?.refused

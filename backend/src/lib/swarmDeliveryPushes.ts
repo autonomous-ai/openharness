@@ -2,11 +2,14 @@ import { publishSwarmDeliveries, subscribeSwarmDeliveries } from './bus.js'
 import { logger } from '../utils/logger.js'
 import type { DeliveriesWaiting } from '../superTabs/store.js'
 
-/** Repeated so a host keeps reading idle agents only when told: it goes back to each second 10 minutes after it last heard it
- *  (cli superTabs/host.ts PUSH_LEASE_MS), which covers a missed repeat and a server rolled back to one that does not push. The
- *  repeat goes through the machine's own channel, as the host-changes one does (swarmHostPushes.ts), so a Redis gone silent
- *  stops it too and the host reads each second again instead of waiting on pushes that cannot come (task #2800). */
-const PUSHES_REPEAT_MS = 4 * 60_000
+/** Each minute this socket renews its host's push lease (`__deliveries_lease`, cli superTabs/host.ts PUSH_LEASE_MS, 2.5 min),
+ *  and every LEASES_PER_WORD of them also says it pushes (the empty `super_tab_deliveries` frame), on which a host reads every
+ *  list once. Both go through the machine's own channel, as the host-changes repeat does (swarmHostPushes.ts): a host reads an
+ *  idle worker's list only when told (task #2800), so a Redis gone silent must end its lease within minutes and put it back
+ *  to reading each second (review of #2977, Important 1), and a repeat nobody heard is logged. An older daemon drops the `__`
+ *  frame and keeps its lease on the 4-minute word, as before. */
+const LEASE_REPEAT_MS = 60_000
+const LEASES_PER_WORD = 4
 
 /**
  * Stability roadmap 2.4: every Swarm host read each running agent's deliveries each second, almost always to find nothing.
@@ -25,11 +28,15 @@ const PUSHES_REPEAT_MS = 4 * 60_000
  */
 export async function relaySwarmDeliveries(machineId: string, send: (frame: unknown) => unknown): Promise<() => void> {
   const tell = (payload: { tabId?: string; agentId?: string }) => { send({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload } }) }
-  let unsubscribe: () => void
+  let unsubscribe: () => void, leases = 0
   try {
     unsubscribe = await subscribeSwarmDeliveries(machineId, msg => {
       const { tabId, agentId, terminal, pushes } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
-      if (pushes === true) return tell({})
+      if (pushes === true) {
+        send({ t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } })
+        if (++leases % LEASES_PER_WORD === 0) tell({})
+        return
+      }
       if (typeof tabId !== 'string' || typeof agentId !== 'string') return
       // A terminal request waiting for this machine (announceSwarmTerminal): a `__` control frame, which an older daemon drops.
       if (terminal === true) send({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId, agentId } } })
@@ -45,7 +52,7 @@ export async function relaySwarmDeliveries(machineId: string, send: (frame: unkn
     void publishSwarmDeliveries(machineId, { pushes: true }).then(heard => {
       if (!heard) logger.warn('[swarm] delivery push repeat reached no one; hosts fall back to reading each second', { machineId })
     })
-  }, PUSHES_REPEAT_MS)
+  }, LEASE_REPEAT_MS)
   return () => {
     clearInterval(repeat)
     unsubscribe()

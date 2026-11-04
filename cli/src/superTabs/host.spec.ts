@@ -5156,7 +5156,11 @@ describe('deliveries the server pushes', () => {
     t.idle()
     t.push(announced)
     await host.tick()
-    await seconds(t, host, 180)
+    // The server renews the lease each minute (backend lib/swarmDeliveryPushes.ts): that reads nothing.
+    for (let minute = 0; minute < 3; minute++) {
+      await seconds(t, host, 60)
+      t.push({ type: '__deliveries_lease' })
+    }
     expect(reads(t)).toBe(1)
     t.push(announced)
     await host.tick()
