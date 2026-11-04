@@ -1316,6 +1316,8 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
+  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (overdueDecisions.ts).
+  overdue        Boolean?
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
@@ -1329,6 +1331,8 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
   /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
+  /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
+  @@index([answeredAt, createdAt], map: "decision_waiting_created")
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
