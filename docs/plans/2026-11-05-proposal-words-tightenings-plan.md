@@ -23,10 +23,12 @@ the owner's own words or the newest okayed shown line still passes.
   label ("Bug: login fails"), an attribution ("Ken said: the client is leaving") or a refusal ("Don't post this: …")
   let the Buddy post the rest as the owner. Now the text after the first colon counts only when everything before it
   is a short ask to send it:
-  - it starts with a send word, optionally after ok/yes/please/can you: post, send, share, propose, tell, pass,
+  - it starts with a send word, optionally after ok/yes/please/can you: post, send, share, propose, tell,
     forward, submit or raise, or in Vietnamese gửi, đăng, chuyển, nói or đề xuất. Words that read as a label as often
     as an ask (report, file, pass, báo) are left out;
-  - it has no negation (not, don't, never, no, đừng, không, chưa);
+  - it has no negation (not, n't, no, never, nobody, nothing, none, neither, nor, without, đừng, không, ko, chưa,
+    chẳng, khỏi);
+  - it is not a question to the Buddy (a send word followed by me, us, tôi or mình);
   - it has no sentence break (`.`, `!`, `?`, `;` or a new line);
   - it is at most 10 words.
 
@@ -96,4 +98,4 @@ the owner's own words or the newest okayed shown line still passes.
       "ok, please send it: …" and "Gửi PM: …". These are refused after the colon: "Bug: login fails",
       "Ken said: the client is leaving", "Don't post this: …", "Please don't send this: …" and a lead-in with a
       sentence break. Each whole message still passes. Watch it fail.
-- [ ] Code: `askLeadIn` decides whether the lead-in is an ask to send.
+- [ ] Code: `asksToSend` decides whether the lead-in is an ask to send.

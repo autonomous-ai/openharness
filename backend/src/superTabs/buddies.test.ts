@@ -705,6 +705,15 @@ describe('a Buddy\'s proposal to the PM', () => {
       ['Tell Ken not to post: the client is leaving', 'the client is leaving'],
       ['Đừng gửi: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
       ['Report: the client is leaving', 'the client is leaving'],
+      // A negation after the send word says not to send it (security review 1 of #3055).
+      ['Tell nobody: the client is leaving', 'the client is leaving'],
+      ['Send nothing yet: we drop Windows', 'we drop Windows'],
+      ['Share this with nobody: layoffs are coming', 'layoffs are coming'],
+      ['Send it to none of them: layoffs are coming', 'layoffs are coming'],
+      ['Post it without Ken knowing: layoffs are coming', 'layoffs are coming'],
+      ['Gửi ko được: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
+      ['Gửi khỏi cần: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
+      ['Nói chẳng ai nghe: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
       // A question to the Buddy is not an ask to send (security review 2 of #3055).
       ['Tell me why Ken said: the client is leaving', 'the client is leaving'],
       ['can you tell me what this means: the client is leaving', 'the client is leaving'],
