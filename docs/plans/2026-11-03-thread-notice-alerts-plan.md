@@ -126,7 +126,8 @@ threads #2704). Not done here: the brief's optional "tapping it enters that thre
   - `test_cable_supertab.py`: `supertab.notice` with `thread` reaches the UI with it; without it, "".
 - [ ] **Step 2: Run** `python3 test/test_touch_ui.py` and `python3 test/test_cable_supertab.py` in the firmware folder: FAIL.
 - [ ] **Step 3: Commit** the failing tests and push.
-- [ ] **Step 4: Implement**: `handle_supertab_notice` reads `thread` (an id that fits, else ""); `ui_supertab_notice`
+- [ ] **Step 4: Implement**: `handle_supertab_notice` reads `thread` ("" when absent; a root too long to hold is passed as it
+  is, so no face matches it and it beeps, as Design's failure line says); `ui_supertab_notice`
   takes it; the face reads a notice at once only when it shows that chat and, for a thread notice, that thread. The
   Buddy's quiet word keeps its rule.
 - [ ] **Step 5: Run** both files and `test/run.sh`: PASS.

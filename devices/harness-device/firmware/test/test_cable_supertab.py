@@ -212,11 +212,14 @@ int main(void) {
     beep_next=false;
     assert(notice_calls==1 && beeps==beeps_before+1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && got_chat==HT_CHAT_PM);
     assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u && !strcmp(got_thread,""));
-    // A reply inside a thread (#2463) names its root; one that is no id is a main-stream notice.
+    // A reply inside a thread (#2463) names its root. One whose root cannot be held is still a thread's: no face shows it, so
+    // it beeps rather than reading as the main chat's; an empty one is the main stream.
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m12\",\"text\":\"Fixed.\",\"at\":7,\"thread\":\"m9\"}");
     assert(notice_calls==2 && !strcmp(got_thread,"m9") && !strcmp(got_text,"Fixed."));
-    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m13\",\"text\":\"x\",\"at\":7,\"thread\":\"bad id\"}");
-    assert(notice_calls==3 && !strcmp(got_thread,""));
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m13\",\"text\":\"x\",\"at\":7,\"thread\":\"0123456789012345678901234567890123456789012345678901234567890123\"}");
+    assert(notice_calls==3 && got_thread[0]);
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m14\",\"text\":\"x\",\"at\":7,\"thread\":\"\"}");
+    assert(notice_calls==4 && !strcmp(got_thread,""));
     notice_calls=1;
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"lead-web\",\"id\":\"m10\",\"text\":\"Done.\",\"at\":5}");
     assert(notice_calls==2 && got_chat==HT_CHAT_LEAD && beeps==beeps_before+1);
