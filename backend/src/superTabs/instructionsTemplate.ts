@@ -111,9 +111,10 @@ export const TEMPLATE_ROUTING = `## Routing
   5. Between equals, the machine with fewer agents working. Then price.
 - When no other account has weekly quota left, the PM's account takes work as any other account does.
 - The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota:
-  fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.
-  Picking against it needs a reason in the route's override: urgency, context, or a machine the work needs. "Idle" is
-  not a reason.
+  fits or short, weekly quota left and reset time. It lists them by machine name, with no ranking and no pick: the PM
+  applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
+  urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
+  reason.
 - An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line,
   hands its pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`

@@ -34,39 +34,42 @@ const noteOf = (p: { notes: string[] }) => p.notes.find(n => n.startsWith(`${WIN
 const fitted = (p: Probe, fit: Partial<Fit> = {}): Probe & { fit: Fit } => ({ ...p, fit: { status: 'fits', coverage: 1, effectiveCost: p.cost, expiring: 0,
   spend: { '5-hour': 30, weekly: 4 }, account: p.quota.account ?? '', ...fit } })
 
-describe('the window pull ranks', () => {
-  it('an account whose weekly window resets soon with quota left first, and says why', () => {
+describe('the window pull notes', () => {
+  it('an account whose weekly window resets soon with quota left, and says why', () => {
     const probes = [codex('alpha', FRESH), codex('zulu', SOON)]
-    // Without it, the two tie on strength, price and fit, and the title decides.
-    expect(route(probes, []).shown.map(s => s.machineId)).toEqual(['alpha', 'zulu'])
+    expect(route(probes, []).shown.every(s => !noteOf(s))).toBe(true)
     const choice = route(probes, [pull])
-    expect(choice.shown.map(s => s.machineId)).toEqual(['zulu', 'alpha'])
-    const reason = 'Window pull: its account\'s weekly window resets in 12h, and at this week\'s pace about 57% of it would go unused; this task spends it first'
-    expect(choice.shown[0]!.notes).toContain(reason)
-    expect(choice.shown[0]!.label).toContain(reason)
-    expect(noteOf(choice.shown[1]!)).toBeUndefined()
+    // Since task #2901 a plug-in's finding is a note, never the order.
+    expect(choice.shown.map(s => s.machineId)).toEqual(['alpha', 'zulu'])
+    const reason = 'Window pull: its account\'s weekly window resets in 12h, and at this week\'s pace about 57% of it would go unused; prefer this account to use it before the reset'
+    expect(choice.shown[1]!.notes).toContain(reason)
+    expect(choice.shown[1]!.label).toContain(reason)
+    expect(noteOf(choice.shown[0]!)).toBeUndefined()
     const verdict = decide(choice)
-    expect(verdict.pick.machineId).toBe('zulu')
-    expect(verdict.why).toContain('plug-ins')
+    expect(verdict.via).toBe('instructions')
+    expect(verdict.why).toContain('Plug-ins\' findings are in each candidate\'s notes.')
     expect(JSON.stringify(recordOf(choice, verdict, a()))).toContain(reason)
     // What the candidate is shown and recorded as stays as measured.
-    expect(choice.shown[0]!.fit.effectiveCost).toBe(2)
+    expect(choice.shown[1]!.fit.effectiveCost).toBe(2)
   })
-  it('an idle agent on such an account over a cheaper new agent: it pulls the queued task', () => {
+  it('an idle agent on such an account, beside a cheaper new agent: it could take the queued task', () => {
     const probes = [codex('alpha', FRESH), opusMember('zulu', SOON)]
-    // Codex is cheaper than Opus at the same strength.
-    expect(route(probes, []).shown[0]!.kind).toBe('new')
     const choice = route(probes, [pull])
-    expect(choice.shown[0]).toMatchObject({ kind: 'member', agentId: 'agent-1' })
-    expect(noteOf(choice.shown[0]!)).toMatch(/this idle agent takes queued work first$/)
+    // Since task #2901 a plug-in's finding is a note, never the order.
+    expect(choice.shown.map(s => s.kind)).toEqual(['new', 'member'])
+    expect(choice.shown[1]).toMatchObject({ kind: 'member', agentId: 'agent-1' })
+    expect(noteOf(choice.shown[1]!)).toMatch(/this idle agent could take queued work to use it$/)
+    expect(noteOf(choice.shown[0]!)).toBeUndefined()
   })
-  it('never above a stronger model', () => {
+  it('a weaker model on such an account is noted, and the order stays the neutral one', () => {
     const sonnet = codex('zulu', SOON, { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2 })
     const choice = route([codex('alpha', FRESH), sonnet], [pull])
+    // Since task #2901 a plug-in's finding is a note, never the order.
     expect(choice.shown.map(s => s.model)).toEqual(['default', 'sonnet'])
-    expect(noteOf(choice.shown[1]!)).toBeDefined()
+    expect(noteOf(choice.shown[1]!)).toMatch(/prefer this account to use it before the reset$/)
+    expect(choice.shown[1]!.quality).toBe(2)
   })
-  it('makes a choice at most half as costly, never free, so a clearly better record still wins (pieces 3 and 6 together)', () => {
+  it('leans a choice at most half as costly, never free, and a clearly better record is said beside it (pieces 3 and 6 together)', () => {
     // At most half, however much would go unused.
     expect(windowPullAdjust(fitted(codex('zulu', SOON)), NOW, [])?.cost).toBe(-2 * MAX_DISCOUNT)
     expect(windowPullAdjust(fitted(codex('zulu', SOON), { effectiveCost: 1.2 }), NOW, [])?.cost).toBe(-0.6)
@@ -75,9 +78,10 @@ describe('the window pull ranks', () => {
       firstReviews: 10, firstReviewPassed, shipped: 10, costPerShipped: 1, fullCostPerShipped, fullCostKnown: 1 })
     const measured = measuredPlugin({ truncated: false, rows: [row('claude', 'opus', 'high', 9, 3), row('codex', 'default', 'default', 6, 9)] })
     const probes = [codex('alpha', FRESH, { engine: 'claude', model: 'opus', effort: 'high', cost: 3 }), codex('zulu', SOON)]
-    expect(route(probes, [pull], [], { kind: 'build' }).shown[0]!.machineId).toBe('zulu')
+    expect(noteOf(route(probes, [pull], [], { kind: 'build' }).shown[1]!)).toBeDefined()
     for (const plugins of [[measured, pull], [pull, measured]]) {
       const choice = route(probes, plugins, [], { kind: 'build' })
+      // Since task #2901 a plug-in's finding is a note, never the order.
       expect(choice.shown.map(s => s.machineId)).toEqual(['alpha', 'zulu'])
       expect(noteOf(choice.shown[1]!)).toBeDefined()
       expect(choice.shown[0]!.notes.some(n => n.startsWith(`${MEASURED}: build work`))).toBe(true)
@@ -98,22 +102,20 @@ describe('the window pull leaves alone', () => {
     const choice = route([codex('alpha', FRESH), short], [pull])
     expect(choice.shown.find(s => s.machineId === 'zulu')!.fit.status).toBe('short')
     expect(choice.shown.every(s => !noteOf(s))).toBe(true)
-    expect(choice.shown[0]!.machineId).toBe('alpha')
   })
   it('a candidate whose fit is not known to cover the task: a weekly window that could not be read (review of f97c022)', () => {
-    // Opus with only its 5-hour window read: the fit is unknown, and half off would put it above a Codex that fits.
+    // Opus with only its 5-hour window read: the fit is unknown, and half off would read it as cheaper than a Codex that fits.
     const unread = { ...opusMember('zulu', windows([90, 12 * H], null, 'acct-soon')), kind: 'new' as const, agentId: undefined, name: undefined }
     const choice = route([codex('alpha', FRESH), unread], [pull])
     expect(choice.shown.find(s => s.machineId === 'zulu')!.fit.status).toBe('unknown')
-    expect(choice.shown[0]!.machineId).toBe('alpha')
     expect(choice.shown.every(s => !noteOf(s))).toBe(true)
     none(unread, { status: 'unknown' })
   })
   it('but pulls an account that reports its weekly window alone, Codex or Claude, a complete reading that fits', () => {
     const weeklyOnly = codex('zulu', windows(null, [60, 12 * H], 'acct-soon'))
     const choice = route([codex('alpha', FRESH), weeklyOnly], [pull])
-    expect(choice.shown[0]).toMatchObject({ machineId: 'zulu', fit: { status: 'fits' } })
-    expect(noteOf(choice.shown[0]!)).toBeDefined()
+    expect(choice.shown[1]).toMatchObject({ machineId: 'zulu', fit: { status: 'fits' } })
+    expect(noteOf(choice.shown[1]!)).toBeDefined()
     // A Team account's Claude, whose host relays no 5-hour window (Ken, 2026-11-03).
     const claude = { ...opusMember('zulu', windows(null, [60, 12 * H], 'acct-soon')), kind: 'new' as const, agentId: undefined, name: undefined }
     expect(route([codex('alpha', FRESH), claude], [pull]).shown.find(s => s.machineId === 'zulu')!.fit.status).toBe('fits')
@@ -172,7 +174,7 @@ describe('the window pull\'s reason', () => {
     const choice = route([codex('alpha', FRESH), soon], made.plugins)
     const reason = noteOf(choice.shown.find(s => s.machineId === 'zulu')!)!
     // Their pick is counted: about 57% less its 20% (a minute of a 3-hour task over) is about 37%.
-    expect(reason).toBe('Window pull: its account\'s weekly window resets in 12h, and at this week\'s pace about 37% of it would go unused; this task spends it first')
+    expect(reason).toBe('Window pull: its account\'s weekly window resets in 12h, and at this week\'s pace about 37% of it would go unused; prefer this account to use it before the reset')
     for (const leak of ['payroll', 'Payroll', 'Dee', 'dee', 'acct', 'example.com', 'd-secret', 'as-9', '/Users', 'Rotate']) expect(reason).not.toContain(leak)
   })
 })
@@ -212,19 +214,18 @@ describe('the window pull\'s maker', () => {
     expect(ROUTE_PLUGIN_MAKERS.map(m => m.name)).toContain(WINDOW_PULL)
   })
   it('two routes a minute apart do not both pull onto one window', async () => {
-    // About 2% would go unused, half a medium task: the first route pulls; the second sees that pick, not yet started.
+    // About 2% would go unused, half a medium task: the first route notes the pull; the second sees that pick, not yet started.
     const thin = windows([80, 3 * H], [16, 24 * H], 'acct-soon')
     const probes = [codex('alpha', FRESH), codex('zulu', thin)]
     const first = await makePlugins([windowPullMaker(() => NOW)], input({ ok: true, value: { decisions: [] } }))
-    expect(route(probes, first.plugins).shown[0]!.machineId).toBe('zulu')
+    expect(noteOf(route(probes, first.plugins).shown.find(s => s.machineId === 'zulu')!)).toBeDefined()
     const routed = { id: 'd1', conversationId: 'g1', account: 'acct-soon', spend: { weekly: 4 }, size: 'medium', outcome: null, final: null, createdAt: new Date(NOW - M).toISOString() }
     const second = await makePlugins([windowPullMaker(() => NOW)], input({ ok: true, value: { decisions: [routed] } }))
     const choice = route(probes, second.plugins)
-    expect(choice.shown[0]!.machineId).toBe('alpha')
     expect(choice.shown.every(s => !noteOf(s))).toBe(true)
   })
   it('is left out, and the route answer says so, when the history could not be read', async () => {
     expect(await makePlugins([windowPullMaker()], input(null))).toEqual({ plugins: [],
-      warnings: ['The routing plug-in "Window pull" was skipped: its maker failed. The route is ranked without it.'] })
+      warnings: ['The routing plug-in "Window pull" was skipped: its maker failed. The route is shown without it.'] })
   })
 })
