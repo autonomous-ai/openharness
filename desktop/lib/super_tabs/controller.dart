@@ -3294,6 +3294,18 @@ class SuperTabController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The agent whose terminal a Waiting on you notice asked to open
+  /// ([openAgentTerminal]), until the Swarm workspace on screen takes it.
+  ({String agentId, String? conversationId})? agentTerminalRequest;
+
+  /// Opens [agentId]'s terminal, focused, beside the chat it waits in
+  /// ([conversationId] when the notice names one), in the workspace on screen
+  /// or the one shown next.
+  void openAgentTerminal(String agentId, {String? conversationId}) {
+    agentTerminalRequest = (agentId: agentId, conversationId: conversationId);
+    notifyListeners();
+  }
+
   /// A message the reader asked to open by its link ([openMessageLink]), until
   /// the Swarm view on screen takes it.
   ({String conversationId, String messageId})? messageRequest;
