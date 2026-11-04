@@ -19,7 +19,7 @@ final _swarmRoute = RegExp(
   '|/list|/invitations|/deleted'
   '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
-  '|activity|activity/read|threads|inbox'
+  '|activity|activity/read|threads|inbox|proposals'
   '|reminders'
   '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
   '|threads/$_id/(?:read|follow)'

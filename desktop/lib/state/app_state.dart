@@ -13962,7 +13962,9 @@ class AppNotifier extends ChangeNotifier {
     }
     var changed = false;
     for (final tab in swarms) {
+      // A Swarm's tab keeps the Swarm's name (task #2647).
       if (!tab.nameIsCustom &&
+          !tab.isSuperTab &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
         final title = Swarm.titleFor(agent);
@@ -20111,6 +20113,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (firstAgent &&
         !target.nameIsCustom &&
+        !target.isSuperTab &&
         !target.isCompanions &&
         !target.isDevices) {
       final agent = machine.agents
@@ -20809,7 +20812,10 @@ class AppNotifier extends ChangeNotifier {
       target.panes.add(pane);
       // A tab that had no harness in it takes this one's name, the way it
       // would for a harness opened into it.
-      if (firstAgent && !target.nameIsCustom && pane.agentId != null) {
+      if (firstAgent &&
+          !target.nameIsCustom &&
+          !target.isSuperTab &&
+          pane.agentId != null) {
         final agent = machineStates[pane.machineId]?.agents
             .where((agent) => agent.id == pane.agentId)
             .firstOrNull;

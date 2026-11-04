@@ -1514,6 +1514,16 @@ abstract final class AppDesktop {
   static const lightVeil = Color(0xF2FFFFFF);
   static Color veil(Brightness brightness) =>
       brightness == Brightness.dark ? darkVeil : lightVeil;
+
+  /// The chat's picture viewer: a see-through dark veil in both appearances,
+  /// as a picture reads best on dark (River, 11-04), and the ink and control
+  /// fills drawn on it. The one exception to [veil]
+  /// (desktop-design-system.md).
+  static const mediaVeil = Color(0xF2000000);
+  static const mediaInk = Color(0xFFFFFFFF);
+  static const mediaInkMuted = Color(0xB3FFFFFF);
+  static const mediaControl = Color(0x26FFFFFF);
+  static const mediaControlHover = Color(0x40FFFFFF);
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so

@@ -37,7 +37,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const issued = new Set<string>()
   const revoked: string[] = []
   let minted = 0
-  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, actionsStatus: 200, jobsStatus: 200 }
+  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, actionsStatus: 200, jobsStatus: 200, pullsStatus: 200 }
   /** Each token's permissions, as it was minted. */
   const permissions = new Map<string, unknown>()
   const json = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status })
@@ -122,6 +122,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const repoKey = `${repoPath[1]}/${repoPath[2]}`.toLowerCase()
       const pull = /^\/pulls\/(\d+)$/.exec(repoPath[3] ?? '')
       if (pull) {
+        if (control.pullsStatus !== 200) return json(control.pullsStatus, { message: 'Server Error' })
         const known = pulls.get(`${repoKey}#${pull[1]}`)
         return known ? tagged({ number: Number(pull[1]), ...known }) : json(404, { message: 'Not Found' })
       }

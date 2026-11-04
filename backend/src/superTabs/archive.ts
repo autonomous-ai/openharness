@@ -5,7 +5,7 @@ import { activeWork, type Conversation, type SuperTabState } from './model.js'
 import type { HeadData } from './parts/index.js'
 import type { SuperTabStore } from './store.js'
 import { projectsOf } from './projects.js'
-import { ARCHIVE_QUIET_MS, archiveWaitsFor } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archiveWaitsFor, type SettledPullRequest } from './tidy.js'
 import { logger } from '../utils/logger.js'
 
 // A finished group archives by itself (roadmap, December: nobody tidies a Swarm by hand): its task done or cancelled, quiet
@@ -15,8 +15,9 @@ import { logger } from '../utils/logger.js'
 // task, in the task's write (steps.ts endSteps), and never on its own clock while that task is open (task steps design): it
 // is taken here only once its task is done or cancelled and every pull request of both is merged or closed.
 
-export type PullRequestState = 'open' | 'merged' | 'closed' | null
-/** What a sweep asks GitHub: a pull request's state (null: it cannot say), and `done` once the sweep is over. */
+export type PullRequestState = 'open' | 'merged' | 'closed' | 'missing' | null
+/** What a sweep asks GitHub: a pull request's state (missing: GitHub knows no such pull request there; null: it cannot say),
+ *  and `done` once the sweep is over. */
 export interface PullRequests { state(url: string): Promise<PullRequestState>; done(): Promise<void> }
 
 /** Without the Harness GitHub App nothing can say a pull request is merged: a group that links one stays open. */
@@ -106,7 +107,7 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
   const stateOf = (url: string) => { if (!states.has(url)) states.set(url, prs.state(url)); return states.get(url)! }
   // One group's failed write (a busy group's conflicts outlasting its retries, a GitHub error) skips that group for this
   // pass, with a warning, instead of ending the pass for every group after it (review of #2322).
-  const archive = async (row: { tabId: string; key: string }, checked: Record<string, 'merged' | 'closed'>, reviewOf?: string) => {
+  const archive = async (row: { tabId: string; key: string }, checked: Record<string, SettledPullRequest>, reviewOf?: string) => {
     try {
       return await store.archiveFinished(row.tabId, row.key, checked, reviewOf)
     } catch (error) {
@@ -124,21 +125,28 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
         const group = row.data as unknown as Conversation
         const finished = ended(group), step = !!group.reviewOf
         if (group.audience || !(finished || (step && !activeWork(group))) || !await tidyOn(row.tabId)) continue
-        const checked: Record<string, 'merged' | 'closed'> = {}
-        // Stops at the first pull request still open, or that GitHub cannot read.
+        const checked: Record<string, SettledPullRequest> = {}
+        // Stops at the first pull request still open. One GitHub cannot read holds the group too, and is logged once a pass
+        // when nothing open holds it: a hold nobody sees lasts forever (#2602).
         const settled = async (urls: string[]) => {
+          const unread: string[] = []
           for (const url of urls) {
             const state = await stateOf(url)
-            if (state !== 'merged' && state !== 'closed') return false
-            checked[url] = state
+            if (state === 'open') return false
+            if (state === null) unread.push(url)
+            else checked[url] = state
           }
-          return true
+          if (unread.length) logger.warn('[swarm-archive] group held for pull requests GitHub cannot read', { tabId: row.tabId, group: row.key, pullRequests: unread })
+          return !unread.length
         }
         // Its links, and a "PR #N" its result or check evidence names; none to read it in keeps it open.
         const head = await headOf(row.tabId)
         const project = head && projectsOf(head as unknown as SuperTabState).find(p => p.id === (group.projectId ?? 'lead'))
         const own = archiveWaitsFor(group, project?.repository?.repositoryUrl)
-        if (!own) continue
+        if (!own) {
+          logger.warn('[swarm-archive] group held: it names PR #N and its project has no GitHub repository', { tabId: row.tabId, group: row.key })
+          continue
+        }
         if (!step) {
           if (await settled(own) && await archive(row, checked)) archived++
           continue

@@ -106,6 +106,8 @@ const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
+// The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
+const proposalsQuery = z.object({ projectId: id }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -517,6 +519,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
     })
+  // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
+    { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
+    (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
   // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {

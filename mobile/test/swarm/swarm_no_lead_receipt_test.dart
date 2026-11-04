@@ -53,13 +53,24 @@ void main() {
     String? kind,
     String role = 'owner',
     bool machines = true,
+    bool waiting = false,
     FutureOr<Object?> Function(Map<String, dynamic>? body)? command,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) {
       final load = firstLoad(
         head: headData(
-          projects: [swarmProject(project, 'Mobile', repo: harnessRepo)],
+          projects: [
+            {
+              ...swarmProject(project, 'Mobile', repo: harnessRepo),
+              // The server keeps the message for the project's Lead: a
+              // Personal Swarm's chat with none (backend leadStart.ts).
+              if (waiting)
+                'leadWaiting': [
+                  {'id': 'm1', 'at': 1},
+                ],
+            },
+          ],
         ),
         groups: [
           if (chat != leadChat)
@@ -147,6 +158,23 @@ void main() {
       await show(tester, rig());
       expect(find.text(line), findsOneWidget);
       expect(find.text('Add a Lead'), findsOneWidget);
+    });
+
+    // River, 11-04 (task #2633): in a Personal Swarm the server keeps the
+    // message for the Lead the person's computer starts, so it is not "Not
+    // sent"; the phone starts none itself.
+    testWidgets('a message the server keeps for the Lead waits for one', (
+      tester,
+    ) async {
+      await show(tester, rig(waiting: true));
+      expect(
+        find.text(
+          'Waiting for a Lead · open Harness on your computer to start one',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text(line), findsNothing);
+      expect(find.text('Add a Lead'), findsNothing);
     });
 
     testWidgets('none where the chat has its Lead', (tester) async {

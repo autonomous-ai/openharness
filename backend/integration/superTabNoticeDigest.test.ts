@@ -15,6 +15,7 @@ import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Ken, 2026-11-02 (docs/plans/2026-11-02-pm-notice-digest-design.md): the server's routine notices to a project's coordinator
 // go in one message at most every 5 minutes; what someone waits on still goes at once. A fresh loopback replica set, created here.
@@ -711,6 +712,26 @@ describe('with the update request', () => {
     await f.poll()
     expect((await digests(f.tab))[0]!.text).toContain(`message ${id} `)
     expect((await deliveryOf(id, f.lead)).status).toBe('digested')
+  })
+})
+
+// A kept message's deliveries were read by message id alone: a scan of all 43 k deliveries, 440 ms inside this write
+// transaction, 21 times a day (Atlas slow log, 2026-11-04).
+describe('a poll keeping a message already stored', () => {
+  it('reads its deliveries by Swarm and message, examining only those', async () => {
+    const f = await swarm({ fresh: true })
+    await f.write({ kind: 'idle' }, f.lead)
+    f.clock.now += DUE
+    const { projectUpdateRequest } = await import('../src/superTabs/projectUpdates.js')
+    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
+    const draft = projectUpdateRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
+    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
+      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
+    const entries = await profiled(db, () => f.poll())
+    const rows = reads(entries, 'SuperTabDelivery', ['messageId'], ['agentId'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
   })
 })
 

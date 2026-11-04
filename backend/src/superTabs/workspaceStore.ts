@@ -229,6 +229,7 @@ export class SwarmWorkspaces {
   /** Invitations waiting for the signed-in person. */
   async invitationsFor(user: AuthUser) {
     const rows = await this.db.swarmWorkspaceInvitation.findMany({ where: { email: user.email.trim().toLowerCase(), expiresAt: { gt: new Date(this.deps.now()) } }, take: 100 })
+    if (!rows.length) return { invitations: [] }
     const workspaces = await this.db.swarmWorkspace.findMany({ where: { id: { in: rows.map(r => r.workspaceId) }, autonomousEnv: user.autonomousEnv } })
     return { invitations: rows.flatMap(row => {
       const workspace = workspaces.find(o => o.id === row.workspaceId && !o.deletedAt)

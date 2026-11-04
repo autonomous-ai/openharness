@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
 import 'swarm_attachment_store.dart';
+import 'swarm_file_download.dart';
 import 'swarm_file_links.dart';
 import 'swarm_outgoing_files.dart' show swarmFormAttachmentMaxBytes;
 import 'swarm_style.dart';
@@ -61,6 +62,29 @@ class SwarmAttachment extends StatelessWidget {
       chip: chip,
       store: store ?? swarmAttachments,
     );
+  }
+}
+
+/// [file] as [store] keeps it: by the link at hand ([at]), else a fresh one
+/// of [ref]; a signed link that fails (it may have ended) is asked for once
+/// more, then the failure stands.
+Future<File> swarmKeptFile(
+  SwarmAttachmentStore store,
+  SuperTabAttachment file, {
+  Uri? at,
+  SwarmFileRef? ref,
+}) async {
+  // A signed link changes every few minutes; the file it reaches does not,
+  // so it is kept by the file's id.
+  String keyOf(Uri url) =>
+      url.host == swarmFilesHost ? 'swarm-file:${file.id}' : url.toString();
+  var url = at ?? await (ref ?? (throw StateError('No link'))).link();
+  try {
+    return await store.file(url, key: keyOf(url));
+  } catch (_) {
+    if (ref == null || url.host != swarmFilesHost) rethrow;
+    url = await ref.link(stale: true);
+    return store.file(url, key: keyOf(url));
   }
 }
 
@@ -132,33 +156,14 @@ class _PreviewState extends State<_Preview> {
 
   void _ask() {
     _turn = widget.store.turns.value;
-    _local = _fetch(widget.store, widget.url, widget.fileRef);
+    _local = swarmKeptFile(
+      widget.store,
+      widget.file,
+      at: widget.url,
+      ref: widget.fileRef,
+    );
     _failed = false;
   }
-
-  /// The picture's file: by the link at hand, else a fresh one; a signed
-  /// link that fails (it may have ended) is asked for once more, then the
-  /// failure stands.
-  Future<File> _fetch(
-    SwarmAttachmentStore store,
-    Uri? at,
-    SwarmFileRef? ref,
-  ) async {
-    var url = at ?? await (ref ?? (throw StateError('No link'))).link();
-    try {
-      return await store.file(url, key: _keyOf(url));
-    } catch (_) {
-      if (ref == null || url.host != swarmFilesHost) rethrow;
-      url = await ref.link(stale: true);
-      return store.file(url, key: _keyOf(url));
-    }
-  }
-
-  /// A signed link changes every few minutes; the file it reaches does not,
-  /// so it is kept by the file's id.
-  String _keyOf(Uri url) => url.host == swarmFilesHost
-      ? 'swarm-file:${widget.file.id}'
-      : url.toString();
 
   /// The files kept changed hands: the picture is asked for again, for
   /// whoever they are kept for now.
@@ -273,7 +278,8 @@ class _PreviewState extends State<_Preview> {
   }
 }
 
-/// A picture full screen, to pinch and zoom; its name and a close at the top.
+/// A picture full screen, to pinch and zoom; its name, a close and Download
+/// ([SwarmDownloadButton]) at the top.
 ///
 /// It shows a file [store] keeps for one account, so it goes when that
 /// changes ([SwarmAttachmentStore.turns]: another account, sign-out, Swarm
@@ -361,6 +367,11 @@ class _ViewerState extends State<SwarmAttachmentViewer> {
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               title: _gone ? '' : widget.name,
+              trailing: SwarmDownloadButton(
+                name: widget.name,
+                file: _gone ? null : widget.file,
+                store: widget.store,
+              ),
             ),
             Expanded(
               child: _gone

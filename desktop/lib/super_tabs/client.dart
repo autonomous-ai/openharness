@@ -577,6 +577,7 @@ class SuperTabClient {
         } while (after != null);
         discoveryError = null;
         _owners = owners;
+        _listed = tabs.keys.toSet();
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.
@@ -609,6 +610,23 @@ class SuperTabClient {
     return read.whenComplete(() {
       if (identical(_discovering, read)) _discovering = null;
     });
+  }
+
+  /// The Swarms the last list read that answered named.
+  Set<String> _listed = const {};
+
+  /// Whether the account's list still names Swarm [id], read afresh (or
+  /// joining a read under way): a Swarm refuses a read while its backend
+  /// restarts, and only the list says it is gone. Throws when the list cannot
+  /// be read, or the account changed meanwhile.
+  Future<bool> _stillListed(String id) async {
+    final generation = _generation;
+    await refreshTabs();
+    if (generation != _generation) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (discoveryError case final error?) throw error;
+    return _listed.contains(id);
   }
 
   /// One page of the Swarm list, with each Swarm's waiting tags while the
@@ -746,6 +764,7 @@ class SuperTabClient {
             upload: upload,
             avatarUpload: avatarUpload,
             reading: _reading,
+            stillListed: onTabs == null ? null : () => _stillListed(id),
           )
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;

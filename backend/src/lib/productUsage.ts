@@ -135,6 +135,8 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
             : { accepted: false, reason: 'CHOICE_CHANGED', ...choice }
         })
         const permitted = reports.filter((_, i) => results[i].accepted)
+        // Every report refused: nothing to read, and an empty list would scan all the receipts (`$or: []`, 4.1 s, prod 2026-11-04).
+        if (!permitted.length) return results
         const received = new Set((await tx.productUsageReceipt.findMany({
           where: { id: { in: [...new Set(permitted.map(r => r.id))] } }, select: { id: true } })).map(r => r.id))
         // A report sent again while its first copy is in this same batch counts once too.

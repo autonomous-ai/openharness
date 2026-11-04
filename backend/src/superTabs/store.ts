@@ -21,6 +21,7 @@ import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCE
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
+import { databaseProposalReads, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
@@ -49,7 +50,7 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -1159,7 +1160,9 @@ export class SuperTabStore {
 
   /** The heads of Swarms already split into parts, by id. */
   private async heads(rows: Array<Pick<SwarmRow, 'id' | 'format'>>): Promise<Map<string, HeadData>> {
-    const heads = await this.db.swarmHead.findMany({ where: { id: { in: rows.filter(r => r.format === 2).map(r => `${r.id}:head`) } } })
+    const parted = rows.filter(r => r.format === 2)
+    if (!parted.length) return new Map()
+    const heads = await this.db.swarmHead.findMany({ where: { id: { in: parted.map(r => `${r.id}:head`) } } })
     return new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData]))
   }
 
@@ -1311,6 +1314,8 @@ export class SuperTabStore {
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
       return done
     } catch (error) {
+      // Its code and type alone, no values: a Swarm refusing a machine went unseen (MACHINES_FULL, Ken, 2026-11-04).
+      if (error instanceof SuperTabError && input.command?.type) logger.warn('Swarm command refused', { code: error.code, type: input.command.type })
       if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
       // A refusal for a bot's push rolled its mark back. The mark stays, so a post or a join that reads no GitHub is refused next (review 1 of #2559).
       const pushedOn = input.command && 'conversationId' in input.command ? input.command.conversationId : undefined
@@ -2560,7 +2565,8 @@ export class SuperTabStore {
       }
     }
     if (kept.size) {
-      const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
+      // By the Swarm too: by message id alone it scanned every delivery, 440 ms in this transaction (Atlas slow log, 2026-11-04).
+      const have = new Set((await readBy(tx, 'SuperTabDelivery', 'byMessage', [{ $match: { tabId, messageId: { $in: [...kept] } } }, { $project: { _id: 1 } }])).map(d => d._id as string))
       // A delivery compacted into its message's receipts (deliveryCompaction.ts) was written too: never sent again.
       const compacted = await readBy(tx, 'SuperTabReceipt', 'id', [{ $match: { _id: { $in: [...kept] }, tabId } }, { $project: { deliveryIds: 1 } }])
       for (const receipt of compacted) for (const id of receipt.deliveryIds as string[] ?? []) have.add(id)
@@ -2581,8 +2587,8 @@ export class SuperTabStore {
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
       // A session hears its thread's rows; the one Buddy's session in an older project chat (commands.ts startOldChatBuddy)
-      // hears that chat's main rows, never a thread session's.
-      const heard = target.buddySession ? !!row?.buddySession : !!target.buddyNarrow && !row?.buddySession
+      // hears that chat's main rows, never a thread session's; so does a project's Lead that joined a chat with none (leadArrived).
+      const heard = target.buddySession ? !!row?.buddySession : (!!target.buddyNarrow || !!l.lead) && !row?.buddySession
       if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !heard || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
@@ -2747,6 +2753,19 @@ export class SuperTabStore {
       reactionSeq: group.reactionSeq ?? 0 }
   }
 
+  /** One project's Buddy proposals its PM has not answered, oldest first (proposals.ts), for a person who reads its chat:
+   *  anyone else is answered as for a project that is not there. */
+  async proposals(user: AuthUser, tabId: string, projectId: string): Promise<{ proposals: OpenProposal[] }> {
+    this.personOnly(user)
+    let { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state)
+    // The project chat is never archived, but a quiet one is not in the first load.
+    const chatId = readProject(state, actor, projectId).leadConversationId
+    if (!state.conversations.some(c => c.id === chatId)) ({ state } = await this.readLoad(user, tabId, { groupIds: [chatId] }))
+    const chat = proposalChat(state, actor, projectId)
+    return { proposals: await openProposals(state, chat, databaseProposalReads(this.db, tabId, chat.id)) }
+  }
+
   /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session
    *  thread's, never a reply only in its thread), by the conversation's sequence index, at most 50 rows read for 10 kept. */
   private async sessionExcerpt(tx: Transaction, tabId: string, conversationId: string, from: number,
@@ -2880,17 +2899,16 @@ export class SuperTabStore {
   /** What the attempts routed in the last `days` cost and how they went (costs/read.ts), over the groups the reader may read.
    *  The decisions are read first, by index, so only the groups they name are loaded. */
   async costSummary(user: AuthUser, tabId: string, days: number, asAgentId?: string) {
-    return transaction(this.db, async tx => {
-      const until = this.now(), since = until - days * 24 * 60 * 60_000
-      const { rows, truncated } = await costRows(tx, tabId, since)
-      const { state } = await this.load(tx, user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
-      const actor = await this.actor(tx, user, state, asAgentId)
-      author(state, actor)
-      // What routed attempts cost, by engine, model and spend, is how work is routed: never a Buddy's (review of #2115).
-      refuseBuddyRouting(state, actor)
-      const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
-      return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
-    })
+    const until = this.now(), since = until - days * 24 * 60 * 60_000
+    const { rows, truncated } = await costRows(this.db, tabId, since)
+    // Through the read cache, as every read: only what the Swarm's stamp says changed is read again (task #2596).
+    const { state } = await this.readLoad(user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
+    const actor = await this.actor(this.db, user, state, asAgentId)
+    author(state, actor)
+    // What routed attempts cost, by engine, model and spend, is how work is routed: never a Buddy's (review of #2115).
+    refuseBuddyRouting(state, actor)
+    const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
+    return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
   }
 
   async routeDecision(user: AuthUser, tabId: string, decisionId: string, asAgentId?: string) {
@@ -2940,14 +2958,13 @@ export class SuperTabStore {
    *  other projects in the Swarm, those they may open, to name the ones its repository is approved for. */
   async projectRepository(user: AuthUser, tabId: string, projectId: string):
     Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string; others: Array<{ id: string; name: string }> }> {
-    return transaction(this.db, async tx => {
-      const { state } = await this.load(tx, user, tabId)
-      const actor = await this.actor(tx, user, state)
-      const projects = visibleState(state, actor, this.now()).projects ?? []
-      const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
-        others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
-    })
+    // Through the read cache, as every read (task #2596): every app reads it again when the project's GitHub revision moves.
+    const { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state)
+    const projects = visibleState(state, actor, this.now()).projects ?? []
+    const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
+    return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
+      others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
   }
 
   /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
@@ -3031,10 +3048,13 @@ export class SuperTabStore {
     const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: null } },
       { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1 } }])).map(row => ({ id: row._id as string }))
     return transaction(this.db, async tx => {
+      if (!rows.length) return []
       const heads = await tx.swarmHead.findMany({ where: { tabId: { in: rows.map(row => row.id) }, key: 'head' }, select: { tabId: true, data: true } })
       const withGrid = new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData] as const).filter(([, head]) => head.localModels))
-      const people = new Map<string, Person[]>([...withGrid.keys()].map(tabId => [tabId, []]))
-      for (const member of await tx.swarmMember.findMany({ where: { tabId: { in: [...withGrid.keys()] }, deleted: false },
+      const gridTabs = [...withGrid.keys()]
+      if (!gridTabs.length) return []
+      const people = new Map<string, Person[]>(gridTabs.map(tabId => [tabId, []]))
+      for (const member of await tx.swarmMember.findMany({ where: { tabId: { in: gridTabs }, deleted: false },
         orderBy: { ordinal: 'asc' }, select: { tabId: true, data: true } })) people.get(member.tabId)!.push(member.data as unknown as Person)
       return rows.flatMap(row => withGrid.has(row.id)
         ? [swarmGridRow(row.id, { ...withGrid.get(row.id)!, people: people.get(row.id)! } as SuperTabState)!] : [])
@@ -3966,7 +3986,7 @@ export class SuperTabStore {
     })
   }
 
-  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
+  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, SettledPullRequest>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return false
@@ -3978,7 +3998,7 @@ export class SuperTabStore {
       // it in it stays open (tidy.ts archiveWaitsFor). Read only once it may close, so its project is a real one.
       const read = (urls: readonly string[]) => {
         const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
-        return !!waits && [...urls, ...waits].every(url => checked[url] === 'merged' || checked[url] === 'closed')
+        return !!waits && [...urls, ...waits].every(url => !!checked[url])
       }
       // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
       const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))

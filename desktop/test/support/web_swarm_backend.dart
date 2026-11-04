@@ -20,8 +20,8 @@ class WebSwarmBackend extends ApiClient {
   final ConversationServer server;
   final calls = <String>[];
 
-  /// The person lost the Swarm: every read is refused, as the backend
-  /// refuses one they may no longer read.
+  /// The person lost the Swarm: every read of it is refused, as the backend
+  /// refuses one they may no longer read, and their list no longer has it.
   bool forbidden = false;
 
   /// No answer at all: the browser is offline or the backend unreachable.
@@ -43,6 +43,16 @@ class WebSwarmBackend extends ApiClient {
       throw DioException(
         requestOptions: options,
         type: DioExceptionType.connectionError,
+      );
+    }
+    if (forbidden && Uri.parse(path).path == '/api/super-tabs/list') {
+      return Response(
+        requestOptions: options,
+        statusCode: 200,
+        data: {
+          'success': true,
+          'data': {'tabs': <Object>[], 'next': null},
+        },
       );
     }
     if (forbidden) {
