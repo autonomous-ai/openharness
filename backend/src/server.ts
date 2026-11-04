@@ -35,6 +35,7 @@ import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
 import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { registerReplyJsonTiming, startCpuStats } from './lib/cpuStats.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
@@ -149,6 +150,10 @@ async function start(): Promise<void> {
   registerWorkContext(app)
   // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
   selfProfileFromEnv(app)
+  // Always on, every minute: process CPU by thread (main, Prisma engine, libuv pool, V8 workers), GC pauses and reply JSON.
+  // Before any route is added, so every route's object replies are timed (lib/cpuStats.ts).
+  const cpuStats = startCpuStats()
+  registerReplyJsonTiming(app, cpuStats)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
   const stopQueryStats = startQueryStats()
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
@@ -252,6 +257,7 @@ async function start(): Promise<void> {
       stopDeliveryCalls()
       stopCacheStats()
       stopMemoryStats()
+      cpuStats.stop()
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()

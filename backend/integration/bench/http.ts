@@ -1,15 +1,21 @@
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify'
 import type { AuthUser } from '../../src/lib/ssoAuth.js'
 import { registerCpuKinds } from '../../src/lib/selfProfile.js'
+import { registerReplyJsonTiming, type CpuStats } from '../../src/lib/cpuStats.js'
 import { errorHandler } from '../../src/middlewares/errorHandler.js'
 import type { Reply } from './driver.js'
 
 /** The bench's accounts sign in with their id as the bearer token, as in integration/superTabs.test.ts: external SSO is
  *  replaced, and every permission and transaction behind the routes is real. */
+let replyTiming: Pick<CpuStats, 'replyJson'> | null = null
+/** Times the replies of every bench app made from now on, as the server does (routeCost.ts, `cpu by thread`). */
+export function timeBenchReplies(stats: Pick<CpuStats, 'replyJson'> | null): void { replyTiming = stats }
+
 export async function benchApp(users: () => readonly AuthUser[], routes: FastifyPluginAsync): Promise<FastifyInstance> {
   const app = Fastify()
   app.setErrorHandler(errorHandler)
   registerCpuKinds(app)
+  if (replyTiming) registerReplyJsonTiming(app, replyTiming)
   app.addHook('onRequest', async (request, reply) => {
     const user = users().find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!user) return reply.code(401).send({ success: false })
