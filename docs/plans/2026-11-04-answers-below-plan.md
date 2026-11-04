@@ -55,14 +55,14 @@ message.send / delivery settlement tests.
 
 **Interfaces:** `message.send { answers?: string }`; `CommandContext.answered?: { id, conversationId, author }`.
 
-- [ ] Failing tests: an agent's post with `answers` settles its delivery of that message (status `answered`), its row has
+- [x] Failing tests: an agent's post with `answers` settles its delivery of that message (status `answered`), its row has
   `replyTo: null` and `thread` its own id, and the question has no thread replies; an older client's `replyTo` answer
   still settles; `answers` naming a message of another conversation is refused; `answers` with `replyTo` is refused; the
   PM answering a person's message with `answers` in a task does not reach the assigned worker.
-- [ ] Watch them fail.
-- [ ] Schema field, context read in store.ts, validation and routing in commands.ts, settlement uses
+- [x] Watch them fail.
+- [x] Schema field, context read in store.ts, validation and routing in commands.ts, settlement uses
   `replyTo ?? answers`.
-- [ ] Watch them pass; run the touched spec files.
+- [x] Watch them pass; run the touched spec files.
 
 ## Task 2: CLI `post --answers` and the read that marks a question answered
 
@@ -70,26 +70,26 @@ message.send / delivery settlement tests.
 
 **Interfaces:** `post GROUP TEXT OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID] ...`.
 
-- [ ] Failing tests: `--answers m1` sends `answers: 'm1', replyTo: null`; `--answers` with `--reply-to` is a usage error;
+- [x] Failing tests: `--answers m1` sends `answers: 'm1', replyTo: null`; `--answers` with `--reply-to` is a usage error;
   an older backend's "Unrecognized key answers" refusal is retried once with `replyTo`; `messages` marks a question
   answered when the agent's delivery of it is `answered`; help text names `--answers`.
-- [ ] Watch them fail, then implement, then pass.
+- [x] Watch them fail, then implement, then pass.
 
 ## Task 3: the delivery text says which to use
 
 **Files:** `cli/src/superTabs/host.ts`, `cli/src/superTabs/host.spec.ts`.
 
-- [ ] Failing tests: a delivery of a top-level project-chat message says `--answers 'id'`; a delivery of a thread reply
+- [x] Failing tests: a delivery of a top-level project-chat message says `--answers 'id'`; a delivery of a thread reply
   says `--reply-to 'id'`; a scheduled request (top-level) says `--answers`; a Buddy session's delivery keeps
   `--reply-to`; the reply-style line says when to open a thread.
-- [ ] Watch them fail, then implement, then pass.
+- [x] Watch them fail, then implement, then pass.
 
 ## Task 4: skill texts
 
 **Files:** `cli/src/lib/swarmSkills.ts` (Lead in both modes, Buddy), `cli/src/lib/swarmTools.ts`,
 `cli/src/lib/swarmSkills.spec.ts`, `desktop/lib/super_tabs/launch_prompt.dart` and its test.
 
-- [ ] Failing tests: each Lead skill and swarm-tools carry the new answer line; the Buddy skill says to answer its owner
+- [x] Failing tests: each Lead skill and swarm-tools carry the new answer line; the Buddy skill says to answer its owner
   right below; the byte-for-byte checks put back the approved line; the Desktop launch prompt names `--answers` and stays
   within 2,000 code units.
-- [ ] Watch them fail, then implement, then pass.
+- [x] Watch them fail, then implement, then pass.
