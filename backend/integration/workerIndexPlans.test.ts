@@ -217,7 +217,7 @@ describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
   })
 })
 
-describe('the usage-receipt sweep\'s stuck check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
+describe('the usage-receipt sweep\'s done check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
   // backend/AGENTS.md rule 3: its hourly read while the rule is refused takes one key of the expiry index, never a scan of millions.
   it('reads the newest old receipt by one key of the product_usage_expiry index', async () => {
     const { lastOldReceipt } = await import('../src/lib/productUsageReceiptSweep.js')
