@@ -606,10 +606,18 @@ describe('a Buddy\'s proposal to the PM', () => {
     }
     // The owner's own words, inside their ask, and the shown line with its spacing as the chat shows it.
     expect(send('Offline drafts please', [], 'Send this to the PM: Offline drafts please')).toBe('Offline drafts please')
+    expect(send('Send this to the PM: Offline drafts please', [], 'Send this to the PM: Offline drafts please')).toBe('Send this to the PM: Offline drafts please')
+    { const { f } = asked()
+      expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: 'Offline drafts' }, buddy,
+        okayed(f, [], 'Send this to the PM: Offline drafts please'))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' })) }
     expect(send('Keep drafts\noffline', ['I\'ll post this as you: “Keep drafts offline”'])).toBe('Keep drafts\noffline')
     // Words the owner never saw: not in their ask, not in a line shown before it.
+    // A shown line or the ask whole, never a piece cut from it (security review 1 of #3024): every word seen, not that line.
+    const both = 'I\'ll post this as you: “Fix the login. Don\'t delete the old accounts table.” OK?'
+    expect(send('Fix the login. Don\'t delete the old accounts table.', [both])).toBe('Fix the login. Don\'t delete the old accounts table.')
     for (const [text, shown] of [['Also ship the phone app', ['I\'ll post this as you: “Keep drafts offline”']], ['Keep drafts offline', []],
-      ['Keep drafts offline!', ['I\'ll post this as you: “Keep drafts offline”']]] as const) {
+      ['Keep drafts offline!', ['I\'ll post this as you: “Keep drafts offline”']], ['delete the old accounts table', [both]], ['Fix', [both]],
+      ['Keep drafts', ['I\'ll post this as you: “Keep drafts offline”']]] as const) {
       const { f } = asked()
       expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy, okayed(f, [...shown])))
         .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' }))
