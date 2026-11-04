@@ -26,8 +26,8 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`type AGENT [TEXT] [--key K]...\`: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent's terminal in your project. Answer prompts within its task; ask the owner before approving anything risky. Codex's "Update available" screen is dismissed with Esc alone, never a number and Enter.
 
 ## Post
-\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
-- Answer a message once, inside its thread: \`--reply-to MESSAGE_ID\` puts your reply in that message's thread. Post at the top level only to start a new topic.
+\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
+- Answer a message once, where it was asked: \`--answers MESSAGE_ID\` puts your answer right below a message in the main chat; \`--reply-to MESSAGE_ID\` puts it in the thread of a message that is in one. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
 - \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
 - \`--mention PERSON\` tags a person by the id or email shown in status (up to 5), when you need them to act or decide; an @username or @email in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
 - Quote TEXT so the shell keeps it one argument.
@@ -111,7 +111,7 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - After a restart, read the recovery notice and the last recorded checkpoint, then check the agent's actual session and saved work. Never replay old input or commands: they may already have taken effect.
 
 ## Threads
-Many people talk at once; answers in the main chat bury each other. Answer a message in its thread with \`--reply-to\`; summarize a long thread once and record an important decision once.
+Many people talk at once. Answer a message in the main chat right below it with \`--answers\`, and one in a thread inside that thread with \`--reply-to\`; summarize a long thread once and record an important decision once.
 
 ## Accounts and machines
 - The Swarm's people are its members (\`status\`); someone may go by another name or email in the chat. Match a name to a member before asking for an invitation.
