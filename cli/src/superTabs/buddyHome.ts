@@ -8,7 +8,7 @@
  * longer reads leaves the folder before the Buddy's next turn (pruneBuddyHome).
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
@@ -245,13 +245,13 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
  * Answers Claude Code's question about [home], in the file it reads, as its launch would otherwise wait on it. That question
  * is asked in a terminal no Swarm view shows, so the Buddy sat at it until its start timed out (MacBookPro2021, 2026-11-02).
  * This is an exception to "never a folder with content" (engines/kit/folderTrust.ts): the folder is Harness's, made for the
- * start its person pressed, and what the question guards against cannot happen in it. A Buddy launches with
- * `--setting-sources local --strict-mcp-config`, so no project's files configure it, and the folder goes with the Buddy.
- * A Buddy on another engine has none of this to rely on, so it still asks. A failure here only leaves the question.
+ * start its person pressed, and what the question guards against cannot happen in it: its own root holds no project's settings,
+ * hooks or MCP servers (each project's copy is a folder below it), and the folder goes with the Buddy. Claude Code and Codex
+ * alike, as both run a Buddy (task #2832). A failure here only leaves the question.
  */
 export async function trustBuddyHome(home: string, engine: unknown): Promise<void> {
-  if (engine !== 'claude') return
-  try { folderTrust('claude', undefined, await launchEnvironment() ?? undefined)?.record(home) }
+  if (engine !== 'claude' && engine !== 'codex') return
+  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for a Buddy: ${(error as Error).message}`) }
 }
 
