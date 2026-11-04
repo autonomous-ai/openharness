@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
 // The real folder code, with the calls the delivery loop makes held open by the tests that need a pass to be running.
 // Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
-// The tests set it, so they pass the same in an owner account, a Team account and CI; the first reports a Team account.
-const team = vi.hoisted(() => ({ value: true }))
+// The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
+const team = vi.hoisted(() => ({ value: false }))
 vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
@@ -43,7 +43,7 @@ const roots: string[] = []
 const hosts: SuperTabHost[] = []
 /** The machine's host form and Swarm reads, as the service hands them to the host and the role lookup. */
 const sourcesOf = (core: CoreApi) => ({ feed: new HostFeed(core, 'machine-1'), reads: new SwarmReads(core) })
-afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { team.value = false; for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -3585,6 +3585,15 @@ describe('project instructions from the roster', () => {
   const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
     pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
     reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
+  // The refusal itself (#2832): a Buddy is never prepared in a Harness Team account, and its folder is left as it was.
+  it('still refuses to prepare a Buddy in a Harness Team account', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    team.value = true
+    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).toThrow(/runs only on its owner's own machine/)
+    expect(readdirSync(folder)).toEqual([])
+    team.value = false
+    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).not.toThrow()
+  })
   function docFixture(names: Name[] = ['tester'], options: { stale?: Name[] } = {}) {
     const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
     const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
