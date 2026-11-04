@@ -4,6 +4,7 @@
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
 import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
+import { usernameOf } from './usernames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -60,7 +61,7 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
   from: { operationId: string; askerAgentId: string; assignmentId: string | null; kind?: typeof REFLECTION_DECISION }): DecisionDraft[] {
   const asked = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Ask a person in this Swarm.', 400)
   if (!canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) {
-    fail('INVALID_PERSON', `${asked.email} cannot read this conversation.`, 400)
+    fail('INVALID_PERSON', `${usernameOf(state, asked.id)} cannot read this conversation.`, 400)
   }
   for (const q of questions) if (q.recommended >= q.options.length) fail('INVALID_DECISION', 'A question must recommend one of its options.', 400)
   // It would wait for nobody: none waits where the work is over (workOver).

@@ -1,6 +1,6 @@
 import { isRoleName } from './agentNames.js'
 import { reserved } from './buddies.js'
-import { fail, person, type Actor, type SuperTabState } from './model.js'
+import { fail, person, type Actor, type Author, type SuperTabState } from './model.js'
 import { printable } from './profile.js'
 import { agentNamesSeenBy, nameKey, swarmUsernames, usernameOf } from './usernames.js'
 
@@ -67,4 +67,37 @@ const escaped = (text: string): string =>
 export function writtenNameOf(state: SuperTabState, id: string): string | undefined {
   const name = state.people.find(p => p.id === id)?.name
   return name ? escaped(name) : usernameOf(state, id)
+}
+
+/** A message's author as an agent reads it: a person by their username and the name they show, never by the email their
+ *  stored row names them with, which agents copied into commands and pull requests until a machine's privacy hook stopped
+ *  their sessions (task #2954, Ken 11-04). Someone who left reads as "a person". People's apps keep the stored row, which
+ *  they match to a person (Desktop superTabPersonName). [names] is `swarmUsernames(state)`, worked out once per read. */
+export function authorForAgent<T extends Pick<Author, 'kind' | 'id'>>(state: SuperTabState, author: T, names: ReadonlyMap<string, string>): T {
+  if (author.kind !== 'person') return author
+  const name = names.get(author.id) ?? 'a person'
+  return { ...author, name, displayName: agentReadName(state.people.find(p => p.id === author.id)?.name) ?? name }
+}
+
+/** A name a person set, unless it is an email address, which setName allows for one's own: an agent never reads one. */
+const agentReadName = (name: string | undefined): string | undefined => name && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name) ? name : undefined
+
+/** Person [id] as server-written text an agent reads names them (writtenNameOf), never by an email they took as their name. */
+export const agentWrittenNameOf = (state: SuperTabState, id: string): string | undefined =>
+  agentReadName(state.people.find(p => p.id === id)?.name) ? writtenNameOf(state, id) : usernameOf(state, id)
+
+type Row = { author: unknown; source?: unknown }
+const personAuthor = (value: unknown): value is Author => !!value && typeof value === 'object' && (value as Author).kind === 'person'
+/** Whether a stored row names a person by email: its author, or the person who typed into an agent's terminal (native.ts). */
+export const namesPerson = (row: Row): boolean => personAuthor(row.author) || personAuthor((row.source as { operator?: unknown } | null)?.operator)
+/** A stored row as an agent reads it (authorForAgent): its author and, for input someone typed into an agent's terminal, its
+ *  operator by name. */
+export function rowForAgent<T extends Row>(state: SuperTabState, names: ReadonlyMap<string, string>, row: T): T {
+  const source = row.source as { kind?: unknown; operator?: unknown } | null | undefined
+  const operator = source?.operator
+  return {
+    ...row,
+    ...personAuthor(row.author) ? { author: authorForAgent(state, row.author, names) } : {},
+    ...source && personAuthor(operator) ? { source: { ...source, operator: authorForAgent(state, operator, names) } } : {},
+  }
 }
