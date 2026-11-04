@@ -659,8 +659,13 @@ describe('a Buddy\'s proposal to the PM', () => {
     // An unquoted line after the marker is still taken whole, as today, and never a piece of it or a quote inside it.
     expect(passes('Fix the "login" page', ['I’ll post this as you: Fix the "login" page'])).toBe(true)
     expect(passes('login', ['I’ll post this as you: Fix the "login" page'])).toBe(false)
-    // Mixed quotes close the line too, and an unclosed one leaves all of it whole, as today.
-    expect(passes('ship it', ['I\'ll post this as you: “Keep drafts offline" and then “ship it”'])).toBe(false)
+    // Only a pair of the same kind closes the line (security review 2 of #3055): a straight quote inside a curly one, or a
+    // curly one opened inside it, is part of the line the owner read, never its end. An unclosed one leaves all of it whole, as today.
+    for (const [text, shown] of [['Ship it', 'I\'ll post this as you: “Ship it" is wrong, wait for the fix”'],
+      ['We merge', 'I\'ll post this as you: "We merge” only after Ken signs off"'],
+      ['A “B', 'I\'ll post this as you: “A “B” C”'], ['ship it', 'I\'ll post this as you: “Keep drafts offline" and then “ship it”']] as const)
+      expect(passes(text, [shown])).toBe(false)
+    expect(passes('We merge” only after Ken signs off', ['I\'ll post this as you: "We merge” only after Ken signs off"'])).toBe(true)
     expect(passes('“Keep drafts offline', ['I\'ll post this as you: “Keep drafts offline'])).toBe(true)
   })
 
@@ -686,6 +691,7 @@ describe('a Buddy\'s proposal to the PM', () => {
       ['ok, please send it to River: "Fix the login"', 'Fix the login'],
       ['Can you post this for me: Keep drafts offline', 'Keep drafts offline'],
       ['Gửi PM: Sửa lỗi đăng nhập', 'Sửa lỗi đăng nhập'],
+      ['Send this to the PM for me: Keep drafts offline', 'Keep drafts offline'],
     ] as const) {
       expect(passes(words, [], ask)).toBe(true)
       expect(passes(ask, [], ask)).toBe(true)
@@ -699,6 +705,11 @@ describe('a Buddy\'s proposal to the PM', () => {
       ['Tell Ken not to post: the client is leaving', 'the client is leaving'],
       ['Đừng gửi: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
       ['Report: the client is leaving', 'the client is leaving'],
+      // A question to the Buddy is not an ask to send (security review 2 of #3055).
+      ['Tell me why Ken said: the client is leaving', 'the client is leaving'],
+      ['can you tell me what this means: the client is leaving', 'the client is leaving'],
+      ['Send us what Ken said: the client is leaving', 'the client is leaving'],
+      ['Nói cho tôi biết vì sao Ken bảo: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
       ['File: payroll.xlsx has every salary', 'payroll.xlsx has every salary'],
       ['The client is leaving. Post this: Fix the login', 'Fix the login'],
       ['The client is leaving. Post this: Fix the login', 'Post this: Fix the login'],
