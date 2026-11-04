@@ -203,6 +203,23 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expect(whole.map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { tabId: 1, key: 1 }'], 1]])
   })
 
+  it('the read cache\'s next delta reads keys and versions through the changes index, and whole by id only what moved (#2783)', async () => {
+    const held: parts.DeltaRows = new Map()
+    // Every row of the scene: its writes are dated at the fixture's time.
+    const since = 0
+    const delta = () => db.$transaction(tx => parts.loadDelta(tx, s.tabId, since, ['group'], held))
+    const first = await delta()
+    expect(first.parts.length).toBeGreaterThan(0)
+    const quiet = await profiled(delta)
+    expectIndexed(quiet)
+    expect(where(quiet, ['_id'])).toEqual([])
+    await db.swarmGroup.update({ where: { id: `${s.tabId}:${s.web}` }, data: { version: { increment: 1 }, changedAt: new Date() } })
+    const changed = await profiled(delta)
+    expectIndexed(changed)
+    expect(where(changed, ['_id']).map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { _id: 1 }'], 1]])
+    expectOnlyReturned(where(changed, ['_id']))
+  })
+
   it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {
     const quiet = s.quietLead[5]!.key
     for (const [named, expected] of [
