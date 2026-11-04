@@ -188,6 +188,61 @@ void main() {
     expect(find.text('Reminders'), findsNothing);
   });
 
+  testWidgets('a reminder set again on the same message notifies again', (
+    tester,
+  ) async {
+    final server = _chat();
+    await show(tester, server);
+    final reminders = SuperTabReminders.of(c);
+    server.remindElsewhere(
+      'message-3',
+      clock.now().add(const Duration(minutes: 1)),
+    );
+    await c.refresh();
+    await tester.pump(const Duration(minutes: 1, seconds: 2));
+    await tester.pumpAndSettle();
+    expect(arrived, ['reminder-message-3']);
+    await reminders.open(reminders.due.single);
+    await tester.pumpAndSettle();
+
+    // Snoozed again, with no time in between: one more notice when due.
+    server.remindElsewhere(
+      'message-3',
+      clock.now().add(const Duration(minutes: 1)),
+    );
+    await c.refresh();
+    await tester.pump(const Duration(minutes: 1, seconds: 2));
+    await tester.pumpAndSettle();
+    expect(arrived, ['reminder-message-3', 'reminder-message-3']);
+  });
+
+  testWidgets('a reminder due while the timer was held (the Mac asleep) is '
+      'read at the next Swarm read', (tester) async {
+    final server = _chat();
+    await show(tester, server);
+    server.remindElsewhere(
+      'message-2',
+      clock.now().add(const Duration(minutes: 5)),
+    );
+    await c.refresh();
+    await tester.pumpAndSettle();
+    final reads = server.reminderReads.length;
+    // The clock passes the time without the timer firing, as after sleep.
+    await withClock(
+      Clock.fixed(clock.now().add(const Duration(minutes: 6))),
+      () async {
+        await c.refresh();
+        await tester.pumpAndSettle();
+      },
+    );
+    expect(server.reminderReads.length, greaterThan(reads));
+    expect(SuperTabReminders.of(c).due.map((r) => r.id), [
+      'reminder-message-2',
+    ]);
+    await tester.pump(const Duration(minutes: 6));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('a reminder set on another device wakes this one at its time', (
     tester,
   ) async {
