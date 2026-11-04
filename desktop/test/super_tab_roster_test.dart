@@ -724,7 +724,8 @@ void main() {
       await f.show(tester);
       await f.details(tester, 1);
       await tester.pumpAndSettle();
-      expect(find.text('Reads only, never asks'), findsOneWidget);
+      // An older Buddy's saved mode runs in full mode now (task #2832).
+      expect(find.text('Full, older Buddy'), findsOneWidget);
       expect(find.text('Unrecognized setting'), findsNothing);
       await f.close(tester);
     },
