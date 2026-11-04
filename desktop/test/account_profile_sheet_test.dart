@@ -53,7 +53,7 @@ List<String> _types(ConversationServer server) => [
   for (final post in server.posts) _command(post)['type'] as String,
 ];
 
-AppNotifier _app(NameApi api, {String? name = 'phorom12a'}) {
+AppNotifier profileApp(NameApi api, {String? name = 'phorom12a'}) {
   final app = AppNotifier(
     config: AppConfig.dev,
     authSession: AuthSession(),
@@ -116,7 +116,7 @@ void main() {
     tester,
   ) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     await _open(tester, app, swarm: await _swarm(server));
@@ -129,7 +129,7 @@ void main() {
   testWidgets('Save applies both: the account name, this Swarm\'s name and '
       'the username', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     final c = await _swarm(server);
@@ -153,7 +153,7 @@ void main() {
 
   testWidgets('only what changed is sent', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     await _open(tester, app, swarm: await _swarm(server));
@@ -167,7 +167,7 @@ void main() {
   testWidgets('a taken username says so under it and keeps the sheet open; '
       'Save again sends only what is left', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     final c = await _swarm(server);
@@ -195,7 +195,7 @@ void main() {
 
   testWidgets('an empty name says why and sends nothing', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     await _open(tester, app, swarm: await _swarm(server));
@@ -215,7 +215,7 @@ void main() {
   ) async {
     final api = NameApi()
       ..refuse = (400, 'Use 1 to 60 characters, with no hidden ones.');
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     final server = ConversationServer();
     await _open(tester, app, swarm: await _swarm(server));
@@ -234,7 +234,7 @@ void main() {
     tester,
   ) async {
     final api = NameApi()..refuse = (404, 'Request failed (404)');
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     await _open(tester, app);
     await tester.enterText(_name, 'Elvis');
@@ -246,7 +246,7 @@ void main() {
 
   testWidgets('with no Swarm open there is no username', (tester) async {
     final api = NameApi();
-    final app = _app(api, name: null);
+    final app = profileApp(api, name: null);
     addTearDown(app.dispose);
     await _open(tester, app);
     expect(_text(tester, _name), '');
@@ -260,7 +260,7 @@ void main() {
 
   testWidgets('Cancel closes it and saves nothing', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     await _open(tester, app);
     await tester.enterText(_name, 'Elvis');
@@ -295,7 +295,7 @@ void main() {
   testWidgets('Settings ▸ Account shows the name with an Edit that opens the '
       'sheet', (tester) async {
     final api = NameApi();
-    final app = _app(api);
+    final app = profileApp(api);
     addTearDown(app.dispose);
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
