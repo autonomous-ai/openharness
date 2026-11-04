@@ -54,7 +54,10 @@ pools share the window pool's record, as they share its refusals.
 - A list from before a sign-in change: a null list (sign-out) lifts every hold.
 - A machine the list does not name (a shared machine, a list from before it was added): never held by the list.
 - An explicit redial (`forceReconnect`) of a listed-offline machine: held too; the backend would refuse it.
-- A machine the list shows online that the backend still refuses: the longer offline backoff, not the list.
+- A machine the list shows online that the backend still refuses: the longer offline backoff, not the list. Both read
+  the same presence, so they disagree only for a moment.
+- An explicit redial inside the backend's retry-after: waits it out even when the backoff step equals it (the old
+  record lost that when the two were equal; Task 2 keeps the retry-after's end on its own).
 
 ---
 
@@ -68,7 +71,7 @@ pools share the window pool's record, as they share its refusals.
 - Produces: `RemoteRelayPool.listed(offline: string[] | null): void`; option
   `recheckList?: () => void` on `RemoteRelayPoolOptions`; shared record option `listedOffline?: ListedOffline`.
 
-- [ ] **Step 1: Write the failing tests** (`remoteRelayListed.spec.ts`, a fake backend that answers every select
+- [x] **Step 1: Write the failing tests** (`remoteRelayListed.spec.ts`, a fake backend that answers every select
   `MACHINE_OFFLINE` and counts sockets):
   - `listed([m])` then window, background and redial selects: each rejects `{ message: 'MACHINE_OFFLINE',
     closeCode: 1013 }`; 0 sockets, also 10 minutes later.
@@ -77,10 +80,10 @@ pools share the window pool's record, as they share its refusals.
   - `listed(null)`: nothing held; a list read 15 minutes ago holds nothing.
   - held selects call `recheckList` once, again only 5 minutes later.
   - a machine absent from the list is dialled as before.
-- [ ] **Step 2: Run and watch them fail:** `cd cli && TMPDIR=$(mktemp -d) npx vitest run src/lib/remoteRelayListed.spec.ts`
-- [ ] **Step 3: Implement** `listed()`, the hold in `connect()`, the shared record passed to background pools.
-- [ ] **Step 4: Run them and `src/lib/remoteRelay*.spec.ts`; all pass.**
-- [ ] **Step 5: Commit** test, then code.
+- [x] **Step 2: Run and watch them fail:** `cd cli && TMPDIR=$(mktemp -d) npx vitest run src/lib/remoteRelayListed.spec.ts`
+- [x] **Step 3: Implement** `listed()`, the hold in `connect()`, the shared record passed to background pools.
+- [x] **Step 4: Run them and `src/lib/remoteRelay*.spec.ts`; all pass.**
+- [x] **Step 5: Commit** test, then code.
 
 ### Task 2: A machine refused as offline backs off to 5 minutes
 
@@ -88,12 +91,12 @@ pools share the window pool's record, as they share its refusals.
 - Modify: `cli/src/lib/remoteRelay.ts` (`backOff`)
 - Test: `cli/src/lib/remoteRelayRefusal.spec.ts`
 
-- [ ] **Step 1: Failing test:** `MACHINE_OFFLINE` with `retryAfterMs: 30_000` is dialled again after 30 s, 60 s,
+- [x] **Step 1: Failing test:** `MACHINE_OFFLINE` with `retryAfterMs: 30_000` is dialled again after 30 s, 60 s,
   2, 4, 5, 5 minutes; other refusals keep 1, 2, 4 … 30 s.
-- [ ] **Step 2: Run, watch it fail.**
-- [ ] **Step 3: Implement:** for `MACHINE_OFFLINE`, backoff `min(OFFLINE_BACKOFF_MAX_MS = 5 min, 30 s × 2^(n-1))`.
-- [ ] **Step 4: Run the relay specs; pass.**
-- [ ] **Step 5: Commit** test, then code.
+- [x] **Step 2: Run, watch it fail.**
+- [x] **Step 3: Implement:** for `MACHINE_OFFLINE`, backoff `min(OFFLINE_BACKOFF_MAX_MS = 5 min, 30 s × 2^(n-1))`.
+- [x] **Step 4: Run the relay specs; pass.**
+- [x] **Step 5: Commit** test, then code.
 
 ### Task 3: The gateway's machine list tells the pool
 
@@ -102,14 +105,15 @@ pools share the window pool's record, as they share its refusals.
   `cli/src/gateway/start.ts` (wire `offline` → `relayPool.listed`, `recheckList` → `recheck`)
 - Test: `cli/src/gateway/accountHttp.spec.ts`
 
-- [ ] **Step 1: Failing test:** a list read with one machine `stopped` and one `running` calls `offline([stopped])`;
+- [x] **Step 1: Failing test:** a list read with one machine `stopped` and one `running` calls `offline([stopped])`;
   a sign-out calls `offline(null)`; `recheck(60_000)` within a minute of a read makes no request.
-- [ ] **Step 2: Run, watch it fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run `src/gateway` and relay specs, `npm run typecheck`.**
-- [ ] **Step 5: Commit** test, then code.
+- [x] **Step 2: Run, watch it fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run `src/gateway` and relay specs, `npm run typecheck`.**
+- [x] **Step 5: Commit** test, then code.
 
 ### Task 4: Evidence
 
-- [ ] Before/after refused opens per hour from the backend logs (aggregates), in the PR.
-- [ ] Red/green evidence comment on the PR.
+- [ ] Before/after refused opens per hour from the backend logs (aggregates): before ~3,600 an hour (the brief, 2026-11-04);
+  after read hourly from the production logs by an agent on Ken's Mac once the CLI release ships (River, 2026-11-04).
+- [x] Red/green evidence comment on the PR.
