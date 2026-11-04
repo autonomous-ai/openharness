@@ -1,4 +1,8 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
@@ -9,7 +13,11 @@ import 'package:harness/super_tabs/day_pill.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
+
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_DAY_JUMP_SHOTS'];
 
 const _pill = ValueKey('super-day-pill');
 
@@ -44,6 +52,10 @@ Future<void> _list(WidgetTester tester, ValueChanged<DateTime?> onJump) async {
 }
 
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
+
   group('the time each choice starts at', () {
     final wednesday = DateTime(2026, 11, 4, 15, 30);
 
@@ -422,4 +434,81 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 3));
     });
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('screenshots for review (${brightness.name})', (tester) async {
+      if (shots == null) return;
+      final before = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = before);
+      // The menu's lift as the app draws it, not the test's solid outline.
+      await tester.binding.setSurfaceSize(const Size(900, 640));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final now = DateTime.now();
+      final server = ConversationServer()..messagePage = 40;
+      const updates = [
+        'Reading the offline queue before the reconnect.',
+        'The reconnect keeps every queued edit in order.',
+        'Two devices editing at once settle on the newest edit.',
+        'Pushed the branch; the checks are running.',
+      ];
+      for (var i = 0; i < 40; i++) {
+        server.append(updates[i % updates.length]);
+        server.messages.last
+          ..['author'] = {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'}
+          ..['createdAt'] = DateTime(
+            now.year,
+            now.month,
+            now.day - 6 + i ~/ 8,
+            9,
+            i,
+          ).toUtc().toIso8601String();
+      }
+      server.markReadElsewhere('lead', 40);
+      final c = server.controller();
+      await c.refresh();
+      final picture = GlobalKey();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) =>
+              RepaintBoundary(key: picture, child: child),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      addTearDown(c.dispose);
+      Future<void> shoot(String name) => tester.runAsync(() async {
+        final boundary =
+            picture.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 1.5);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await Directory(shots!).create(recursive: true);
+        await File('$shots/$name.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+      debugDisableShadows = false;
+      try {
+        await tester.tap(find.byKey(_pill));
+        await tester.pumpAndSettle();
+        await shoot('jump-menu-${brightness.name}');
+        await tester.tap(find.text('Jump to a specific date'));
+        await tester.pumpAndSettle();
+        await shoot('jump-calendar-${brightness.name}');
+      } finally {
+        // Back before the test ends, which checks it was.
+        debugDisableShadows = true;
+      }
+    });
+  }
 }

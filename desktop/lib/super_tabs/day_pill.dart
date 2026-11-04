@@ -344,8 +344,10 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
   final _first = FocusNode(debugLabel: 'Swarm day pill first choice');
   bool _picking = false;
 
-  /// The calendar's size: Material's month grid with its header.
-  static const _calendar = Size(296, 336);
+  /// The calendar's size: Material's month header (52) over its grid of
+  /// seven rows of 42 (weekdays and up to six weeks), 7 columns of 42 with
+  /// its 8 of padding each side. Taller than a menu may be by default.
+  static const _calendar = Size(7 * 42 + 2 * 8, 52 + 7 * 42 + 8);
 
   @override
   void dispose() {
@@ -367,17 +369,26 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
     return MenuAnchor(
       controller: _menu,
       childFocusNode: _focus,
-      // The first choice takes the keys, so Esc and the arrows reach the menu
-      // however it was opened.
-      onOpen: () => WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _first.requestFocus(),
-      ),
+      // Opened from the keyboard, the first choice is the next key's target;
+      // a click leaves none lit, with the keys on the pill, so Esc still
+      // closes it.
+      onOpen: () {
+        final keyboard = _focus.hasPrimaryFocus;
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => (keyboard ? _first : _focus).requestFocus(),
+        );
+      },
       onClose: () {
         if (mounted) setState(() => _picking = false);
       },
       consumeOutsideTap: true,
       alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(minWidth: 220),
+      style: grid.AppMenu.style(
+        minWidth: 220,
+        maxHeight: _picking
+            ? _calendar.height + grid.AppMenu.panelPadding.vertical
+            : null,
+      ),
       menuChildren: _picking
           ? [
               SizedBox.fromSize(
