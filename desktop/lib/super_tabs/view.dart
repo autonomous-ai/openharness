@@ -2819,8 +2819,8 @@ class _SuperTabViewState extends State<SuperTabView>
   };
 
   /// A Personal project's empty chat with no Lead: the card that starts one
-  /// (Huy 11-04, task #2815), and under it the project's panes when it holds
-  /// any.
+  /// (Huy 11-04, task #2815), and under it what the chat says without it: its
+  /// panes when it holds any, else its plain line.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
       padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
@@ -2835,7 +2835,20 @@ class _SuperTabViewState extends State<SuperTabView>
               conversationId: group.id,
               app: widget.app!,
             ),
-            if (_personalPaneCount(group) > 0) _panesWaiting(group),
+            if (_personalPaneCount(group) > 0)
+              _panesWaiting(group)
+            else
+              Padding(
+                padding: const EdgeInsets.only(
+                  top: grid.AppDesktop.panelPadding,
+                ),
+                child: Text(
+                  'Discuss the plan with '
+                  '${c.snapshot!.coordinatorNameOf(group.projectId)}.',
+                  textAlign: TextAlign.center,
+                  style: DesktopChrome.text(color: DesktopChrome.muted),
+                ),
+              ),
           ],
         ),
       ),

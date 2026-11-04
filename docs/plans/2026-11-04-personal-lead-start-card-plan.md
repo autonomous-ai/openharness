@@ -88,8 +88,9 @@ store and a fake sign-in.
 - [ ] **Step 2: Run them and watch them fail:** `flutter test test/super_tab_personal_lead_card_test.dart` fails with
   no `super-lead-start`.
 - [ ] **Step 3: Implement** the card after the Buddy start card's layout (`buddies.dart` `_BuddyStart`: a medium
-  title, one row of fields and a filled button, lines under it). In `view.dart`, show it above the panes block (alone when the project has no
-  panes: with no Lead, "Discuss the plan with …" has no one to name) while `wants` holds and the reader can write.
+  title, one row of fields and a filled button, lines under it). In `view.dart`, show it above the panes block, or
+  above the plain "Discuss the plan" line when the project has no panes, while `wants` holds and the reader can
+  write.
 - [ ] **Step 4: Run them and watch them pass,** then the files that draw the empty chat or start a Lead:
   `super_tab_personal_projects_test.dart`, `super_tab_personal_lead_test.dart`, `super_tab_receipt_test.dart`,
   `super_tab_view_test.dart`. Then the guard tests: `python3 scripts/check-ui-style.py`,
