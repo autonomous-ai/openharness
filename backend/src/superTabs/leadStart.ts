@@ -5,7 +5,7 @@
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
-  slotCounter, teamWorkRefusal, type ContributedMachine } from './machines.js'
+  slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -87,8 +87,10 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
     candidates = [named]
   } else {
     const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
+    // Its owner lets teammates' work run in their own account there (machines.ts ownAccountWork): the Mac itself, as its owner.
+    if (ownAccountWork(named)) candidates = [named]
     // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
-    if (named.teamAccountOnly) {
+    else if (named.teamAccountOnly) {
       const pool = team ?? named
       const why = refusal(pool)
       if (why) failTeamWork(why)
