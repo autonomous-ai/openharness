@@ -1621,12 +1621,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions.
       const project = manageProject(state, actor, command.projectId)
+      // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
+      const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
+        && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
       for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
       // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
       for (const start of state.starts ?? []) {
         if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
       }
-      deleteProject(state, actor, command.projectId)
+      deleteProject(state, actor, command.projectId, orphaned)
       // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
       for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
       break
