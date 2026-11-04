@@ -11,10 +11,11 @@ chat, preview and unread count.
 and removals end exactly as before, without a line. Every read decides per row kind who may see a stored row, at read time
 (`model.ts NOTICE_READERS` through `agentOnly`: pages, the inbox's latest preview, Activity, mentions, deliveries). With
 `machine-left` read by nobody (`agent`; these rows have no recipients), the stored rows are hidden from Desktop, web and
-every phone build already installed, with no app release. One catch: a chat whose newest main row is such a line keeps
-`lastMainSequence` at it. An app marks read only up to the newest row it sees, so that chat would stay unread on the phone
-(which counts by `lastMainSequence`). `SwarmReads.markRead` therefore reads through hidden rows: a mark up to the newest
-row the person can see moves on to `lastMainSequence` when no main row they can read lies between.
+every phone build already installed, with no app release. One catch: a project chat whose newest main row is such a line keeps
+`lastMainSequence` at it, and Desktop and the phone count a chat unread while that number is past the reader's mark. They
+also send no read at or below the mark the server already holds, so a read-time fix on the mark never runs (review 1,
+Grebe2639). The server therefore serves each project chat's `lastMainSequence` as the newest main row people read
+(`read/servedTops.ts`, using the inbox's own lookup `inbox.ts latestIn`), with no stored data changed.
 
 **Tech Stack:** TypeScript backend (vitest unit tests, MongoDB integration tests).
 
@@ -25,21 +26,22 @@ task has no agent now.") stay. They go only to the groups whose agents went, and
 ## Global Constraints
 
 - Nothing else about machine removal changes: cleanup records, the 30-minute fallback, offline removal, Team accounts.
-- Read cost: `markRead` reads extra rows only when the mark it is given stops short of `lastMainSequence`. Then it reads at
-  most `LATEST_SCAN` rows of that chat by its (tabId, conversationId, sequence) index, as the inbox already does.
+- Read cost: a person's read looks up only project chats, and each (Swarm, chat, `lastMainSequence`) once per server
+  process (kept up to 20,000 answers). A lookup is the inbox's existing one: the row at that number by the
+  (tabId, conversationId, sequence) index, and at most `LATEST_SCAN` rows more only when that row is hidden.
 - No data migration: stored rows stay, hidden at read time. Rollback: an older backend shows them again.
 
 ## Review Focus
 
 - That no reader, an agent included, still gets a stored `machine-left` row (pages, inbox, Activity, deliveries).
-- That `markRead` never moves a mark past a main row the person can read, nor past `lastMainSequence`.
+- That the served `lastMainSequence` is never past the stored one, and never below a main row people read.
 
 ## Design
 
 - growth: no new data; the lines are no longer written.
-- concurrency: unchanged; `moveChatMark` keeps its own guarded write.
+- concurrency: N/A because nothing new is written; the kept answers are per process and immutable per key.
 - read cost: see Global Constraints.
-- scale: the extra scan runs only on a mark short of the chat's newest main row, at most `LATEST_SCAN` rows.
+- scale: lookups grow with project-chat messages (one per new number per process), not with reads; the warning metric is read latency of first loads.
 - compatibility: older apps get the same pages, without these rows; nothing in the API changes.
 - migration + rollback: none / an older backend shows the stored rows again.
 - audience: the server enforces it (read-time `agentOnly`).
@@ -63,7 +65,15 @@ task has no agent now.") stay. They go only to the groups whose agents went, and
 **Files:** `backend/src/superTabs/model.ts`, `backend/src/superTabs/read/service.ts`, `backend/integration/superTabInbox.test.ts`,
 `backend/integration/superTabBuddies.test.ts`.
 
-- [ ] Integration test: a stored `machine-left` line is missing from the chat's page and from the inbox's latest preview,
-  and a mark up to the newest visible row moves on to the line's sequence. Control: a readable main row after the mark
-  stops it. Run it and see it fail.
-- [ ] `NOTICE_READERS['machine-left'] = 'agent'`, and `markRead` reads through hidden rows. Run it and see it pass.
+- [ ] Integration test: a stored `machine-left` line is missing from the chat's page and from the inbox's latest preview. Run it and see it fail.
+- [ ] `NOTICE_READERS['machine-left'] = 'agent'`. Run it and see it pass.
+
+## Task 3 (review 1): a caught-up person's chat reads as read with no read sent
+
+**Files:** `backend/src/superTabs/read/servedTops.ts`, `backend/src/superTabs/read/service.ts`, `backend/src/superTabs/read/inbox.ts`,
+`backend/integration/superTabInbox.test.ts`.
+
+- [ ] Integration test: a person reads the project chat, then a machine-left line is stored. Their first load serves the
+  chat's newest main row at their mark, with no read sent. Run it and see it fail.
+- [ ] Serve each project chat's newest main row people read (`ServedTops`); drop the mark read-through it replaces. Run it
+  and see it pass.

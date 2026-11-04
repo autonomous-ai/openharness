@@ -15,7 +15,7 @@ import { activityDigest, listActivity, markActivityRead, markActivityThreadRead,
 import { clearReminder, listReminders, REMINDER_AHEAD_MS, remindersDigest, setReminder, type ReminderItem } from '../reminders.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
-import { FIELDS, readable, readThroughHidden, row as messageRow } from './inbox.js'
+import { FIELDS, readable, row as messageRow } from './inbox.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -40,6 +40,7 @@ import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 import { moveChatMark } from './threadMarkSeeds.js'
+import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
@@ -95,8 +96,11 @@ export class SwarmReads {
     this.db = store.db
     this.now = options.now ?? store.now
     this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
+    this.servedTops = new ServedTops(store.db)
   }
   private readonly avatarLinks: AvatarLinks | null
+  /** Each project chat's newest main row people read, as readers are served it (servedTops.ts, #2742). */
+  private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
 
@@ -249,16 +253,14 @@ export class SwarmReads {
     }
   }
 
-  /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts), and
-   *  past hidden rows that end its main stream (inbox.ts readThroughHidden). Only a
+  /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
    *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
    *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
    *  mark of its own gets one at the old mark (threadMarkSeeds.ts), so the inbox and Threads still count it. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
-    // A read through the newest row the person sees also reads the hidden rows that end the chat (inbox.ts readThroughHidden).
-    const next = await readThroughHidden(this.db, tabId, state, group.data!, Math.min(sequence, group.data!.lastMessageSequence)), now = this.now()
+    const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
     const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
     await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
     return { sequence: stored }
@@ -493,10 +495,12 @@ export class SwarmReads {
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
-    return { parts: loaded, actor, lastChangedAt: newest,
-      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
-        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-          decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state) }
+    const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
+      ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
+        decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
+    // People count a chat unread by its newest main row; agents keep no read marks.
+    if (actor.kind === 'person') await this.servedTops.apply(tabId, view)
+    return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

@@ -200,7 +200,7 @@ const newestIn = (tabId: string, conversationId: string, sequence: Record<string
 /** Each chat's newest main message the person reads: the row at its stored main sequence, read alone; the LATEST_SCAN rows
  *  before it only for a chat where that row is not one (an older chat's newest row may be a thread reply or a hidden copy).
  *  `more` when such a chat has none in that range. */
-async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
+export async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
   const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top }] : [] })
   const pick = async (rows: Row[]) => {
     const shown = (await readable(db, tabId, rows, state)).filter(isMain)
@@ -217,19 +217,6 @@ async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, c
   // A chat with LATEST_SCAN rows and none of them a main row the person reads may have one further back.
   const full = new Set([...groupBy(deeper, m => m.conversationId)].filter(([, rows]) => rows.length >= LATEST_SCAN).map(([id]) => id))
   return { latest, more: missing.some(c => !latest.has(c.id) && full.has(c.id)) }
-}
-
-/** Where a read of `group` through `next` leaves its mark: past the rows after it nobody reads, when they end the chat's main
- *  stream. An app marks read only up to the newest row it was given, so a chat whose newest main row became hidden after it
- *  was numbered (a `machine-left` line stored before #2742) would otherwise stay unread wherever unread is counted by the
- *  chat's newest main row (lastMainSequence). Reads nothing when `next` is already there, and at most LATEST_SCAN rows of
- *  the chat by its sequence index otherwise; with that many rows to pass, the mark stays where it was asked to go. */
-export async function readThroughHidden(db: PrismaClient, tabId: string, state: SuperTabState, group: Conversation, next: number): Promise<number> {
-  const top = group.lastMainSequence
-  if (top === undefined || next >= top) return next
-  const rows = await perRange(db, [newestIn(tabId, group.id, { $gt: next, $lte: top }, LATEST_SCAN, { ...SCAN_FIELDS, alsoInChat: 1 })])
-  if (rows.length >= LATEST_SCAN) return next
-  return (await readable(db, tabId, rows, state)).some(isMain) ? next : top
 }
 
 interface Candidate { conversationId: string; root: string; mark: number; replies: Row[]; unread: number; member: boolean; at: number; id: string }
