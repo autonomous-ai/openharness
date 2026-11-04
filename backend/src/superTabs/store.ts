@@ -50,7 +50,7 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { taskLineChats } from './taskLine.js'
+import { endedReply, taskLineChats } from './taskLine.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -4092,7 +4092,11 @@ export class SuperTabStore {
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       ended = []
-      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      let loaded = await this.load(tx, user, tabId)
+      // The stop says Not building this in its task's project-chat thread (below): that chat is read when the load left it out.
+      const lines = taskLineChats(loaded.state)
+      if (lines.length) loaded = await this.ensure(tx, loaded, { groupIds: lines })
+      const state = cloneData(loaded.state)
       const before = { agents: state.agents, conversations: cloneData(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
       const assignment = await strangerRefusal(state, user.sub, () => {
@@ -4128,6 +4132,9 @@ export class SuperTabStore {
             author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),
             text: `Stopped\n\n${assignment.result}`, replyTo: null, recipients: lead ? [lead] : [] })
         }
+        // And its project chat's thread says Not building this, as a stop a command records does (task #2693).
+        notices.push(...endedReply(state, group, stableId('task-line-stopped', tabId, assignmentId),
+          worker && author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId })))
       }
       const sequences = numberMessages(state, notices, this.now())
       // A confirmed stop finishes its worker, as work.status stopped does; no command reads that decision now, so it touches
