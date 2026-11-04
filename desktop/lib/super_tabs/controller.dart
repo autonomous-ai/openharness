@@ -4385,6 +4385,40 @@ class SuperTabController extends ChangeNotifier {
     return seq is int && known != null && known != seq;
   }
 
+  /// The rows of [held] that [page], read whole, no longer has: from its
+  /// oldest row on (from the start when it reached it) and before [before]
+  /// (to the end when null). Each was deleted since it was read.
+  static Set<String> _deletedFrom(
+    Iterable<SuperTabMessage> held,
+    Map<String, dynamic> page,
+    int? before,
+  ) {
+    final rows = [
+      for (final row in page['messages'] as List)
+        SuperTabMessage.fromJson(superTabMap(row)),
+    ];
+    if (page['next'] != null && rows.isEmpty) return {};
+    final ids = {for (final m in rows) m.id};
+    final oldest = page['next'] == null
+        ? null
+        : rows.reduce((a, b) => superTabMessageOrder(a, b) <= 0 ? a : b);
+    return {
+      for (final m in held)
+        if (!ids.contains(m.id) &&
+            (before == null || m.sequence < before) &&
+            (oldest == null || superTabMessageOrder(m, oldest) >= 0))
+          m.id,
+    };
+  }
+
+  /// Where a query's page ends: its `before`, or null for the latest page.
+  static int? _beforeOf(String query) => int.tryParse(
+    Uri.splitQueryString(
+          query.startsWith('?') ? query.substring(1) : query,
+        )['before'] ??
+        '',
+  );
+
   static bool _sameMessages(
     List<SuperTabMessage>? shown,
     List<SuperTabMessage> next,
@@ -4394,6 +4428,8 @@ class SuperTabController extends ChangeNotifier {
       final a = shown[i], b = next[i];
       if (a.id != b.id ||
           a.text != b.text ||
+          a.editedAt != b.editedAt ||
+          a.deletedAt != b.deletedAt ||
           a.deliveries.length != b.deliveries.length ||
           !_sameReactions(a.reactions, b.reactions)) {
         return false;
@@ -4655,21 +4691,29 @@ class SuperTabController extends ChangeNotifier {
       // below them, and the rest waits for [showLatest].
       final skipped = query.startsWith('?after=') && answer['next'] != null;
       final keepPlace = skipped && _readingBack.contains(id);
+      // A page read whole, latest or before a point: it holds every row
+      // from its oldest on, so a held row it lacks was deleted (an edit or a
+      // delete moves `reactionSeq` as a reaction does).
+      ({Map<String, dynamic> page, int? before})? whole =
+          older || query.startsWith('?after=')
+          ? null
+          : (page: answer, before: _beforeOf(query));
       if (!_disposed && skipped && !keepPlace) {
         answer = await request('GET', _messagesPath(id));
+        whole = (page: answer, before: null);
       } else if (!_disposed && keepPlace) {
         // A changed reaction refreshes the page ending at the newest held:
         // the latest page, under rows read back, would leave a gap.
-        final shown = reacted
-            ? (await request(
-                    'GET',
-                    '${_messagesPath(id)}?before=${tail! + 1}',
-                  ))['messages']
-                  as List
-            : const [];
+        final page = reacted
+            ? await request('GET', '${_messagesPath(id)}?before=${tail! + 1}')
+            : null;
+        if (page != null) whole = (page: page, before: tail! + 1);
         answer = {
           ...answer,
-          'messages': [...shown, ...answer['messages'] as List],
+          'messages': [
+            ...page?['messages'] as List? ?? const [],
+            ...answer['messages'] as List,
+          ],
         };
       } else if (!_disposed &&
           reacted &&
@@ -4682,10 +4726,12 @@ class SuperTabController extends ChangeNotifier {
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',
         );
+        whole = (page: answer, before: tail + 1);
       } else if (!_disposed && reacted && arrived) {
         // New messages and a changed reaction at once: the rows already shown
         // need their counts too, so the latest page is read with the new ones.
         final page = await request('GET', _messagesPath(id));
+        whole = (page: page, before: null);
         answer = {
           ...answer,
           'messages': [
@@ -4785,6 +4831,12 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) {
           combined.putIfAbsent(m.id, () => m);
         }
+      }
+      if (whole != null) {
+        final gone = _deletedFrom(combined.values, whole.page, whole.before)
+          ..removeAll(incoming.map((m) => m.id));
+        combined.removeWhere((messageId, _) => gone.contains(messageId));
+        _rows[id]?.removeWhere((messageId, _) => gone.contains(messageId));
       }
       final sorted = combined.values.toList()..sort(superTabMessageOrder);
       // Past the cap the oldest rows go, where earlier history continues;
