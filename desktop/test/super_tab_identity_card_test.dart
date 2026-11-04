@@ -181,6 +181,35 @@ void main() {
     expect(focus.hasPrimaryFocus, isTrue);
   });
 
+  testWidgets(
+    'Escape on the task line closes the card and returns to the name',
+    (tester) async {
+      final focus = FocusNode();
+      addTearDown(focus.dispose);
+      await tester.pumpWidget(
+        _anchor(
+          SuperTabAgentFacts(
+            'Shrike2',
+            engine: 'claude',
+            task: 'Working on #2605 Chat: a card',
+            onOpenTask: () {},
+          ),
+          focus: focus,
+        ),
+      );
+      focus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(focus.hasPrimaryFocus, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(SuperTabHoverCard.openDelay);
+      expect(_card, findsNothing);
+      expect(focus.hasPrimaryFocus, isTrue);
+    },
+  );
+
   testWidgets('Tab reaches the task line and Enter opens the task', (
     tester,
   ) async {
