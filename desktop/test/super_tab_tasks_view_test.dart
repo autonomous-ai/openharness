@@ -1,4 +1,6 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -434,4 +436,134 @@ void main() {
       await _close(tester, c);
     },
   );
+
+  group('Next up, in the shared order', () {
+    ConversationServer queued() {
+      final server = tasksServer();
+      (server.state['conversations'] as List).add(
+        _task('third', 'Rename the round dial', 14),
+      );
+      return server;
+    }
+
+    Iterable<Map> moves(ConversationServer server) => [
+      for (final post in server.posts)
+        if ((post['command'] as Map?)?['type'] == 'work.queue')
+          post['command'] as Map,
+    ];
+
+    Future<void> dragTo(WidgetTester tester, String id, Offset to) async {
+      final gesture = await tester.startGesture(tester.getCenter(_card(id)));
+      await tester.pump(kLongPressTimeout);
+      for (var i = 1; i <= 10; i++) {
+        final from = tester.getCenter(_card(id));
+        await gesture.moveTo(Offset.lerp(from, to, i / 10)!);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a drag to the top sets the order for everyone, and it holds', (
+      tester,
+    ) async {
+      final server = queued();
+      var c = await _show(tester, server);
+      expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'preview', 'third']);
+      await dragTo(
+        tester,
+        'third',
+        tester.getTopLeft(_card('shipped-means')) + const Offset(20, 2),
+      );
+      expect(moves(server), [
+        {'type': 'work.queue', 'conversationId': 'third', 'after': null},
+      ]);
+      expect(_cardsIn(tester, 'nextUp'), ['third', 'shipped-means', 'preview']);
+      await _close(tester, c);
+      // Read again, as another person or a restart reads it.
+      c = await _show(tester, server);
+      expect(_cardsIn(tester, 'nextUp'), ['third', 'shipped-means', 'preview']);
+      await _close(tester, c);
+    });
+
+    testWidgets('a card dropped on another column goes back', (tester) async {
+      final server = queued();
+      final c = await _show(tester, server);
+      await dragTo(tester, 'preview', tester.getCenter(_column('working')));
+      expect(moves(server), isEmpty);
+      expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'preview', 'third']);
+      expect(_cardsIn(tester, 'working'), ['tag']);
+      await _close(tester, c);
+    });
+
+    testWidgets('only Next up can be dragged', (tester) async {
+      final c = await _show(tester, queued());
+      expect(
+        find.byKey(const ValueKey('super-task-drag-preview')),
+        findsOneWidget,
+      );
+      for (final id in ['tag', 'test-copy', 'sender', 'p-old']) {
+        expect(find.byKey(ValueKey('super-task-drag-$id')), findsNothing);
+      }
+      await _close(tester, c);
+    });
+
+    testWidgets('a focused card moves up with ⌥↑ and down with ⌥↓', (
+      tester,
+    ) async {
+      final server = queued();
+      final c = await _show(tester, server);
+      Focus.of(tester.element(find.text('Rename the round dial')))
+          .requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.alt);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.alt);
+      await tester.pumpAndSettle();
+      expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'third', 'preview']);
+      Focus.of(tester.element(find.text('Shipped means merged')))
+          .requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.alt);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.alt);
+      await tester.pumpAndSettle();
+      expect(moves(server), [
+        {
+          'type': 'work.queue',
+          'conversationId': 'third',
+          'after': 'shipped-means',
+        },
+        {
+          'type': 'work.queue',
+          'conversationId': 'shipped-means',
+          'after': 'third',
+        },
+      ]);
+      expect(_cardsIn(tester, 'nextUp'), ['third', 'shipped-means', 'preview']);
+      await _close(tester, c);
+    });
+
+    testWidgets('a refused move puts the card back and says why', (
+      tester,
+    ) async {
+      final server = queued()
+        ..refuse = {
+          'code': 'COORDINATOR_REQUIRED',
+          'message': 'Only a person or the PM can reorder tasks.',
+        };
+      final c = await _show(tester, server);
+      await dragTo(
+        tester,
+        'third',
+        tester.getTopLeft(_card('shipped-means')) + const Offset(20, 2),
+      );
+      expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'preview', 'third']);
+      expect(
+        find.text('Only a person or the PM can reorder tasks.'),
+        findsOneWidget,
+      );
+      await _close(tester, c);
+    });
+  });
 }

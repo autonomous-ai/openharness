@@ -1427,6 +1427,38 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'work.queue') {
+        // As backend taskQueue.ts places it: right after `after` among the
+        // project's open tasks, by rank or else number; null for the top.
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final task = groups.firstWhere(
+          (g) => g['id'] == command['conversationId'],
+        );
+        num key(Map<String, dynamic> g) =>
+            (g['queueRank'] ?? g['number'] ?? 0) as num;
+        final siblings =
+            groups
+                .where(
+                  (g) =>
+                      g['projectId'] == task['projectId'] &&
+                      g['archived'] != true &&
+                      g['number'] != null &&
+                      g['id'] != task['id'],
+                )
+                .toList()
+              ..sort((a, b) => key(a).compareTo(key(b)));
+        final after = command['after'];
+        if (after == null) {
+          task['queueRank'] = siblings.isEmpty ? 1 : key(siblings.first) - 1;
+        } else {
+          final i = siblings.indexWhere((g) => g['id'] == after);
+          final next = i + 1 < siblings.length ? siblings[i + 1] : null;
+          task['queueRank'] = next == null
+              ? key(siblings[i]) + 1
+              : (key(siblings[i]) + key(next)) / 2;
+        }
+        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()
