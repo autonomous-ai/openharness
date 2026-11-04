@@ -51,11 +51,11 @@ export function registerRequestMetrics(app: FastifyInstance, metrics: Metrics): 
 }
 
 /**
- * Where this worker serves /metrics: off unless a port is set; each pm2 worker binds base + its index (as
- * the mesh port does); loopback unless the deploy says otherwise. Never the public control port.
+ * Where this worker serves /metrics: always on, with no switch; each pm2 worker binds base + its index (as the mesh
+ * port does); loopback unless the deploy says otherwise. Never the public control port.
  */
-export function metricsAddress({ portBase, host = '127.0.0.1' }: { portBase?: number; host?: string }, workerIndex: number) {
-  return portBase === undefined ? undefined : { port: portBase + workerIndex, host }
+export function metricsAddress({ portBase = 9464, host = '127.0.0.1' }: { portBase?: number; host?: string }, workerIndex: number) {
+  return { port: portBase + workerIndex, host }
 }
 
 /** A listener of its own for the scraper: GET /metrics, and 404 for everything else. A failure to bind is logged. */
