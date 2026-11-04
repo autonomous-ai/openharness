@@ -32,6 +32,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.outgoing,
     this.sessionActivity,
     this.machineName,
+    this.onScroll,
   });
 
   final SuperTabController controller;
@@ -49,6 +50,10 @@ class SuperTabThreadPanel extends StatefulWidget {
 
   /// A machine's name, said beside an agent `@` offers.
   final String Function(String machineId)? machineName;
+
+  /// Given the thread's list while the panel lives (null once it is gone),
+  /// so a device scrolling this Swarm scrolls the thread, not the chat.
+  final ValueChanged<ScrollController?>? onScroll;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -100,6 +105,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     super.initState();
     _focus.requestFocus();
     _scroll.addListener(_measureAfterFrame);
+    widget.onScroll?.call(_scroll);
   }
 
   @override
@@ -124,6 +130,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
+    widget.onScroll?.call(null);
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
