@@ -1361,6 +1361,16 @@ describe('a route that names no pick', () => {
     }
   })
 
+  // The only candidate that can run needs no rule to choose it: the start gives none and the row says so.
+  it('takes a start of the only candidate without a reason, and says it was the only one', () => {
+    const f = routed(), task = f.group()
+    const only = open({ conversationId: task, record: pickless({ via: 'only', candidates: [candidate('c1', { model: 'sonnet' })] }) })
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: only, contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([expect.objectContaining({ op: 'final', final: expect.objectContaining({ candidateId: 'c1' }) })])
+    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      source: expect.objectContaining({ via: 'only', why: 'Only candidate that can run this task.', pick: { id: 'c1', title: expect.any(String) } }) })])
+  })
+
   it('records the candidate a start matches, and posts the route row naming it and the rule', () => {
     const f = routed(), task = f.group()
     const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
