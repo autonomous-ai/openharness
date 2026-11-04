@@ -311,6 +311,9 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '# Harness Team account setup (cli/src/team/script.ts), run once as root behind the macOS administrator prompt.',
     '# Running it again repairs what is there; `harness team remove` undoes it.',
     'set -eu',
+    // Root runs only the system's own tools, never the owner's PATH: a micromamba GNU stat first on it read / as not root's
+    // (#2765, Darren-MacBook), and a tool ahead of the system's would run as root. The Linux scripts pin it the same way.
+    'PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'umask 022',
     'cd /',
     `die() { printf 'harness: %s\\n' "$1" >&2; exit "\${2:-1}"; }`,
