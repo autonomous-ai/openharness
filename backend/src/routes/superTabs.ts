@@ -93,6 +93,8 @@ const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+// Mark unread names the message it starts from: the mark goes to just before it.
+const unreadBody = z.object({ sequence: z.number().int().positive().safe() }).strict()
 const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const activityReadBody = z.object({ through: z.string().datetime() }).strict()
@@ -636,6 +638,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
+  // A person's own Mark unread (superTabs/readMarks.ts lowerReadMark): the one write that moves their mark back.
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof unreadBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/unread',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(unreadBody)] },
+    (req, reply) => respond(reply, () => reads.markUnread(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
   // A person's own thread mark (superTabs/readMarks.ts), as the conversation's above.
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(readMarkBody)] },

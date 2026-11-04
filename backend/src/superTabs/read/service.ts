@@ -10,7 +10,7 @@ import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stable
 import { logger } from '../../utils/logger.js'
 import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
+import { lowerReadMark, readMarkRows, readThreadMarks, writeThreadFollow, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
@@ -54,14 +54,17 @@ function readableGroups(read: Read): Set<string> {
 }
 
 /** The reader's marks of the conversations and threads they can read now: a mark never names a conversation the reader has
- *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent). */
-function readableMarks(read: Read, marks: Map<string, number>, threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
-  Pick<Derived, 'readMarks' | 'threadMarks' | 'chatSettings'> {
+ *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent), and one
+ *  with no mark their Mark unread moved last none either (`unreadMarks` absent). */
+function readableMarks(read: Read, marks: ReadMarkRow[], threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
+  Pick<Derived, 'readMarks' | 'unreadMarks' | 'threadMarks' | 'chatSettings'> {
   if (read.actor.kind !== 'person') return {}
   const readable = readableGroups(read)
+  const kept = marks.filter(mark => readable.has(mark.conversationId))
+  const unreadMarks = Object.fromEntries(kept.filter(mark => mark.lowered).map(mark => [mark.conversationId, mark.sequence]))
   const threadMarks = Object.fromEntries([...threads].filter(([id]) => readable.has(id)).map(([id, held]) => [id, Object.fromEntries(held)]))
   const chatSettings = Object.fromEntries([...settings].filter(([id]) => readable.has(id)))
-  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable.has(id))),
+  return { readMarks: Object.fromEntries(kept.map(mark => [mark.conversationId, mark.sequence])), ...(Object.keys(unreadMarks).length ? { unreadMarks } : {}),
     ...(Object.keys(threadMarks).length ? { threadMarks } : {}), ...(Object.keys(chatSettings).length ? { chatSettings } : {}) }
 }
 
@@ -156,7 +159,7 @@ export class SwarmReads {
       const person = asAgentId ? null : user.sub
       const [changed, tagged, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
         person ? waitingTagConversations(tx, tabId, person, t0) : [],
-        person ? readMarks(tx, tabId, person, from.since) : new Map<string, number>(),
+        person ? readMarkRows(tx, tabId, person, from.since) : [],
         person ? readThreadMarks(tx, tabId, person, from.since) : new Map<string, Map<string, number>>(),
         person ? readChatSettings(tx, tabId, person, from.since) : new Map<string, NotifyLevel>()])
       // Starts: only unfinished ones whole in the base, then the poll's own.
@@ -167,7 +170,7 @@ export class SwarmReads {
       // moved, so the mark goes only to a reader who can still read it.
       const held = new Set(base.groups.map(g => g.key))
       const named = [...new Set([...tagged, ...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
-        ...marks.keys(), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
+        ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
@@ -244,6 +247,17 @@ export class SwarmReads {
     const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
     await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
     return { sequence: stored }
+  }
+
+  /** The person's Mark unread from the message at `sequence`: their mark of a conversation they can read goes to just before it,
+   *  never forward (readMarks.ts lowerReadMark), and never past the conversation's newest message. Checked as markRead: only a
+   *  person reading as themselves, and every chat they cannot read is the same refusal. Tags it resolved and Activity it read
+   *  stay so; a reply only in a thread keeps its thread's mark. */
+  async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const { group } = await this.readGroup(user, tabId, conversationId)
+    const target = Math.min(sequence - 1, group.data!.lastMessageSequence)
+    return { sequence: await lowerReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: target, now: this.now() }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -330,8 +344,8 @@ export class SwarmReads {
   }
 
   /** A person's own read marks (an agent has none), every one or those moved since `since`. */
-  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<Map<string, number>> {
-    return actor.kind === 'person' ? readMarks(tx, tabId, actor.userId, since) : new Map()
+  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<ReadMarkRow[]> {
+    return actor.kind === 'person' ? readMarkRows(tx, tabId, actor.userId, since) : []
   }
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the

@@ -1232,6 +1232,9 @@ model SuperTabReadMark {
   conversationId String
   sequence       Int
   updatedAt      DateTime
+  /// When the person's Mark unread moved the mark back (readMarks.ts lowerReadMark); set with updatedAt in that write and
+  /// cleared by a read that raises it, so the mark's last move was a Mark unread while the two are equal. Unset otherwise.
+  loweredAt      DateTime?
 
   @@index([tabId, personId, updatedAt])
   /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.

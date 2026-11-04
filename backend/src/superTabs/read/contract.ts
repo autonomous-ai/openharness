@@ -91,6 +91,11 @@ export interface Derived {
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
+  /** A person only: those of their `readMarks` whose last move was their own Mark unread (readMarks.ts lowerReadMark), which
+   *  a client takes in place of a higher mark it holds, where it keeps the higher of the two for every other mark. Like
+   *  `readMarks`: a first load has every one of the conversations it holds, a changes read those moved since its cursor; a read
+   *  that raises the mark again ends it. Absent when there are none, and from an older backend. Never another person's. */
+  unreadMarks?: Record<string, number>
   /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
    *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
    *  Absent when there are none, and from an older backend. Never another person's. */
