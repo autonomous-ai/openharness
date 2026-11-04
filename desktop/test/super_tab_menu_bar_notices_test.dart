@@ -494,25 +494,45 @@ void main() {
       await SuperTabMentions.of(c).load();
       await SuperTabDecisions.of(c).load();
       await SuperTabReminders.of(c).load();
-      c.select('lead');
+      // Away from the tags' chat: reading it would read them.
+      c.select('offline');
       await tester.pumpAndSettle();
       return view;
     }
 
     testWidgets('a tag answered elsewhere, not read, opens at its message '
         '(#2914)', (tester) async {
-      final view = await showEverything(tester);
+      final server = ConversationServer();
+      giveEverything(server);
+      final view = await showView(tester, server);
       final c = view.controller;
       c.select('offline');
       await tester.pumpAndSettle();
-      c.openNotice('mention', 'mention-2');
+      // Answered on the phone while another chat was open here.
+      server
+        ..append('Answered later')
+        ..tag(
+          'message-${server.revision}',
+          text: 'Answered later',
+          messageSequence: server.revision,
+        );
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T08:00:00Z'
+        ..['resolvedBy'] = 'answered';
+      await c.refresh();
+      await SuperTabMentions.of(c).load();
+      await tester.pumpAndSettle();
+      final id = server.mentions.last['id'] as String;
+      expect(SuperTabActivity.of(c).notices.map((n) => n.id), contains(id));
+      c.openNotice('mention', id);
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(c.noticeRequest, isNull);
       expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(find.text('Answered later'), findsWidgets);
       expect(
         SuperTabActivity.of(c).notices.map((n) => n.id),
-        isNot(contains('mention-2')),
+        isNot(contains(id)),
       );
       await close(tester, view);
     });
@@ -522,8 +542,6 @@ void main() {
     ) async {
       final view = await showEverything(tester);
       final c = view.controller;
-      c.select('offline');
-      await tester.pumpAndSettle();
       c.openNotice('reminder', 'reminder-message-1');
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
@@ -540,6 +558,8 @@ void main() {
         '(#2914)', (tester) async {
       final view = await showEverything(tester);
       final c = view.controller;
+      c.select('lead');
+      await tester.pumpAndSettle();
       c.openNotice('agent', 'offline');
       await tester.pumpAndSettle();
       expect(c.selectedId, 'offline');
