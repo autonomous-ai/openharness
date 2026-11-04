@@ -25,7 +25,7 @@ import { createRateLimiter } from '../../lib/rateLimit.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type Conversation, type SuperTabState } from '../model.js'
 import { readConversation } from '../projects.js'
-import { deliveredCopies, threadsAcross, threadsBackfilled, type ThreadReply } from '../pageReads.js'
+import { deliveredCopies, threadsBackfilled, threadsNaming, type ThreadReply } from '../pageReads.js'
 import { isSwarmBuddyChat } from '../buddies.js'
 import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
@@ -197,8 +197,8 @@ export async function newestInThreads(db: PrismaClient, tabId: string, ranges: T
 
 /**
  * The threads of `threads` the person wrote in or was tagged in, in rows a page shows them, as threadKey(conversationId, thread).
- * Read from the threads' summaries (pageReads.ts threadsAcross): one small row per thread by root id in one read, whatever its
- * length, holding each author's newest row and every person's first tag with what a reader skips marked, so a row of theirs any
+ * Read from the threads' summaries (pageReads.ts threadsNaming): one read by root id, whatever the threads' length, of only the
+ * summaries naming the person and only their parts and tags that do, with what a reader skips marked, so a row of theirs any
  * distance back counts, as the Threads view counts it. It read each thread's newest MEMBER_SCAN rows before the mark, one $or
  * branch per thread and one $unionWith branch past the cap: the threads route's slowest read in Ken's scan of 11-04 (task #2768).
  * A Swarm Buddy chat's threads still read those rows before `sequence`: its summary cannot tell a row of a project its person
@@ -213,12 +213,8 @@ export async function namedInThreads(db: PrismaClient, tabId: string, state: Sup
   const scan = new Set(state.conversations.filter(g => !ready || isSwarmBuddyChat(g)).map(g => g.id))
   const scanned = threads.filter(t => scan.has(t.conversationId)), summed = threads.filter(t => !scan.has(t.conversationId))
   if (summed.length) {
-    const chatOf = new Map(summed.map(t => [t.thread, t.conversationId]))
-    for (const m of await threadsAcross(db, tabId, summed.map(t => ({ conversationId: t.conversationId, root: t.thread })))) {
-      if (!m.agentOnly && ((m.author.kind === 'person' && m.author.id === personId) || m.mentions.includes(personId))) {
-        named.add(threadKey(chatOf.get(m.thread)!, m.thread))
-      }
-    }
+    const naming = await threadsNaming(db, tabId, summed.map(t => ({ conversationId: t.conversationId, root: t.thread })), personId)
+    for (const t of summed) if (naming.has(`${t.conversationId}\u0000${t.thread}`)) named.add(threadKey(t.conversationId, t.thread))
   }
   if (scanned.length) {
     const rows = await newestInThreads(db, tabId, scanned.map(t => ({ conversationId: t.conversationId, thread: t.thread, sequence: { $lte: t.sequence } })),

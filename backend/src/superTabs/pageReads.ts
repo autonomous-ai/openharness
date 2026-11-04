@@ -301,14 +301,49 @@ export async function threadsAcross(tx: Transaction, tabId: string, threads: Rea
 }
 
 /**
+ * Of the threads rooted at `threads`, those whose summary shows `personId` writing or tagged in a row a person reads (what
+ * threadReplies marks agentOnly is left out), as `${conversationId}\u0000${root}`. A backfilled Swarm's only (threadsBackfilled):
+ * its summaries hold every reply. One read by `_id`, as threadsAcross, that returns only the summaries naming the person, and
+ * of each only the parts and tags that do, without their rows' authors or the root's source: the member check needs no more
+ * (inbox.ts namedInThreads). Reading them whole made the threads route return 2.8x the database bytes per call (task #2838).
+ */
+export async function threadsNaming(tx: Transaction, tabId: string, threads: ReadonlyArray<{ conversationId: string; root: string }>,
+  personId: string): Promise<Set<string>> {
+  if (!threads.length) return new Set()
+  const named = new Set(threads.map(t => `${t.conversationId}\u0000${t.root}`))
+  // A part's key fields that decide whether a reader skips its rows (threadReplies hidden).
+  const key = (of: string) => ({ root: `${of}._id.root`, kind: `${of}._id.kind`, only: `${of}._id.only`, to: `${of}._id.to` })
+  const stored = (await readBy(tx, 'SuperTabThread', 'id', [
+    { $match: { _id: { $in: [...new Set(threads.map(t => t.root))] },
+      $or: [{ parts: { $elemMatch: { '_id.author.kind': 'person', '_id.author.id': personId } } }, { 'mentions._id.person': personId }] } },
+    { $project: { tabId: 1, conversationId: 1,
+      parts: { $map: { input: { $filter: { input: '$parts', as: 'p',
+        cond: { $and: [{ $eq: ['$$p._id.author.kind', 'person'] }, { $eq: ['$$p._id.author.id', personId] }] } } }, as: 'p', in: key('$$p') } },
+      mentions: { $map: { input: { $filter: { input: '$mentions', as: 'm', cond: { $eq: ['$$m._id.person', personId] } } }, as: 'm', in: key('$$m') } },
+      // The root's row, which deliveredCopies reads: only what it decides by.
+      root: { $map: { input: { $filter: { input: '$parts', as: 'p', cond: { $eq: ['$$p._id.root', true] } } }, as: 'p',
+        in: { kind: '$$p.root.source.kind', only: '$$p.root.source.recipientsOnly', to: { $gt: [{ $size: { $ifNull: ['$$p.root.recipientIds', []] } }, 0] } } } },
+    } }]) as unknown as Array<{ _id: string; tabId: string; conversationId: string; parts: NamingPart[]; mentions: NamingPart[]
+      root: Array<{ kind?: unknown; only?: unknown; to: boolean }> }>)
+    .filter(t => t.tabId === tabId && named.has(`${t.conversationId}\u0000${t._id}`))
+  const copies = await deliveredCopies(tx, tabId, stored.flatMap(t => t.root.slice(0, 1).map(r =>
+    ({ id: t._id, source: { kind: r.kind, recipientsOnly: r.only }, recipientIds: r.to ? ['recipient'] : [] }))))
+  const hidden = (thread: string, p: NamingPart) => (p.root === true && copies.has(thread))
+    || agentOnly({ kind: p.kind, recipientsOnly: p.only }, p.to ? ['recipient'] : [])
+  return new Set(stored.filter(t => [...t.parts, ...t.mentions].some(p => !hidden(t._id, p))).map(t => `${t.conversationId}\u0000${t._id}`))
+}
+/** What threadsNaming reads of a part or tag: what threadReplies decides agentOnly by. */
+interface NamingPart { root?: boolean; kind?: unknown; only?: unknown; to?: boolean }
+
+/**
  * Rewrites the summaries of the threads rooted at `roots` in one conversation from their rows now: one document per thread
  * with a reply, as threadFacet gives it, and none for a thread left with no reply. Run in the transaction that inserts a reply
  * (refreshReplies) or deletes one, so a summary holds what its rows do: two replies at once write the same document, and one
  * of their transactions runs again.
  */
-export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<void> {
-  if (!roots.length) return
-  const { parts, mentions } = await threadFacet(tx, tabId, conversationId, roots)
+export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
+  if (!roots.length) return { parts: [], mentions: [] }
+  const facet = await threadFacet(tx, tabId, conversationId, roots), { parts, mentions } = facet
   const updatedAt = { $date: new Date().toISOString() }
   const updates = roots.flatMap(root => {
     const own = parts.filter(p => p._id.thread === root)
@@ -321,17 +356,26 @@ export async function refreshThreads(tx: Transaction, tabId: string, conversatio
   // A thread whose last reply was deleted (messageEdits.ts) has no summary left.
   const empty = roots.filter(root => !parts.some(p => p._id.thread === root && !p._id.root))
   if (empty.length) await tx.$runCommandRaw({ delete: 'SuperTabThread', deletes: [{ q: { _id: { $in: empty }, tabId, conversationId }, limit: 0 }] as unknown as Prisma.InputJsonArray })
+  return facet
 }
 
-/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads). A row that is its own
- *  thread's root, or has none (written before threads), changes no summary. */
+/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads), and answers each thread's facet
+ *  by its root, which the same transaction's Activity reads instead of the thread's rows (activity.ts writeReplyActivity). A row
+ *  that is its own thread's root, or has none (written before threads), changes no summary. */
 export async function refreshReplies(tx: Transaction, tabId: string,
-  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<void> {
+  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<Map<string, ThreadFacet>> {
   const roots = new Map<string, Set<string>>()
   for (const row of rows) {
     if (row.thread && row.thread !== row.id) roots.set(row.conversationId, (roots.get(row.conversationId) ?? new Set()).add(row.thread))
   }
-  for (const [conversationId, threads] of roots) await refreshThreads(tx, tabId, conversationId, [...threads])
+  const facets = new Map<string, ThreadFacet>()
+  for (const [conversationId, threads] of roots) {
+    const facet = await refreshThreads(tx, tabId, conversationId, [...threads])
+    for (const root of threads) {
+      facets.set(root, { parts: facet.parts.filter(p => p._id.thread === root), mentions: facet.mentions.filter(m => m._id.thread === root) })
+    }
+  }
+  return facets
 }
 
 /** How long this process trusts what it last read of a Swarm's backfill marker. */

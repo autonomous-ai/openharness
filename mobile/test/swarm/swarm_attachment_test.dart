@@ -10,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_attachment.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_file_download.dart';
 
+import '../temp_folder.dart';
 import 'swarm_attachment_fakes.dart';
 
 /// A picture in a chat shows in place, as Slack shows one (Dee, 10-29): a
@@ -38,9 +39,8 @@ void main() {
     storage = FakeFileStorage();
     store = storeIn(root, storage);
   });
-  tearDown(() {
-    if (root.existsSync()) root.deleteSync(recursive: true);
-  });
+  // A test can end with a fetch still writing its picture in.
+  tearDown(() => deleteTempFolder(root));
 
   Finder key(String value) => find.byKey(ValueKey(value));
   final chip = key('chip');

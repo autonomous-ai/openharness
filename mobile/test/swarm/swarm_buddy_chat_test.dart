@@ -545,8 +545,8 @@ void main() {
       ]);
     });
 
-    testWidgets('an offline Codex Buddy starts again with Claude Code, since '
-        'the server refuses a Codex Buddy for now', (tester) async {
+    // Ken, 11-04 (#2832): a Codex Buddy runs as a Claude one does.
+    testWidgets('an offline Codex Buddy starts again on Codex', (tester) async {
       final fake = backend(
         buddy: {
           ...wren(downSince: offline),
@@ -559,7 +559,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-buddy-start-again'),
-          matching: find.text('Start with Claude Code'),
+          matching: find.text('Start again'),
         ),
         findsOneWidget,
       );
@@ -571,9 +571,20 @@ void main() {
           'type': 'buddy.create',
           'projectId': project,
           'machineId': 'mac-1',
-          'engine': 'claude',
+          'engine': 'codex',
         },
       ]);
+    });
+
+    testWidgets('⋮ has Find in chat, which opens the find field (#2826)', (
+      tester,
+    ) async {
+      await pump(tester, backend(buddy: wren()));
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Find in chat'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-find-field'), findsOneWidget);
     });
 
     testWidgets('⋮ holds the chat\'s Notifications too: Muted is kept, and '
@@ -920,26 +931,18 @@ void main() {
       expect(key('swarm-buddy-start-button'), findsNothing);
     });
 
-    testWidgets('Codex is offered turned off, with the reason the server '
-        'refuses it beside it, as on Desktop; Claude stays picked', (
-      tester,
-    ) async {
+    testWidgets('Codex is offered as Claude is, with nothing beside it, as on '
+        'Desktop (#2832)', (tester) async {
       final fake = backend(machines: [machine('mac-1', 'Tonys-MacBook-Pro')]);
       await pump(tester, fake);
 
-      expect(
-        find.text(
-          'A Codex Buddy is not available yet: Codex would run some commands '
-          'outside its sandbox without asking. Choose Claude Code.',
-        ),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Codex Buddy'), findsNothing);
       await tester.tap(key('swarm-buddy-engine-codex'));
       await tester.pump();
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();
 
-      expect(fake.commands.single['engine'], 'claude');
+      expect(fake.commands.single['engine'], 'codex');
     });
 
     testWidgets('a start that failed says why, and Start again asks with the '
@@ -973,7 +976,7 @@ void main() {
       });
     });
 
-    testWidgets('a Codex start that failed is asked again with Claude Code', (
+    testWidgets('a Codex start that failed is asked again on Codex', (
       tester,
     ) async {
       final fake = backend(
@@ -992,7 +995,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-buddy-start-again'),
-          matching: find.text('Start with Claude Code'),
+          matching: find.text('Start again'),
         ),
         findsOneWidget,
       );
@@ -1003,7 +1006,7 @@ void main() {
         'type': 'buddy.create',
         'projectId': project,
         'machineId': 'mac-1',
-        'engine': 'claude',
+        'engine': 'codex',
       });
     });
 

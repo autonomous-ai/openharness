@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../notify/system_notices.dart';
+import 'swarm_activity_feed.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
@@ -47,6 +48,8 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
       conversationId: need.conversationId,
       messageId: need is SwarmMentionNeed ? need.mention.messageId : null,
       decisionId: need is SwarmDecisionNeed ? need.decision.id : null,
+      // A tag in a reply only in its thread opens that thread.
+      threadId: need is SwarmMentionNeed ? need.mention.threadId : null,
     ),
   );
 }
@@ -115,6 +118,9 @@ class SwarmAnnouncer {
       for (final MapEntry(:key, :value) in _chats.entries.toList()) {
         if (!readable.contains(value.swarmId)) _takeDownChat(key);
       }
+      for (final MapEntry(:key, :value) in _replies.entries.toList()) {
+        if (!readable.contains(value.swarmId)) _takeDownReply(key);
+      }
     }
     if (needs.length != _badge) {
       _badge = needs.length;
@@ -169,6 +175,7 @@ class SwarmAnnouncer {
           conversationId: chatId,
           messageId: null,
           decisionId: null,
+          threadId: null,
         ),
       )),
     );
@@ -187,6 +194,60 @@ class SwarmAnnouncer {
         _takeDownChat(key);
       }
     }
+  }
+
+  /// The notices of replies in threads the person is in: each key's Swarm
+  /// and Activity row.
+  final _replies = <String, ({String swarmId, String rowId})>{};
+
+  /// Posts [entry]'s notice, once: a reply in a thread of Swarm [swarmId]'s
+  /// project [project] that the person is in ([SwarmActivityFeed.onReply]).
+  /// Names who replied and the project only, as [swarmNotice] does.
+  void announceReply({
+    required String swarmId,
+    required SwarmActivityEntry entry,
+    required String project,
+  }) {
+    if (quiet(null)) return;
+    final key = 'reply:$swarmId:${entry.id}';
+    if (!told.add(key)) return;
+    _replies[key] = (swarmId: swarmId, rowId: entry.id);
+    final who = entry.actorName.isEmpty ? 'Someone' : entry.actorName;
+    unawaited(
+      notices.showSwarm((
+        key: key,
+        title: '$who replied in a thread',
+        subtitle: project,
+        body: 'Open Harness to read it.',
+        target: (
+          swarmId: swarmId,
+          conversationId: entry.conversationId,
+          messageId: entry.messageId,
+          decisionId: null,
+          // A reply only in its thread is found there, not in the chat.
+          threadId: entry.threadId,
+        ),
+      )),
+    );
+  }
+
+  /// Swarm [swarmId]'s Activity was read and lists [rows]: a reply's notice
+  /// whose row is read now, or no longer listed, is taken down.
+  void repliesRead(String swarmId, Iterable<SwarmActivityEntry> rows) {
+    final unread = {
+      for (final row in rows)
+        if (!row.read) row.id,
+    };
+    for (final MapEntry(:key, :value) in _replies.entries.toList()) {
+      if (value.swarmId == swarmId && !unread.contains(value.rowId)) {
+        _takeDownReply(key);
+      }
+    }
+  }
+
+  void _takeDownReply(String key) {
+    _replies.remove(key);
+    unawaited(notices.cancelSwarm(key));
   }
 
   void _takeDownChat(String key) {
@@ -209,13 +270,16 @@ class SwarmAnnouncer {
     for (final key in _chats.keys.toList()) {
       _takeDownChat(key);
     }
+    for (final key in _replies.keys.toList()) {
+      _takeDownReply(key);
+    }
     settle(const []);
   }
 }
 
 /// The notices this phone has posted for one account, by their keys
 /// ([SwarmNeed.key]: the decision's or tag's id, or the work's assignment and
-/// status): what [SwarmAnnouncer] never posts twice, however often its need
+/// status; a reply's Activity row id): what [SwarmAnnouncer] never posts twice, however often its need
 /// leaves the reads and comes back. [SwarmHost] keeps one for the life of the
 /// app, so a session made again for the same account remembers too.
 ///
