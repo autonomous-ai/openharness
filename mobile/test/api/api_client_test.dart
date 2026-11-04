@@ -150,6 +150,33 @@ void main() {
 
   Map<String, Object?> ok(Object? data) => {'success': true, 'data': data};
 
+  group('the account name (#2655)', () {
+    test('PATCHes /api/auth/me with the name, signed as the phone, and answers the profile', () async {
+      backend.answer = (_, _) => (
+        status: 200,
+        body: ok({'user': {'id': 'u', 'name': 'Ada King', 'email': 'ada@example.com'}}),
+      );
+      final me = await client(_Tokens(['phone-token'])).updateMe(name: 'Ada King');
+      expect((me?['user'] as Map)['name'], 'Ada King');
+      final request = backend.requests.single;
+      expect(request.method, 'PATCH');
+      expect(request.path, '/api/auth/me');
+      expect(request.headers.value('authorization'), 'Bearer phone-token');
+      expect(jsonDecode(utf8.decode(request.body)), {'name': 'Ada King'});
+    });
+
+    test("a refusal comes back in the backend's words, with its status", () async {
+      backend.answer = (_, _) => (
+        status: 400,
+        body: {'success': false, 'error': {'code': 'INVALID_NAME', 'message': 'Use a name, not an email address.'}},
+      );
+      await expectLater(
+        client(_Tokens(['t'])).updateMe(name: 'a@b.c'),
+        throwsA(isA<ApiException>().having((e) => e.message, 'message', 'Use a name, not an email address.').having((e) => e.status, 'status', 400)),
+      );
+    });
+  });
+
   group('a Swarm read', () {
     test('answers the value, signed with this sign-in, its query kept', () async {
       backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));
