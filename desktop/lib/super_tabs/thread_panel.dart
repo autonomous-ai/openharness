@@ -155,6 +155,29 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _reveal(jump, messages.indexOf(target) / messages.length, 0);
   }
 
+  /// The reply the thread was opened at ([SuperTabController.threadTarget]),
+  /// once [messages] hold it: brought into view and lit, as the day pill's
+  /// choice is, and the list reads on from it rather than following the end.
+  void _takeTarget(List<SuperTabMessage> messages) {
+    final target = c.threadTarget;
+    if (target == null || target.root != widget.root) return;
+    final at = messages.indexWhere((m) => m.id == target.messageId);
+    if (at < 0) return;
+    c.threadTarget = null;
+    final jump = ++_jumps;
+    // After the frame: a panel just opened has no list to hold before it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || jump != _jumps) return;
+      _scroll.holdPlace();
+      _litTimer?.cancel();
+      setState(() => _target = _lit = target.messageId);
+      _litTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _lit = null);
+      });
+      _reveal(jump, at / messages.length, 0);
+    });
+  }
+
   /// The list is lazy: jump near the target's place ([at], its share of the
   /// thread) until its row is built, then bring it into view.
   void _reveal(int jump, double at, int attempt) {
@@ -412,6 +435,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final messages = c.threadMessages(widget.root);
+    _takeTarget(messages);
     final root = messages.where((m) => m.id == widget.root).firstOrNull;
     final replies = messages.where((m) => m.id != widget.root).toList();
     final pending = c

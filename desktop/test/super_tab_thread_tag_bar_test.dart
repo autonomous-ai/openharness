@@ -88,9 +88,9 @@ void main() {
       of: find.descendant(of: panel(), matching: find.text(text)),
       matching: find.byType(SuperTabMessageHighlight),
     );
-    return tester.widgetList<SuperTabMessageHighlight>(highlight).any(
-      (h) => h.on,
-    );
+    return tester
+        .widgetList<SuperTabMessageHighlight>(highlight)
+        .any((h) => h.on);
   }
 
   group('the thread tags of a chat', () {
@@ -178,7 +178,7 @@ void main() {
       await settle(tester);
     });
 
-    testWidgets('a thread read on another device clears the row', (
+    testWidgets('a thread read from the Threads view clears the row', (
       tester,
     ) async {
       final server = threads(1);
