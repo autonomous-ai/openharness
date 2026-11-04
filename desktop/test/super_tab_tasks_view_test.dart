@@ -12,7 +12,7 @@ import 'support/super_tab_fixture.dart';
 final _now = DateTime(2026, 11, 4, 9);
 const _repo = 'https://github.com/autonomous-ai/openharness/pull';
 
-Map<String, dynamic> _task(
+Map<String, dynamic> taskFixture(
   String id,
   String title,
   int number, {
@@ -100,9 +100,14 @@ ConversationServer tasksServer({bool empty = false}) {
   );
   if (!empty) {
     (server.state['conversations'] as List)..addAll(<Map<String, dynamic>>[
-      _task('shipped-means', 'Shipped means merged', 10, requester: 'scholes'),
-      _task('preview', 'Remove the old preview route', 11),
-      _task(
+      taskFixture(
+        'shipped-means',
+        'Shipped means merged',
+        10,
+        requester: 'scholes',
+      ),
+      taskFixture('preview', 'Remove the old preview route', 11),
+      taskFixture(
         'tag',
         'One tag per ask',
         12,
@@ -110,7 +115,7 @@ ConversationServer tasksServer({bool empty = false}) {
         status: 'working',
         pullRequest: 2867,
       ),
-      _task(
+      taskFixture(
         'test-copy',
         'First run of the test copy',
         13,
@@ -123,7 +128,7 @@ ConversationServer tasksServer({bool empty = false}) {
           'since': 1,
         },
       ),
-      _task(
+      taskFixture(
         'sender',
         'Task chat keeps its sender',
         9,
@@ -280,7 +285,7 @@ void main() {
   ) async {
     final server = tasksServer();
     (server.state['conversations'] as List).add(
-      _task(
+      taskFixture(
         'later',
         'Dial thread alerts',
         20,
@@ -441,7 +446,7 @@ void main() {
     ConversationServer queued() {
       final server = tasksServer();
       (server.state['conversations'] as List).add(
-        _task('third', 'Rename the round dial', 14),
+        taskFixture('third', 'Rename the round dial', 14),
       );
       return server;
     }
