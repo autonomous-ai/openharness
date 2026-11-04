@@ -45,6 +45,26 @@ function decide(tool: string, input: Record<string, unknown>, guard = script): s
 }
 const bash = (command: string) => decide('Bash', { command, description: 'x' })
 
+// Seen on a real Windows PC: `D:x` reads another drive's current folder and `ls C:` a drive's, and a split at ":" hid both.
+describe('a Windows Buddy and a drive named in a word', () => {
+  const windows = join(root, 'buddy-guard-windows.mjs')
+  writeFileSync(windows, readFileSync(script, 'utf8').replace("const OS_WINDOWS = process.platform === 'win32'", 'const OS_WINDOWS = true'))
+  const onWindows = (command: string) => decide('Bash', { command, description: 'x' }, windows)
+
+  it('refuses it, alone or after an option', () => {
+    for (const command of ['cat C:secret.txt', 'cat D:x', 'ls C:', 'grep x --file=D:x a.txt']) expect(onWindows(command), command).toBe('deny')
+  })
+
+  it('still lets the folder\'s own names through', () => {
+    for (const command of ['cat a.txt', 'git show HEAD:a.txt', 'git log main..HEAD']) expect(onWindows(command), command).toBe(bash(command))
+    expect(onWindows('cat a.txt')).toBe('allow')
+  })
+
+  it('leaves other systems alone: a one-letter name there is a file', () => {
+    expect(bash('cat C:a.txt')).toBe(bash('cat a.txt'))
+  })
+})
+
 describe('a one Buddy\'s proposal carries a summary (security review of #2530)', () => {
   const proposal = (scope: string) => JSON.stringify({ conversationId: 'c', ownerMessageId: 'm', projectId: 'p', goal: 'Cut API CPU', scope, priority: 'normal' })
   const pasted = [['a code block', 'See:\n```\nconst secret = 1\n```'], ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')]]
