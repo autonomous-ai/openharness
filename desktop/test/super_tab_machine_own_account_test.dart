@@ -51,6 +51,10 @@ Future<dynamic> _mount(
   ConversationServer server, {
   Brightness brightness = Brightness.light,
 }) async {
+  // The design tokens follow the app's brightness, which main.dart sets from the theme.
+  final previous = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = previous);
   final c = server.controller();
   await c.refresh();
   await tester.pumpWidget(
