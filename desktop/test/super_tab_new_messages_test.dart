@@ -530,6 +530,31 @@ void main() {
     expect(c.unread(c.selected!), isFalse);
   });
 
+  // Tern's test of #2896: a click on the bar left focus nowhere in the chat, so
+  // a later Esc never reached it.
+  testWidgets('after a click on the bar, Esc still dismisses it once the line '
+      'is above again', (tester) async {
+    final server = _server(60)..markReadElsewhere('lead', 20);
+    final c = await show(tester, server);
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: tester.getCenter(find.byKey(_jump)));
+    await mouse.down(tester.getCenter(find.byKey(_jump)));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    expect(c.unread(c.selected!), isFalse);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
   test('the bar counts its messages, and says when there are more', () {
     expect(SuperTabUnreadBar.label(1, false), '1 new message · Jump');
     expect(SuperTabUnreadBar.label(2, false), '2 new messages · Jump');
