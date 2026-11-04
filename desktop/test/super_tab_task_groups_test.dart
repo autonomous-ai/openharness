@@ -147,18 +147,14 @@ void main() {
     await closeGrouped(tester, c);
   });
 
-  testWidgets('a project\'s badge adds the tasks that need the reader', (
+  // Task #2927: the tasks that need the reader are on their cards and in
+  // Activity; the project's number is its own chat's tags.
+  testWidgets('a project\'s badge leaves out the tasks that need the reader', (
     tester,
   ) async {
     final c = await pumpGrouped(tester, groupedServer());
     // `mine` waits on the reader by name; nothing in alpha does.
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-mentions-lead')),
-        matching: find.text('1'),
-      ),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('super-mentions-lead')), findsNothing);
     expect(
       find.byKey(const ValueKey('super-mentions-alpha-chat')),
       findsNothing,
