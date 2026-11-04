@@ -97,6 +97,7 @@ import { OVERDUE_PER_PASS, overdueDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
+import { recordMessageReach } from './messageReachStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -3000,6 +3001,16 @@ export class SuperTabStore {
     const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
     // Only the rows this reader is shown get file links, each signed afresh for this read (fileLinks.ts).
     const linked = await this.linked(tabId, shown)
+    // A person's read of new messages is where a message reaches them (task #2840): every app reads `after` once a push or its
+    // poll says the conversation moved. Their own messages, and any other read (the page shown, a thread, a scroll back) are
+    // not a message reaching its reader. Timed only once the read can no longer fail.
+    if (forward && readerKind(actor, buddy) === 'person' && actor.kind === 'person') {
+      const now = this.now()
+      for (const m of shown) {
+        const author = m.author as unknown as Author
+        if (author.kind !== 'person' || author.id !== actor.userId) recordMessageReach({ reader: 'person', via: 'read' }, now - m.createdAt.getTime())
+      }
+    }
     const byMessage = deliveriesByMessage(deliveries)
     return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
@@ -4032,6 +4043,13 @@ export class SuperTabStore {
       if (!live) await restoreDelivery(tx, delivery)
       // A claim that gets in ends the failing record. Unset, never null: a missing field is a real absence, which the first failure's
       // isSet: false branch matches and which leaves no keys in the document.
+      // The message reached its agent (task #2840): its host's first acknowledgement that it was typed, timed from the delivery's
+      // creation, which is written with its message. Once committed, so a retried transaction times it once; a repeated ack
+      // finds deliveredAt set and times nothing.
+      if (action.type === 'ack' && !action.uncertain && !delivery.deliveredAt) {
+        const reader = isBuddy(agent(state, agentId)) ? 'buddy' as const : 'agent' as const, ms = this.now() - delivery.createdAt.getTime()
+        afterCommit(tx, () => recordMessageReach({ reader, via: 'delivery' }, ms))
+      }
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
         ...(action.type === 'claim' ? { claimFailingSince: { unset: true }, claimFailedAt: { unset: true }, claimFailures: { unset: true },
           claimFailure: { unset: true } } : {}),
