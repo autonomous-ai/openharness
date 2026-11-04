@@ -117,6 +117,9 @@ class SuperTabMentions extends ChangeNotifier {
   int? _epoch;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
+
+  /// Whether the tags have been read once, so an empty list means none.
+  bool get loaded => _seen != null;
   Future<void>? _loading;
   // Something changed while a read was under way: read once more after it.
   bool _dirty = false;

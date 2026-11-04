@@ -200,6 +200,36 @@ void main() {
   );
 
   testWidgets(
+    'decisions read before the tags still open on the tab with unread rows',
+    (tester) async {
+      await withClock(Clock.fixed(_now), () async {
+        final server = swarm()..followedThreads = null;
+        _tags(server, 1);
+        final tags = server.holdMentions = Completer<void>();
+        // The Swarm and its decisions are read; the tags are not yet.
+        final activity = (await tester.runAsync(() async {
+          final c = server.controller(account: 'owner');
+          addTearDown(() async {
+            await c.flush();
+            c.dispose();
+          });
+          await c.refresh();
+          final a = SuperTabActivity.of(c);
+          await a.decisions.load();
+          return a;
+        }))!;
+        expect(activity.mentions.loaded, isFalse);
+        await show(tester, activity);
+        tags.complete();
+        await tester.runAsync(() => activity.mentions.load());
+        await tester.pumpAndSettle();
+        expect(find.text('Tag number 0'), findsOneWidget);
+        expect(find.text('Nothing needs you'), findsNothing);
+      });
+    },
+  );
+
+  testWidgets(
     'the Needs you tab shows the count in red and the others in grey',
     (tester) async {
       await withClock(Clock.fixed(_now), () async {

@@ -64,7 +64,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     super.initState();
     _activity.opened();
     _tab = _opening();
-    _settled = _activity.decisions.loaded || _activity.decisions.error != null;
+    _settled = _readEnough(_activity);
   }
 
   @override
@@ -93,6 +93,13 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   /// The reader acted: the tab they are on stays, whatever arrives.
   void _settle() => _settled = true;
+
+  /// Whether the opening tab can be chosen for good: the decisions and the
+  /// tags have each answered or failed. Settling on the decisions alone left
+  /// the view on an empty Needs you while unread tags were still on their way.
+  static bool _readEnough(SuperTabActivity a) =>
+      (a.decisions.loaded || a.decisions.error != null) &&
+      (a.mentions.loaded || a.mentions.error != null);
 
   void _choose(_Tab tab) => setState(() {
     _tab = tab;
@@ -680,7 +687,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       final a = _activity;
       if (!_settled) {
         _tab = _opening();
-        _settled = a.decisions.loaded || a.decisions.error != null;
+        _settled = _readEnough(a);
       }
       final error = a.mentions.error ?? a.decisions.error ?? a.attention.error;
       final body = switch (_tab) {
@@ -855,25 +862,29 @@ class _ActivityRowState extends State<_ActivityRow> {
           : grid.AppPalette.textFaint,
     ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
     final lead = widget.previewLead;
-    return Padding(
-      padding: const EdgeInsets.only(top: 1),
-      child: Text.rich(
-        TextSpan(
-          style: base,
-          children: [
-            if (lead != null) ...[
-              TextSpan(
-                text: text.substring(0, lead),
-                style: TextStyle(color: DesktopChrome.foreground),
-              ),
-              TextSpan(text: text.substring(lead)),
-            ] else
-              TextSpan(text: text),
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 1),
+        Text.rich(
+          TextSpan(
+            style: base,
+            children: [
+              if (lead != null) ...[
+                TextSpan(
+                  text: text.substring(0, lead),
+                  style: TextStyle(color: DesktopChrome.foreground),
+                ),
+                TextSpan(text: text.substring(lead)),
+              ] else
+                TextSpan(text: text),
+            ],
+          ),
+          maxLines: widget.previewLines,
+          overflow: TextOverflow.ellipsis,
         ),
-        maxLines: widget.previewLines,
-        overflow: TextOverflow.ellipsis,
-      ),
+      ],
     );
   }
 
@@ -926,18 +937,25 @@ class _ActivityRowState extends State<_ActivityRow> {
                           SizedBox(
                             width: grid.AppDesktop.controlGap,
                             child: unread
-                                ? Padding(
-                                    padding: const EdgeInsets.only(top: 13),
-                                    child: DecoratedBox(
-                                      key: const ValueKey('super-activity-dot'),
-                                      decoration: BoxDecoration(
-                                        color: DesktopChrome.accent,
-                                        shape: BoxShape.circle,
+                                ? Column(
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 13),
+                                      DecoratedBox(
+                                        key: const ValueKey(
+                                          'super-activity-dot',
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: DesktopChrome.accent,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const SizedBox.square(
+                                          dimension: 7,
+                                        ),
                                       ),
-                                      child: const SizedBox.square(
-                                        dimension: 7,
-                                      ),
-                                    ),
+                                    ],
                                   )
                                 : null,
                           ),
@@ -992,18 +1010,17 @@ class _ActivityRowState extends State<_ActivityRow> {
                                   ],
                                 ),
                                 _preview(),
-                                if (widget.more != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 3),
-                                    child: Text(
-                                      widget.more!,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(
-                                        color: DesktopChrome.accent,
-                                      ),
+                                if (widget.more != null) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    widget.more!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: DesktopChrome.metadata(
+                                      color: DesktopChrome.accent,
                                     ),
                                   ),
+                                ],
                                 ?widget.extra,
                               ],
                             ),
@@ -1038,13 +1055,19 @@ class _ActivityRowState extends State<_ActivityRow> {
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: grid.AppDesktop.controlGap,
-                                vertical: 3,
                               ),
-                              child: Text(
-                                action.label,
-                                style: DesktopChrome.metadata(
-                                  color: DesktopChrome.foreground,
-                                ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    action.label,
+                                    style: DesktopChrome.metadata(
+                                      color: DesktopChrome.foreground,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                ],
                               ),
                             ),
                           ),
