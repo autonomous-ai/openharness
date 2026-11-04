@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -7,6 +7,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { localReportMemory, type ReportMemory } from '../src/superTabs/machineReports.js'
+import { clock as stamps } from '../src/superTabs/parts/index.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { poolRows } from './hostRows.test-support.js'
 import { planDatabase } from './plans.test-support.js'
@@ -32,11 +33,20 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+// Only Date, with part stamps read from it too (parts/clock.ts holds the real Date.now), so a stamp and a cursor read one clock.
+const clock = { get now() { return Date.now() }, set now(at: number) { vi.setSystemTime(at) } }
+let start = Date.now(), stamped = 0
+beforeEach(() => {
+  start += 3_600_000
+  vi.useFakeTimers({ toFake: ['Date'], now: start })
+  vi.spyOn(stamps, 'next').mockImplementation(() => stamped = Math.max(Date.now(), stamped + 1))
+})
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
 /** A server that remembers no full report: every reading runs in full. */
 const never: ReportMemory = { get: async () => undefined, set: async () => {}, sweepDue: async () => false }
 
 async function swarm(memory: 'fast' | 'full' = 'fast') {
-  const clock = { now: 10_000_000 }
   const local = localReportMemory(() => clock.now)
   const reports: ReportMemory = memory === 'full' ? never : { get: (t, m) => local.get(t, m), set: (t, m, r) => local.set(t, m, r), sweepDue: async () => false }
   const store = new SuperTabStore(db, () => clock.now, null, { reports })
@@ -116,9 +126,13 @@ describe('a client that asks', () => {
     const changes = await f.light()
     expect(changes.machines.map(m => m.key)).toEqual(['mac'])
     expect(changes.machineReadings).toEqual([])
+    // Saving a machine again starts a new generation, whose first reading is content too. Then past the cursor's overlap.
+    const generation = (await poolRows(f.store, host, 'mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await f.beat({ generation })
+    f.clock.now += MINUTE
     const cursor = (await f.reads.firstLoad(owner, f.tab) as { cursor: string }).cursor
-    f.clock.now += 2 * MINUTE
-    await f.beat(busier)
+    f.clock.now += MINUTE
+    await f.beat({ ...busier, generation })
     const next = await f.reads.changes(owner, f.tab, cursor, undefined, { lightMachines: true }) as { machines: unknown[]; machineReadings: Array<{ key: string }> }
     expect(next.machines).toEqual([])
     expect(next.machineReadings.map(r => r.key)).toEqual(['mac'])
@@ -131,6 +145,7 @@ describe('a client that asks', () => {
     const part = (await f.today()).machines[0]!
     expect(line.receivedAt).toBe(part.data.observation!.receivedAt)
     // A machine that stopped reporting has no new line, and what the client holds goes stale as a part would.
+    f.clock.now += MINUTE
     const cursor = (await f.reads.firstLoad(owner, f.tab) as { cursor: string }).cursor
     f.clock.now += 5 * MINUTE
     const silent = await f.reads.changes(owner, f.tab, cursor, undefined, { lightMachines: true }) as { machines: unknown[]; machineReadings: unknown[] }
