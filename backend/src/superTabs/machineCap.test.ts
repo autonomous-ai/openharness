@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import { MACHINE_LIMIT_MESSAGE } from './machines.js'
+import { hostTab } from './read/hostRows.js'
 
 const actorOf = (userId: string): Extract<Actor, { kind: 'person' }> => ({ kind: 'person', userId, email: `${userId}@example.com` })
 const own = (userId: string) => ({ machineOwnerId: userId, contributorId: userId, hostGrant: null })
@@ -55,5 +56,52 @@ describe('how many machines one person adds to a Swarm', () => {
 
   it('still saves the settings of a machine already in it at the limit', () => {
     expect(contribute(swarm({ owner: { real: 20 } }), 'owner', 'owner-m5').machines).toHaveLength(20)
+  })
+})
+
+// Old CLIs know only MACHINES_FULL as final and would retry the new code for good; their host stops once its roster row stops
+// asking (cli host.spec "stops after %s until the roster stops asking"), so the server asks no host to join when it would refuse.
+describe('which hosts are asked to join', () => {
+  const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
+  const hostUser = (sub: string) => ({ sub, email: `${sub}@example.com`, role: 'user', autonomousEnv: 'test' }) as never
+  const lookups = (teams: string[]) => ({ people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: teams.map(machineId => ({ machineId })), githubApp: false })
+  /** [state] with the owner's Lead on [machineId], which is not one of the Swarm's machines. */
+  function leadOn(start: ReturnType<typeof swarm>, machineId: string) {
+    let state = start
+    const run = (command: Command, operationId: string) => {
+      const effects = applyCommand(state, actorOf('owner'), command, { operationId, now: 1000, contribution: own('owner') })
+      state = effects.state
+      return effects.result
+    }
+    const project = run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }, 'p') as { conversationId: string }
+    const lead = run({ type: 'agent.add', conversationId: project.conversationId, harnessId: 'pm', machineId, name: 'Lead', configuration, lead: true }, 'a').agentId as string
+    return { state, lead }
+  }
+  const joinSwarm = async ({ state, lead }: ReturnType<typeof leadOn>, machineId: string) =>
+    (await hostTab('swarm', state, machineId, hostUser('owner'), null, lookups([]))).roster.find(r => 'agent' in r && r.agent.id === lead)
+  const joinTeam = async (state: ReturnType<typeof swarm>, teams: string[]) =>
+    (await hostTab('swarm', state, 'owner-m0', hostUser('owner'), null, lookups(teams))).roster.flatMap(r => 'joinTeam' in r ? [r.joinTeam.machineId] : [])
+
+  it('asks the owner\'s Lead machine to join below 20, and not at 20', async () => {
+    expect(await joinSwarm(leadOn(swarm({ owner: { real: 19 }, peer: { real: 20 } }), 'laptop'), 'laptop')).toMatchObject({ joinSwarm: true })
+    expect(await joinSwarm(leadOn(swarm({ owner: { real: 20 } }), 'laptop'), 'laptop')).toMatchObject({ joinSwarm: false })
+  })
+
+  it('asks again once a machine of theirs is gone', async () => {
+    const f = leadOn(swarm({ owner: { real: 20 } }), 'laptop')
+    f.state.machines = f.state.machines!.filter(m => m.machineId !== 'owner-m3')
+    expect(await joinSwarm(f, 'laptop')).toMatchObject({ joinSwarm: true })
+  })
+
+  it('still asks the Lead on its owner\'s Buddy-only record at 20: that record is counted already', async () => {
+    const state = swarm({ owner: { real: 20 } })
+    state.machines!.find(m => m.machineId === 'owner-m19')!.buddyOnly = true
+    expect(await joinSwarm(leadOn(state, 'owner-m19'), 'owner-m19')).toMatchObject({ joinSwarm: true })
+  })
+
+  it('asks a Mac\'s Team accounts to join only while their person has room for them', async () => {
+    expect(await joinTeam(swarm({ owner: { real: 20, team: 18 } }), ['team-a', 'team-b', 'team-c'])).toEqual(['team-a', 'team-b'])
+    expect(await joinTeam(swarm({ owner: { real: 20, team: 20 } }), ['team-a'])).toEqual([])
+    expect(await joinTeam(swarm({ owner: { real: 20, team: 0 } }), ['team-a'])).toEqual(['team-a'])
   })
 })
