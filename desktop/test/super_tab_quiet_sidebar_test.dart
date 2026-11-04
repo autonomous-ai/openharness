@@ -122,22 +122,23 @@ void main() {
   });
 
   testWidgets(
-    'a project row has no chevron; a second click shows its workgroups',
+    'a project row has no chevron; every click selects its chat and lists '
+    'no tasks',
     (tester) async {
       final c = await show(tester);
       expect(
         find.byKey(const ValueKey('super-project-toggle-lead')),
         findsNothing,
       );
-      await c.select('lead');
+      await c.select('offline');
       await tester.pump();
-      expect(c.expandedProjects, isNot(contains('lead')));
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pump();
-      expect(c.expandedProjects, contains('lead'));
+      expect(c.selectedId, 'lead');
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pump();
-      expect(c.expandedProjects, isNot(contains('lead')));
+      expect(c.selectedId, 'lead');
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
     await tester.pump(const Duration(seconds: 1));
     },
   );

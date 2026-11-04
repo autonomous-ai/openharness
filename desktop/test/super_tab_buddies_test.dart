@@ -11,7 +11,6 @@ import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/task_groups.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
@@ -1477,15 +1476,8 @@ void main() {
           },
         });
         final c = await show(tester, server);
-        if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
-        // Workgroups with no work are in The rest, unfolded here (#2309).
-        c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await tester.pumpAndSettle();
 
-        expect(
-          find.byKey(const ValueKey('super-group-offline')),
-          findsOneWidget,
-        );
         expect(find.byKey(const ValueKey('super-group-private')), findsNothing);
         expect(find.text('Pricing talk'), findsNothing);
         expect(await c.select('private'), isTrue);

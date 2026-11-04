@@ -9,8 +9,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
 
-/// Set to a folder to write the project rows' pictures there: a project
-/// collapsed and expanded, in both themes.
+/// Set to a folder to write the project rows' pictures there, in both themes.
 final shots = Platform.environment['SUPER_TAB_SIDEBAR_SHOTS'];
 
 void main() {
@@ -64,10 +63,7 @@ void main() {
         );
       }
 
-      controller.expandedProjects.clear();
       await take('collapsed');
-      controller.toggleProject('lead');
-      await take('expanded');
       await tester.pumpWidget(const SizedBox());
       await controller.flush();
       controller.dispose();

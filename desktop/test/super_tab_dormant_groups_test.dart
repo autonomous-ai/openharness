@@ -42,12 +42,11 @@ void main() {
       });
   });
 
-  test('a first load has only active groups; expanding the project reads the others', () async {
+  test('a first load has only active groups; reading the project\'s closed ones reads the others', () async {
     final c = open();
     await c.refresh();
     expect(c.snapshot!.conversation('old'), isNull);
     expect(c.dormantLoaded('lead'), isFalse);
-    c.toggleProject('lead');
     await c.loadDormant('lead');
     expect(reads, ['/api/super-tabs/tab/groups?dormant=1&projectId=lead']);
     expect(c.dormantLoaded('lead'), isTrue);
@@ -58,10 +57,7 @@ void main() {
     expect(finished.archived, isFalse);
     expect(finished.closed, isTrue);
     expect(c.snapshot!.conversation('offline')!.closed, isFalse);
-    // Read once: collapsing and expanding again reads nothing more.
-    c
-      ..toggleProject('lead')
-      ..toggleProject('lead');
+    // Read once: asking again reads nothing more.
     await c.loadDormant('lead');
     expect(reads, hasLength(1));
   });
@@ -70,7 +66,6 @@ void main() {
     server.parts.dormantPage = 1;
     final c = open();
     await c.refresh();
-    c.toggleProject('lead');
     await c.loadDormant('lead');
     expect(c.hasEarlierDormant('lead'), isTrue);
     final first = c.snapshot!.conversations.where((g) => g.closed).length;
@@ -248,13 +243,12 @@ void main() {
       await again.refresh();
       await again.flush();
       expect(again.draft('finished'), 'A last note');
-      again.toggleProject('lead');
       await again.loadDormant('lead');
       expect(again.unread(again.snapshot!.conversation('finished')!), isFalse);
     },
   );
 
-  test('a reload while closed groups are being read reads them again for the new parts', () async {
+  test('a reload while closed groups are being read keeps none of that read; the next ask reads them for the new parts', () async {
     Completer<void>? hold;
     reads = [];
     final c = SuperTabController(
@@ -272,7 +266,6 @@ void main() {
     );
     await c.refresh();
     hold = Completer<void>();
-    c.toggleProject('lead');
     final stale = c.loadDormant('lead');
     // Who may see what changed meanwhile: the next read loads in full.
     server.parts.epoch++;
@@ -281,8 +274,12 @@ void main() {
     hold = null;
     waiting.complete();
     await stale;
-    // The reload asked for them again by itself: nothing else asks.
     await pumpEventQueue();
+    // Read for the parts before: not kept. The sidebar lists no closed
+    // tasks, so nothing asks again by itself (task #2569).
+    expect(c.dormantLoaded('lead'), isFalse);
+    expect(c.snapshot!.conversation('old'), isNull);
+    await c.loadDormant('lead');
     expect(reads.where((p) => p.contains('dormant=1')), hasLength(2));
     expect(c.dormantLoaded('lead'), isTrue);
     expect(c.snapshot!.conversation('old')!.closed, isTrue);
