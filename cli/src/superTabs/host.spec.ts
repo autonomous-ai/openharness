@@ -3329,7 +3329,7 @@ describe('built-in skill text after a CLI update', () => {
     let inFlight = 0
     /** A notice the backend refuses (an older backend, an outage), and every refused request. */
     let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
-    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
+    const refused: Array<{ operationId: string; asAgentId?: string; command: Record<string, any> }> = []
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
@@ -3511,6 +3511,18 @@ describe('built-in skill text after a CLI update', () => {
     await f.pass(host, 5_000)
     await f.pass()
     expect(f.sent).toHaveLength(3)
+  })
+
+  // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes. A Buddy session's notice is
+  // a top-level post the backend refuses (a session answers only in its own thread), and the host tried it every minute.
+  it('stops a skill notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.asAgentId === 'a-builder' ? { status: 403, body: { success: false,
+      error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
+    const host = await f.pass()
+    for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
+    expect(f.refused.filter(r => r.asAgentId === 'a-builder')).toHaveLength(1)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-lead', 'a-reviewer'])
   })
 
   it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
