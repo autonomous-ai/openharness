@@ -1114,6 +1114,50 @@ void main() {
     );
   }
 
+  // Review of #2951 (Kite): the backend opens a terminal in any conversation
+  // that holds the agent but an archived one, a finished (dormant) task the
+  // Desktop holds included.
+  for (final archived in [false, true]) {
+    testWidgets(
+      'Open terminal on the card of an agent held only by a ${archived ? 'archived' : 'finished'} task the Desktop holds ${archived ? 'stays off' : 'opens there'}',
+      (tester) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(const Size(560, 420));
+        // Held while it was open, then finished (or archived) as the Swarm
+        // sweeps it: the Desktop still holds it.
+        final done = <String, dynamic>{
+          ...conversationFixture('done', 'Finished work'),
+          'projectId': 'lead',
+          'agentIds': ['agent-3'],
+        };
+        (f.server.state['conversations'] as List).add(done);
+        await f.controller.refresh();
+        done[archived ? 'archived' : 'dormant'] = true;
+        await f.controller.refresh();
+        await f.controller.loadGroup('done');
+        expect(f.controller.snapshot!.conversation('done'), isNotNull);
+        await f.show(tester);
+        await f.card(tester, 3);
+        final card = find.byKey(const ValueKey('super-agent-card'));
+        final open = find.descendant(
+          of: card,
+          matching: find.widgetWithText(TextButton, 'Open terminal'),
+        );
+        expect(tester.widget<TextButton>(open).onPressed == null, archived);
+        expect(
+          find.byKey(const ValueKey('super-card-terminal-blocked')),
+          archived ? findsOneWidget : findsNothing,
+        );
+        if (!archived) {
+          await tester.tap(open);
+          await tester.pumpAndSettle();
+          expect(f.opened?.id, 'agent-3');
+        }
+        await f.close(tester);
+      },
+    );
+  }
+
   testWidgets('a reviewer reads Rev; an agent without a role stays Dev', (
     tester,
   ) async {
