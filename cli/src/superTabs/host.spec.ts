@@ -1544,10 +1544,10 @@ describe('the super-tab command in delivered input', () => {
   it('hands the PM a proposal\'s goal, scope and priority after its owner\'s words', async () => {
     const author = { kind: 'person', id: 'peer', name: 'peer@example.com' }
     const source = { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', goal: 'Desktop keeps drafts offline', scope: 'Desktop only', priority: 'high' }
-    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('Message message from peer:\nKeep my drafts when I go offline\n\n'
+    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('Message message from peer@example.com:\nKeep my drafts when I go offline\n\n'
       + 'Proposal details from their Buddy, for the PM:\nGoal: Desktop keeps drafts offline\nScope: Desktop only\nPriority: high')).toBe(true)
     // A proposal from before keeps its details in its Buddy's reply, and any other row is as it was.
-    expect((await delivered({ text: 'Offline drafts', author, source: { kind: 'buddy-proposal', personId: 'peer' } })).endsWith('Message message from peer:\nOffline drafts')).toBe(true)
+    expect((await delivered({ text: 'Offline drafts', author, source: { kind: 'buddy-proposal', personId: 'peer' } })).endsWith('Message message from peer@example.com:\nOffline drafts')).toBe(true)
   })
   it('marks a message the server says an agent of another account wrote, right before it (audit M3)', async () => {
     const author = { kind: 'agent', id: 'team-agent', name: 'Tester' }
