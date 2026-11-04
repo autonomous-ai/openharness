@@ -9,8 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/shared/theme/app_theme.dart'
-    show AppFont;
+import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
@@ -379,7 +378,7 @@ void main() {
       expect(find.text('Jump to…'), findsNothing);
       expect(find.text('Needs you'), findsNothing, reason: "Activity's now");
       expect(find.text('Ship it behind a flag?'), findsNothing);
-      expect(key('swarm-away'), findsOneWidget, reason: 'always there');
+      expect(key('swarm-need-line'), findsOneWidget, reason: 'one need');
       expect(find.text('Buddies'), findsNothing);
       expect(key('swarm-home-buddy-$tab-$project'), findsNothing);
       expect(find.text('Chat with PM'), findsNothing);
@@ -530,12 +529,12 @@ void main() {
         )
         .first;
 
-    testWidgets('under the Threads row, Projects has the usual room', (
+    testWidgets('under the need-you line, Projects has the usual room', (
       tester,
     ) async {
       await pump(tester, backend());
 
-      expect(find.byKey(const ValueKey('swarm-threads-row')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-need-line')), findsOneWidget);
       expect(first(tester, 'Projects'), isFalse);
     });
 
@@ -549,7 +548,7 @@ void main() {
     });
   });
 
-  group('While you were away', () {
+  group('the need-you line', () {
     /// The app hidden, then shown again [later].
     Future<void> away(
       WidgetTester tester,
@@ -586,25 +585,38 @@ void main() {
       },
     };
 
-    testWidgets('there on a first open and back within five minutes; back '
-        'later, how long, the work done since and what needs you; a tap '
-        'opens what needs you', (tester) async {
+    String line(WidgetTester tester) => tester
+        .widget<Text>(key('swarm-need-line-text'))
+        .textSpan!
+        .toPlainText();
+
+    /// Nothing waits on the person: no decision, tag or work asking.
+    FakeSwarm quiet() {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2');
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      return fake;
+    }
+
+    testWidgets('one line in place of the three tiles: how many need you, '
+        'then the work done since the person left; a tap opens Activity on '
+        'Needs you', (tester) async {
       var now = _halfHourIn();
       final fake = backend();
       final host = await pump(tester, fake, now: () => now);
-      expect(
-        inside('swarm-away', find.text('now')),
-        findsOneWidget,
-        reason: 'never left: no time away yet',
-      );
-      expect(inside('swarm-away-done', find.text('0')), findsOneWidget);
 
-      await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-      expect(
-        inside('swarm-away', find.text('4m')),
-        findsOneWidget,
-        reason: 'four minutes',
-      );
+      expect(key('swarm-home-tiles'), findsNothing);
+      expect(key('swarm-away'), findsNothing);
+      expect(key('swarm-threads-row'), findsNothing);
+      expect(key('swarm-agents-tile'), findsNothing);
+      expect(line(tester), '3 need you', reason: 'nothing done yet');
 
       final left = now;
       moveOn(fake, {
@@ -616,147 +628,69 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        y(tester, 'swarm-title-button'),
-        lessThan(y(tester, 'swarm-away')),
-      );
-      expect(
-        y(tester, 'swarm-away'),
-        lessThan(y(tester, 'swarm-project-$tab-$project')),
-      );
-      expect(inside('swarm-away', find.text('2h')), findsOneWidget);
-      expect(
-        inside('swarm-away-done', find.text('1')),
-        findsOneWidget,
+        line(tester),
+        '3 need you · 1 done',
         reason: 'the work done before the person left is not counted',
       );
-      expect(inside('swarm-away-needs', find.text('3')), findsOneWidget);
       expect(
-        tester.getSize(key('swarm-away')).height,
+        y(tester, 'swarm-title-button'),
+        lessThan(y(tester, 'swarm-need-line')),
+      );
+      expect(
+        y(tester, 'swarm-need-line'),
+        lessThan(y(tester, 'swarm-project-$tab-$project')),
+      );
+      expect(
+        tester.getSize(key('swarm-need-line')).height,
         greaterThanOrEqualTo(44),
       );
 
-      await tester.tap(key('swarm-away'));
+      await tester.tap(key('swarm-need-line'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmActivityPage), findsOneWidget);
     });
 
-    testWidgets(
-      'back within five minutes and using the app on: the time stays, '
-      'as only time in the background is time away',
-      (tester) async {
-        var now = _halfHourIn();
-        await pump(tester, backend(), now: () => now);
-        await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-        expect(inside('swarm-away', find.text('4m')), findsOneWidget);
-
-        now = now.add(const Duration(minutes: 2));
-        await tester.pump(const Duration(minutes: 2));
-        expect(
-          inside('swarm-away', find.text('4m')),
-          findsOneWidget,
-          reason: 'two minutes in the foreground are no time away',
-        );
-      },
-    );
-
-    testWidgets('opened four minutes after the app was last left, and used '
-        'on: four minutes', (tester) async {
+    testWidgets('a moment away counts the work done from when the person '
+        'left before; a long time away counts from then', (tester) async {
       var now = _halfHourIn();
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({
-          'pins': <Object>[],
-          'seen': now
-              .subtract(const Duration(minutes: 4))
-              .millisecondsSinceEpoch,
-        });
-      await pump(tester, backend(), now: () => now, store: store);
-      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
-
-      now = now.add(const Duration(minutes: 2));
-      await tester.pump(const Duration(minutes: 2));
-      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
-    });
-
-    testWidgets('waits for when the app was last left, so it never shows a '
-        'first open and then jumps', (tester) async {
-      final now = _halfHourIn();
-      final store = _HeldStore()
-        ..values['swarm_home.$me'] = jsonEncode({
-          'pins': <Object>[],
-          'seen': now
-              .subtract(const Duration(minutes: 20))
-              .millisecondsSinceEpoch,
-        });
-      await pump(
-        tester,
-        backend(),
-        now: () => now,
-        store: store,
-        settle: false,
-      );
-      expect(key('swarm-away'), findsNothing);
-
-      store.release.complete();
-      await tester.pumpAndSettle();
-
-      expect(inside('swarm-away', find.text('20m')), findsOneWidget);
-    });
-
-    testWidgets('with no Swarm to report on, there is none', (tester) async {
       final fake = backend();
-      fake.routes['/api/super-tabs/list'] = (_) => {
-        'tabs': <Object>[],
-        'next': null,
-      };
-      await pump(tester, fake);
-
-      expect(key('swarm-away'), findsNothing);
-    });
-
-    testWidgets('a moment away leaves the card as it was; a long time away '
-        'starts it over', (tester) async {
-      var now = _halfHourIn();
-      await pump(tester, backend(), now: () => now);
+      final host = await pump(tester, fake, now: () => now);
+      final left = now;
+      moveOn(fake, {
+        'g-after': done('g-after', left.add(const Duration(minutes: 30))),
+      });
       await away(tester, const Duration(hours: 1), (d) => now = now.add(d));
-      expect(inside('swarm-away', find.text('1h')), findsOneWidget);
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+      expect(line(tester), '3 need you · 1 done');
 
       await away(tester, const Duration(seconds: 30), (d) => now = now.add(d));
       expect(
-        inside('swarm-away', find.text('1h')),
-        findsOneWidget,
+        line(tester),
+        '3 need you · 1 done',
         reason: 'a phone locked for a moment takes nothing away',
       );
-      await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-      expect(inside('swarm-away', find.text('1h')), findsOneWidget);
 
       await away(tester, const Duration(minutes: 6), (d) => now = now.add(d));
-      expect(inside('swarm-away', find.text('6m')), findsOneWidget);
-      expect(inside('swarm-away', find.text('1h')), findsNothing);
+      expect(line(tester), '3 need you', reason: 'done before they left');
     });
 
-    testWidgets('its time is how long the person was away, not how long since '
-        'they left', (tester) async {
-      var now = _halfHourIn();
-      await pump(tester, backend(), now: () => now);
-      await away(tester, const Duration(minutes: 10), (d) => now = now.add(d));
-      expect(inside('swarm-away', find.text('10m')), findsOneWidget);
+    testWidgets('with nothing waiting on the person, there is no line', (
+      tester,
+    ) async {
+      await pump(tester, quiet());
 
-      now = now.add(const Duration(minutes: 3));
-      await tester.pump(const Duration(minutes: 3));
-      expect(inside('swarm-away', find.text('10m')), findsOneWidget);
-      expect(find.text('13m'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(key('swarm-need-line'), findsNothing);
     });
 
-    testWidgets('what needs you is a dash while it is read, and when it '
-        'could not be read, never 0', (tester) async {
+    testWidgets('never "0 need you": while what waits is read again, or '
+        'could not be read, no line', (tester) async {
       var now = _halfHourIn();
       // What waits on the person is one decision alone.
-      final fake = backend();
+      final fake = quiet();
       fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
           firstLoad(derived: const {'decisionsWaiting': 1});
-      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
         'decisions': [
           {
@@ -771,57 +705,28 @@ void main() {
         ],
       };
       final host = await pump(tester, fake, now: () => now);
-      await away(tester, const Duration(hours: 1), (d) => now = now.add(d));
-      expect(inside('swarm-away-needs', find.text('1')), findsOneWidget);
+      expect(line(tester), '1 need you');
 
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
-          throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
       final gate = Completer<void>();
-      final asked = fake.routes['/api/super-tabs/$tab/decisions?state=open']!;
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (body) async {
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) async {
         await gate.future;
-        return asked(body);
+        throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
       };
       unawaited(host.session!.inbox.refresh());
       await frames(tester);
 
-      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
-      expect(inside('swarm-away-needs', find.text('0')), findsNothing);
+      expect(find.textContaining('0 need you'), findsNothing);
 
       gate.complete();
       await frames(tester);
 
-      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
-      expect(inside('swarm-away-needs', find.text('0')), findsNothing);
+      expect(find.textContaining('0 need you'), findsNothing);
     });
 
-    testWidgets('the figures are skeletons while a Swarm shown is not read, '
-        'its rows on their way, and the failure says nothing', (tester) async {
-      var now = _halfHourIn();
-      final fake = backend()
-        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
-            throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      await pump(tester, fake, now: () => now, settle: false);
-      await away(
-        tester,
-        const Duration(hours: 1),
-        (d) => now = now.add(d),
-        settle: false,
-      );
-
-      expect(inside('swarm-away-done', find.byType(SkeletonText)), findsOne);
-      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
-      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
-      expect(key('swarm-projects-error-$tab'), findsNothing);
-      expect(find.text('Broken'), findsNothing);
-    });
-
-    testWidgets('back from away before the list answers: the card, its figures '
-        'skeletons, never a false none; the figures once it is read', (
+    testWidgets('with no Swarm, or before the list answers, there is none', (
       tester,
     ) async {
-      var now = _halfHourIn();
       final fake = backend();
       final gate = Completer<void>();
       final listed = fake.routes['/api/super-tabs/list']!;
@@ -829,47 +734,36 @@ void main() {
         await gate.future;
         return listed(body);
       };
-      await pump(tester, fake, now: () => now, settle: false);
-      await away(
-        tester,
-        const Duration(hours: 1),
-        (d) => now = now.add(d),
-        settle: false,
-      );
+      await pump(tester, fake, settle: false);
 
       expect(key('swarm-projects-loading'), findsOneWidget);
-      expect(inside('swarm-away-done', find.byType(SkeletonText)), findsOne);
-      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
-      expect(inside('swarm-away', find.text('0')), findsNothing);
+      expect(key('swarm-need-line'), findsNothing);
 
       gate.complete();
       await tester.pumpAndSettle();
+      expect(line(tester), '3 need you');
 
-      expect(inside('swarm-away', find.byType(SkeletonText)), findsNothing);
+      final none = backend();
+      none.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await pump(tester, none);
+      expect(key('swarm-need-line'), findsNothing);
     });
 
-    testWidgets('a Swarm no read will bring says why, and leaves no skeleton '
-        'for ever', (tester) async {
-      var now = _halfHourIn();
+    testWidgets('a Swarm no read will bring says why, and leaves no line', (
+      tester,
+    ) async {
       final fake = backend()
         ..routes['/api/super-tabs/$tab/parts'] = (_) =>
             throw SuperTabFailure('UPDATE_REQUIRED', 'Update', statusCode: 426);
-      await pump(tester, fake, now: () => now, settle: false);
-      await away(
-        tester,
-        const Duration(hours: 1),
-        (d) => now = now.add(d),
-        settle: false,
-      );
+      await pump(tester, fake, settle: false);
+      await frames(tester);
 
       expect(key('swarm-projects-error-$tab'), findsOneWidget);
-      expect(
-        find.text('Update Harness to keep using this Swarm.'),
-        findsOneWidget,
-      );
       expect(key('swarm-projects-loading-$tab'), findsNothing);
-      expect(inside('swarm-away-done', find.text('0')), findsOneWidget);
-      expect(inside('swarm-away', find.byType(SkeletonText)), findsNothing);
+      expect(key('swarm-need-line'), findsNothing);
     });
   });
 
@@ -2846,11 +2740,7 @@ void main() {
       expect(find.text('Buddies'), findsNothing);
       expect(find.text('Projects'), findsOneWidget);
       expect(find.textContaining('Reading'), findsNothing);
-      expect(
-        key('swarm-away'),
-        findsOneWidget,
-        reason: 'its figures skeletons',
-      );
+      expect(key('swarm-need-line'), findsNothing, reason: 'not known yet');
 
       listed.complete();
       await tester.pumpAndSettle();
