@@ -560,6 +560,65 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(reply.body.data.read).toHaveLength(MAX_READ_THREADS)
     expect(reply.body.data.more).toBe(true)
   }, 120_000)
+
+  // Ken's scan of 11-04 (task #2768): the unread threads' member check read each thread's newest 100 rows before the mark in
+  // one $or branch per thread, and long threads sent it to one $unionWith branch per thread. It reads their summaries now.
+  /** Web: 60 roots of the owner's; the first 10 hold 300 worker replies. Peer replied early in every third thread (i % 3 == 0)
+   *  and is tagged early in the next (i % 3 == 1); in a long thread both are more than 100 rows before the mark. Peer read the
+   *  chat, then each thread got one new worker reply. */
+  async function memberScene() {
+    const s = await scene()
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 60 }, (_, i) => ({ text: `Member root ${i}`, author: personAuthor(owner) })))
+    await insert(s.tabId, s.web, roots.flatMap((thread, i) => i % 3 === 0 ? [{ text: `Peer early ${i}`, author: personAuthor(peer), thread }]
+      : i % 3 === 1 ? [{ text: `Tags peer ${i}`, author: personAuthor(owner), thread, mentions: [peer.sub] }] : []))
+    for (let batch = 0; batch < 3; batch++) {
+      await insert(s.tabId, s.web, Array.from({ length: 1000 }, (_, i) => ({ text: `History ${batch}.${i}`, author: agentAuthor(s.worker), thread: roots[i % 10]! })))
+    }
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    await insert(s.tabId, s.web, roots.map(thread => ({ text: 'New reply', author: agentAuthor(s.worker), thread })))
+    return { ...s, roots, member: roots.filter((_, i) => i % 3 !== 2) }
+  }
+
+  it('counts the person in a thread they wrote or were tagged in long before their mark, from summaries as from rows', async () => {
+    const s = await memberScene()
+    const before = (await threads(s.tabId, peer)).body.data
+    expect(before.unread.map((t: any) => t.rootId).sort()).toEqual([...s.member].sort())
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    expect((await threads(s.tabId, peer)).body.data).toEqual(before)
+  }, 120_000)
+
+  it('learns whether the person is in each unread thread from its summary, in one read, never from its messages', async () => {
+    const s = await memberScene()
+    await backfillThreads(db, Date.now())
+    const { reply, rows } = await profiledThreads(s.tabId)
+    const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+    expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+    // No message read by the thread index: the chat's rows past the mark, and the 60 roots by id.
+    expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
+    expect(messages.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(2 * 61)
+    // The 60 candidates' summaries in one read by id, one small row each.
+    expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+    expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+    expect(summaries.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(60)
+    expect(reply.body.data.unread).toHaveLength(s.member.length)
+  }, 120_000)
+
+  it('keeps reading a Swarm Buddy chat\'s rows to learn whether the person is in a thread: its summary cannot hide a lost project\'s row', async () => {
+    let chat = ''
+    const s = await scene(f => f.edit(state => { chat = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.sub)!).id }))
+    const [root] = await insert(s.tabId, chat, [{ text: 'Buddy root', author: agentAuthor('peer-buddy') }])
+    // Peer's own reply in a session of the Secret project, which they do not read: it must not make them a member.
+    await insert(s.tabId, chat, [{ text: 'Secret session words', author: personAuthor(peer), thread: root!, buddySession: true, buddyProject: s.secret }])
+    await markRead(s.tabId, chat, await newestIn(s.tabId, chat), peer)
+    await insert(s.tabId, chat, [{ text: 'Buddy reply', author: agentAuthor('peer-buddy'), thread: root! }])
+    expect((await threads(s.tabId, peer)).body.data.unread).toEqual([])
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    expect((await threads(s.tabId, peer)).body.data.unread).toEqual([])
+    resetInboxReads()
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+  })
 })
 
 describe('a thread the person is tagged in, in a chat they never opened (GET /threads)', () => {
