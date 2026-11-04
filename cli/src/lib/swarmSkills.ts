@@ -782,9 +782,11 @@ function prepareBuddyFolder(root: string, key: string): void {
   if (!owner) throw new Error(BUDDY_START_AGAIN)
   if (account && account !== owner) throw new Error(BUDDY_NOT_HERE)
   const claude = join(root, '.claude'), guard = join(claude, 'buddy-guard.mjs'), settings = join(claude, 'settings.local.json')
-  const locked = isPlainFile(guard)
+  // Harness's lock, and nothing else: its settings named its guard by this folder's own path, which no commit can know
+  // (security review 2 of #2832). A project's own file of either name is left as it is.
+  const locked = isPlainFile(guard) && isPlainFile(settings) && readFileSync(settings, 'utf8').includes(guard)
   if (locked) {
-    if (isPlainFile(settings) && readFileSync(settings, 'utf8').includes(guard)) rmSync(settings, { force: true })
+    rmSync(settings, { force: true })
     rmSync(guard, { force: true })
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
