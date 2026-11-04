@@ -316,6 +316,42 @@ void main() {
       await _done(tester, c);
     });
 
+    // Review of #2983 (Avocet4): a reply that never came says "Retry"; the warning offers it.
+    testWidgets('a lost reply offers Retry in the warning, which confirms it', (
+      tester,
+    ) async {
+      final server = ConversationServer()..loseReply = true;
+      server.state['machines'] = [_machine('studio')];
+      final c = await _mount(tester, server);
+      await _rightClick(tester, 'studio');
+      await tester.tap(find.byKey(_item));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(_allow));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-machine-own-account-reason')),
+        findsOneWidget,
+      );
+      final retry = find.byKey(_allow);
+      expect(
+        find.descendant(of: retry, matching: find.text('Retry')),
+        findsOneWidget,
+      );
+      expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
+      await tester.tap(retry);
+      await tester.pumpAndSettle();
+      expect(find.byKey(_allow), findsNothing);
+      expect(c.hasPendingAction, isFalse);
+      expect(_ownAccountCommands(server).toSet(), {
+        {
+          'type': 'machine.ownAccountWork',
+          'machineId': 'studio',
+          'allowed': true,
+        },
+      });
+      await _done(tester, c);
+    });
+
     testWidgets("the row says it runs in the owner's own account", (
       tester,
     ) async {
