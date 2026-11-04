@@ -552,7 +552,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
   const giveBack = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, creationOf: vi.fn(() => null), stop }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, ended: vi.fn(), creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
@@ -572,10 +572,25 @@ it('keeps host capacity separate from account authority and closes it on disconn
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
 })
 
+// Issue #2989: a start the Swarm failed gives its reservation back at once. Only this machine's own host, which read that
+// verdict from the Swarm, may say so: a relayed caller with machine access could otherwise free memory still starting.
+it('ends a failed start\'s reservation only for a caller on this machine', async () => {
+  const core = fakeCore()
+  const ended = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended, creationOf: vi.fn(() => null), stop: vi.fn() }))
+  const service = superTabService(core, { reservations: factory })
+  const closed = new AbortController().signal
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, visitor, closed)).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(ended).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, { local: true, owner: false }, closed))
+    .toMatchObject({ ok: true, returned: true })
+  expect(ended).toHaveBeenCalledWith('native-creation-id', closed)
+})
+
 it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
   const core = fakeCore()
   const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
-  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), creationOf, stop: vi.fn() }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended: vi.fn(), creationOf, stop: vi.fn() }))
   let options: SuperTabHostOptions = {}
   const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
     options = given
@@ -667,6 +682,22 @@ describe('routeHistory', () => {
     const [person, lead] = moved.value.decisions as Array<Record<string, unknown>>
     expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
     expect(lead).not.toHaveProperty('account')
+  })
+  // Task #2901: a route names no pick; the start or assignment the coordinator made records the candidate it matched, and that
+  // candidate's account and spend are what the open decision holds (the backend keeps every candidate's slim fit).
+  it('takes the title, account and spend of the candidate a pick-less decision\'s start chose', async () => {
+    const slim = (account: string, weekly: number) => ({ account, spend: { '5-hour': weekly * 7, weekly } })
+    const record = { via: 'instructions', assessment: { size: 'small' }, candidates: [{ id: 'c0', title: 'New agent · Claude opus high · a', fit: slim('ka', 1) },
+      { id: 'c1', title: 'New agent · Codex default default · b', fit: slim('kb', 2) }] }
+    const chosen = { id: 'd1', conversationId: 'g1', record, override: null, outcome: null, assignmentId: 'as1', createdAt: '2026-11-04T10:00:00Z',
+      final: { kind: 'new', startId: 's', machineId: 'b', engine: 'codex', model: 'default', effort: 'default', candidateId: 'c1' } }
+    const waiting = { ...chosen, id: 'd2', final: null, assignmentId: null }
+    const { value } = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([chosen, waiting]))
+    const [started, unstarted] = value.decisions as Array<Record<string, unknown>>
+    expect(started).toMatchObject({ title: 'New agent · Codex default default · b', account: 'kb', spend: { '5-hour': 14, weekly: 2 }, size: 'small', via: 'instructions' })
+    // Nothing chosen yet holds nothing, and says so.
+    expect(unstarted).toMatchObject({ title: 'not chosen yet' })
+    expect(unstarted).not.toHaveProperty('account')
   })
   it('gives every attempt of the group, newest first, with only what the route needs and no more than fifty', async () => {
     const t = setup()
@@ -845,8 +876,9 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
-// Project instructions, phase 4: the route ranks by facts and notes the rest; no build, review or grid rule is the help's.
-it('tells every agent what the route leaves out, how it ranks the rest, and which kinds of work may go to the grid', async () => {
+// Project instructions, phase 4: the route shows facts and notes the rest; no build, review or grid rule is the help's. Task #2901:
+// it ranks nothing and names no pick, so the help sends the choice to the Routing instructions and asks for the rule followed.
+it('tells every agent what the route leaves out, that it ranks the rest by nothing, and which kinds of work may go to the grid', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
   expect(help.route).toContain('The route leaves out what cannot run, and says why')
   // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
@@ -857,8 +889,11 @@ it('tells every agent what the route leaves out, how it ranks the rest, and whic
   for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
   expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
   expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
-  expect(help.route).toContain('It ranks the rest by strength, then price and quota fit, then an idle agent before a new one')
-  expect(help.route).toContain('Your project\'s instructions say how to choose')
+  expect(help.route).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
+  expect(help.route).toContain('weekly % left and reset time')
+  expect(help.route).toContain('choose by your project\'s Routing instructions')
+  expect(help.route).toContain('routeDecisionId and overrideReason, the Routing rule that chose it')
+  expect(help.route).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on/)
   expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)
   expect(help.commands.map(c => c.type)).not.toContain('rule.set')
 })

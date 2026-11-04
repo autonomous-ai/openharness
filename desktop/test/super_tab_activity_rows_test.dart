@@ -7,26 +7,15 @@ SuperTabMention mention(
   String author, {
   String conversationId = 'c1',
   String? threadId,
-  String? resolvedBy,
 }) => SuperTabMention.fromJson({
   'id': id,
   'conversationId': conversationId,
   'messageId': 'm-$id',
   'leadName': author,
   'threadId': ?threadId,
-  'resolvedBy': ?resolvedBy,
 });
 
 void main() {
-  test('a row is unresolved while any of its mentions still waits', () {
-    final rows = groupMentions([
-      mention('1', 'dee', resolvedBy: 'done'),
-      mention('2', 'dee'),
-      mention('3', 'Plover', resolvedBy: 'reply'),
-    ], (_) => false);
-    expect([for (final r in rows) r.unresolved], [true, false]);
-  });
-
   test('neighbours from one author in one chat fold', () {
     final rows = groupMentions([
       mention('1', 'dee'),
@@ -35,11 +24,10 @@ void main() {
       mention('4', 'Plover'),
       mention('5', 'Plover'),
       mention('6', 'dee', conversationId: 'c2'),
-    ], (m) => m.id == '5');
+    ]);
     expect([for (final r in rows) r.newest.leadName], ['dee', 'Plover', 'dee']);
     expect([for (final r in rows) r.all.length], [3, 2, 1]);
     expect([for (final r in rows) r.more], [2, 1, 0]);
-    expect([for (final r in rows) r.unread], [false, true, false]);
   });
 
   test('a Title: line gives the subject', () {

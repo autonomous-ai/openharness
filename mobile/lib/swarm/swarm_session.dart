@@ -8,6 +8,7 @@ import '../notify/system_notices.dart';
 import '../phone/voice_recorder.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_activity.dart';
+import 'swarm_activity_feed.dart';
 import 'swarm_chat_peeks.dart';
 import 'swarm_choices.dart';
 import 'swarm_face.dart';
@@ -61,6 +62,8 @@ class SwarmSession extends ChangeNotifier {
       ..onArrived = announce
       ..onSwarmRead = _swarmRead
       ..addListener(_needsChanged);
+    // Its feeds tell of new replies with no screen open.
+    activity = SwarmActivity(this);
   }
 
   final String accountId;
@@ -74,9 +77,10 @@ class SwarmSession extends ChangeNotifier {
   final messageReads = SwarmMessageReads();
 
   /// Activity, in place of Needs you: its filters, counts and handled rows.
-  /// Made when a screen first asks for it.
-  SwarmActivity get activity => _activity ??= SwarmActivity(this);
-  SwarmActivity? _activity;
+  /// Made with the session: its feeds read each Swarm's replies when the
+  /// Activity digest moves, whether a screen shows them or not, so a new
+  /// reply in a thread the person is in is told ([announceReply]).
+  late final SwarmActivity activity;
 
   /// Brings the Buddy tab forward, while Swarm's tabs are up ([SwarmTabsPage]);
   /// null under none.
@@ -156,6 +160,25 @@ class SwarmSession extends ChangeNotifier {
 
   /// Posts [need]'s notice, unless a Swarm screen is up.
   void announce(SwarmNeed need) => _announcer.announce(need);
+
+  /// Posts the notice of [entry], a new reply in Swarm [swarmId] in a thread
+  /// the person is in, unless a Swarm screen is up.
+  void announceReply(String swarmId, SwarmActivityEntry entry) {
+    final snapshot = inbox.reader(swarmId)?.snapshot;
+    _announcer.announceReply(
+      swarmId: swarmId,
+      entry: entry,
+      project: snapshot?.projectFor(entry.conversationId)?.name ?? '',
+    );
+  }
+
+  /// Swarm [swarmId]'s Activity as [feed] lists it now: the notices of
+  /// replies read since, or no longer listed, go. Not while it is unread
+  /// from the server, failed, or read again from nothing.
+  void repliesListed(String swarmId, SwarmActivityFeed feed) {
+    if (!feed.fromServer || !feed.loaded || feed.error != null) return;
+    _announcer.repliesRead(swarmId, feed.items);
+  }
 
   /// Swarms read whose decisions and tags are still being read: what the
   /// read missed is counted once they are ([_countReads]).
@@ -322,7 +345,7 @@ class SwarmSession extends ChangeNotifier {
       held.timer.cancel();
     }
     _held.clear();
-    _activity?.dispose();
+    activity.dispose();
     peeks.dispose();
     messageReads.dispose();
     inbox.removeListener(_needsChanged);

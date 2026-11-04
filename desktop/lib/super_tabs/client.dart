@@ -14,6 +14,7 @@ import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
 import 'reminders.dart';
+import 'reply_notices.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'saved_view.dart';
@@ -38,6 +39,7 @@ class SuperTabClient {
     this.onSelection,
     this.onMention,
     this.onChatMessage,
+    this.onReply,
     this.onReminder,
     this.onTagCounts,
     this.onNotices,
@@ -75,6 +77,10 @@ class SuperTabClient {
   /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
   final void Function(String tabId, SuperTabConversation group, int sequence)?
   onChatMessage;
+
+  /// A new reply in a thread the reader is in, in Swarm `tabId`
+  /// ([SuperTabReplyNotices]).
+  final void Function(String tabId, SuperTabReplyRow reply)? onReply;
 
   /// A reminder the reader set came due in Swarm `tabId` ([SuperTabReminders]).
   final void Function(String tabId, SuperTabReminder reminder)? onReminder;
@@ -849,13 +855,31 @@ class SuperTabClient {
       SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
           told(id, group, sequence);
     }
+    if (onReply case final told?) {
+      SuperTabReplyNotices.of(controller).onReply = (reply) => told(id, reply);
+    }
     if (onReminder case final told?) {
       SuperTabReminders.of(controller).onArrived = (reminder) =>
           told(id, reminder);
     }
     if (onNotices case final changed?) {
-      SuperTabMentions.of(controller).addListener(changed);
+      // What Activity lists is what the menu bar's Swarm section draws
+      // (task #2914): it hears every list that moves it.
+      final mentions = SuperTabMentions.of(controller)..addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);
+      SuperTabReminders.of(controller).addListener(changed);
+      // A read mark moved here reads a tag with no list or count moving:
+      // told only when the unread number moves, not on every change.
+      var unread = 0;
+      controller.addListener(() {
+        final now = [
+          ...mentions.waiting,
+          ...mentions.earlier,
+        ].where((m) => superTabMentionUnread(controller, m)).length;
+        if (now == unread) return;
+        unread = now;
+        changed();
+      });
     }
     _tagCounts.remove(id);
     _tagDigests.remove(id);

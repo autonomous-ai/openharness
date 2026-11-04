@@ -15,6 +15,7 @@ import 'avatar_art.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
+import 'identity.dart' show superTabPersonName;
 import 'machine_status.dart' show superTabAgoShort;
 import 'model.dart';
 import 'notifications.dart';
@@ -61,7 +62,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   /// to be), or as soon as the reader does anything here. Until then more
   /// arriving may still change it; after, it never moves under their hands.
   bool _settled = false;
-  bool _mentionsUnreadOnly = false;
   bool _handledShown = false;
 
   @override
@@ -91,7 +91,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   /// unread rows, else Needs you.
   _Tab _opening() {
     if (_activity.needsYou.isNotEmpty) return _Tab.needs;
-    if (_activity.mentionRows.any((r) => r.unread)) return _Tab.mentions;
+    if (_activity.mentionRows.isNotEmpty) return _Tab.mentions;
     if (_activity.threadRows.isNotEmpty) return _Tab.threads;
     return _Tab.needs;
   }
@@ -263,25 +263,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     ),
   );
 
-  Widget _unreadsOnly() => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text('Unreads only', style: DesktopChrome.metadata()),
-      const SizedBox(width: grid.AppDesktop.controlGap),
-      Transform.scale(
-        scale: .8,
-        child: Switch(
-          key: const ValueKey('super-activity-unreads-only'),
-          value: _mentionsUnreadOnly,
-          onChanged: (on) => setState(() {
-            _settle();
-            _mentionsUnreadOnly = on;
-          }),
-        ),
-      ),
-    ],
-  );
-
   Widget _markAll(VoidCallback? onPressed) => quietDecisionAction(
     key: const ValueKey('super-activity-mark-all-read'),
     label: 'Mark all read',
@@ -378,11 +359,16 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               ),
             ];
     }
-    final needs = a.needsYou;
-    final due = a.reminders.due;
+    // The one list the menu bar draws too (task #2914), in its order.
+    final notices = a.notices;
+    final due = [for (final n in notices) ?n.reminder];
+    final waiting = [
+      for (final n in notices)
+        if (n.kind == SuperTabNoticeKind.agent) n.need!,
+    ];
     final decided = [
-      for (final n in needs)
-        if (n.decision != null) n,
+      for (final n in notices)
+        if (n.kind == SuperTabNoticeKind.decision) n.need!,
     ];
     // Only these can be left to the PM, and only these the bar speaks of.
     final delegatable = [
@@ -412,7 +398,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               ),
             ]);
           }();
-    if (needs.isEmpty && due.isEmpty) {
+    if (due.isEmpty && waiting.isEmpty && decided.isEmpty) {
       final handled = a.handledToday;
       final name = a.coordinatorFor(handled);
       return [
@@ -440,8 +426,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       // decisions, and is not left to the PM.
       for (final reminder in due) _reminder(reminder),
       // An agent waiting has no time of its own: it leads, above the days.
-      for (final n in needs)
-        if (n.decision == null) _need(n),
+      for (final n in waiting) _need(n),
       ..._byDay<SuperTabNeed>(decided, (n) => n.at, _need),
     ];
   }
@@ -477,7 +462,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       final project = _snapshot?.projectFor(need.conversationId);
       return _ActivityRow(
         key: ValueKey('super-activity-row-${need.id}'),
-        unread: true,
         avatarName: need.title,
         who: need.title,
         where: project?.name,
@@ -504,7 +488,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         now.difference(created) < const Duration(days: 8);
     return _ActivityRow(
       key: ValueKey('super-activity-row-${need.id}'),
-      unread: true,
       avatarName: decision.askerName,
       who: decision.askerName,
       where: decision.projectName,
@@ -530,7 +513,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final text = _oneLine(reminder.text);
     return _ActivityRow(
       key: ValueKey('super-activity-row-reminder:${reminder.id}'),
-      unread: true,
       avatarName: who,
       who: who,
       where: project?.name,
@@ -598,19 +580,9 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   List<Widget> _mentions() {
     final a = _activity;
-    final all = a.mentionRows;
-    final rows = _mentionsUnreadOnly
-        ? [
-            for (final r in all)
-              if (r.unread) r,
-          ]
-        : all;
-    // Every one still waiting, read past or not: Mark read answers them all.
-    final waiting = [
-      for (final r in rows)
-        for (final m in r.all)
-          if (m.resolvedBy == null) m,
-    ];
+    // Only the unread ones are listed, and Mark all read reads them all.
+    final rows = a.mentionRows;
+    final listed = [for (final r in rows) ...r.all];
     final people = {
       for (final p in _snapshot?.people ?? const <SuperTabPerson>[]) p.id: p,
     };
@@ -618,23 +590,19 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         people[m.leadId]?.shownName ?? m.leadName;
     void markRead(List<SuperTabMention> mentions) {
       _settle();
-      unawaited(a.mentions.doneAll(mentions));
+      a.markMentionsRead(mentions);
     }
 
     return [
-      _bar([
-        _unreadsOnly(),
-        _markAll(waiting.isEmpty ? null : () => markRead(waiting)),
-      ]),
+      _bar([_markAll(listed.isEmpty ? null : () => markRead(listed))]),
       if (rows.isEmpty)
-        _empty(_mentionsUnreadOnly ? 'No unread mentions' : 'No mentions')
+        _empty('No unread mentions')
       else
         ..._byDay<SuperTabMentionRow>(rows, (r) => r.newest.createdAt, (row) {
           final m = row.newest;
           final name = author(m);
           return _ActivityRow(
             key: ValueKey('super-activity-row-mention:${m.id}'),
-            unread: row.unread,
             avatarName: name,
             who: name,
             where: m.projectName,
@@ -642,9 +610,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
             trailing: m.createdAt == null ? '' : _when(m.createdAt!),
             preview: _oneLine(m.text),
             more: row.more > 0 ? '+${row.more} more from $name' : null,
-            actions: row.unresolved
-                ? [(label: 'Mark read', run: () => markRead(row.all))]
-                : const [],
+            actions: [(label: 'Mark read', run: () => markRead(row.all))],
             onTap: () => widget.onOpenMention(m),
           );
         }),
@@ -652,6 +618,22 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   }
 
   // ---- Threads ----
+
+  /// How the Swarm shows a thread's [author] now, as the chat does: a person
+  /// by the name they set, an agent by its shown name; else the name recorded
+  /// with the message, an email cut to its name (it named people by email,
+  /// Diego, #2887).
+  String _authorName(Map<String, dynamic> author) {
+    final id = author['id'] as String? ?? '';
+    final recorded = author['name'] as String? ?? '';
+    final snapshot = _snapshot;
+    if (author['kind'] == 'agent') {
+      final fallback = author['displayName'] as String? ?? recorded;
+      return snapshot?.agentName(id, fallback: fallback) ?? fallback;
+    }
+    return snapshot?.people.where((p) => p.id == id).firstOrNull?.shownName ??
+        superTabPersonName(recorded);
+  }
 
   /// Every thread the reader follows (Darren, task #2835): those with new
   /// replies first, bold, as before; then the ones they have read, plain,
@@ -705,8 +687,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final a = _activity;
     // The data holds the root and the newest reply's author, not the
     // reply's text: the preview is the root, said by the root's author.
-    final author = t.rootAuthor['name'] as String? ?? '';
-    final replier = t.lastReplier?['name'] as String? ?? '';
+    final author = _authorName(t.rootAuthor);
+    final replier = _authorName(t.lastReplier ?? const {});
     final project = _snapshot?.projectFor(t.conversationId);
     final subject = threadSubject(t.rootText);
     final root = _oneLine(t.rootText);
@@ -772,8 +754,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _tabs(
-            needs: a.count,
-            mentions: a.mentionRows.where((r) => r.unread).length,
+            needs: a.needsCount,
+            mentions: a.mentionsUnread,
             threads: a.threadRows.length,
           ),
           Expanded(
@@ -817,12 +799,14 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 }
 
 /// One row, Slack's way: an unread dot, an avatar, who and where and when,
-/// then a preview and whatever hangs under it. Hover actions float at the
+/// then a preview and whatever hangs under it. Every row is unread but a
+/// read thread's (Threads lists those below the new ones): it has no dot, a
+/// regular muted name and a faint preview. Hover actions float at the
 /// right, over the time.
 class _ActivityRow extends StatefulWidget {
   const _ActivityRow({
     super.key,
-    required this.unread,
+    this.unread = true,
     required this.avatarName,
     required this.who,
     this.where,
@@ -928,11 +912,11 @@ class _ActivityRowState extends State<_ActivityRow> {
     final text = widget.preview;
     if (text == null) return const SizedBox.shrink();
     final strong = widget.previewStrong;
+    // Unread in the foreground, read faint: muted read too close to faint to
+    // tell apart (Diego, #2887).
     final base = DesktopChrome.control(
-      color: strong
+      color: strong || widget.unread
           ? DesktopChrome.foreground
-          : widget.unread
-          ? DesktopChrome.muted
           : grid.AppPalette.textFaint,
     ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
     final lead = widget.previewLead;

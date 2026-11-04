@@ -1,7 +1,8 @@
 /** Cheap first (Scholes's goals, piece 4; Ken, 2026-10-29): a small, low-risk build goes to a cheap model on the Swarm's grid
  *  (Kimi K3, DeepSeek v4.1) before Opus or Astra, and steps up to them once that attempt fails. Reviews and security work never
- *  run on the grid. A route plug-in (route.ts RoutePlugin): it ranks and leaves out grid candidates only, each with a reason
- *  people read, and leaves every subscription candidate and member as it was.
+ *  run on the grid. A route plug-in (route.ts RoutePlugin): it notes and leaves out grid candidates only, each with a reason
+ *  people read, and leaves every subscription candidate and member as it was. Since task #2901 its note is never the order:
+ *  the project's Routing instructions weigh it.
  *
  *  Since project instructions (#2414) the server no longer steps a task up, and only the server knew a grid attempt's first
  *  review failed. So the step-up is read from what the route already sees: a grid model takes only a task's first attempt
@@ -23,7 +24,7 @@ export const CHEAP_FIRST = 'Cheap first'
  *  owned files"). Every routed task names owned code and checks, so their presence says nothing on its own. */
 export const MAX_OWNED = 3
 /** The least strength a grid model needs to be tried first: the catalog's named grid rows (Kimi K3, DeepSeek v4.1) are 2; an
- *  unnamed grid model (a small local one) is 1 and is never moved up. */
+ *  unnamed grid model (a small local one) is 1 and is never noted as the cheap first choice. */
 const CHEAP_STRENGTH = 2
 /** Kinds of work a grid model never takes, as the routing agent names them (route.ts Assessment.kind). */
 const SECURITY_KINDS = new Set(['security', 'auth', 'privacy', 'secrets', 'crypto', 'permissions'])
@@ -32,7 +33,7 @@ const SECURITY_KINDS = new Set(['security', 'auth', 'privacy', 'secrets', 'crypt
  *  Adding a kind here is the one place to widen it. */
 export const GRID_KINDS: readonly string[] = ['docs', 'tests', 'fixtures', 'copy', 'refactor']
 
-export const GRID_FIRST = 'A small, low-risk build: a cheap model on the Swarm\'s grid tries it first. If its review fails or the attempt is lost, the next route steps up to a strong model.'
+export const GRID_FIRST = 'A small, low-risk build: the cheap first choice is a model on the Swarm\'s grid. If its review fails or the attempt is lost, the next route steps up to a strong model.'
 export const NEVER_REVIEWS = 'A review never runs on a model on the Swarm\'s grid: reviews need a strong model.'
 export const NEVER_SECURITY = 'Security-sensitive work (a security kind or high risk) never runs on a model on the Swarm\'s grid.'
 /** The kinds as people read them: "docs, tests, fixtures, copy or refactor". */
@@ -41,7 +42,7 @@ export const GRID_KINDS_ONLY = `A model on the Swarm's grid takes only work whos
 /** What the route's help tells every routing agent (service.ts HELP.route), from the same constants the plug-ins apply, so a
  *  Lead knows which kind to give for the cheap choice (review of #2422: help that called kind optional got it rarely). */
 export const ROUTE_KIND_HELP = `one word for the kind of work; a model on the Swarm's grid is offered only for kind ${KINDS_TEXT}`
-export const CHEAP_FIRST_HELP = `Cheap first: small, low-risk work (risk and difficulty low, 1 to ${MAX_OWNED} owned paths) of kind ${KINDS_TEXT} ranks a model on the Swarm's grid first. `
+export const CHEAP_FIRST_HELP = `Cheap first: small, low-risk work (risk and difficulty low, 1 to ${MAX_OWNED} owned paths) of kind ${KINDS_TEXT} notes a model on the Swarm's grid as the cheap first choice. `
   + 'A model on the grid is never offered, even when named, for a review, security work (a security kind or high risk), work of any other kind or with no kind, or a task\'s second attempt.'
 export const FIRST_ATTEMPT_ONLY = 'A model on the Swarm\'s grid takes only a task\'s first attempt, so this one steps up.'
 export const EARLIER_UNREADABLE = 'Its earlier attempts could not be read, so it is not taken for a first attempt.'
@@ -102,10 +103,10 @@ export function gridLimits(review: boolean): RoutePlugin {
   }
 }
 
-/** The ranking for one task, beside [gridLimits]: a grid candidate is left out of any attempt after the first unless a person
- *  named it, and ranked first for a small, low-risk build it is strong enough for: above the catalog's strongest, so it is
- *  tried before Opus and Astra while keeping the order among grid models. A review or security task is the guard's, so this
- *  says nothing of it. */
+/** Cheap first for one task, beside [gridLimits]: a grid candidate is left out of any attempt after the first unless a person
+ *  named it, and noted as the cheap first choice for a small, low-risk build it is strong enough for, to be tried before Opus
+ *  and Astra. Its strength leans above the catalog's strongest, which since task #2901 moves nothing. A review or security
+ *  task is the guard's, so this says nothing of it. */
 export function cheapFirst(task: CheapTask): RoutePlugin {
   return {
     name: CHEAP_FIRST,
@@ -155,5 +156,5 @@ export const CHEAP_FIRST_MAKER: PluginMaker = {
   },
 }
 
-/** Piece 4's makers, in order: the guard first, ready at once, then the ranking. */
+/** Piece 4's makers, in order: the guard first, ready at once, then cheap first. */
 export const CHEAP_FIRST_MAKERS: readonly PluginMaker[] = [GRID_LIMITS_MAKER, CHEAP_FIRST_MAKER]

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
+
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { instructionsSkillText, recordProjectSkillsNotice, refreshProjectSkills, type ProjectDoc } from './swarmInstructionsSkill.js'
@@ -12,7 +15,6 @@ const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-instructions-')); roots.push(root); return root }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 // A Buddy that reads its folder alone (lib/buddyGuard.ts has the wide mode's tests).
-const folderOnly = () => null
 
 const TEXT = '# How we work\nEvery task gets a review.\n'
 /** When launched() sessions start: the launch's tools record's mtime, in whole seconds so every file system keeps it. */
@@ -209,7 +211,7 @@ describe('the project instructions skill', () => {
 
   it('gives a Buddy the instructions file only', () => {
     const workspace = fixture(), saved = { role: 'buddy' as const, key: 'buddy' }
-    const { file } = prepareSwarmSkill(workspace, saved, folderOnly)
+    const { file } = prepareSwarmSkill(workspace, saved)
     const skills = dirname(dirname(file)), instructions = join(skills, 'swarm-instructions', 'SKILL.md')
     const buddyDoc = doc({ roleName: 'Buddy' })
     const first = refreshProjectSkills(workspace, saved, buddyDoc)!
@@ -222,7 +224,7 @@ describe('the project instructions skill', () => {
     // Told once.
     recordProjectSkillsNotice(workspace, saved, first)
     expect(refreshProjectSkills(workspace, saved, buddyDoc)).toMatchObject({ owed: false })
-    prepareSwarmSkill(workspace, saved, folderOnly)
+    prepareSwarmSkill(workspace, saved)
     expect(refreshProjectSkills(workspace, saved, buddyDoc)).toMatchObject({ owed: false })
     expect(readdirSync(skills).sort()).toEqual(['swarm-buddy', 'swarm-instructions'])
     // A later save is told as to any agent, with no tools part and no switch line.

@@ -8,7 +8,6 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
-import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
 
@@ -1422,14 +1421,6 @@ class ConversationServer {
         // buddy.create since 10-31): its chat is in no project.
         final swarm = command['projectId'] == null;
         final projectId = command['projectId'] as String? ?? '';
-        // As the backend: no Codex Buddy for now (security review 1 of #2087).
-        if (command['engine'] == 'codex') {
-          throw SuperTabFailure(
-            'BUDDY_ENGINE',
-            kBuddyEngineRefusals['codex']!,
-            statusCode: 403,
-          );
-        }
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&

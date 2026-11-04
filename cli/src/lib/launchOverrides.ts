@@ -232,9 +232,6 @@ export async function prepareLaunchOverrides(
   const swarm = deps.swarm
   const owner = current
   source = structuredClone(source)
-  // A Buddy starts no MCP server, and the grid's web tools are one: with `--strict-mcp-config` among its flags it would
-  // load exactly that server (docs/swarms.md, Buddies). Launched from the grid without it, as on its own login.
-  if (source.swarmSkill?.role === 'buddy' && source.gridLaunch) delete source.gridLaunch.mcpUrl
   const inspected = capturedNative ? { ok: true as const, launch: capturedNative } : await deps.native?.(engine, source, { id: configKey, current: owner })
   if (!current()) return changed
   if (inspected && !inspected.ok) return inspected
@@ -309,9 +306,9 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again. Never
-    // a Buddy's (core/agents/create.ts).
-    const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again; a
+    // Buddy's too (task #2832).
+    const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
