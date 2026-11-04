@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/state/harness_attachments.dart';
@@ -190,6 +191,8 @@ class SwarmPartsBackend {
     // chatSettings.ts): every setting on every read, which the app keeps.
     if (state['activityDigest'] != null)
       'activityDigest': state['activityDigest'],
+    if (state['remindersDigest'] != null)
+      'remindersDigest': state['remindersDigest'],
     if ((state['chatSettings'] as Map?)?[reader ?? 'owner'] case final Map set
         when set.isNotEmpty)
       'chatSettings': Map<String, dynamic>.from(set),
@@ -698,6 +701,47 @@ class ConversationServer {
         () => <String, dynamic>{},
       ) as Map;
 
+  /// The reader's reminders (backend reminders.ts), as its list answers each;
+  /// its read lists those due by `clock.now()` and the next time after.
+  final reminders = <Map<String, dynamic>>[];
+
+  /// Whether the server has reminders: without, each route answers 404.
+  bool remindersServed = true;
+  final reminderReads = <String>[];
+
+  /// Every reminder set or cleared, in order: {method, conversationId,
+  /// messageId, at}.
+  final reminderWrites = <Map<String, dynamic>>[];
+  int _reminderTurn = 0;
+
+  /// [message] as a reminder due [at] lists it.
+  Map<String, dynamic> remindOf(Map<String, dynamic> message, DateTime at) {
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == message['conversationId']);
+    final thread = message['thread'] as String?;
+    return {
+      'id': 'reminder-${message['id']}',
+      'conversationId': message['conversationId'],
+      'conversationTitle': group['title'],
+      'projectName': 'Harness',
+      'messageId': message['id'],
+      'messageSequence': message['sequence'],
+      'threadId': thread != null && thread != message['id'] ? thread : null,
+      'author': message['author'],
+      'text': message['text'],
+      'dueAt': at.toUtc().toIso8601String(),
+    };
+  }
+
+  /// A reminder of [messageId] the reader set on another device, due [at].
+  void remindElsewhere(String messageId, DateTime at) {
+    reminders.add(
+      remindOf(messages.firstWhere((m) => m['id'] == messageId), at),
+    );
+    state['remindersDigest'] = 'r${++_reminderTurn}';
+  }
+
   /// The Mark unread writes this device sent, in order: {conversationId,
   /// sequence} with the message's own sequence.
   final unreadPosts = <Map<String, dynamic>>[];
@@ -1011,6 +1055,38 @@ class ConversationServer {
         : null;
     if (read != null) {
       return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
+    final reminder = RegExp(
+      r'/conversations/([^/]+)/messages/([^/]+)/reminder$',
+    ).firstMatch(path);
+    if (reminder != null && (method == 'PUT' || method == 'DELETE')) {
+      final conversationId = Uri.decodeComponent(reminder.group(1)!);
+      final messageId = Uri.decodeComponent(reminder.group(2)!);
+      reminderWrites.add({
+        'method': method,
+        'conversationId': conversationId,
+        'messageId': messageId,
+        if (body?['at'] case final at?) 'at': at,
+      });
+      if (!remindersServed) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      final id = 'reminder-$messageId';
+      final held = reminders.indexWhere((r) => r['id'] == id);
+      if (method == 'DELETE') {
+        if (held >= 0) reminders.removeAt(held);
+        state['remindersDigest'] = 'r${++_reminderTurn}';
+        return {'cleared': held >= 0};
+      }
+      final message = messages.firstWhere((m) => m['id'] == messageId);
+      final row = remindOf(message, DateTime.parse(body!['at'] as String));
+      if (held >= 0) {
+        reminders[held] = row;
+      } else {
+        reminders.add(row);
+      }
+      state['remindersDigest'] = 'r${++_reminderTurn}';
+      return {'id': id, 'dueAt': row['dueAt']};
     }
     final unread = method == 'POST'
         ? RegExp(r'/conversations/([^/]+)/unread$').firstMatch(path)
@@ -1608,6 +1684,28 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
       return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'reminders' && method == 'GET') {
+      reminderReads.add(path);
+      if (!remindersServed) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      final now = clock.now();
+      DateTime due(Map r) => DateTime.parse(r['dueAt'] as String);
+      final listed = [
+        for (final r in reminders)
+          if (!due(r).isAfter(now)) r,
+      ]..sort((a, b) => due(b).compareTo(due(a)));
+      final later = [
+        for (final r in reminders)
+          if (due(r).isAfter(now)) due(r),
+      ]..sort();
+      return jsonDecode(
+        jsonEncode({
+          'due': listed,
+          'next': later.firstOrNull?.toUtc().toIso8601String(),
+        }),
+      ) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'activity') {
       activityReads.add(path);
