@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
@@ -1427,75 +1428,89 @@ void main() {
       await settle();
     });
 
-    test('no answer in time says Not sent; Retry reuses the receipt and the '
-        'late answer counts', () async {
-      final r = await rig();
-      final answers = held(r.swarm);
-      final chat = SwarmConversation(
-        r.reader,
-        'g1',
-        sendTimeout: const Duration(milliseconds: 20),
+    /// A chat and its thread on [async]'s clock, the reply [text] in its box: a
+    /// timeout there passes only when the test says so, never because the
+    /// machine is slow.
+    ({FakeSwarm swarm, Map<String, Completer<Object?>> answers, SwarmThread t})
+    onFakeClock(FakeAsync async, String text) {
+      late final FakeSwarm swarm;
+      late final SwarmReader reader;
+      unawaited(
+        rig().then((r) {
+          swarm = r.swarm;
+          reader = r.reader;
+        }),
       );
+      async.flushMicrotasks();
+      final answers = held(swarm);
+      final chat = SwarmConversation(reader, 'g1');
       addTearDown(chat.dispose);
-      await chat.load();
-      r.swarm.routes[thread] = (_) => {
+      unawaited(chat.load());
+      async.flushMicrotasks();
+      swarm.routes[thread] = (_) => {
         'messages': [message('m1', 1)],
         'next': null,
       };
       final t = open(chat);
-      await t.load();
-      t.draft = 'Once only';
+      unawaited(t.load());
+      async.flushMicrotasks();
+      t.draft = text;
+      return (swarm: swarm, answers: answers, t: t);
+    }
 
-      expect(await t.send(), isFalse);
-      final post = t.outgoing.single;
-      expect(post.state, SwarmPostState.unconfirmed);
-      expect(t.error, contains('not sent'));
+    test('no answer in time says Not sent; Retry reuses the receipt and the '
+        'late answer counts', () {
+      fakeAsync((async) {
+        final (:swarm, :answers, :t) = onFakeClock(async, 'Once only');
 
-      final again = t.retry(post);
-      await settle();
-      final posts = [
-        for (final call in r.swarm.calls)
-          if (call.path == commands) call.body!['operationId'],
-      ];
-      expect(posts, hasLength(2));
-      expect(posts.toSet(), hasLength(1), reason: 'one reply, one receipt');
-      answers.values.single.complete({'result': <String, dynamic>{}});
-      expect(await again, isTrue);
-      expect(post.state, SwarmPostState.confirmed);
-      expect(t.error, isNull);
+        bool? sent;
+        unawaited(t.send().then((value) => sent = value));
+        async.elapse(SwarmOutbox.defaultTimeout);
+        expect(sent, isFalse);
+        final post = t.outgoing.single;
+        expect(post.state, SwarmPostState.unconfirmed);
+        expect(t.error, contains('not sent'));
+
+        bool? again;
+        unawaited(t.retry(post).then((value) => again = value));
+        async.flushMicrotasks();
+        final posts = [
+          for (final call in swarm.calls)
+            if (call.path == commands) call.body!['operationId'],
+        ];
+        expect(posts, hasLength(2));
+        expect(posts.toSet(), hasLength(1), reason: 'one reply, one receipt');
+        // The last moment of the retry's own wait, whatever the machine's speed.
+        async.elapse(
+          SwarmOutbox.defaultTimeout - const Duration(milliseconds: 1),
+        );
+        expect(again, isNull);
+        answers.values.single.complete({'result': <String, dynamic>{}});
+        async.flushMicrotasks();
+        expect(again, isTrue);
+        expect(post.state, SwarmPostState.confirmed);
+        expect(t.error, isNull);
+      });
     });
 
-    test(
-      'a refusal that lands after Not sent still puts the reply back',
-      () async {
-        final r = await rig();
-        final answers = held(r.swarm);
-        final chat = SwarmConversation(
-          r.reader,
-          'g1',
-          sendTimeout: const Duration(milliseconds: 20),
-        );
-        addTearDown(chat.dispose);
-        await chat.load();
-        r.swarm.routes[thread] = (_) => {
-          'messages': [message('m1', 1)],
-          'next': null,
-        };
-        final t = open(chat);
-        await t.load();
-        t.draft = 'Too long';
+    test('a refusal that lands after Not sent still puts the reply back', () {
+      fakeAsync((async) {
+        final (swarm: _, :answers, :t) = onFakeClock(async, 'Too long');
 
-        expect(await t.send(), isFalse);
+        bool? sent;
+        unawaited(t.send().then((value) => sent = value));
+        async.elapse(SwarmOutbox.defaultTimeout);
+        expect(sent, isFalse);
         expect(t.draft, isEmpty);
         answers.values.single.completeError(
           const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
         );
-        await settle();
+        async.flushMicrotasks();
         expect(t.outgoing, isEmpty);
         expect(t.draft, 'Too long');
         expect(t.error, 'Too long.');
-      },
-    );
+      });
+    });
 
     test('a refused reply goes back to the box while another stays on its '
         'way', () async {
