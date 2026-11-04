@@ -96,6 +96,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
     json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
+    json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
