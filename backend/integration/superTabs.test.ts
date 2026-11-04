@@ -2459,7 +2459,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const data = read.json().data
     // An older Desktop shows the read's warnings atop its routing dialog, and reads no save's `note`: they say where routing went.
     expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [IGNORED_NOTE], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
-    expect(data.catalog.models).toHaveLength(7)
+    // Six rows since task #2972: Codex has Sol and Astra by name, and no `default default` row.
+    expect(data.catalog.models).toHaveLength(6)
+    expect(data.catalog.models.filter((m: { model: string; effort: string }) => m.model === 'default' || m.effort === 'default')).toEqual([])
     expect(data.catalog.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
     expect(data.catalog.prices.map((p: { model: string }) => p.model)).toContain('claude-opus-5-5')
     expect(data.catalog.priors.models.length).toBeGreaterThan(0)
