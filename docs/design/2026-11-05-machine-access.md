@@ -32,12 +32,12 @@ writes still need Ken's go.
 **With this design**, no lamp code anywhere:
 
 1. thaibao56's teammate opens Machines > their Mac. The machine found `lamp` in its MCP servers, and a USB modem device,
-   and suggests **Lamp** (kind device). They press Add.
+   and suggests **Lamp**. They press Add.
 2. The lampOS task says it needs **Lamp**.
 3. The route offers only machines whose account that would run the work has Lamp, ok. For a teammate's Mac that is its
    Team account, so the lamp MCP server has to be set up there (open question 3).
-4. If an agent finds the lamp unreachable, it marks Lamp "not reachable" (the needs sign-in state, worded for a
-   device; see Staleness). The owner is told, and the route stops offering it until it is back.
+4. If an agent finds the lamp unreachable, it marks Lamp "not working" with a one-line why (see Staleness). The owner
+   is told, and the route stops offering it until it works again.
 
 Email, Fusion 360 and the production database go through exactly the same four steps.
 
@@ -50,14 +50,16 @@ beside `projects` and `ownAccountChoice`), at most 32 entries:
 | --- | --- |
 | `id` | 16 hex, made by the server |
 | `name` | 1 to 60 characters, as people say it: "Lamp", "Email (dee@)", "Fusion 360", "Prod DB read-only", "Tony's iPhone" |
-| `kind` | `app`, `account`, `data`, `device` or `network` |
 | `account` | `own` (the owner's macOS account) or `team` (the Mac's Harness Team account). A machine with no Team account has only `own`. |
-| `state` | `ok` or `needsSignIn` (shown as "needs sign-in"; for a device, "not reachable") |
+| `state` | `ok` or `notWorking` (shown as "not working", with the agent's one-line why: "gmail asks for sign-in", "lamp does not answer") |
 | `teammates` | own-account entries only: whether teammates' tasks that need it may run in the owner's account (section 4). Default false. |
 | `production` | true for production systems, so the route notes "Production writes need Ken's go". Default false. |
 | `check` | optional, how the machine can confirm it by itself: a tool on PATH, an MCP server name, a device path pattern (`/dev/cu.usbmodem*`), an app bundle id. Owner-only to read. |
 | `addedBy`, `addedAt` | the person who added or confirmed it; `found: true` when it came from a suggestion |
-| `stale` | when `needsSignIn`: which agent said so, when, in which task, and its one-line why |
+
+No kind field (River's review, for less-is-better): a name and where it is are enough, and a suggestion's `check`
+already says what it is.
+| `stale` | when `notWorking`: which agent said so, when, in which task, and its one-line why |
 
 What it never holds: a password, key, token, file path to a secret, account id or email the owner did not type
 themselves. The server refuses a name that looks like a secret (a run of 20+ key-like characters, `user:pass@`, known
@@ -82,11 +84,11 @@ Team account's suggestions show what it really has:
 
 | Looks at | Suggests |
 | --- | --- |
-| Apps in /Applications from a short list of work apps (Fusion 360, Xcode, Blender, Figma, Android Studio, …) | Fusion 360 (app) |
-| Signed-in CLIs, by their read-only status command (`gh auth status`, `gcloud auth list`, `aws sts get-caller-identity`, `vercel whoami`, …) | Google Cloud (account). Signed in or not only: no account name is read out. |
+| Apps in /Applications from a short list of work apps (Fusion 360, Xcode, Blender, Figma, Android Studio, …) | Fusion 360 |
+| Signed-in CLIs, by their read-only status command (`gh auth status`, `gcloud auth list`, `aws sts get-caller-identity`, `vercel whoami`, …) | Google Cloud. Signed in or not only: no account name is read out. |
 | Machine MCP servers (`mcp-servers.json`) | Lamp (from `lamp`) |
-| Connected devices: USB product names, `xcrun devicectl` phones, `adb devices` | Tony's iPhone, a USB modem (device) |
-| Tools on PATH, from today's tool probe (`COMMON_TOOLS`, `cli/src/superTabs/machines.ts`) | Flutter, Docker (app) |
+| Connected devices: USB product names, `xcrun devicectl` phones, `adb devices` | Tony's iPhone, a USB modem |
+| Tools on PATH, from today's tool probe (`COMMON_TOOLS`, `cli/src/superTabs/machines.ts`) | Flutter, Docker |
 
 Suggestions never leave the machine until the owner adds one: Desktop asks the machine's own daemon for them when its
 owner opens Configure, and the daemon answers only its owner's session. The server's machine reading has no field for
@@ -102,7 +104,7 @@ run.
   in `machines.ts` already decide this). An entry counts only when its state is ok and section 4 lets this task use it.
 - A candidate without it is left out with one line, like a missing tool today (`requiredToolReason`):
   - "No Lamp here."
-  - "Lamp needs sign-in on Gray's Mac; Gray was told."
+  - "Lamp is not working on Gray's Mac (lamp does not answer); Gray was told."
   - "Fusion 360 is in Gray's own account, not shared with teammates."
 - Entries ride in the machine record every route already reads, so nothing new is fetched. Entries with a `check` are
   confirmed by the machine itself every 10 minutes, the tool probe's cache time (`VERIFIED_TOOL_TTL_MS`), and at each
@@ -116,7 +118,7 @@ run.
 
 | Who | Sees | Can use |
 | --- | --- | --- |
-| Swarm members who see the machine today | Name, kind, account, state, who added it | Only through tasks routed by the rules below |
+| Swarm members who see the machine today | Name, account, state and its why, who added it | Only through tasks routed by the rules below |
 | The machine's owner | Everything, `check` and suggestions included | Their own tasks, any entry |
 | A teammate's task, Team account (the default) | — | Team-account entries only. The Team account never sees the owner's sign-ins, apps' logins or files. |
 | A teammate's task, owner's own account | — | Only when the owner turned on own-account work (#2806, `ownAccountWork`) or that entry's `teammates` |
@@ -135,11 +137,11 @@ run.
 
 ## 5. Staleness
 
-- An agent that finds an entry signed out (or a device not reachable) marks it: `harness super-tab access mark "Email
-  (dee@)" needs-sign-in --why "gmail asks for sign-in"`. Only an agent running on that machine, in that entry's
+- An agent that finds an entry not working (signed out, a device not answering) marks it: `harness super-tab access
+  mark "Email (dee@)" not-working --why "gmail asks for sign-in"`. Only an agent running on that machine, in that entry's
   account, may mark it. Agents can never mark one ok.
-- The server sets `needsSignIn` with the agent, task and why, and tells the owner in their Buddy chat (`person.tell`),
-  at most once a day per entry: "Email (dee@) on Gray's Mac needs sign-in: Aster found it in #2945."
+- The server sets `notWorking` with the agent, task and why, and tells the owner in their Buddy chat (`person.tell`),
+  at most once a day per entry: "Email (dee@) on Gray's Mac is not working (gmail asks for sign-in): Aster found it in #2945."
 - It goes back to ok when the owner says so in Machines, or by itself when its `check` passes again.
 - Until then the route leaves it out with that line, so no work waits on a signed-out machine without saying so.
 
@@ -155,7 +157,7 @@ account. Seen by every Swarm member who sees the machine:
      Kiln6   Rev  idle
      CPU 62% free    Memory 9.1 GB free    Disk 210 GB free
      Subscriptions   Claude 41% left · resets Fri    Codex 77% left
-     Access          Gray's account: Fusion 360 · Email (dee@) needs sign-in
+     Access          Gray's account: Fusion 360 · Email (dee@) not working
                      Team account:   Lamp · Flutter · Tony's iPhone
  ~ Mac Studio                                          (K)  online   ⋯
      Access          Gray's account: Prod DB read-only  (production)
@@ -170,17 +172,17 @@ Configure dialog (right-click > Configure), owner only. New: the Access section.
 
  Access
    Your account
-     Fusion 360        App       ok              [ ] Teammates may use    ⋯
-     Email (dee@)      Account   needs sign-in   [ ] Teammates may use    ⋯
+     Fusion 360      ok                                     [ ] Teammates may use  ⋯
+     Email (dee@)    not working: gmail asks for sign-in    [ ] Teammates may use  ⋯
    Team account
-     Lamp              Device    ok                                       ⋯
-     Tony's iPhone     Device    ok                                       ⋯
+     Lamp            ok                                                            ⋯
+     Tony's iPhone   ok                                                            ⋯
    Add access…
 
    Found on this Mac
-     Blender                    App, your account        Add   Not now
-     Google Cloud, signed in    Account, your account    Add   Not now
-     lamp MCP server            Device, Team account     Add   Not now
+     Blender                    your account     Add   Not now
+     Google Cloud, signed in    your account     Add   Not now
+     lamp MCP server            Team account     Add   Not now
 
  Remove from this Swarm                                    Cancel   Save
 ```
@@ -190,10 +192,8 @@ Add access:
 ```
  Add access
  Name    [ Fusion 360                    ]   Like: Email (dee@), Prod DB read-only
- Kind    (•) App  ( ) Account  ( ) Data  ( ) Device  ( ) Network
  Where   (•) Your account  ( ) Team account
  [ ] Production system
- Names only. Never type a password, key or token here.
                                                           Cancel   Add
 ```
 
@@ -210,7 +210,7 @@ New: the Needs line, "has" on each candidate, and the access reasons:
  New agent · Claude opus high · Gray's Mac — has Lamp (Team account)
  Kiln5 · Claude opus high · Mac Studio — has Lamp (Team account)
  Unavailable: New agent · Codex · Darren-MacBook — No Lamp here.
- Unavailable: New agent · Claude opus high · Diego's Mac — Lamp is not reachable on Diego's Mac; Diego was told.
+ Unavailable: New agent · Claude opus high · Diego's Mac — Lamp is not working on Diego's Mac (lamp does not answer); Diego was told.
  Unavailable: New agent · Claude opus high · Tony's Mac — Lamp is in Tony's own account, not shared with teammates.
 ```
 
