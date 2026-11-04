@@ -63,7 +63,7 @@ ALSO.update({f"desktop/{path}": "mobile" for path in (
     "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
     "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
     "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
-    "test/support/real_fonts.dart")})
+    "lib/super_tabs/roster.dart", "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -122,6 +122,8 @@ NOT_READS = {
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
+    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
+                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
     "cli/src/lib/buddyGuard.claude.spec.ts": ("test data: files in a temporary repository", {"docs/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
