@@ -94,7 +94,7 @@ describe('setup script', () => {
     const script = buildSetupScript(input())
     const order = [
       'owned_by_root "$dir"', 'dscl . -create "/Users/$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
-      'as_owner /bin/sh -c', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+      'sh "$SENTINEL"', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
       'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
       'install -o 0 -g 0 -m 0644 "$STAGE/team.plist" "$PLIST"', 'launchctl bootstrap system "$PLIST"',
     ].map((needle) => at(script, needle))
@@ -178,7 +178,9 @@ describe('the team account\'s own engines', () => {
     expect(run.stdout).toContain('harness: installed @anthropic-ai/claude-code for the team account')
     expect(run.stderr).toContain('harness: could not install @openai/codex for the team account; harness team setup tries again')
     const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split('|'))
-    expect(calls).toHaveLength(2)
+    // Both in one run first (one download phase, Scholes 2026-11-04); one refused, so each alone.
+    expect(calls.map(([, , args]) => args!.split(' ').filter((a) => a.startsWith('@')))).toEqual([
+      ['@anthropic-ai/claude-code', '@openai/codex'], ['@anthropic-ai/claude-code'], ['@openai/codex']])
     for (const [path, cwd, args] of calls) {
       expect(path!.split(':')[0]).toBe(bin)
       expect(cwd).toBe(home)
@@ -188,6 +190,52 @@ describe('the team account\'s own engines', () => {
     const bare = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', join(root, 'nobody'), 'node-v1', '@openai/codex'], { encoding: 'utf8' })
     expect(bare.status).toBe(0)
     expect(bare.stderr).toContain('has no npm')
+  })
+})
+
+describe('the team account\'s engines, on a slow network', () => {
+  // Scholes, 2026-11-04: a new Mac waited about 7 minutes after the password, nothing on screen saying why. Claude
+  // Code and Codex are ~320 MB from npm with an empty cache, and nothing bounded it.
+  it('stops an install that outlasts its time, says the engines are missing and how to add them, and goes on', () => {
+    const root = temp()
+    const home = join(root, 'home'), bin = join(home, '.harness', 'runtime', 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const pids = join(root, 'npm.pids')
+    // A stand-in npm that never ends, holding the output open as a real download would.
+    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho $$ >> '${pids}'\nexec sleep 30\n`, { mode: 0o755 })
+    const started = Date.now()
+    const run = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', home, 'node-v1', '@anthropic-ai/claude-code', '@openai/codex'],
+      { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HARNESS_TEAM_ENGINE_SECONDS: '2' }, timeout: 20_000 })
+    expect(run.status).toBe(0)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(run.stderr).toContain('harness: Claude Code and Codex did not finish installing in 2 seconds; the Harness Team account works without them, and harness team setup installs them')
+    // Nothing tried after the time ran out, and nothing left running.
+    const npms = readFileSync(pids, 'utf8').trim().split('\n')
+    expect(npms).toHaveLength(1)
+    expect(spawnSync('/bin/kill', ['-0', npms[0]!]).status).not.toBe(0)
+  })
+
+  it('ends at once when npm does: a quick install does not wait out its time', () => {
+    const root = temp()
+    const home = join(root, 'home'), bin = join(home, '.harness', 'runtime', 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const started = Date.now()
+    const run = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', home, 'node-v1', '@anthropic-ai/claude-code', '@openai/codex'],
+      { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+    expect(run.status).toBe(0)
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(run.stdout).toContain('harness: installed @openai/codex for the team account')
+  })
+
+  it('says each step, as the owner, in the stage the owner\'s Harness reads, before the step runs', () => {
+    const script = buildSetupScript(input())
+    expect(script).toContain(`step() { printf '%s\\n' "$1" | as_owner /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$STAGE/progress" >/dev/null 2>&1 || true; }`)
+    const order = ['account', 'home', 'privacy', 'runtime', 'engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name}\n`))
+    for (const at of order) expect(at).toBeGreaterThan(0)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    expect(order[4]).toBeLessThan(script.indexOf(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)}`))
+    parses(script)
   })
 })
 

@@ -120,6 +120,21 @@ describe('harness team setup', () => {
     expect(text).toContain('engines     ? not reported yet')
   })
 
+  // Scholes, 2026-11-04: a new member waited about 7 minutes after the password with no sign of progress. Setup says
+  // which step it is on: the password first, then each step the script reports, then the team daemon's report.
+  it('says each step as it goes: the password, the script\'s own steps, then the team daemon\'s report', async () => {
+    const steps: string[] = []
+    const f = fake({ statusAfter: reported, progress: (step) => steps.push(step) })
+    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
+      build('/private/var/folders/aa/T/harness-team-stage')
+      expect(steps).toEqual(['password'])
+      progress?.('account'); progress?.('engines')
+      return { ok: true, stdout: 'harness: handed a sign-in to the team account\n' }
+    })
+    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
+    expect(steps).toEqual(['password', 'account', 'engines', 'report'])
+  })
+
   it('asks to create the account on a Mac without one, and to repair it on a Mac that has it', async () => {
     const first = fake({ statusAfter: reported })
     await teamCommand(['setup'], first.deps)

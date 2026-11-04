@@ -24,6 +24,8 @@ import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
+import '../shortcuts/app_keymap.dart' show KeymapRegion;
+import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
@@ -613,6 +615,14 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
+  /// The bar or the pill clicked: the line, with typing back in the composer,
+  /// as after Jump to latest. A click outside the composer takes its focus,
+  /// and a later Esc then reached nothing in the chat.
+  void _jumpToUnreadLine(String id) {
+    _focus.requestFocus();
+    _revealUnreadLine(id);
+  }
+
   void _revealUnreadLine(String id) {
     final messageId = _unread.lineAt(id);
     if (messageId == null) return;
@@ -656,12 +666,11 @@ class _SuperTabViewState extends State<SuperTabView>
       final view = scroll.position.viewportDimension;
       away = top == null || top < 0 || top > view;
       if (!away) _unread.saw(c.selectedId);
-      // A line not laid out is told by its place in the list; once seen, no
-      // pill needs its direction.
+      // A line not laid out is told by its place in the list, seen or not:
+      // the bar shows whenever it is above.
       below = top != null
           ? top > view
-          : !_unread.seen(c.selectedId) &&
-                _below(c.selectedId, lineAt, scroll.position);
+          : _below(c.selectedId, lineAt, scroll.position);
     }
     final id = c.selectedId;
     final awayFromEnd =
@@ -690,6 +699,20 @@ class _SuperTabViewState extends State<SuperTabView>
         _awayFromEnd.remove(id);
       }
     });
+  }
+
+  /// Whether [id] shows the bar: its line above the reader, and its message
+  /// still held, since a jump can reach only a held row (the newest page read
+  /// in place of the held copy, or 500 newer, let it go).
+  bool _showsBar(String id) => _unread.offersBar(id) && _newFromLine(id) > 0;
+
+  /// The bar's count: [id]'s messages from others in the main stream, from
+  /// its New messages line on; none while the line's message is not held.
+  int _newFromLine(String id) {
+    final shown = _shownMessages(id);
+    final at = shown.indexWhere((m) => m.id == _unread.lineAt(id));
+    if (at < 0) return 0;
+    return shown.skip(at).where((m) => m.inMainStream && !c.isOwn(m)).length;
   }
 
   /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
@@ -740,9 +763,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return true;
   }
 
-  /// Slack's Option+Shift+Down and Up: the next or previous chat with
-  /// something unread, in the sidebar's order, skipping muted ones. At either
-  /// end nothing moves.
+  /// Slack's Option+Shift+Down and Up (`swarm.next_unread`, `.previous_unread`):
+  /// the next or previous chat with something unread, in the sidebar's order,
+  /// skipping muted ones. At either end nothing moves.
   bool _jumpUnread(int step) {
     final snapshot = c.snapshot;
     if (snapshot == null || c.accessRevoked) return false;
@@ -776,18 +799,33 @@ class _SuperTabViewState extends State<SuperTabView>
       _markAllRead();
       return KeyEventResult.handled;
     }
-    if (keys.isAltPressed && keys.isShiftPressed) {
-      final step = switch (event.logicalKey) {
-        LogicalKeyboardKey.arrowDown => 1,
-        LogicalKeyboardKey.arrowUp => -1,
-        _ => 0,
-      };
-      if (step != 0) {
-        _jumpUnread(step);
-        return KeyEventResult.handled;
-      }
+    // Esc dismisses the bar from anywhere in the chat, as from its box.
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        !keys.isShiftPressed &&
+        !keys.isAltPressed &&
+        _showsBar(c.selectedId) &&
+        _readAll()) {
+      return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
+  }
+
+  /// The region the view sits in (the quick switcher's) with the unread chat
+  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
+  /// Move pane only while the chat has focus.
+  Widget _unreadKeys(Widget child) {
+    final region = KeymapRegion.of(context);
+    return KeymapRegion(
+      contextKind: KeymapContext.swarmChat,
+      actions: {
+        ...?region?.actions,
+        'swarm.next_unread': () => _jumpUnread(1),
+        'swarm.previous_unread': () => _jumpUnread(-1),
+      },
+      composing: region?.composing,
+      keeps: region?.keeps,
+      child: child,
+    );
   }
 
   bool _readAll() {
@@ -4055,7 +4093,13 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _unread.offersJump(c.selectedId)
+                      child: _showsBar(c.selectedId)
+                          ? SuperTabUnreadBar(
+                              count: _newFromLine(c.selectedId),
+                              more: c.hasNewer(c.selectedId),
+                              onPressed: () => _jumpToUnreadLine(c.selectedId),
+                            )
+                          : _unread.offersDown(c.selectedId)
                           ? Padding(
                               padding: const EdgeInsets.fromLTRB(
                                 grid.AppDesktop.panelPadding,
@@ -4065,9 +4109,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               ),
                               child: Center(
                                 child: SuperTabJumpToUnread(
-                                  down: _unread.below,
                                   onPressed: () =>
-                                      _revealUnreadLine(c.selectedId),
+                                      _jumpToUnreadLine(c.selectedId),
                                 ),
                               ),
                             )
@@ -4746,7 +4789,7 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
-      return Focus(
+      final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
         onKeyEvent: _attentionKey,
@@ -4944,6 +4987,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ],
         ),
       );
+      return _unreadKeys(view);
     },
   );
 }
