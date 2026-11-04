@@ -72,7 +72,9 @@ describe('a task waiting on a person (task #2969)', () => {
   })
 
   it('is lost when no report ever showed its session, as before', () => {
-    expect(status(waiting({}, undefined), asked + 2 * HOUR).status).toBe('lost')
+    const unseen = waiting()
+    unseen.machines = []
+    expect(status(unseen, asked + 2 * HOUR).status).toBe('lost')
   })
 
   it('runs 30 minutes from the person\'s answer, then is lost if the agent stays quiet', () => {

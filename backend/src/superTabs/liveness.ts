@@ -248,10 +248,28 @@ function reportRenewedAt(state: SuperTabState, worker: Agent): number | undefine
   return progress === undefined ? undefined : Math.min(report.receivedAt, progress + PROGRESS_FRESH_MS)
 }
 
+/** When the person its agent asked answered, while the assignment still says needs_human (the agent has not set working yet). */
+function answeredAt(group: Conversation, assignment: Assignment): number | undefined {
+  const waiting = group.ledger?.waiting
+  return assignment.status === 'needs_human' && waiting?.assignmentId === assignment.id ? waiting.answeredAt ?? undefined : undefined
+}
+
+/** A task waits on a person (needs_human, or blocked: its agent cannot go on) and its agent is alive: its machine's last report
+ *  lists the session running. Its terminal prints nothing while it waits, so quiet time does not count (Ken, 2026-11-04, #2969:
+ *  a task waiting on Huy was lost after 30 quiet minutes, twice). Not once the person answered (the agent then has 30 minutes
+ *  from the answer, leaseEnd), and not for an agent no report shows running: that one is gone and loses it as before. */
+function waitingOnPerson(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment): boolean {
+  return (assignment.status === 'needs_human' || assignment.status === 'blocked') && answeredAt(group, assignment) === undefined
+    && !!state.machines?.find(m => m.machineId === worker.machineId)?.observation?.runningHarnessIds.includes(worker.harnessId)
+}
+
 /** When a worker's lease ends: from its own last status, check or post (for an assignment from before leases, its group's
- *  last message), or from its machine's reports, whichever is later. Undefined when nothing ever renewed it. */
+ *  last message), or from its machine's reports, whichever is later; a person's answer to its question starts its quiet
+ *  time too. Undefined when nothing ever renewed it. */
 function leaseEnd(group: Conversation, assignment: Assignment, renewed: number | undefined): number | undefined {
-  const own = assignment.leaseUntil ?? (group.lastActivityAt ? Date.parse(group.lastActivityAt) + LEASE_MS : undefined)
+  const answered = answeredAt(group, assignment)
+  const lease = assignment.leaseUntil ?? (group.lastActivityAt ? Date.parse(group.lastActivityAt) + LEASE_MS : undefined)
+  const own = answered === undefined ? lease : Math.max(lease ?? 0, answered + QUIET_RUNNING_MS)
   const reported = renewed === undefined ? undefined : renewed + LEASE_MS
   return own === undefined ? reported : reported === undefined ? own : Math.max(own, reported)
 }
@@ -275,7 +293,7 @@ export function nextLossAt(state: SuperTabState, machineId: string): number | un
   const steps = stepIndex(state)
   const ends = workerTasks(state)
     .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group)
-      && !waitingOnSteps(state, group, steps))
+      && !waitingOnSteps(state, group, steps) && !waitingOnPerson(state, group, worker, assignment))
     .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
@@ -291,7 +309,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
-  if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps)) return null
+  if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
