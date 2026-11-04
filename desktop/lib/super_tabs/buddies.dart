@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -10,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'private_project_lock.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
+import 'buddy_sandbox_prompt.dart';
 import 'buddy_model.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
@@ -660,6 +662,25 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
+          // The one Buddy on this Windows computer: a project's reads its folder
+          // alone everywhere, and a Team account's never reads more.
+          if (defaultTargetPlatform == TargetPlatform.windows &&
+              chat.isSwarmBuddyChat &&
+              agent.machineOwnerId == c.accountId &&
+              app?.localMachineState?.machine.isTeamAccount != true &&
+              agent.machineId == app?.localMachineState?.machine.machineId)
+            BuddySandboxPrompt(
+              key: const ValueKey('super-buddy-sandbox'),
+              installer: CliBuddySandboxInstaller(),
+              restart: () async {
+                if (!await c.removeBuddy(chat.projectId)) return;
+                await c.addBuddy(
+                  projectId: chat.projectId,
+                  machineId: agent.machineId,
+                  engine: buddyRestartEngine(agent.engine),
+                );
+              },
+            ),
           if (agent.downSince != null)
             Row(
               children: [

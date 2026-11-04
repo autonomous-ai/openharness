@@ -69,8 +69,12 @@ export interface WindowsPrivacyDeps {
   list(path: string): void
   /** Every group SID in this process's token, deny-only ones included (`windowsGroupSids` of `whoami /groups`). */
   groupSids(): string[]
+  /** The same groups by name (`windowsGroupNames`): the sandbox's has no well-known SID. */
+  groupNames?(): string[]
   now(): number
 }
+
+const WINDOWS_SANDBOX_GROUP = 'sandbox-runtime-users'
 
 export const realWindowsPrivacyFs = {
   open: (path: string) => closeSync(openSync(path, 'r')),
@@ -103,6 +107,10 @@ export function runWindowsPrivacyCheck(config: Pick<TeamConfig, 'ownerHome' | 's
   }
   if (deps.groupSids().includes(SID.administrators)) {
     return { passed: false, item: 'standard-user', checkedAt, detail: 'The team account is an administrator; it must be a standard user.' }
+  }
+  // A Buddy's sandbox opens its person's profile to this one group for reading (lib/windows/buddySandbox.ts).
+  if (deps.groupNames?.().some((name) => name.toLowerCase().endsWith(`\\${WINDOWS_SANDBOX_GROUP}`))) {
+    return { passed: false, item: 'home-listing', checkedAt, detail: `The team account is in the ${WINDOWS_SANDBOX_GROUP} group, which can read your profile; it must not be.` }
   }
   return { passed: true, checkedAt }
 }
@@ -142,6 +150,10 @@ export function windowsUserSid(stdout: string): string | null {
 export function windowsGroupSids(stdout: string): string[] {
   return stdout.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => csvFields(line)[2] ?? '').filter((sid) => sid.startsWith('S-1-'))
 }
+
+/** The groups' names (`DOMAIN\name`), from the same output. */
+export const windowsGroupNames = (stdout: string): string[] =>
+  stdout.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => csvFields(line)[0] ?? '')
 
 // ── The relay folder ──────────────────────────────────────────────────────────────────────────
 

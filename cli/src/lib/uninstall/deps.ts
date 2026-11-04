@@ -49,6 +49,7 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     markUninstalling: () => { try { writeFileSync(marker, `${Math.floor(Date.now() / 1000)}\n`) } catch { /* see above */ } },
     unmarkUninstalling: () => { rmSync(marker, { force: true }) },
     ask: options.ask,
+    ...(process.platform === 'win32' ? { removeBuddySandbox: async () => (await import('../windows/buddySandboxCommand.js')).removeBuddySandbox() } : {}),
     daemonPid: () => { const pid = readPid(); return pid !== null && isAlive(pid) ? pid : null },
     alive: isAlive,
     // The port the daemon saved when it started (lib/daemonRecord.ts): another user's daemon may have had the configured

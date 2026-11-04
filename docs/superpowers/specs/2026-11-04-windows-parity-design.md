@@ -208,14 +208,15 @@ On a Mac, Claude Code's OS sandbox holds a wide Buddy's shell: no writes, a host
 **Chosen over:** AppContainer, whose network access is on or off with no host list; a low-integrity token, which cannot close folders without relabelling the person's files; Windows Sandbox, a separate VM with none of the person's files, tools or sign-ins (Codex rejected it for this reason too).
 
 **Decisions:**
-- The helper `srt-win.exe` has no Authenticode signature in the npm package, and Smart App Control would block it. Harness builds it from source when the source is published, and ships and signs it in the pty payload through the existing pipeline.
-- The person sees one permission prompt, the first time a Buddy needs to read more than its folder, in plain words, and can decline: the Buddy then stays in its folder, as now.
-- `windows-uninstall` runs from `harness uninstall`, so nothing stays behind.
+- The helper `srt-win.exe` has no Authenticode signature in the npm package, and Smart App Control would block it. Harness takes it from the package the lockfile pins by hash, and ships and signs it in the pty payload through the existing pipeline. The exact binary the runtime is tested with, and no Rust toolchain or second source to pin.
+- The person sees one question in the Buddy bar, on the one Buddy on their own computer, in plain words, and can decline: the Buddy then stays in its folder, as now. On yes, Windows asks once, the person's home is opened for reading (the first time can take minutes, shown as it goes), and the Buddy starts again in the same chat.
+- `harness uninstall` removes it, so nothing stays behind.
+- Claude Code's own lines stay outside. Only the command runs inside: the rest of its line names the person's temporary folder, which stays closed. A hook line runs outside by its exact words, known at launch. A `harness` command runs outside only on its guard's one-use approval of its exact words (Claude Code quotes every apostrophe in a command, so another command cannot forge that line, measured on 2.1.318 on Windows and a Mac). Anything else runs inside.
 
 **Must hold:**
-- A Harness Team account is never in `sandbox-runtime-users`, and its privacy check proves it.
-- The session's guard still judges every command first.
-- `initialize()` proves the fence each session. A fence that fails means a Buddy in its own folder, said in one line, never a wide Buddy without it.
+- A Harness Team account is never in `sandbox-runtime-users`, and its privacy check proves it. The grant is on that group alone, so the privacy check's reads prove it too.
+- The session's guard still judges every command first. It allows no program but its fixed reads, so the runtime's documented gaps that need code of its own (a token it derives, an anonymous thread) are behind the guard here, as on a Mac.
+- `initialize()` runs for each command. A sandbox that cannot start refuses that command in one line and never runs it outside.
 
 **Known limits, to design around:** the runtime is alpha. Tools using Windows' own TLS stack (Schannel) do not work inside: `System32\curl.exe`, `winget`, git's Schannel backend; Git for Windows is set to OpenSSL there. System DNS and SMB are not fenced. New top-level profile items need a refresh, which Harness runs at each Buddy launch.
 

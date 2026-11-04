@@ -19,7 +19,7 @@ import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 
 /** The payload's files, as install.ps1 ($HarnessPtyFiles) and publish-pty-payload.sh (FILES) name them. */
-export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']
+export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe']
 const NODE_ZIP = /^node-(v\d+\.\d+\.\d+)-win-(x64|arm64)\.zip$/
 /** What ptyHost/launch.ts currentPtyVersion accepts as a version folder. */
 const PTY_VERSION = /^\d+(\.\d+)*$/

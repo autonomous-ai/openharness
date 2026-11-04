@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupSids,
+  WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupNames, windowsGroupSids,
   takeWindowsHandoffFile, windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsStartTaskScript,
   windowsUnzipScript, windowsUserSid, writeWindowsHandoff, type WindowsPrivacyDeps,
 } from './windowsTeam.js'
@@ -60,6 +60,14 @@ describe('runWindowsPrivacyCheck', () => {
 
   it('fails for an administrator, deny-only or not', () => {
     expect(runWindowsPrivacyCheck(config, deps({ groupSids: () => ['S-1-5-32-544'] }))).toMatchObject({ passed: false, item: 'standard-user' })
+  })
+
+  // A Buddy's sandbox opens its person's profile for reading to this group alone (lib/windows/buddySandbox.ts).
+  it('fails for an account in the Buddy sandbox\'s group', () => {
+    expect(runWindowsPrivacyCheck(config, deps({ groupNames: () => ['PC\\sandbox-runtime-users'] }))).toMatchObject({ passed: false, item: 'home-listing' })
+    expect(runWindowsPrivacyCheck(config, deps({ groupNames: () => ['BUILTIN\\Users', 'PC\\HarnessTeam'] }))).toMatchObject({ passed: true })
+    expect(windowsGroupNames('"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group"\n"PC\\sandbox-runtime-users","Alias","S-1-5-21-1","Enabled"\n'))
+      .toEqual(['BUILTIN\\Users', 'PC\\sandbox-runtime-users'])
   })
 })
 

@@ -155,9 +155,13 @@ jobs:
           $broken = Get-Content -Raw -LiteralPath $stderr
           if ($command.ExitCode -ne 3 -or $broken -notmatch 'Harness is not installed completely') { throw "harness.exe exited $($command.ExitCode) and said: $broken" }
       - name: CLI install
-        if: ${{ !inputs.release }}
         working-directory: cli
         run: npm ci
+      # A Buddy's sandbox (cli/src/lib/windows/buddySandbox.ts): Anthropic's helper, from the package the lockfile pins by
+      # hash, unsigned there. pty-sign signs it with the rest, as Smart App Control runs nothing else.
+      - name: Place the sandbox helper beside the host
+        shell: pwsh
+        run: Copy-Item "cli/node_modules/@anthropic-ai/sandbox-runtime/vendor/srt-win/${{ matrix.arch }}/srt-win.exe" "pty/target/${{ matrix.target }}/release"
       - name: Contract suite against the real host, and the Windows CLI specs
         if: ${{ !inputs.release }}
         working-directory: cli
@@ -190,7 +194,7 @@ jobs:
         run: |
           $release = "pty/target/${{ matrix.target }}/release"
           New-Item -ItemType Directory -Force payload | Out-Null
-          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe" payload/
+          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe", "$release/srt-win.exe" payload/
           Get-ChildItem payload
       - uses: actions/upload-artifact@v4
         with:

@@ -1085,3 +1085,27 @@ describe('role kinds keep their role files', () => {
     }
   })
 })
+
+describe("a wide Buddy on Windows", () => {
+  it("runs its shell through its sandbox, with every hook line of the launch known to the script", () => {
+    const home = fixture(), dataDir = join(home, ".data"), root = realpathSync(fixture())
+    const shellApprovals = join(dataDir, "buddy-sandbox", "x", "approved")
+    const wide = { ...buddyWideOf({ home, dataDir, tmpDirs: [join(home, "tmp")], repos: [] }), shellApprovals }
+    prepareSwarmSkill(root, { role: "buddy", key: "win-key", mode: "default" }, () => wide)
+    const settings = JSON.parse(readFileSync(join(root, ".claude", "settings.local.json"), "utf8"))
+    // Claude Code stops at startup with a sandbox it cannot start on native Windows, so none is asked of it.
+    expect(settings.sandbox).toBeUndefined()
+    expect(settings.env.CLAUDE_CODE_SHELL_PREFIX).toBe(join(dirname(shellApprovals), "buddy-shell.sh"))
+    const script = readFileSync(join(dirname(shellApprovals), "buddy-shell.sh"), "utf8")
+    expect(script).toContain(settings.hooks.PreToolUse[0].hooks[0].command.split("\x27").join("\x27\"\x27\"\x27"))
+    expect(script).toContain("buddy-shell")
+    const policy = JSON.parse(readFileSync(join(dirname(shellApprovals), "policy.json"), "utf8"))
+    expect(policy.filesystem.denyWrite).toContain(root)
+  })
+
+  it("asks nothing new of a Buddy on a Mac, or one kept to its folder", () => {
+    const root = realpathSync(fixture())
+    prepareSwarmSkill(root, { role: "buddy", key: "plain", mode: "default" }, () => null)
+    expect(JSON.parse(readFileSync(join(root, ".claude", "settings.local.json"), "utf8")).env).toBeUndefined()
+  })
+})

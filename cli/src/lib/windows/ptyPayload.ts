@@ -21,7 +21,7 @@ import {
 
 /** The files a payload carries, and the only ones it may carry. */
 export const PTY_PAYLOAD_FILES: readonly string[] = [
-  'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe',
+  'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe',
 ]
 
 /** Each canary run must answer within this; a hung binary must not hold the updater. */

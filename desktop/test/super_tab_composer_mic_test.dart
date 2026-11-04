@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -162,6 +163,32 @@ void main() {
       await tester.tap(key('super-voice-settings'));
       expect(opened, [superTabMicrophoneSettings]);
       await close(tester);
+    });
+
+    testWidgets('on Windows it opens Windows settings, in Windows words', (
+      tester,
+    ) async {
+      final opened = <Uri>[];
+      final before = superTabOpenSettings;
+      superTabOpenSettings = (url) async {
+        opened.add(url);
+        return true;
+      };
+      addTearDown(() => superTabOpenSettings = before);
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await show(tester);
+        mic.allow = false;
+        await tester.tap(key('super-composer-mic'));
+        await tester.pumpAndSettle();
+        expect(find.text('Open Settings'), findsOneWidget);
+        expect(find.textContaining('System Settings'), findsNothing);
+        await tester.tap(key('super-voice-settings'));
+        expect(opened, [Uri.parse('ms-settings:privacy-microphone')]);
+        await close(tester);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
     });
   });
 

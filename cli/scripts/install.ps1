@@ -29,7 +29,7 @@ $HarnessScriptPath = $MyInvocation.MyCommand.Path
 
 $HarnessCliVersionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
 $HarnessPtyVersionPattern = '^\d+(\.\d+)*$'
-$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe')
+$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'srt-win.exe')
 
 function Get-HarnessPlatform {
   # The platform from the NATIVE architecture, read where Windows keeps it for the whole system. An x64

@@ -1,7 +1,8 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { buddyTmpOf } from './agentTmp.js'
-import { buddyGuardCommand, buddyGuardSource, buddyLaunchFile, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, revokeBuddyWide, type BuddyWide } from './buddyGuard.js'
+import { buddyShellPrefix, writeBuddySandboxPolicy, writeBuddyShell } from './windows/buddySandbox.js'
+import { buddyGuardCommand, buddyGuardSource, buddyLaunchFile, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, buddyWindowsSandboxPolicy, revokeBuddyWide, type BuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { dshShellAvailable } from '../dsh/shell.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
@@ -756,7 +757,7 @@ export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wid
 /** Claude Code's settings in a Buddy's folder, the only ones it reads (it launches with `--setting-sources local` in dontAsk
  *  mode, engines/claude/launch.ts `buddy`): its guard answers every tool call, allowing only reads and its Super Tab
  *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
-const buddyClaudeSettings = (guard: string, sandbox: Record<string, unknown> | null) => ({
+const buddyClaudeSettings = (guard: string, sandbox: Record<string, unknown> | null, shellPrefix: string | null = null) => ({
   // Not offered PowerShell on Windows either: its guard judges Bash alone, and a real Buddy lost its first turns to refusals there.
   permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', ...(process.platform === 'win32' ? ['PowerShell'] : [])] },
   // No memory file at all. The local settings source still loads a CLAUDE.local.md, and a committed one importing files
@@ -769,7 +770,20 @@ const buddyClaudeSettings = (guard: string, sandbox: Record<string, unknown> | n
     ...harnessClaudeHooks() },
   // In wide mode its shell runs in Claude Code's sandbox: no writes, its hosts only (lib/buddyGuard.ts buddySandboxSettings).
   ...(sandbox ? { sandbox } : {}),
+  // On Windows Claude Code has none, and Harness's holds its shell instead (lib/windows/buddySandbox.ts).
+  ...(shellPrefix ? { env: { CLAUDE_CODE_SHELL_PREFIX: shellPrefix } } : {}),
 })
+
+/** A wide Buddy on Windows: its sandbox's rules, and the script every shell line of this launch goes through. */
+function prepareBuddyShell(root: string, wide: BuddyWide, approvals: string, guard: string): string {
+  const dir = dirname(approvals)
+  writeBuddySandboxPolicy(dir, buddyWindowsSandboxPolicy(root, wide))
+  const { hooks } = buddyClaudeSettings(guard, null)
+  const lines = Object.values(hooks).flat().flatMap((block) => (block as { hooks?: { command?: unknown }[] }).hooks ?? [])
+    .map(hook => hook.command).filter((command): command is string => typeof command === 'string')
+  writeBuddyShell(dir, { node: managedNodePath(), cli: process.argv[1]!, hooks: lines })
+  return buddyShellPrefix(dir)
+}
 
 /**
  * Harness's own Claude Code hooks, as the launch just wrote them to the person's settings (core/agents/create.ts prepares
@@ -832,7 +846,9 @@ function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null, ownT
   if (existsSync(launchFile)) chmodSync(launchFile, 0o600)
   if (wide) writeFileSync(launchFile, `${wide.launch}\n`, { mode: 0o600 }); else rmSync(launchFile, { force: true })
   writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide, ownTemp), { mode: 0o600 })
-  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide, ownTemp) : null), null, 2)}\n`, { mode: 0o600 })
+  const body = wide?.shellApprovals ? buddyClaudeSettings(guard, null, prepareBuddyShell(root, wide, wide.shellApprovals, guard))
+    : buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide, ownTemp) : null)
+  writeFileSync(settings, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 })
   ignoreBuddyFiles(root)
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

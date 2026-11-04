@@ -133,6 +133,8 @@ export interface UninstallDeps {
   markUninstalling(): void
   unmarkUninstalling(): void
   ask(question: string): Promise<string>
+  /** Windows: this computer's sandbox for a Buddy's shell (lib/windows/buddySandboxCommand.ts); whether there was one. */
+  removeBuddySandbox?(): Promise<boolean>
   daemonPid(): number | null
   alive(pid: number): boolean
   stopAgents(): Promise<AgentsStopped>
@@ -188,6 +190,7 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     ...(deps.service?.present() ? [`  · takes the Harness daemon out of ${deps.service.name}, so it no longer starts at login`] : []),
     // The rules are recognized by their text: one the person added that is the same as Harness's cannot be told apart (B5.5).
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
+    ...(deps.removeBuddySandbox ? ['  · removes your Buddy\'s sandbox, if you set one up (Windows asks once)'] : []),
     deps.platform === 'win32'
       ? `  · removes ${deps.tildify(win32.join(deps.root, 'bin'))} from your PATH`
       : '  · removes the harness and hn commands, and the PATH line the installer added',
@@ -421,6 +424,11 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
 
   await step(problems, (detail) => `Harness could not remove its hooks from your agents' settings (${detail}), so your agents may still try to reach Harness`,
     async () => reportHooks(deps, await deps.removeHooks(), problems))
+
+  if (deps.removeBuddySandbox) {
+    await step(problems, (detail) => `Harness could not remove your Buddy's sandbox (${detail}): run harness buddy-sandbox uninstall before deleting Harness, or remove the srt-sandbox account yourself`,
+      async () => { if (await deps.removeBuddySandbox!()) deps.out('✓ removed your Buddy\'s sandbox') })
+  }
 
   if (!windows) {
     await step(problems, (detail) => `Harness could not remove the harness and hn commands (${detail}): delete them from ~/.local/bin yourself`, () => {

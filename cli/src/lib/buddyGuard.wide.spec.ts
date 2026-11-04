@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buddyTmpParent } from './agentTmp.js'
 import { BUDDY_ENGINE_HOMES, markBuddyNarrow, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
-  judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount, buddyGrantLive, buddyAccountFile, buddyLaunchFile } from './buddyGuard.js'
+  judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount, buddyGrantLive, buddyAccountFile, buddyLaunchFile, buddyWindowsSandboxPolicy } from './buddyGuard.js'
+import { buddySandboxDir } from './windows/buddySandbox.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -612,7 +613,8 @@ describe('the launch\'s wide mode and sandbox', () => {
   it.each([
     ['engine homes it cannot read, so it cannot tell where another engine keeps its data', { engineHomes: null }],
     ['a Harness Team account', { team: true }],
-    ['Windows, where Claude Code has no sandbox', { platform: 'win32' as NodeJS.Platform }],
+    ['Windows, whose person has not agreed to its sandbox', { platform: 'win32' as NodeJS.Platform }],
+    ['Windows, in a Harness Team account', { platform: 'win32' as NodeJS.Platform, sandboxReady: true, team: true }],
     ['Linux without bubblewrap', { platform: 'linux' as NodeJS.Platform, hasBwrap: false }],
   ])('keeps the folder only on %s', (_, change) => {
     expect(buddyLaunchWide(repo, { ...deps, ...change })).toBeNull()
@@ -958,3 +960,56 @@ describe('passing its owner\'s words to their own harnesses on this Mac (#2626)'
   })
 })
 
+
+// A wide Buddy on Windows: its guard leaves its sandbox one word for each harness command it allowed (lib/windows/buddySandbox.ts).
+describe("a wide Buddy on Windows", () => {
+  const approvalsDir = join(parent, "approvals")
+  const windowsScript = join(parent, "buddy-guard-windows.mjs")
+  mkdirSync(approvalsDir, { recursive: true })
+  writeFileSync(windowsScript, buddyGuardSource(root, reads, { ...wide, shellApprovals: approvalsDir }))
+  const left = () => readdirSync(approvalsDir).map(name => JSON.parse(readFileSync(join(approvalsDir, name), "utf8")) as { command: string; at: number })
+  beforeEach(() => { rmSync(approvalsDir, { recursive: true, force: true }); mkdirSync(approvalsDir); grant() })
+
+  it("approves a harness command its guard allowed, by its exact words", () => {
+    const command = "harness super-tab status"
+    expect(bash(command, windowsScript)).toBe("allow")
+    expect(left()).toEqual([{ command, at: expect.any(Number) }])
+  })
+
+  it("approves nothing for a read that stays in the sandbox, a refused command, or another tool", () => {
+    expect(bash("git status", windowsScript)).toBe("allow")
+    expect(bash("harness uninstall", windowsScript)).toBe("deny")
+    expect(bash("harness super-tab status; cat x", windowsScript)).toBe("deny")
+    expect(decide("Read", { file_path: join(root, "notes.txt") }, windowsScript)).toBeDefined()
+    expect(left()).toEqual([])
+  })
+
+  it("never approves anything on a Mac, whose engine holds the shell", () => {
+    expect(bash("harness super-tab status")).toBe("allow")
+    expect(left()).toEqual([])
+  })
+
+  const facts = { platform: "win32" as NodeJS.Platform, team: false, home: join(parent, "win-home"), dataDir: join(parent, "win-data"), uid: -1, hasBwrap: false, engineHomes: [], sandboxReady: true }
+  it("launches wide once its sandbox is ready, closing Windows secrets and naming no system folder", () => {
+    const launched = buddyLaunchWide(root, facts)!
+    expect(launched.readable).toEqual([facts.home])
+    expect(launched.denied).toEqual(expect.arrayContaining([join(facts.home, ".ssh"), join(facts.home, "AppData/Roaming/Microsoft/Credentials"), join(facts.home, "AppData/Local/Google/Chrome/User Data")]))
+    expect(launched.shellApprovals).toBe(join(buddySandboxDir(root, facts.dataDir), "approved"))
+  })
+
+  it("holds its commands to no writes and its hosts, the tools able to read their sign-ins", () => {
+    const launched = buddyLaunchWide(root, facts)!
+    const policy = buddyWindowsSandboxPolicy(root, launched)
+    expect(policy.filesystem.allowWrite).toEqual([])
+    expect(policy.filesystem.denyWrite).toContain(root)
+    expect(policy.filesystem.allowRead).toContain(root)
+    expect(policy.gitFolders).toContain(root)
+    expect(policy.network.allowedDomains).toContain("github.com")
+    expect(policy.filesystem.denyRead).toContain(join(facts.home, ".ssh"))
+    expect(policy.filesystem.denyRead).toContain(facts.dataDir)
+    expect(policy.filesystem.denyRead).not.toContain(join(facts.home, "AppData/Roaming/GitHub CLI"))
+    expect(policy.filesystem.denyRead).not.toContain(join(facts.home, ".kube"))
+    // Its sessions output and every other session stay closed: nothing in the sandbox needs them here.
+    expect(policy.filesystem.denyRead).toEqual(expect.arrayContaining([...launched.sessionTemp]))
+  })
+})

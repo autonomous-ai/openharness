@@ -15,7 +15,7 @@ import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, readdir
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
 import type { TeamEngines } from './engines.js'
-import { WHOAMI_GROUPS_ARGS, runWindowsPrivacyCheck, windowsGroupSids } from './windowsTeam.js'
+import { WHOAMI_GROUPS_ARGS, runWindowsPrivacyCheck, windowsGroupNames, windowsGroupSids } from './windowsTeam.js'
 
 export type PrivacyItem =
   | 'sentinel' | 'home-listing' | 'gitconfig' | 'ssh' | 'projects' | 'keychain' | 'chrome' | 'safari' | 'firefox' | 'credentials' | 'edge'
@@ -71,6 +71,7 @@ export interface PrivacyDeps {
   adminGids?(): number[]
   /** Windows: every group SID of this process's token, a deny-only Administrators included (./windowsTeam.ts). */
   groupSids?(): string[]
+  groupNames?(): string[]
 }
 
 /** The administrator groups Linux distributions use: sudo (Debian, Ubuntu), wheel (Fedora, Arch), admin (older Ubuntu). */
@@ -91,6 +92,7 @@ export const realPrivacyDeps: PrivacyDeps = {
   // Through NSS, as the system itself looks groups up. getent exits 2 when one of them is missing, and prints the others.
   adminGids: () => adminGroupIds(spawnSync('getent', ['group', ...LINUX_ADMIN_GROUPS], { encoding: 'utf8', timeout: 5_000 }).stdout ?? ''),
   groupSids: () => windowsGroupSids(spawnSync('whoami', WHOAMI_GROUPS_ARGS, { encoding: 'utf8', timeout: 5_000, windowsHide: true }).stdout ?? ''),
+  groupNames: () => windowsGroupNames(spawnSync('whoami', WHOAMI_GROUPS_ARGS, { encoding: 'utf8', timeout: 5_000, windowsHide: true }).stdout ?? ''),
 }
 
 /** The group macOS administrators are in. */
@@ -105,7 +107,7 @@ export function runPrivacyCheck(config: Pick<TeamConfig, 'ownerHome' | 'sentinel
   const platform = deps.platform ?? 'darwin'
   // Windows' places and rules (./windowsTeam.ts): every account may open a path it cannot list, so a missing place is
   // skipped there, and administrators are told by SID.
-  if (platform === 'win32') return runWindowsPrivacyCheck(config, { open: deps.open, list: deps.list, groupSids: deps.groupSids ?? (() => []), now: deps.now })
+  if (platform === 'win32') return runWindowsPrivacyCheck(config, { open: deps.open, list: deps.list, groupSids: deps.groupSids ?? (() => []), ...(deps.groupNames ? { groupNames: deps.groupNames } : {}), now: deps.now })
   const checkedAt = deps.now()
   for (const probe of privacyProbes(config, platform)) {
     for (const path of probe.paths) {

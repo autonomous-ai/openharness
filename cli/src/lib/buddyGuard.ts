@@ -11,6 +11,7 @@ import { durableEngineHomes } from './engineHomes.js'
 import type { AgentEngine } from '../engines/types.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
+import { buddyApprovalsDir, buddySandboxDir, buddySandboxReady, WINDOWS_CLOSED_IN_HOME, type BuddySandboxPolicy } from './windows/buddySandbox.js'
 
 /** Where a Buddy's guard reads what its person sent it (the host's list for this Buddy), and where Harness downloads chat
  *  files to (lib/pasteDropFiles.ts). */
@@ -29,7 +30,9 @@ export interface BuddyWide { home: string; denied: readonly string[];
   /** Where every Swarm session's folder on this machine is (Harness's worktrees folder): closed to this one's reads but its
    *  own folder, so a Buddy's thread session never reads another session's folder or the files sent to it (spec
    *  2026-10-30-buddy-thread-sessions). The guard's alone: closing it in the sandbox would close the session's own folder. */
-  otherSessions?: readonly string[] }
+  otherSessions?: readonly string[]
+  /** Windows: where its guard leaves its approval of a harness command, which runs outside the sandbox (lib/windows/buddySandbox.ts). */
+  shellApprovals?: string }
 
 /** Where each engine Harness runs keeps its sessions, history and sign-in in a home: closed to a Buddy, as other agents on
  *  this machine keep Swarm chats there (delta reviews of #2310). Typed by the engine list, so a new engine names its own. */
@@ -83,8 +86,11 @@ export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: rea
 /** What a Buddy's launch reads of its machine to decide wide mode (`buddyLaunchWide`). */
 export interface BuddyLaunchFacts { platform: NodeJS.Platform; team: boolean; home: string; dataDir: string; uid: number; hasBwrap: boolean
   /** Engine homes Harness points agents at beside the default ones; null when they cannot be read. */
-  engineHomes: readonly string[] | null }
+  engineHomes: readonly string[] | null
+  /** Windows: its person agreed to the sandbox and it is installed (lib/windows/buddySandbox.ts). */
+  sandboxReady?: boolean }
 const launchFacts = (): BuddyLaunchFacts => ({ platform: process.platform, team: isTeamAccount(), home: homedir(), dataDir: env.ADAPTER_DATA_DIR,
+  sandboxReady: process.platform === 'win32' && buddySandboxReady(),
   uid: process.getuid?.() ?? -1, hasBwrap: spawnSync('/bin/sh', ['-c', 'command -v bwrap'], { stdio: 'ignore' }).status === 0,
   engineHomes: engineHomesOutsideDefaults(env.ADAPTER_DATA_DIR, process.env) })
 
@@ -163,7 +169,15 @@ const narrowFolder = (root: string, dataDir: string) => {
 
 export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
   if (narrowFolder(root, facts.dataDir)) return null
-  if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
+  if (facts.team || !facts.engineHomes) return null
+  if (facts.platform === 'win32') {
+    if (!facts.sandboxReady) return null
+    // No system folders: a Mac's /etc and logs have no one place here, and its home is what its person agreed to.
+    return { ...buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs: [join(tmpdir(), 'claude')], repos: githubRepos(root), hosts: configHosts(facts.home), system: [],
+      closed: [...facts.engineHomes, ...WINDOWS_CLOSED_IN_HOME.map(path => join(facts.home, path))], otherSessions: sessionsFolderOf(root, facts.home) }),
+    shellApprovals: buddyApprovalsDir(buddySandboxDir(root, facts.dataDir)) }
+  }
+  if (!(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap))) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
   return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes,
@@ -195,6 +209,7 @@ function cloneOf(root: string): string[] {
 
 /** The tools' own sign-ins, which they read to sign in: closed to the Buddy's own reads, open to the tools in the sandbox. */
 const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
+const WINDOWS_GH_SIGN_IN = 'AppData/Roaming/GitHub CLI'
 
 /**
  * Claude Code's sandbox for a wide Buddy's shell (tried with Claude Code 2.1.314): every command in it but Harness's own,
@@ -209,6 +224,22 @@ const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
  * command of the session. Ken chose it over running those tools outside the sandbox (10-30), so the sandbox's no-writes
  * and host list hold for them too.
  */
+/** What the Windows sandbox holds a wide Buddy's commands to (lib/windows/buddySandbox.ts), as `buddySandboxSettings` does on a
+ *  Mac: nothing written, its hosts alone, the closed places closed but for the tools' own sign-ins. Its temporary folder stays
+ *  closed too: only the command runs in there, with a temporary folder of the sandbox's own. */
+export function buddyWindowsSandboxPolicy(root: string, wide: BuddyWide): BuddySandboxPolicy {
+  const signIns = new Set([...TOOL_SIGN_INS, WINDOWS_GH_SIGN_IN].map(path => join(wide.home, path)))
+  const clones = cloneOf(root)
+  return { network: { allowedDomains: buddyHosts(wide) }, gitFolders: [root, ...clones],
+    filesystem: { allowWrite: [], allowRead: [root, ...clones], denyWrite: [...new Set([root, ...clones])], denyRead: wide.denied.filter(path => !signIns.has(path)) } }
+}
+
+/** What its home's read grant leaves out, for good, on a computer's Windows sandbox: anything a tool in it does not need. */
+export const buddyProfileExcludes = (home: string): string[] =>
+  [...CLOSED_IN_HOME, ...WINDOWS_CLOSED_IN_HOME, '.harness'].filter(path => ![...TOOL_SIGN_INS, WINDOWS_GH_SIGN_IN].includes(path)).map(path => join(home, path))
+
+const buddyHosts = (wide: BuddyWide): string[] => ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts]
+
 export function buddySandboxSettings(root: string, wide: BuddyWide, ownTemp: string | null = null): Record<string, unknown> {
   // Open to the sandbox: the tools' own sign-ins, and Claude Code's temporary folder, where every command's output goes
   // (with it closed, even cat failed: "cat: stdout: Operation not permitted", Claude Code 2.1.314). The guard keeps both
@@ -217,7 +248,7 @@ export function buddySandboxSettings(root: string, wide: BuddyWide, ownTemp: str
   return {
     enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
     excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
-    network: { allowedDomains: ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts] },
+    network: { allowedDomains: buddyHosts(wide) },
     // Writes are denied by name where Claude Code would allow them: the folder it runs in; its person's clone and its git
     // folder, which a command in a worktree could otherwise commit to; and every session's folder in Claude Code's own
     // temporary folder (both found by the real sandbox test, review of #2310). That folder itself stays writable: Claude
@@ -286,7 +317,7 @@ const ONE_BUDDY_HOMES = 'buddy-home'
 export const buddyGuardSource = (root: string, reads: BuddyReads, wide: BuddyWide | null = null, ownTemp: string | null = null): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
 import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 // The Buddy's folder, as its real path: what it reads stays in it.
@@ -885,6 +916,14 @@ process.stdin.on('end', () => {
   let input = null
   try { input = JSON.parse(text) } catch { /* refused below */ }
   const allow = decide(input)
+  // On Windows its sandbox (lib/windows/buddySandbox.ts) lets a harness command out only on this word, for these words, once.
+  if (allow && WIDE?.shellApprovals && input.tool_name === 'Bash' && input.tool_input.command.startsWith('harness ')) {
+    const file = join(WIDE.shellApprovals, createHash('sha256').update(String(process.pid) + text + Date.now()).digest('hex'))
+    try {
+      writeFileSync(file + '.next', JSON.stringify({ command: input.tool_input.command, at: Date.now() }), { mode: 0o600 })
+      renameSync(file + '.next', file + '.json')
+    } catch { /* it then runs in the sandbox, where it cannot reach its daemon and says so */ }
+  }
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse',
     permissionDecision: allow ? 'allow' : 'deny', permissionDecisionReason: allow ? 'A Buddy may read.' : reason } }))
 })
