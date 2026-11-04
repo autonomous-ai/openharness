@@ -68,9 +68,11 @@ call.
 - Produces: `typedef SwarmLeadComputer = ({String id, String name, List<String> engines, Map<String, String> folders})`,
   `folders` keyed by normalized remote (`github.com/owner/repo`).
 - Produces: `typedef SwarmLeadLaunch = ({String engine, String? folder, String projectName, String prompt, String skillMode})`.
+- Produces: `typedef SwarmLeadStarted = ({String harnessId, String? cwd, String? remote})`: the harness started, and the
+  folder and remote it reports (for `agent.add`'s `project`).
 - Produces: `abstract interface class SwarmLeadComputers implements Listenable { List<SwarmLeadComputer> get leadComputers;
-  Future<String> startLead(String machineId, SwarmLeadLaunch launch); }`: answers the harness id, throws a
-  `SuperTabFailure` with the reason.
+  Future<SwarmLeadStarted> startLead(String machineId, SwarmLeadLaunch launch); }`: throws a `SuperTabFailure` with the
+  reason.
 - Produces: `bool swarmWantsLeadStart(SwarmReader reader, String chatId)`.
 - Produces: `String? swarmNormalizedRemote(String? remote)` and `String swarmPersonalProjectOperation(String repo)`
   (ports of Desktop's `normalizedRemote` and `personalProjectOperation`).

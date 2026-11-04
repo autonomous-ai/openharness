@@ -112,8 +112,7 @@ void main() {
       },
       'agent.add': (_) => {'result': <String, Object>{}},
     };
-    swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
-        load ?? personalLoad();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => load ?? personalLoad();
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
       final command = body!['command'] as Map<String, dynamic>;
@@ -170,7 +169,11 @@ void main() {
       'one', () async {
     await open();
     final first = swarmLeadPlan(reader, computers, personalChat);
-    expect(first, (machineId: 'mac-1', engine: 'claude', folder: '/Users/me/games'));
+    expect(first, (
+      machineId: 'mac-1',
+      engine: 'claude',
+      folder: '/Users/me/games',
+    ));
     final air = swarmLeadPlan(
       reader,
       computers,
@@ -212,9 +215,13 @@ void main() {
 
   test('start claims, starts on the computer, then joins it as Lead', () async {
     await open();
-    await SwarmLeadStarter.of(
+    await SwarmLeadStarter.of(reader).start(
       reader,
-    ).start(reader, computers, personalChat, machineId: 'mac-1', engine: 'codex');
+      computers,
+      personalChat,
+      machineId: 'mac-1',
+      engine: 'codex',
+    );
 
     expect(sent(), ['lead.claim', 'agent.add']);
     expect(swarm.commands.first, {
@@ -232,7 +239,10 @@ void main() {
       launch.prompt,
       swarmLeadLaunchPrompt(tabId: tab, conversationId: personalChat),
     );
-    expect(launch.prompt, startsWith('Harness Swarm agent. You are the Lead. '));
+    expect(
+      launch.prompt,
+      startsWith('Harness Swarm agent. You are the Lead. '),
+    );
     final join = swarm.commands.last;
     expect(join['conversationId'], personalChat);
     expect(join['machineId'], 'mac-1');
