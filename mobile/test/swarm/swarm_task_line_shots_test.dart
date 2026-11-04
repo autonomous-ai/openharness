@@ -125,7 +125,7 @@ void main() {
         boundary: boundary,
         theme: buildAppTheme(brightness: palette.brightness),
       );
-      expect(find.text("Let's build: Offline drafts"), findsOneWidget);
+      expect(find.text('Offline drafts'), findsOneWidget);
       await capture(boundary, 'task-chat-${palette.brightness.name}');
       await tester.tap(find.byKey(const ValueKey('swarm-thread-line-line-1')));
       await tester.pumpAndSettle();

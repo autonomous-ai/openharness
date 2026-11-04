@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -247,7 +248,7 @@ void main() {
       expect(avatar.name, 'Dee');
       expect(avatar.id, me);
       expect(avatar.agent, isFalse);
-      expect(find.text("Let's build: Offline drafts"), findsOneWidget);
+      expect(find.text('Offline drafts'), findsOneWidget);
       expect(find.text('Old metadata title'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
       expect(replies, 1);
@@ -315,7 +316,7 @@ void main() {
         );
         expect(find.text('1 reply'), findsOneWidget);
         if (openWith == 'Reply') {
-          await tester.tap(find.text("Let's build: Offline drafts"));
+          await tester.tap(find.text('Offline drafts'));
           await tester.pumpAndSettle();
           expect(find.text('Reply in thread'), findsOneWidget);
           await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
@@ -373,19 +374,80 @@ void main() {
     expect(find.text('Shipped: task-1'), findsOneWidget);
   });
 
-  test('task source follows ordinary same-author grouping', () {
-    final line = taskLine(sequence: 1);
-    final normal = {
-      ...taskLine(id: 'normal', sequence: 2),
-      'source': {'kind': 'message'},
-      'text': 'A normal follow-up',
-    };
-    expect(
-      swarmGroupedMessages([
-        SuperTabMessage.fromJson(line),
-        SuperTabMessage.fromJson(normal),
-      ]),
-      {'normal'},
-    );
+  // Its header is the row's mark that it is a task (#2552), and a message after
+  // it is not part of that task.
+  for (final kind in ['task-line', 'buddy-proposal']) {
+    test('a $kind root stands on its own, on either side', () {
+      Map<String, dynamic> plain(String id, int sequence) => {
+        ...taskLine(id: id, sequence: sequence),
+        'source': {'kind': 'message'},
+        'text': 'A normal message',
+      };
+      Map<String, dynamic> root(String id, int sequence) => {
+        ...taskLine(id: id, sequence: sequence),
+        'source': {'kind': kind},
+      };
+      expect(
+        swarmGroupedMessages(
+          [
+            plain('before', 1),
+            root('first', 2),
+            root('second', 3),
+            plain('after', 4),
+          ].map(SuperTabMessage.fromJson).toList(),
+        ),
+        isEmpty,
+      );
+    });
+  }
+
+  // Dee, 2026-11-04 (#2552): a task row reads as its title alone, with
+  // "name  time · Task" above it; older rows still carry the old prefix.
+  group('a task row', () {
+    final tag = find.textContaining(RegExp(r'^\d\d:\d\d · Task$'));
+
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
+        testWidgets('$kind "$text" shows the title, and Task after the time', (
+          tester,
+        ) async {
+          await pumpRow(tester, {
+            ...taskLine(),
+            'text': text,
+            'source': {'kind': kind},
+          });
+          expect(find.text('Offline drafts'), findsOneWidget);
+          expect(find.textContaining("Let's build"), findsNothing);
+          expect(tag, findsOneWidget);
+          expect(tester.widget<Text>(tag).style?.color, AppPalette.textFaint);
+        });
+
+        testWidgets('$kind "$text" keeps the role badge after the name', (
+          tester,
+        ) async {
+          await pumpRow(tester, {
+            ...taskLine(),
+            'text': text,
+            'source': {'kind': kind},
+          });
+          double left(Finder within) => tester.getTopLeft(within).dx;
+          final badge = find.byType(SwarmRoleBadge);
+          expect(left(find.text('River')), lessThan(left(badge)));
+          expect(left(badge), lessThan(left(tag)));
+        });
+      }
+    }
+
+    testWidgets('a message that is no task keeps its words and has no tag', (
+      tester,
+    ) async {
+      await pumpRow(tester, {
+        ...taskLine(),
+        'text': "Let's build: a shed",
+        'source': {'kind': 'message'},
+      });
+      expect(find.text("Let's build: a shed"), findsOneWidget);
+      expect(tag, findsNothing);
+    });
   });
 }
