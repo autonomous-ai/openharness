@@ -608,11 +608,12 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               if (r.unread) r,
           ]
         : all;
-    // Every one still waiting, read past or not: Mark read answers them all.
-    final waiting = [
+    // Every one still waiting, read past or not, and every unread one the
+    // server resolved: Mark read reads them all.
+    final markable = [
       for (final r in rows)
         for (final m in r.all)
-          if (m.resolvedBy == null) m,
+          if (m.resolvedBy == null || a.mentionUnread(m)) m,
     ];
     final people = {
       for (final p in _snapshot?.people ?? const <SuperTabPerson>[]) p.id: p,
@@ -621,13 +622,13 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         people[m.leadId]?.shownName ?? m.leadName;
     void markRead(List<SuperTabMention> mentions) {
       _settle();
-      unawaited(a.mentions.doneAll(mentions));
+      a.markMentionsRead(mentions);
     }
 
     return [
       _bar([
         _unreadsOnly(),
-        _markAll(waiting.isEmpty ? null : () => markRead(waiting)),
+        _markAll(markable.isEmpty ? null : () => markRead(markable)),
       ]),
       if (rows.isEmpty)
         _empty(_mentionsUnreadOnly ? 'No unread mentions' : 'No mentions')
@@ -645,7 +646,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
             trailing: m.createdAt == null ? '' : _when(m.createdAt!),
             preview: _oneLine(m.text),
             more: row.more > 0 ? '+${row.more} more from $name' : null,
-            actions: row.unresolved
+            actions: row.unresolved || row.unread
                 ? [(label: 'Mark read', run: () => markRead(row.all))]
                 : const [],
             onTap: () => widget.onOpenMention(m),

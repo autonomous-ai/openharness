@@ -120,10 +120,6 @@ class SuperTabActivity extends ChangeNotifier {
     ];
   }
 
-  /// A tag from a server that does not say where it is: it counts until
-  /// answered, past any read mark. Not `1 << 52`: a shift is 32 bits on the web.
-  static const _unknown = 9007199254740991;
-
   /// The tags that are not read past (the number clears by reading). They are
   /// bold in Mentions but never counted: a tag asks for nothing.
   Iterable<SuperTabMention> get _tags {
@@ -172,14 +168,40 @@ class SuperTabActivity extends ChangeNotifier {
     return agent?.displayName ?? agent?.name ?? 'An agent';
   }
 
-  /// Whether [mention] shows bold: not read past, as its chat's red number
-  /// counts it (attention.dart).
-  bool mentionUnread(SuperTabMention mention) =>
-      mention.resolvedBy == null &&
-      (mention.messageSequence ?? _unknown) >
-          (mention.threadId == null
-              ? controller.readMark(mention.conversationId)
-              : controller.threadReadMark(mention.threadId!));
+  /// Whether [mention] shows bold: not read past (its thread's mark for a
+  /// reply that lives in a thread) and not marked read. The server resolves a
+  /// tag when the reader answers anyone, a Buddy's posts as them included, so
+  /// only `read` and `done` say they saw it (Diego, #2887). A tag from a
+  /// server that does not say where it is counts until resolved.
+  bool mentionUnread(SuperTabMention mention) {
+    if (mention.resolvedBy case 'read' || 'done') return false;
+    final sequence = mention.messageSequence;
+    if (sequence == null) return mention.resolvedBy == null;
+    return sequence >
+        (mention.threadId == null
+            ? controller.readMark(mention.conversationId)
+            : controller.threadReadMark(mention.threadId!));
+  }
+
+  /// Marks [tags] read: the ones that still wait are marked done on the
+  /// server; the ones it resolved without the reader reading them move the
+  /// read mark to their message (the thread's for a thread reply).
+  void markMentionsRead(Iterable<SuperTabMention> tags) {
+    final waiting = <SuperTabMention>[];
+    for (final m in tags) {
+      if (m.resolvedBy == null) {
+        waiting.add(m);
+      } else if (mentionUnread(m)) {
+        final sequence = m.messageSequence!;
+        if (m.threadId case final root?) {
+          controller.markThreadRead(m.conversationId, root, sequence);
+        } else {
+          controller.markReadThrough(m.conversationId, sequence);
+        }
+      }
+    }
+    if (waiting.isNotEmpty) unawaited(mentions.doneAll(waiting));
+  }
 
   /// The followed threads with replies the reader has not read, newest reply
   /// first; one read during this visit stays, bold, until the view is left.
