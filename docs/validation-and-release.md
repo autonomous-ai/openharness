@@ -103,6 +103,32 @@ created before #991 still carries the old planner, which expects removed jobs an
 fails `ci/required` for CLI, Desktop, workflow and script changes. Update the branch
 from `main` before relying on its CI.
 
+### Reuse in a batch PR
+
+A batch PR (a branch from main with each member PR merged in, as the PM builds them) reuses
+a member PR's passed result the same way. A phone PR batched with unrelated work does not
+run mobile-checks again. The planner reads the members from the batch's own commits, never
+from the PR's text:
+
+- The new head's first-parent line, down to a commit on the base branch, is all
+  two-parent merges. Each second parent is a member PR's tested head; one that is on the
+  base branch is main merged again and brings only main's commits. A commit pushed by hand
+  on that line runs everything. A batch that merged main again after its earlier head ran
+  CI reads its members the same way.
+- Each member's latest `ci/required` check is followed to its exact run, attempt and
+  receipt, as above, and a component that member's run reused points at its original run.
+- A component is reused from the first member whose run covered it and whose tested
+  commit differs from the batch head in none of that component's inputs, with the same
+  shared-input rules. Two members that both change a component's inputs therefore run it:
+  each one's diff holds the other's change. A main change to an input after a member ran
+  runs it too.
+- A member whose run cannot be read is only no candidate. Its changes are still in every
+  other member's diff, so a component it touched runs. With no readable member, every
+  component runs.
+
+The receipt names the batch's members in order, and `make merge-pr`, using main's copy of
+the planner, refuses a receipt whose members differ from the head's merges.
+
 ### What PR CI does not run
 
 | Check | Where it runs now | When you must run it yourself |
