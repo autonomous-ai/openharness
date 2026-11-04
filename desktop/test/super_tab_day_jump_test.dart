@@ -219,7 +219,9 @@ void main() {
 
   // The chat and the thread show the day without the menu until the crash
   // a jump causes is fixed (#2762).
-  group('the chat and the thread offer no Jump to for now', () {
+  // The chat's Jump to is back on one read of the window (task #2911,
+  // super_tab_jump_window_test.dart); a thread reads whole, and shows the day.
+  group('the thread offers no Jump to', () {
     Future<void> chat(WidgetTester tester, {bool thread = false}) async {
       final now = DateTime.now();
       final server = ConversationServer()
@@ -267,7 +269,6 @@ void main() {
     }
 
     for (final (place, pill, thread) in [
-      ('chat', _pill, false),
       ('thread', const ValueKey('super-thread-day-pill'), true),
     ]) {
       testWidgets("the $place's pill shows the day and opens nothing", (

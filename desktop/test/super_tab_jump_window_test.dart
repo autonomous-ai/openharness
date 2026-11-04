@@ -1,5 +1,10 @@
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -108,5 +113,201 @@ void main() {
     expect(reads, hasLength(1));
     expect(c.messages('lead').last.id, server.messages.last['id']);
     expect(c.hasNewer('lead'), isFalse);
+  });
+
+  group('in the chat', () {
+    const list = PageStorageKey('super-messages-tab-lead');
+
+    /// [chat] on screen, settled at its end.
+    Future<(SuperTabController, ConversationServer, List<String>)> open(
+      WidgetTester tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 860));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final (c, server, reads) = await chat();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      reads.clear();
+      return (c, server, reads);
+    }
+
+    Finder row(String text) => find
+        .ancestor(
+          of: find.text(text),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'super-message-message-',
+                ),
+          ),
+        )
+        .first;
+    bool lit(WidgetTester tester, String text) => tester
+        .widget<SuperTabMessageHighlight>(
+          find.ancestor(
+            of: row(text),
+            matching: find.byType(SuperTabMessageHighlight),
+          ),
+        )
+        .on;
+    bool onScreen(WidgetTester tester, String text) {
+      if (find.text(text).evaluate().isEmpty) return false;
+      final view = tester.getRect(find.byKey(list));
+      final at = tester.getRect(row(text));
+      return at.top >= view.top - 1 && at.top < view.bottom;
+    }
+
+    String textOf(ConversationServer server, String id) =>
+        server.messages.firstWhere((m) => m['id'] == id)['text'] as String;
+
+    Future<void> lastWeek(WidgetTester tester) async {
+      await tester.drag(find.byKey(list), const Offset(0, 300));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-day-pill')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Last week'));
+      // The highlight lasts 2 seconds: look while it is on.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    /// The topmost row in view, and its top.
+    (String, double) topRow(WidgetTester tester) {
+      final view = tester.getRect(find.byKey(list));
+      (String, double)? top;
+      for (final text
+          in find
+              .descendant(of: find.byKey(list), matching: find.byType(Text))
+              .evaluate()
+              .map((e) => (e.widget as Text).data)
+              .whereType<String>()
+              .where((t) => t.startsWith('Update '))) {
+        final at = tester.getRect(row(text)).top;
+        if (at >= view.top && (top == null || at < top.$2)) top = (text, at);
+      }
+      return top!;
+    }
+
+    testWidgets('Last week lands on and lights that day\'s first message, '
+        'after one read', (tester) async {
+      final (c, server, reads) = await open(tester);
+      await lastWeek(tester);
+      expect(reads, hasLength(1));
+      expect(reads.single, contains('at='));
+      final target = textOf(server, firstFrom(server, weekAgo));
+      expect(onScreen(tester, target), isTrue);
+      expect(lit(tester, target), isTrue);
+      expect(c.messages('lead').length, lessThanOrEqualTo(200));
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('scrolling down reads the page below, and up the page above, '
+        'each once, with the rows on screen in place and the list small', (
+      tester,
+    ) async {
+      final (c, _, reads) = await open(tester);
+      await lastWeek(tester);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      reads.clear();
+      // Down: to the window's end, and on past it, page by page.
+      for (var i = 0; i < 12; i++) {
+        await tester.drag(find.byKey(list), const Offset(0, -3000));
+        await tester.pumpAndSettle();
+        expect(c.messages('lead').length, lessThanOrEqualTo(400));
+      }
+      final newer = reads.where((r) => r.contains('after=')).length;
+      expect(newer, greaterThanOrEqualTo(2));
+      expect(reads.where((r) => r.contains('at=')), isEmpty);
+      // A page landing below keeps the row at the top where it is.
+      final (text, top) = topRow(tester);
+      await tester.drag(find.byKey(list), const Offset(0, -200));
+      await tester.pumpAndSettle();
+      await tester.drag(find.byKey(list), const Offset(0, 200));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(row(text)).top, moreOrLessEquals(top, epsilon: 2));
+      // Up: past where the jump landed, page by page.
+      reads.clear();
+      for (var i = 0; i < 16; i++) {
+        await tester.drag(find.byKey(list), const Offset(0, 3000));
+        await tester.pumpAndSettle();
+        expect(c.messages('lead').length, lessThanOrEqualTo(400));
+      }
+      expect(
+        reads.where((r) => r.contains('before=')).length,
+        greaterThanOrEqualTo(2),
+      );
+      expect(c.hasNewer('lead'), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Jump to latest after a jump is one read, at the end', (
+      tester,
+    ) async {
+      final (c, server, reads) = await open(tester);
+      await lastWeek(tester);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      reads.clear();
+      await tester.tap(find.byKey(const ValueKey('super-jump-latest')));
+      await tester.pumpAndSettle();
+      expect(reads, hasLength(1));
+      expect(c.hasNewer('lead'), isFalse);
+      expect(onScreen(tester, server.messages.last['text'] as String), isTrue);
+    });
+
+    testWidgets('text selected in the chat, then a jump, pages both ways and '
+        'the rows dropped raise nothing, and the chat stays drawn (#2762)', (
+      tester,
+    ) async {
+      final (c, server, _) = await open(tester);
+      final last = server.messages.last['text'] as String;
+      Future<void> select(String text) async {
+        final at = tester.getRect(find.text(text).last);
+        final mouse = await tester.startGesture(
+          at.centerLeft + const Offset(2, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await mouse.moveTo(at.centerRight - const Offset(2, 0));
+        await tester.pump();
+        await mouse.up();
+        await tester.pump();
+      }
+
+      await select(last);
+      await lastWeek(tester);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      final target = textOf(server, firstFrom(server, weekAgo));
+      await select(target);
+      for (var i = 0; i < 8; i++) {
+        await tester.drag(find.byKey(list), const Offset(0, -3000));
+        await tester.pumpAndSettle();
+      }
+      for (var i = 0; i < 12; i++) {
+        await tester.drag(find.byKey(list), const Offset(0, 3000));
+        await tester.pumpAndSettle();
+      }
+      await lastWeek(tester);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await tester.tap(find.byKey(const ValueKey('super-jump-latest')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(ErrorWidget), findsNothing);
+      expect(c.messages('lead').last.text, last);
+    });
   });
 }
