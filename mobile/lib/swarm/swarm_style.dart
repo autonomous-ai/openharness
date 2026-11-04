@@ -861,10 +861,20 @@ class _SwarmSegment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    // The chosen one is already chosen: no click, nothing sent.
+    final VoidCallback? choose = selected
+        ? null
+        : () {
+            HapticFeedback.selectionClick();
+            onTap();
+          };
     return Semantics(
       button: true,
       selected: selected,
       label: label,
+      // Its children's semantics are excluded, the InkWell's tap with them: a
+      // screen reader taps through this node (review of #2920).
+      onTap: choose,
       excludeSemantics: true,
       child: TouchTarget(
         child: Material(
@@ -872,13 +882,7 @@ class _SwarmSegment extends StatelessWidget {
           shape: const StadiumBorder(),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            // The chosen one is already chosen: no click, nothing sent.
-            onTap: selected
-                ? null
-                : () {
-                    HapticFeedback.selectionClick();
-                    onTap();
-                  },
+            onTap: choose,
             child: ConstrainedBox(
               constraints: const BoxConstraints(
                 minHeight: AppControl.heightSmall,
