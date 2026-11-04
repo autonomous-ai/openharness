@@ -654,6 +654,14 @@ class ConversationServer {
     if (!agent) group['lastPersonSequence'] = revision;
   }
 
+  /// Each project's unanswered Buddy proposals, as the backend's proposals
+  /// read answers them (task #2569), by project id; [proposalReads] records
+  /// each read's path. With [proposalsUnsupported], it answers 404 as a
+  /// backend from before the read does.
+  final proposals = <String, List<Map<String, dynamic>>>{};
+  final proposalReads = <String>[];
+  bool proposalsUnsupported = false;
+
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
 
@@ -1527,6 +1535,15 @@ class ConversationServer {
         );
       }
       return {'attachment': await answer(uri.pathSegments.last)};
+    }
+    if (uri.pathSegments.last == 'proposals') {
+      proposalReads.add(path);
+      if (proposalsUnsupported) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return {
+        'proposals': [...?proposals[uri.queryParameters['projectId']]],
+      };
     }
     if (uri.pathSegments.last == 'threads' ||
         uri.pathSegments.last == 'inbox') {

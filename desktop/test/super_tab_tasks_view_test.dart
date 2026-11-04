@@ -56,30 +56,26 @@ Map<String, dynamic> _task(
 /// shipped two days ago and archived since.
 ConversationServer tasksServer({bool empty = false}) {
   final server = ConversationServer();
-  server.state['projects'] = [
-    {
-      ...projectFixture('lead', 'openharness', 'lead'),
-      if (!empty)
-        'openProposals': [
-          {
-            'messageId': 'p-new',
-            'title': 'Rename a Swarm from the phone',
-            'personId': 'tony',
-            'at': _now
-                .subtract(const Duration(minutes: 23))
-                .millisecondsSinceEpoch,
-          },
-          {
-            'messageId': 'p-old',
-            'title': 'Backlog shows nothing in Mine',
-            'personId': 'scholes',
-            'at': _now
-                .subtract(const Duration(minutes: 3, days: 2))
-                .millisecondsSinceEpoch,
-          },
-        ],
-    },
-  ];
+  server.state['projects'] = [projectFixture('lead', 'openharness', 'lead')];
+  // The backend's read of the project's unanswered proposals (#2867's rule).
+  if (!empty) {
+    server.proposals['lead'] = [
+      {
+        'messageId': 'p-new',
+        'title': 'Rename a Swarm from the phone',
+        'personId': 'tony',
+        'at': _now.subtract(const Duration(minutes: 23)).millisecondsSinceEpoch,
+      },
+      {
+        'messageId': 'p-old',
+        'title': 'Backlog shows nothing in Mine',
+        'personId': 'scholes',
+        'at': _now
+            .subtract(const Duration(minutes: 3, days: 2))
+            .millisecondsSinceEpoch,
+      },
+    ];
+  }
   server.state['people'] = [
     {'id': 'owner', 'email': 'dee@example.com', 'role': 'owner'},
     {'id': 'scholes', 'email': 'scholes@example.com', 'role': 'member'},
@@ -404,4 +400,38 @@ void main() {
     expect(_cardsIn(tester, 'working'), contains('preview'));
     await _close(tester, c);
   });
+
+  testWidgets('a new proposal shows once the project chat moves', (
+    tester,
+  ) async {
+    final server = tasksServer();
+    final c = await _show(tester, server);
+    final reads = server.proposalReads.length;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    // Nothing moved in the chat: nothing is read again.
+    expect(server.proposalReads.length, reads);
+    server.proposals['lead']!.add({
+      'messageId': 'p-newest',
+      'title': 'Device as your Buddy',
+      'personId': 'owner',
+      'at': _now.millisecondsSinceEpoch,
+    });
+    server.append('Device as your Buddy');
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(_cardsIn(tester, 'proposals'), ['p-old', 'p-new', 'p-newest']);
+    await _close(tester, c);
+  });
+
+  testWidgets(
+    'an older server with no proposals read leaves the column empty',
+    (tester) async {
+      final server = tasksServer()..proposalsUnsupported = true;
+      final c = await _show(tester, server);
+      expect(_cardsIn(tester, 'proposals'), isEmpty);
+      expect(_card('tag'), findsOneWidget);
+      await _close(tester, c);
+    },
+  );
 }
