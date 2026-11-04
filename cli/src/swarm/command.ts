@@ -54,8 +54,9 @@ function table(deps: SwarmDeps, headers: string[], rows: string[][], numeric: re
     const padded = right ? value.padStart(widths[column]!) : value.padEnd(widths[column]!)
     return padded
   }
-  deps.out(`  ${headers.map((head, column) => cell(head, column, numeric.includes(column))).join('  ')}`)
-  for (const row of rows) deps.out(`  ${row.map((value, column) => cell(value ?? '', column, numeric.includes(column))).join('  ')}`)
+  const line = (values: string[]): string => `  ${values.map((value, column) => cell(value, column, numeric.includes(column))).join('  ')}`.replace(/\s+$/, '')
+  deps.out(line(headers))
+  for (const row of rows) deps.out(line(row))
 }
 
 interface Parts {
@@ -84,7 +85,8 @@ function machineName(parts: Parts, machineId: unknown): string {
   const row = parts.machines.find((machine) => machine.machineId === machineId)
   if (!row) return String(machineId ?? 'unknown')
   const name = text(row.name) || String(machineId)
-  return row.sessionKind === 'team' ? `${name} (team account)` : name
+  // A machine's own row and its team account are two rows: the reading says which one it is.
+  return object(row.observation).sessionKind === 'team' ? `${name} (team account)` : name
 }
 
 function groupTitle(parts: Parts, conversationId: unknown): string {
@@ -95,6 +97,13 @@ function groupTitle(parts: Parts, conversationId: unknown): string {
 function ownerEmail(parts: Parts, userId: unknown): string {
   const person = parts.members.find((row) => row.id === userId)
   return text(person?.email) || String(userId ?? '')
+}
+
+/** The engine names a machine contributes: the reading carries names, and may carry `{ engine }` rows. */
+function enginesOf(machine: Json): string {
+  const raw = Array.isArray(machine.engines) ? machine.engines : []
+  const names = raw.map((engine) => typeof engine === 'string' ? engine : text(object(engine).engine)).filter(Boolean)
+  return names.join(', ') || '-'
 }
 
 function machineState(machine: Json, now: number): string {
@@ -189,7 +198,7 @@ async function run(verb: string, flags: readonly string[], deps: SwarmDeps, json
       const rows = parts.machines.map((machine) => [
         machineName(parts, machine.machineId),
         ownerEmail(parts, machine.contributorId),
-        list(machine.engines).map((engine) => String(engine)).join(', ') || '-',
+        enginesOf(machine),
         String(parts.agents.filter((agent) => agent.machineId === machine.machineId).length),
         machineState(machine, now),
       ])
