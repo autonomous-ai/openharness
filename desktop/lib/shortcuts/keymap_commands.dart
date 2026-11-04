@@ -232,6 +232,27 @@ final harnessCommands = <HarnessCommand>[
     context: KeymapContext.swarmChat,
     keywords: ['Swarm', 'chat', 'people', 'agents'],
   ),
+  // Slack's next and previous unread chat, in the sidebar's order. Only the
+  // Swarm chat has them: in a pane, Alt+Shift+arrows still move it where Alt
+  // is the workspace key (Linux, the web, Windows).
+  const HarnessCommand(
+    'swarm.next_unread',
+    'Next unread chat',
+    ShortcutGroup.navigate,
+    extraKeys: ['alt+shift+down'],
+    context: KeymapContext.swarmChat,
+    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
+    repeatable: true,
+  ),
+  const HarnessCommand(
+    'swarm.previous_unread',
+    'Previous unread chat',
+    ShortcutGroup.navigate,
+    extraKeys: ['alt+shift+up'],
+    context: KeymapContext.swarmChat,
+    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
+    repeatable: true,
+  ),
   // The current project's Buddy chat, in a Swarm tab, where the PM's private
   // lines land since Buddies replaced Chat with PM: the id stays, so a key a
   // person bound to it keeps working. K for "talk": free on every platform

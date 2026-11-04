@@ -20,6 +20,8 @@ import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
+import '../shortcuts/app_keymap.dart' show KeymapRegion;
+import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
@@ -714,9 +716,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return true;
   }
 
-  /// Slack's Option+Shift+Down and Up: the next or previous chat with
-  /// something unread, in the sidebar's order, skipping muted ones. At either
-  /// end nothing moves.
+  /// Slack's Option+Shift+Down and Up (`swarm.next_unread`, `.previous_unread`):
+  /// the next or previous chat with something unread, in the sidebar's order,
+  /// skipping muted ones. At either end nothing moves.
   bool _jumpUnread(int step) {
     final snapshot = c.snapshot;
     if (snapshot == null || c.accessRevoked) return false;
@@ -753,18 +755,25 @@ class _SuperTabViewState extends State<SuperTabView>
       _markAllRead();
       return KeyEventResult.handled;
     }
-    if (keys.isAltPressed && keys.isShiftPressed) {
-      final step = switch (event.logicalKey) {
-        LogicalKeyboardKey.arrowDown => 1,
-        LogicalKeyboardKey.arrowUp => -1,
-        _ => 0,
-      };
-      if (step != 0) {
-        _jumpUnread(step);
-        return KeyEventResult.handled;
-      }
-    }
     return KeyEventResult.ignored;
+  }
+
+  /// The region the view sits in (the quick switcher's) with the unread chat
+  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
+  /// Move pane only while the chat has focus.
+  Widget _unreadKeys(Widget child) {
+    final region = KeymapRegion.of(context);
+    return KeymapRegion(
+      contextKind: KeymapContext.swarmChat,
+      actions: {
+        ...?region?.actions,
+        'swarm.next_unread': () => _jumpUnread(1),
+        'swarm.previous_unread': () => _jumpUnread(-1),
+      },
+      composing: region?.composing,
+      keeps: region?.keeps,
+      child: child,
+    );
   }
 
   bool _readAll() {
@@ -4421,7 +4430,7 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
-      return Focus(
+      final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
         onKeyEvent: _attentionKey,
@@ -4608,6 +4617,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ],
         ),
       );
+      return _unreadKeys(view);
     },
   );
 }
