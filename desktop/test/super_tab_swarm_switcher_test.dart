@@ -1112,9 +1112,13 @@ void main() {
       test('a list that answered before the refusal asked never takes the '
           'Swarm away', () {
         return under(() async {
-          // The last list that answered (at sign-in) is older than the ask,
-          // whose own read fails; another read within the minute is not made.
+          // The last list that answered, already without Alpha, is older
+          // than the ask, whose own read fails; another read within the
+          // minute is not made.
           backend.tabs.removeWhere((t) => t['id'] == 'alpha');
+          await app.superTabs.refreshTabs();
+          await _settle();
+          now = now.add(const Duration(seconds: 1));
           backend.listFailure = dropped;
           backend.stateReadFailure = refusals.last;
           await poll();
