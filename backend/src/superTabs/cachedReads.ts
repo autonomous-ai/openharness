@@ -108,10 +108,26 @@ const pickFinished = (finished: Part<AgentStart>[], named: ReadNamed): Part<Agen
   return [...finished.filter(s => ids.has(s.key)), ...(named.startAgentIds ?? []).flatMap(agent => index!.get(agent) ?? [])]
 }
 
+/** The Swarms whose last delta's rows a process keeps (store.loadDelta `held`), most recently read last. Each keeps only its
+ *  last delta's rows of each kind: about what changed in its last 30 s (the overlap) and more. */
+export const DELTA_ROWS_SWARMS = 256
+
 /** The read cache's delta (cache.ts): one snapshot, as a base load is (final review, Important 5), and tried again on a
- *  transient error as one is. */
-export const readDelta = (db: Pick<PrismaClient, '$transaction'>) => (tabId: string, since: number, kinds: readonly PartKind[]): Promise<SwarmDelta> =>
-  retryTransient(() => db.$transaction(tx => store.loadDelta(tx, tabId, since, kinds)))
+ *  transient error as one is. It keeps each Swarm's rows its last delta read, so the next reads whole only what moved since
+ *  (#2783). */
+export function readDelta(db: Pick<PrismaClient, '$transaction'>): (tabId: string, since: number, kinds: readonly PartKind[]) => Promise<SwarmDelta> {
+  const held = new Map<string, store.DeltaRows>()
+  return (tabId, since, kinds) => {
+    const rows = held.get(tabId) ?? new Map()
+    held.delete(tabId)
+    held.set(tabId, rows)
+    for (const oldest of held.keys()) {
+      if (held.size <= DELTA_ROWS_SWARMS) break
+      held.delete(oldest)
+    }
+    return retryTransient(() => db.$transaction(tx => store.loadDelta(tx, tabId, since, kinds, rows)))
+  }
+}
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {

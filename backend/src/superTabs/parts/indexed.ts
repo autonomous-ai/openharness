@@ -23,6 +23,8 @@ export const GROUP_INDEX = {
   wake: { hostMachineIds: 1, tabId: 1, changedAt: 1 },
   /** Every live group: the host signature's index. */
   live: { tabId: 1, deleted: 1, key: 1, hostDigest: 1, dormant: 1 },
+  /** Rows by id: a delta's whole rows of the versions it has not read (parts/load.ts loadDelta). */
+  id: { _id: 1 },
 } as const
 export type GroupIndex = keyof typeof GROUP_INDEX
 
@@ -48,16 +50,17 @@ export const NAMED_INDEX = {
     /** The Swarms people at a domain join by themselves (autoJoin.ts): one read per person at most every 2 minutes. */
     autoJoin: { autonomousEnv: 1, autoJoinDomain: 1 },
   },
-  /** Each part kind's changes since a cursor; machines also by when they were last read. */
-  SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
+  /** Each part kind's changes since a cursor; machines also by when they were last read. `id`: rows by id, a delta's whole
+   *  rows of the versions it has not read (parts/load.ts loadDelta). */
+  SwarmHead: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 } },
   /** `purge`: tombstones past their purge time (the hourly sweep). */
-  SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
-  SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
-  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 } },
+  SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
+  SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
+  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
   /** `expiry`: live starts by finish time (the hourly sweep). `agents`: a Swarm's starts of some agents (agentTombstones.ts):
    *  unnamed, Mongo planned that read on `expiry` and read every live start of every Swarm. */
-  SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 }, agents: { tabId: 1, agentId: 1 } },
-  SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 }, agents: { tabId: 1, agentId: 1 }, id: { _id: 1 } },
+  SwarmProgress: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 } },
   SuperTabMessage: {
     /** A conversation's page in (sequence, id) order. */
     sequence: { tabId: 1, conversationId: 1, sequence: 1, _id: 1 },
