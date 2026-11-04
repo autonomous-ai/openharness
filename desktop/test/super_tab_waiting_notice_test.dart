@@ -39,7 +39,13 @@ Future<SuperTabController> waitingSwarm(SuperTabLaunchFixture f) async {
     ...conversationFixture('task', 'Build the mobile app'),
     'projectId': 'lead',
     'agentIds': ['nova'],
-    'assignment': {'id': 'as-nova', 'agentId': 'nova', 'status': 'needs_human'},
+    'assignment': {
+      'id': 'as-nova',
+      'agentId': 'nova',
+      'status': 'needs_human',
+      // Asked of the reader by name, as Activity lists it (#2929).
+      'askedOf': 'owner',
+    },
   });
   f.app.stateOf('m')!.agents = [
     for (final name in ['nova', 'finn'])
