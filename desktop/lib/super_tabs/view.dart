@@ -3753,9 +3753,14 @@ class _SuperTabViewState extends State<SuperTabView>
         Expanded(child: Divider(color: DesktopChrome.rim)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            MaterialLocalizations.of(context).formatMediumDate(time.toLocal()),
-            style: DesktopChrome.metadata(),
+          // The day pill takes its place once it reaches the pill.
+          child: SuperTabDayLabel(
+            day: time,
+            child: Text(
+              MaterialLocalizations.of(context)
+                  .formatMediumDate(time.toLocal()),
+              style: DesktopChrome.metadata(),
+            ),
           ),
         ),
         Expanded(child: Divider(color: DesktopChrome.rim)),
