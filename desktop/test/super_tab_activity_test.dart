@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +18,7 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'super_tab_attention_test.dart'
     show
         close,
+        conversation,
         fromLead,
         inRow,
         openHere,
@@ -560,7 +562,8 @@ void main() {
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
         expect(inRow('super-activity', find.text('Activity')), findsOneWidget);
-        expect(inRow('super-activity', find.text('1')), findsOneWidget);
+        // A tag is no longer counted: Activity shows no number for it.
+        expect(inRow('super-activity', find.text('1')), findsNothing);
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -686,6 +689,115 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
+    });
+  });
+
+  group('Needs you counts what was asked of the reader', () {
+    ConversationServer withAgent() {
+      final server = projectServer();
+      server.state['agents'] = [
+        {
+          'id': 'kestrel',
+          'projectId': 'lead',
+          'name': 'Builder',
+          'displayName': 'Kestrel',
+          'machineId': 'host',
+          'harnessId': 'session',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      conversation(server, 'offline')['agentIds'] = ['kestrel'];
+      return server;
+    }
+
+    void assign(
+      ConversationServer server,
+      String status, {
+      String? askedOf,
+      String? requesterId,
+    }) {
+      final group = conversation(server, 'offline');
+      if (requesterId != null) group['requesterId'] = requesterId;
+      group['assignment'] = {
+        'id': 'a1',
+        'agentId': 'kestrel',
+        'status': status,
+        'askedOf': ?askedOf,
+      };
+    }
+
+    Future<SuperTabActivity> activityOf(ConversationServer server) async {
+      final c = await open(server);
+      return SuperTabActivity.of(c);
+    }
+
+    test('tags do not count', () async {
+      final server = withAgent();
+      for (var i = 1; i <= 4; i++) {
+        server.tag('message-$i', messageSequence: i);
+      }
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.count, 0);
+      expect(activity.unread, isTrue);
+    });
+
+    test('a stuck task nobody was asked about does not count', () async {
+      final server = withAgent();
+      assign(server, 'blocked', requesterId: 'owner');
+      final activity = await activityOf(server);
+      await activity.decisions.load();
+      expect(activity.count, 0);
+      expect(activity.needsYou, isEmpty);
+    });
+
+    test('an agent that asked the reader by name counts once, before and '
+        'after the decisions load', () async {
+      final server = withAgent();
+      server.ask(['Ship it?'], conversationId: 'offline');
+      assign(server, 'needs_human', askedOf: 'owner');
+      final hold = server.holdDecisions = Completer<void>();
+      final activity = await activityOf(server);
+      // Not loaded yet: the server's number stands in and the task waits for
+      // the list that tells it is the same ask.
+      expect(activity.count, 1);
+      hold.complete();
+      await settle();
+      await activity.decisions.load();
+      expect(activity.count, 1);
+    });
+
+    testWidgets('the sidebar fallback counts decisions only', (tester) async {
+      final server = withAgent();
+      server.state['mentionsWaiting'] = 4;
+      server.state['decisionsWaiting'] = 2;
+      server.failDecisions = true;
+      final c = await openHere(server);
+      await pumpSidebar(tester, c);
+      expect(inRow('super-activity', find.text('2')), findsOneWidget);
+      await close(tester, c);
+    });
+
+    test('handled today lists the PM\'s answers of today', () async {
+      final now = DateTime(2026, 11, 4, 12);
+      final server = withAgent();
+      server.ask(['Today?', 'Yesterday?']);
+      String at(DateTime t) => t.toUtc().toIso8601String();
+      server.decisions[0]
+        ..['answeredAt'] = at(DateTime(2026, 11, 4, 9))
+        ..['choice'] = 0
+        ..['delegated'] = true;
+      server.decisions[1]
+        ..['answeredAt'] = at(DateTime(2026, 11, 3, 9))
+        ..['choice'] = 0
+        ..['delegated'] = true;
+      await withClock(Clock.fixed(now), () async {
+        final activity = await activityOf(server);
+        await activity.decisions.load();
+        expect([for (final d in activity.handledToday) d.question], ['Today?']);
+      });
     });
   });
 }

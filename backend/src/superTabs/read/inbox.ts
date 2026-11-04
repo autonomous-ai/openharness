@@ -13,7 +13,8 @@
  *
  * Cost: every message read is bounded by an index range and a limit: the newest UNREAD_SCAN rows past the mark in at most
  * THREAD_CHATS chats; the newest UNREAD_SCAN rows past their own mark in at most BEHIND_THREADS threads; the roots of the
- * newest CANDIDATE_THREADS threads; MEMBER_SCAN rows before the mark of a thread whose newer rows do not show the person in it;
+ * newest CANDIDATE_THREADS threads; the summaries of the threads whose newer rows do not show the person in it, by root id in
+ * one read (namedInThreads; a Swarm Buddy chat's, or any before the Swarm's backfill, MEMBER_SCAN rows before the mark each);
  * one row (LATEST_SCAN for an older chat) at each of LATEST_CHATS chats' newest main message. Text is cut to PREVIEW_CHARS by
  * the database. `more` says a cap was reached. The route allows a person INBOX_READS per INBOX_WINDOW_MS in each Swarm,
  * counted by every pod together.
@@ -24,7 +25,8 @@ import { createRateLimiter } from '../../lib/rateLimit.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type Conversation, type SuperTabState } from '../model.js'
 import { readConversation } from '../projects.js'
-import { deliveredCopies, type ThreadReply } from '../pageReads.js'
+import { deliveredCopies, threadsAcross, threadsBackfilled, type ThreadReply } from '../pageReads.js'
+import { isSwarmBuddyChat } from '../buddies.js'
 import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
 import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
@@ -193,6 +195,39 @@ export async function newestInThreads(db: PrismaClient, tabId: string, ranges: T
   return rows
 }
 
+/**
+ * The threads of `threads` the person wrote in or was tagged in, in rows a page shows them, as threadKey(conversationId, thread).
+ * Read from the threads' summaries (pageReads.ts threadsAcross): one small row per thread by root id in one read, whatever its
+ * length, holding each author's newest row and every person's first tag with what a reader skips marked, so a row of theirs any
+ * distance back counts, as the Threads view counts it. It read each thread's newest MEMBER_SCAN rows before the mark, one $or
+ * branch per thread and one $unionWith branch past the cap: the threads route's slowest read in Ken's scan of 11-04 (task #2768).
+ * A Swarm Buddy chat's threads still read those rows before `sequence`: its summary cannot tell a row of a project its person
+ * lost (buddySessions.ts lostProjectRow), which they no longer read. So does a Swarm whose summaries are not backfilled yet
+ * (threadBackfill.ts): its summaries would come from every row of the threads (threadFacet), unbounded.
+ */
+export async function namedInThreads(db: PrismaClient, tabId: string, state: SuperTabState,
+  threads: ReadonlyArray<{ conversationId: string; thread: string; sequence: number }>, personId: string): Promise<Set<string>> {
+  const named = new Set<string>()
+  if (!threads.length) return named
+  const ready = await threadsBackfilled(db, tabId)
+  const scan = new Set(state.conversations.filter(g => !ready || isSwarmBuddyChat(g)).map(g => g.id))
+  const scanned = threads.filter(t => scan.has(t.conversationId)), summed = threads.filter(t => !scan.has(t.conversationId))
+  if (summed.length) {
+    const chatOf = new Map(summed.map(t => [t.thread, t.conversationId]))
+    for (const m of await threadsAcross(db, tabId, summed.map(t => ({ conversationId: t.conversationId, root: t.thread })))) {
+      if (!m.agentOnly && ((m.author.kind === 'person' && m.author.id === personId) || m.mentions.includes(personId))) {
+        named.add(threadKey(chatOf.get(m.thread)!, m.thread))
+      }
+    }
+  }
+  if (scanned.length) {
+    const rows = await newestInThreads(db, tabId, scanned.map(t => ({ conversationId: t.conversationId, thread: t.thread, sequence: { $lte: t.sequence } })),
+      MEMBER_SCAN, personId)
+    for (const m of await readable(db, tabId, rows, state)) named.add(threadKey(m.conversationId, m.thread!))
+  }
+  return named
+}
+
 /** Up to `limit` rows of one chat, newest first, in its (sequence, id) index range. */
 const newestIn = (tabId: string, conversationId: string, sequence: Record<string, number>, limit: number, fields: Record<string, unknown>): Prisma.InputJsonValue[] =>
   [{ $match: { tabId, conversationId, sequence } }, { $sort: { sequence: -1, _id: -1 } }, { $limit: limit }, { $project: { ...fields, conversationId: 1 } }] as Prisma.InputJsonValue[]
@@ -282,12 +317,10 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
   const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)), state)).map(m => [threadKey(m.conversationId, m.id), m]))
   const withRoot = picked.filter(c => roots.has(threadKey(c.conversationId, c.root)))
   for (const c of withRoot) if (inIt(roots.get(threadKey(c.conversationId, c.root))!)) c.member = true
-  // The rest: did the person write or get tagged before their mark? Each thread's newest MEMBER_SCAN rows there, by its thread
-  // index range; only the rows that name them come back.
+  // The rest: did the person write or get tagged in it before? From the threads' summaries, in one read (namedInThreads).
   const unknown = withRoot.filter(c => !c.member)
   if (unknown.length) {
-    const named = await newestInThreads(db, tabId, unknown.map(c => ({ conversationId: c.conversationId, thread: c.root, sequence: { $lte: c.mark } })), MEMBER_SCAN, personId)
-    const members = new Set((await readable(db, tabId, named, state)).map(m => threadKey(m.conversationId, m.thread!)))
+    const members = await namedInThreads(db, tabId, state, unknown.map(c => ({ conversationId: c.conversationId, thread: c.root, sequence: c.mark })), personId)
     for (const c of unknown) if (members.has(threadKey(c.conversationId, c.root))) c.member = true
   }
   const groups = new Map(readableChats.map(g => [g.id, g]))

@@ -135,7 +135,7 @@ void main() {
     });
   });
 
-  testWidgets('a due reminder shows once under Reminders in Activity, with one '
+  testWidgets("a due reminder shows once in Activity's Needs you, with one "
       'notice, and opening it clears it', (tester) async {
     final server = _chat();
     server.remindElsewhere(
@@ -144,7 +144,6 @@ void main() {
     );
     await show(tester, server);
     await openActivity(tester);
-    expect(find.text('Reminders'), findsNothing);
     expect(reminderRow('message-3'), findsNothing);
 
     // Nothing polls: the list is read again when the reminder is due.
@@ -155,12 +154,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(server.reminderReads, hasLength(reads + 1));
 
-    expect(find.text('Reminders'), findsOneWidget);
     expect(reminderRow('message-3'), findsOneWidget);
     expect(
       find.descendant(
         of: reminderRow('message-3'),
-        matching: find.text('Avocet: $_question'),
+        matching: find.text(_question),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: reminderRow('message-3'),
+        matching: find.text('Avocet'),
       ),
       findsOneWidget,
     );
@@ -185,7 +190,6 @@ void main() {
     expect(find.text(_question), findsOneWidget);
     await openActivity(tester);
     expect(reminderRow('message-3'), findsNothing);
-    expect(find.text('Reminders'), findsNothing);
   });
 
   testWidgets('a reminder set again on the same message notifies again', (

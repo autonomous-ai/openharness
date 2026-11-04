@@ -2014,6 +2014,8 @@ class ConversationServer {
         'question': question,
         'options': ['Behind a flag', 'To everyone'],
         'recommended': recommended,
+        // As the backend says it: a recommended option that exists.
+        'pmTakesOver': recommended >= 0 && recommended < 2,
         'unblocks': 'The release',
         'createdAt': '2026-10-27T05:00:00Z',
         'answeredAt': null,

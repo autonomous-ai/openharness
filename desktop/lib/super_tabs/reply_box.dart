@@ -109,22 +109,17 @@ class SuperTabReplyBox extends StatelessWidget {
       key: surfaceKey,
       decoration: BoxDecoration(
         color: DesktopChrome.field,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
         border: Border.all(color: DesktopChrome.rim),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          grid.AppDesktop.groupGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SuperTabComposerChips(controller: controller, files: files),
-            Focus(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SuperTabComposerChips(controller: controller, files: files),
+          Padding(
+            padding: composerFieldInsets(target: grid.AppControl.height),
+            child: Focus(
               onKeyEvent: (_, event) {
                 if (onKey?.call(event) case final handled?) return handled;
                 switch (composerEnter(
@@ -177,68 +172,85 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ),
             ),
-            if (error case final error?)
-              Padding(
-                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-                child: Text(
-                  error,
-                  key: const ValueKey('super-thread-error'),
-                  style: DesktopChrome.control(),
-                ),
+          ),
+          if (error case final error?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.composerSide,
+                0,
+                grid.AppDesktop.composerSide,
+                grid.AppDesktop.controlGap,
               ),
-            const SizedBox(height: grid.AppDesktop.controlGap),
-            if (voiceRow case final voiceRow?)
-              FocusTraversalOrder(order: sendOrder, child: voiceRow)
-            else
-              Row(
-                children: [
-                  FocusTraversalOrder(
-                    order: toolsOrder,
-                    child: NewHarnessAttachButton(
-                      attachments: files,
-                      enabled: writable && !busy,
-                      icon: AppIcons.plus,
-                    ),
-                  ),
-                  FocusTraversalOrder(
-                    order: toolsOrder,
-                    child: SuperTabComposerTagButton(
-                      key: tagKey,
-                      onPressed: writable ? onTag : null,
-                    ),
-                  ),
-                  Expanded(child: options ?? const SizedBox.shrink()),
-                  if (onMic case final onMic?)
-                    FocusTraversalOrder(
-                      order: sendOrder,
-                      child: SuperTabComposerMic(
-                        key: micKey,
-                        onPressed: writable ? onMic : null,
-                      ),
-                    ),
-                  FocusTraversalOrder(
-                    order: sendOrder,
-                    child: ListenableBuilder(
-                      listenable: Listenable.merge([files, text]),
-                      builder: (context, _) => AppIconButton(
-                        key: sendKey,
-                        icon: AppIcons.arrowUp,
-                        tooltip: 'Send reply',
-                        color: DesktopChrome.accent,
-                        onPressed:
-                            writable &&
-                                !busy &&
-                                (text.text.trim().isNotEmpty || !files.isEmpty)
-                            ? onSend
-                            : null,
-                      ),
-                    ),
-                  ),
-                ],
+              child: Text(
+                error,
+                key: const ValueKey('super-thread-error'),
+                style: DesktopChrome.control(),
               ),
-            ?voiceNotice,
-          ],
-        ),
+            ),
+          Padding(
+            padding: composerRowInsets(target: grid.AppControl.height),
+            // A voice message under way takes the row's place (#2665).
+            child: voiceRow != null
+                ? FocusTraversalOrder(order: sendOrder, child: voiceRow!)
+                : Row(
+                    children: [
+                      FocusTraversalOrder(
+                        order: toolsOrder,
+                        child: NewHarnessAttachButton(
+                          attachments: files,
+                          enabled: writable && !busy,
+                          icon: AppIcons.plus,
+                        ),
+                      ),
+                      FocusTraversalOrder(
+                        order: toolsOrder,
+                        child: SuperTabComposerTagButton(
+                          key: tagKey,
+                          onPressed: writable ? onTag : null,
+                        ),
+                      ),
+                      Expanded(child: options ?? const SizedBox.shrink()),
+                      if (onMic case final onMic?)
+                        FocusTraversalOrder(
+                          order: sendOrder,
+                          child: SuperTabComposerMic(
+                            key: micKey,
+                            onPressed: writable ? onMic : null,
+                          ),
+                        ),
+                      FocusTraversalOrder(
+                        order: sendOrder,
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([files, text]),
+                          builder: (context, _) => AppIconButton(
+                            key: sendKey,
+                            icon: AppIcons.arrowUp,
+                            tooltip: 'Send reply',
+                            color: DesktopChrome.accent,
+                            onPressed:
+                                writable &&
+                                    !busy &&
+                                    (text.text.trim().isNotEmpty ||
+                                        !files.isEmpty)
+                                ? onSend
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          if (voiceNotice case final voiceNotice?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.composerSide,
+                0,
+                grid.AppDesktop.composerSide,
+                grid.AppDesktop.controlGap,
+              ),
+              child: voiceNotice,
+            ),
+        ],
       ),
     ),
   );

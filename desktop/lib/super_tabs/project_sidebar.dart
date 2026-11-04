@@ -670,10 +670,7 @@ class ProjectSidebar extends StatelessWidget {
                     onTap: onNotifications,
                     selected: notificationsSelected,
                     unread: activity?.unread ?? false,
-                    badge:
-                        activity?.count ??
-                        (snapshot?.mentionsWaiting ?? 0) +
-                            (snapshot?.decisionsWaiting ?? 0),
+                    badge: activity?.count ?? snapshot?.decisionsWaiting ?? 0,
                   ),
                 // One Buddy for the whole Swarm, under Activity (Quiet Swarm, screen 1).
                 if (controller.oneBuddy) ?_swarmBuddyRow(),

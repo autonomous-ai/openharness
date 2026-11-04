@@ -43,6 +43,27 @@ String superTabOperationId() {
   ).join();
 }
 
+/// Runs [task] for each of [items], two at a time, and returns the results in
+/// order. Every Swarm command rewrites the whole Swarm row, so twenty at once
+/// hit SWARM_BUSY (503); two keep a batch moving without that.
+Future<List<R>> superTabTwoAtATime<T, R>(
+  Iterable<T> items,
+  Future<R> Function(T item) task,
+) async {
+  final queue = items.toList();
+  final results = List<R?>.filled(queue.length, null);
+  var next = 0;
+  Future<void> worker() async {
+    while (next < queue.length) {
+      final at = next++;
+      results[at] = await task(queue[at]);
+    }
+  }
+
+  await Future.wait([worker(), worker()]);
+  return [for (final r in results) r as R];
+}
+
 /// The id the backend gives the message a person sends with receipt
 /// [operationId]: `stableId(state.id, actorKey(actor), operationId)`, the
 /// first 24 hex of sha256 over the JSON of those parts (backend
@@ -176,6 +197,10 @@ const kSwarmPushSafetyNet = Duration(seconds: 60);
 /// While the server pushes, which Swarms the account is in is still read this
 /// often; a change to one asks for a read at once (`SuperTabClient`).
 const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
+
+/// While a Swarm's reads are refused, the account's Swarm list is read for it
+/// at most this often to learn whether it is gone (task #2767).
+const kSwarmListRecheckEvery = Duration(minutes: 1);
 
 /// The files waiting in a Swarm's boxes: by conversation, and by a thread's
 /// conversation and root.
@@ -697,6 +722,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
+
+  /// When the Swarm was last read (Manage ▸ Backlog's "Synced", #2774).
+  DateTime? get syncedAt => _partsReadAt;
 
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).

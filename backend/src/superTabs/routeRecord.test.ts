@@ -1,5 +1,6 @@
+import { BSON } from 'mongodb'
 import { describe, expect, it } from 'vitest'
-import { readRecord, routeRecordSchema, storedRecord, type RouteRecord } from './routeRecord.js'
+import { finalMatches, readRecord, routeRecordSchema, storedRecord, type RouteRecord } from './routeRecord.js'
 
 const candidate = (i: number) => ({ id: `c${i}`, kind: 'new', machineId: `m${i}`, engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
   title: `New agent · Claude opus high · m${i}`, label: `New agent · Claude opus high · m${i}` })
@@ -27,10 +28,11 @@ describe('a route decision as stored (task #2488: ~20 KB a row since every engin
     return r
   }
 
-  it('keeps the label of the pick only, and every other candidate field', () => {
+  it('keeps the pick whole, and of every other candidate who and where it is and its title', () => {
     const r = routed(), stored = storedRecord(r)
-    expect(stored.candidates.map(c => c.label)).toEqual([undefined, r.candidates[1]!.label, undefined])
-    expect(stored.candidates.map(({ label: _label, ...c }) => c)).toEqual(r.candidates.map(({ label: _label, ...c }) => c))
+    expect(stored.candidates[1]).toEqual(r.candidates[1])
+    const kept = ({ id, kind, machineId, engine, model, effort, title }: RouteRecord['candidates'][number]) => ({ id, kind, machineId, engine, model, effort, title })
+    expect([stored.candidates[0], stored.candidates[2]]).toEqual([kept(r.candidates[0]!), kept(r.candidates[2]!)])
   })
 
   it('keeps each exclusion reason once, with its titles in order', () => {
@@ -58,5 +60,54 @@ describe('a route decision as stored (task #2488: ~20 KB a row since every engin
     expect(storedRecord(none)).not.toHaveProperty('unavailable')
     expect(storedRecord(none).excluded).toEqual([])
     expect(readRecord(storedRecord(none)).excluded).toEqual([])
+  })
+})
+
+// Ken's prod scan, 11-04 14:30: 12.9 KB a decision on average, rows of 12 candidates mostly. A route lists every engine on every
+// machine now (#2723): 42 candidates on 11-04, each with its quota fit, which no reader takes back but the pick's.
+describe('a route decision of every engine on every machine, as stored (task #2769)', () => {
+  const hex = (n: number, seed: number) => Array.from({ length: n }, (_, i) => ((i * 7 + seed) % 16).toString(16)).join('')
+  const routed = (): RouteRecord => {
+    const machines = Array.from({ length: 21 }, (_, i) => hex(24, i))
+    const candidates = machines.flatMap((machineId, m) => (['claude', 'codex'] as const).map((engine, e) => {
+      const i = m * 2 + e
+      return { id: `c${i}`, ...(i % 9 === 4 ? { kind: 'member' as const, agentId: hex(24, 50 + i) } : { kind: 'new' as const }), machineId, engine,
+        model: engine === 'claude' ? 'opus' : 'default', effort: engine === 'claude' ? 'high' : 'default', quality: 3, cost: 40,
+        title: `New agent · ${engine === 'claude' ? 'Claude opus high' : 'Codex default default'} · MacBooks-MacBook-Pro-${m}.local`,
+        label: `New agent · Claude opus high · MacBooks-MacBook-Pro-${m}.local · strength 3, cost 40 · fits: weekly 1% of 64% left, resets in 3d4h`,
+        fit: { status: 'fits' as const, coverage: 3.21, effectiveCost: 1.2, expiring: 0.4, spend: { '5-hour': 2.5, weekly: 1 }, account: hex(64, i) } }
+    }))
+    return { assessment: { difficulty: 'medium', risk: 'medium', why: 'Route decision size and index suggestions from Ken scan', size: 'medium', kind: 'backend' },
+      candidates, excluded: [], floor: 1, notes: false, pick: 'c2', via: 'order', p: null, belowFloor: false,
+      why: 'First by strength, then price and quota fit.', jobKind: 'backend', instructionsRevision: 52 } as RouteRecord
+  }
+  const size = (value: unknown) => BSON.calculateObjectSize({ record: value })
+
+  it('stores its 42 candidates in under 10 KB: 24.7 KB as routed, 18.9 KB with only the labels left out (task #2488)', () => {
+    const r = routed()
+    expect(size(r)).toBeGreaterThan(24_000)
+    expect(size(storedRecord(r))).toBeLessThan(10_000)
+  })
+
+  it('reads back what each reader takes: the pick whole (routeHistory: its account and spend), every title (Desktop Details), and each candidate a start or a person may choose', () => {
+    const r = routed(), back = readRecord(storedRecord(r))
+    expect(back.candidates.find(c => c.id === r.pick)).toEqual(r.candidates.find(c => c.id === r.pick))
+    expect(back.candidates.map(c => c.title)).toEqual(r.candidates.map(c => c.title))
+    for (const [i, c] of r.candidates.entries()) {
+      const kept = back.candidates[i]!
+      expect({ id: kept.id, kind: kept.kind, agentId: kept.agentId, machineId: kept.machineId, engine: kept.engine, model: kept.model, effort: kept.effort })
+        .toEqual({ id: c.id, kind: c.kind, agentId: c.agentId, machineId: c.machineId, engine: c.engine, model: c.model, effort: c.effort })
+      const final = c.kind === 'member' ? { kind: 'member' as const, agentId: c.agentId!, machineId: c.machineId }
+        : { kind: 'new' as const, startId: 's', machineId: c.machineId, engine: c.engine, model: c.model, effort: c.effort }
+      expect(finalMatches(kept, final)).toBe(true)
+    }
+  })
+
+  it('keeps a grid model on a candidate that runs one', () => {
+    const r = routed()
+    r.candidates[5] = { ...r.candidates[5]!, kind: 'new', agentId: undefined, model: 'default', effort: 'default', gridModel: 'kimi-k3', gridName: 'Kimi K3' }
+    delete r.candidates[5]!.agentId
+    const kept = storedRecord(r).candidates[5]!
+    expect([kept.gridModel, kept.gridName]).toEqual(['kimi-k3', 'Kimi K3'])
   })
 })
