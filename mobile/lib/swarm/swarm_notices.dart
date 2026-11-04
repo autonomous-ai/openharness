@@ -48,6 +48,8 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
       conversationId: need.conversationId,
       messageId: need is SwarmMentionNeed ? need.mention.messageId : null,
       decisionId: need is SwarmDecisionNeed ? need.decision.id : null,
+      // A tag in a reply only in its thread opens that thread.
+      threadId: need is SwarmMentionNeed ? need.mention.threadId : null,
     ),
   );
 }
@@ -173,6 +175,7 @@ class SwarmAnnouncer {
           conversationId: chatId,
           messageId: null,
           decisionId: null,
+          threadId: null,
         ),
       )),
     );
@@ -221,6 +224,8 @@ class SwarmAnnouncer {
           conversationId: entry.conversationId,
           messageId: entry.messageId,
           decisionId: null,
+          // A reply only in its thread is found there, not in the chat.
+          threadId: entry.threadId,
         ),
       )),
     );

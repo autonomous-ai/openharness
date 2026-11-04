@@ -18,12 +18,15 @@ typedef AgentNoticeMessage = ({
   String body,
 });
 
-/// Where a Swarm notice leads: the Swarm, and the conversation it is about.
+/// Where a Swarm notice leads: the Swarm, and the conversation it is about;
+/// for a message only in a thread, that thread's root ([threadId]), since the
+/// chat alone does not show it.
 typedef SwarmNoticeTarget = ({
   String swarmId,
   String conversationId,
   String? messageId,
   String? decisionId,
+  String? threadId,
 });
 
 /// One notice about what a Swarm asks of the person. [key] names it, so the
@@ -449,6 +452,7 @@ String encodeSwarmPayload(SwarmNoticeTarget target) =>
     '/${Uri.encodeComponent(target.conversationId)}'
     '${target.messageId != null
         ? '/message/${Uri.encodeComponent(target.messageId!)}'
+              '${target.threadId != null ? '/thread/${Uri.encodeComponent(target.threadId!)}' : ''}'
         : target.decisionId != null
         ? '/decision/${Uri.encodeComponent(target.decisionId!)}'
         : ''}';
@@ -457,22 +461,28 @@ String encodeSwarmPayload(SwarmNoticeTarget target) =>
 SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
   if (payload == null || !payload.startsWith(_swarmPayload)) return null;
   final parts = payload.substring(_swarmPayload.length).split('/');
-  if ((parts.length != 2 && parts.length != 4) || parts.any((p) => p.isEmpty)) {
+  if ((parts.length != 2 && parts.length != 4 && parts.length != 6) ||
+      parts.any((p) => p.isEmpty)) {
     return null;
   }
-  if (parts.length == 4 && !const ['message', 'decision'].contains(parts[2])) {
+  if (parts.length >= 4 && !const ['message', 'decision'].contains(parts[2])) {
+    return null;
+  }
+  // A message in a thread names its root after it (encodeSwarmPayload).
+  if (parts.length == 6 && (parts[2] != 'message' || parts[4] != 'thread')) {
     return null;
   }
   try {
     return (
       swarmId: Uri.decodeComponent(parts[0]),
       conversationId: Uri.decodeComponent(parts[1]),
-      messageId: parts.length == 4 && parts[2] == 'message'
+      messageId: parts.length >= 4 && parts[2] == 'message'
           ? Uri.decodeComponent(parts[3])
           : null,
       decisionId: parts.length == 4 && parts[2] == 'decision'
           ? Uri.decodeComponent(parts[3])
           : null,
+      threadId: parts.length == 6 ? Uri.decodeComponent(parts[5]) : null,
     );
   } on ArgumentError {
     return null;
