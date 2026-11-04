@@ -672,6 +672,31 @@ class _SuperTabViewState extends State<SuperTabView>
   Timer? _historyRetry;
   static const _historyRetryAfter = Duration(seconds: 5);
 
+  /// The band's [today] (the unread bar or the jump pill, or nothing), under
+  /// the row naming [id]'s unread tags in threads when it has any (#2814).
+  Widget? _withThreadTags(String id, Widget? today) {
+    final tags = SuperTabAttention.of(c).threadTagsIn(id);
+    if (tags.isEmpty) return today;
+    final bar = SuperTabThreadTagBar(
+      count: tags.length,
+      onOpen: () => _openThreadTag(tags.first),
+    );
+    if (today == null) return bar;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [bar, today],
+    );
+  }
+
+  /// Opens [tag]'s thread at its reply, lit; opening it reads it, which
+  /// clears the tag from the row and the red number.
+  void _openThreadTag(SuperTabMention tag) {
+    final root = tag.threadId;
+    if (root == null) return;
+    c.openThread(root, at: tag.messageId);
+  }
+
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
   /// The bar or the pill clicked: the line, with typing back in the composer,
@@ -1989,7 +2014,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // A thread reply opens its thread; one shown only there has no row in the
     // chat to scroll to.
     if (message.threadReply) {
-      c.openThread(message.thread!);
+      c.openThread(message.thread!, at: message.id);
       if (!message.inMainStream) return;
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
@@ -2147,7 +2172,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // A tag in a thread opens the thread; one in a thread reply shown only
     // there is not in the chat to scroll to.
     if (message.thread case final root?) {
-      c.openThread(root);
+      c.openThread(root, at: message.inMainStream ? null : message.id);
       if (!message.inMainStream) return;
     }
     setState(() {
@@ -3734,6 +3759,9 @@ class _SuperTabViewState extends State<SuperTabView>
       threadTagged:
           thread != null &&
           SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
+      threadFresh: thread == null
+          ? 0
+          : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null
@@ -4329,29 +4357,33 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _showsBar(c.selectedId)
-                          ? SuperTabUnreadBar(
-                              count: _newFromLine(c.selectedId),
-                              more: c.hasNewer(c.selectedId),
-                              onPressed: () => _jumpToUnreadLine(c.selectedId),
-                              onMarkRead: _markReadFromBar,
-                            )
-                          : _unread.offersDown(c.selectedId)
-                          ? Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                grid.AppDesktop.panelPadding,
-                                grid.AppDesktop.controlGap,
-                                grid.AppDesktop.panelPadding,
-                                0,
-                              ),
-                              child: Center(
-                                child: SuperTabJumpToUnread(
-                                  onPressed: () =>
-                                      _jumpToUnreadLine(c.selectedId),
+                      child: _withThreadTags(
+                        c.selectedId,
+                        _showsBar(c.selectedId)
+                            ? SuperTabUnreadBar(
+                                count: _newFromLine(c.selectedId),
+                                more: c.hasNewer(c.selectedId),
+                                onPressed: () =>
+                                    _jumpToUnreadLine(c.selectedId),
+                                onMarkRead: _markReadFromBar,
+                              )
+                            : _unread.offersDown(c.selectedId)
+                            ? Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  grid.AppDesktop.panelPadding,
+                                  grid.AppDesktop.controlGap,
+                                  grid.AppDesktop.panelPadding,
+                                  0,
                                 ),
-                              ),
-                            )
-                          : null,
+                                child: Center(
+                                  child: SuperTabJumpToUnread(
+                                    onPressed: () =>
+                                        _jumpToUnreadLine(c.selectedId),
+                                  ),
+                                ),
+                              )
+                            : null,
+                      ),
                     ),
                     Expanded(
                       child: Stack(

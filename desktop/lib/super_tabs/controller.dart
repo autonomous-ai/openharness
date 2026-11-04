@@ -896,6 +896,10 @@ class SuperTabController extends ChangeNotifier {
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
 
+  /// The reply the open thread was opened at, to bring into view lit once
+  /// its panel holds it ([SuperTabThreadPanel] takes it); null otherwise.
+  ({String root, String messageId})? threadTarget;
+
   /// A thread restored open, whose replies its first read of the Swarm brings.
   bool _reopenThread = false;
 
@@ -1632,9 +1636,11 @@ class SuperTabController extends ChangeNotifier {
   /// Opens [root]'s thread of the selected conversation beside the chat.
   /// [shown] false opens it with its pane not on screen (the dial opened it
   /// in a background tab): nothing reads until [threadPaneShown].
-  void openThread(String root, {bool shown = true}) {
+  /// [at] names a reply to open the thread at, lit, as a link to it does.
+  void openThread(String root, {bool shown = true, String? at}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    threadTarget = at == null ? null : (root: root, messageId: at);
     _threadUnshown = !shown;
     _pruneThreadFiles();
     _seeThread(root);
@@ -1646,6 +1652,7 @@ class SuperTabController extends ChangeNotifier {
   void closeThread() {
     if (openedThread == null) return;
     openedThread = null;
+    threadTarget = null;
     _pruneThreadFiles();
     _saveSoon();
     _changed();
