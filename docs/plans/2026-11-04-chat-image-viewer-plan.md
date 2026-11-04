@@ -27,14 +27,15 @@
 
 ## Global Constraints
 
-- Harness Design Language (desktop/design/desktop-design-system.md): tokens only, flat rows, colour never the only signal, no explanatory sentences. The veil is the shared modal veil token `grid.AppDesktop.veil(brightness)` (95%, black in dark, white in light), as every modal veil is.
+- Harness Design Language (desktop/design/desktop-design-system.md): tokens only, flat rows, colour never the only signal, no explanatory sentences.
+- The veil is dark in both appearances (River, 11-04: a picture reads best on dark, as in Slack and Photos): one media veil token, `grid.AppDesktop.mediaVeil`, with the ink and control fill drawn on it (`mediaInk`, `mediaInkMuted`, `mediaControl`, `mediaControlHover`), the same in light and dark. The design system names it as the image viewer's exception to the one modal veil.
 - Keeps today's Download (not in a browser) and Open in browser, each asking for a fresh link when the one at hand is about to end (`AttachmentViewerActions`).
 - Previous and next: buttons at the picture's left and right, and the Left and Right keys, through the pictures shown in place in the same scope: the chat's pictures from the chat, the thread's from the thread. No previous button on the first, no next on the last.
 - Zoom: a slider with minus and plus, 100% to 400% in 25% steps, its percentage shown beside it; pinch and scroll zoom move it too. Rotate turns a quarter clockwise each click. A new picture starts at 100%, unturned.
 - Top left: the sender's avatar and name as their row shows them, then "14 days ago in # openharness · shot.png". Time in words: "just now", "1 minute ago", "5 minutes ago", "1 hour ago", "3 hours ago", "1 day ago", "14 days ago".
-- More holds Show in chat (closes the viewer and goes to the message).
+- More holds only Show in chat (closes the viewer and goes to the message) (River, 11-04).
 - Esc closes; a click on the veil closes; a click on the picture or a control does not.
-- Web: a browser still shows a picture as a chip that opens in a new tab (a browser cannot refuse a redirect off file storage, `attachment_viewer_web_test.dart`), so the overlay is drawn only by Desktop. Its code is shared and builds for the web.
+- Web: a browser still shows a picture as a chip that opens in a new tab (a browser cannot refuse a redirect off file storage, `attachment_viewer_web_test.dart`), so the overlay is drawn only by Desktop. Its code is shared and builds for the web. The PR names this as a known limit (River, 11-04).
 - Desktop tests use a memory store and a fake sign-in (`ConversationServer`). Desktop guard tests (`check-ui-style`, `laid_out_list_test`) pass before Ready.
 
 ## Review Focus
@@ -52,6 +53,7 @@
 **Files:**
 - Modify: `desktop/lib/super_tabs/attachment_image.dart` (replace `SuperTabImageViewer`, add `SuperTabImageItem`, `SuperTabImageGallery`, `SuperTabImageStage`, `superTabPostedAgo`)
 - Modify: `desktop/lib/super_tabs/attachment_viewer.dart` (`AttachmentViewerActions`: optional Close, trailing More)
+- Modify: `desktop/lib/shared/theme/app_theme.dart` (the media tokens), `desktop/design/desktop-design-system.md` (the exception)
 - Test: `desktop/test/super_tab_image_viewer_test.dart` (new)
 
 **Interfaces:**
@@ -89,6 +91,6 @@
 
 ### Task 3: Screenshots and Ready
 
-- [ ] Add the viewer to `super_tab_message_rows_shots_test.dart` (light and dark), write before and after shots with `SUPER_TAB_ROW_SHOTS`, attach them to the PR.
+- [ ] `super_tab_image_viewer_shots_test.dart` (light and dark, a thread open beside the chat) writes the before shots on main and the after shots on the branch with `SUPER_TAB_IMAGE_SHOTS`; attach them to the PR.
 - [ ] Run the whole Desktop unit suite once, the guard tests (`check-ui-style`, `laid_out_list_test`), `flutter analyze`, and a web build compile.
 - [ ] Red/green evidence in a PR comment; mark Ready; add the review and test steps.
