@@ -3,7 +3,6 @@
 // then goes on with its interval. Each poller ticks through VisibleTick, or through the widget
 // that owns its controller. Every fake here counts requests; nothing reaches a machine or the
 // network.
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -165,8 +164,7 @@ class _InvitesApp extends AppNotifier {
         configStore: null,
       );
   final paths = <String>[];
-  @override
-  late final SuperTabClient superTabs = SuperTabClient(
+  late final SuperTabClient _client = SuperTabClient(
     transport: (method, path, {body}) async {
       paths.add(path);
       return path.endsWith('/invitations') ? <Object>[] : {'tabs': <Object>[]};
@@ -174,6 +172,8 @@ class _InvitesApp extends AppNotifier {
     storage: MemoryStore(),
     discoveryInterval: Duration.zero,
   )..bind('account');
+  @override
+  SuperTabClient get superTabs => _client;
 }
 
 class _ResourcesApp extends ModelManagerTestApp {
@@ -585,7 +585,6 @@ void main() {
         cli: cli,
         refreshEvery: const Duration(seconds: 60),
       );
-      addTearDown(wifi.dispose);
       final dial = DialState();
       addTearDown(dial.dispose);
       final controller = DevicesController(
@@ -608,6 +607,7 @@ void main() {
         reads: () => cli.statusCalls,
       );
       await tester.pumpWidget(const SizedBox());
+      wifi.dispose();
     },
   );
 }

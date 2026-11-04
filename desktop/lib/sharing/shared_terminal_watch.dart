@@ -41,8 +41,28 @@ class SharedTerminalWatch {
 
   bool get stopped => _stopped;
 
-  /// Whether the pane can be seen: its owner sets this from its [VisibleTick].
-  bool seen = true;
+  bool _seen = true;
+
+  /// Whether the pane can be seen, set by the pane from its `VisibleTick`. While it cannot,
+  /// nothing asks again; when it can again, a stopped terminal is asked for once at once, then
+  /// every [retryEvery].
+  bool get seen => _seen;
+  set seen(bool seen) {
+    if (seen == _seen) return;
+    _seen = seen;
+    _retry?.cancel();
+    _retry = null;
+    if (!seen || !_stopped) return;
+    if (canRetry()) unawaited(session.reopen());
+    _arm();
+  }
+
+  void _arm() {
+    if (!_seen) return;
+    _retry ??= Timer.periodic(retryEvery, (_) {
+      if (canRetry()) unawaited(session.reopen());
+    });
+  }
 
   void _update() {
     if (session.status == TerminalSessionStatus.controlling) {
@@ -54,9 +74,7 @@ class SharedTerminalWatch {
 
   void _set(bool stopped) {
     if (stopped) {
-      _retry ??= Timer.periodic(retryEvery, (_) {
-        if (canRetry()) unawaited(session.reopen());
-      });
+      _arm();
     } else {
       _retry?.cancel();
       _retry = null;

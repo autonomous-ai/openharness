@@ -12,6 +12,7 @@ import '../shared/widgets/skeleton.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
+import '../super_tabs/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import 'device_artwork.dart';
 import 'device_settings.dart';
@@ -37,7 +38,8 @@ class DevicesTab extends StatefulWidget {
   State<DevicesTab> createState() => _DevicesTabState();
 }
 
-class _DevicesTabState extends State<DevicesTab> {
+class _DevicesTabState extends State<DevicesTab>
+    with WidgetsBindingObserver, VisibleTick<DevicesTab> {
   late final controller = DevicesController(
     hosts: widget.notifier.deviceHosts,
     accountId: widget.notifier.currentUser?.id ?? 'guest',
@@ -50,25 +52,26 @@ class _DevicesTabState extends State<DevicesTab> {
   late final wifi = WifiRobotsController(
     onLocalNetworkBlocked: widget.notifier.localNetworkBlocked,
   );
-  Timer? _refresh;
+  late final _every =
+      widget.refreshEvery ?? (kUnderTest ? null : const Duration(seconds: 10));
   @override
   void initState() {
     super.initState();
     unawaited(widget.notifier.refreshDevices());
-    final every =
-        widget.refreshEvery ??
-        (kUnderTest ? null : const Duration(seconds: 10));
-    if (every != null) {
-      _refresh = Timer.periodic(
-        every,
-        (_) => unawaited(widget.notifier.refreshDevices()),
-      );
-    }
+    // Again on the interval while the tab can be seen, and once as it is seen again.
+    if (_every case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() => unawaited(widget.notifier.refreshDevices());
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && _every != null) onTick();
   }
 
   @override
   void dispose() {
-    _refresh?.cancel();
     controller.dispose();
     wifi.dispose();
     super.dispose();
@@ -129,7 +132,8 @@ class DevicesScreen extends StatefulWidget {
   State<DevicesScreen> createState() => _DevicesScreenState();
 }
 
-class _DevicesScreenState extends State<DevicesScreen> {
+class _DevicesScreenState extends State<DevicesScreen>
+    with WidgetsBindingObserver, VisibleTick<DevicesScreen> {
   String? _selectedKey;
   String? _shopError;
   final _cards = ScrollController();
@@ -170,6 +174,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
     unawaited(widget.controller.load());
     widget.wifi?.start();
   }
+
+  // The robots are read again only while the screen can be seen.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    widget.wifi?.seen = onScreen;
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => widget.wifi?.seen = onScreen;
 
   @override
   void didUpdateWidget(DevicesScreen oldWidget) {

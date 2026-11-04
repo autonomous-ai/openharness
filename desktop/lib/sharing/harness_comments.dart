@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../super_tabs/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import '../ws/ws_conn.dart';
 import '../widgets/laid_out_list.dart';
@@ -32,20 +33,29 @@ class HarnessComments extends StatefulWidget {
   State<HarnessComments> createState() => _HarnessCommentsState();
 }
 
-class _HarnessCommentsState extends State<HarnessComments> {
+class _HarnessCommentsState extends State<HarnessComments>
+    with WidgetsBindingObserver, VisibleTick<HarnessComments> {
   final _text = TextEditingController();
   List<Map<String, dynamic>> _comments = [];
   bool _loading = true, _refreshing = false, _busy = false, _canComment = false;
   int _revision = 0;
   String? _error, _postId, _postText;
-  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     widget.updates?.addListener(_refresh);
     _refresh();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
+    // Read every 5 seconds while the comments can be seen; once at once when they are again.
+    visibleTick(const Duration(seconds: 5));
+  }
+
+  @override
+  void onTick() => _refresh();
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen) _refresh();
   }
 
   @override
@@ -59,7 +69,6 @@ class _HarnessCommentsState extends State<HarnessComments> {
 
   @override
   void dispose() {
-    _timer?.cancel();
     widget.updates?.removeListener(_refresh);
     _text.dispose();
     super.dispose();

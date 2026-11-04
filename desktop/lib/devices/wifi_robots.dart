@@ -47,6 +47,22 @@ class WifiRobotsController extends ChangeNotifier {
 
   Timer? _timer;
   bool _started = false, _refreshing = false, _disposed = false;
+  bool _seen = true;
+
+  /// Whether the robots can be seen, set by the screen that lists them (its `VisibleTick`).
+  /// While they cannot, the CLI is not asked; when they can again, once at once, then every
+  /// minute.
+  bool get seen => _seen;
+  set seen(bool seen) {
+    if (seen == _seen) return;
+    _seen = seen;
+    _timer?.cancel();
+    _timer = null;
+    if (seen && _started && _every != null && !unsupported && !busy) {
+      unawaited(refresh());
+    }
+  }
+
   int _generation = 0;
 
   bool loading = true;
@@ -89,7 +105,7 @@ class WifiRobotsController extends ChangeNotifier {
   void _scheduleRefresh() {
     _timer?.cancel();
     final every = _every;
-    if (_disposed || every == null || unsupported || busy) return;
+    if (_disposed || every == null || !_seen || unsupported || busy) return;
     _timer = Timer(every, () => unawaited(refresh()));
   }
 
