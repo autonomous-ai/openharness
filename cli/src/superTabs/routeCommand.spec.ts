@@ -1181,13 +1181,15 @@ describe('routing contributed capacity', () => {
       reason: 'Its terminal is not running.' })]))
   })
   // Task #2744: the idle cleanup closed Tern, and the PM assigned it anyway, over the route's pick; the reason says what to do.
-  it('says a contributed member its machine listed stopped was closed, and to start a new agent', async () => {
-    const pool = healthy(); pool.observation.runningHarnessIds = []
-    Object.assign(pool.observation, { stoppedHarnessIds: ['h1'] })
-    const { answer, s } = await runPool(pool, true)
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
-    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
-      reason: 'Its session was closed. Start a new agent.' })]))
+  // Only for one its idle cleanup closed: one listed stopped alone may be a Change agent before its rebind (review of #2953).
+  it('says a contributed member its idle cleanup closed was closed, and to start a new agent', async () => {
+    for (const [closed, reason] of [[['h1'], 'Its session was closed. Start a new agent.'], [[], 'Its terminal is not running.']] as const) {
+      const pool = healthy(); pool.observation.runningHarnessIds = []
+      Object.assign(pool.observation, { stoppedHarnessIds: ['h1'], closedHarnessIds: closed })
+      const { answer, s } = await runPool(pool, true)
+      expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'), reason })]))
+    }
   })
   it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
     const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
