@@ -579,14 +579,17 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 /** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
 export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
-/** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
- *  stops re-reading every machine; #2900 has what grows with the count. */
-const MAX_MACHINES = 32
-export const MACHINES_FULL_MESSAGE = `This Swarm is at its limit of ${MAX_MACHINES} machines. One has to be removed before another can be added.`
-/** Whether [state] can take another machine, or with [team] another Team account's entry: one for each machine at most. */
-export const machinesFull = (state: SuperTabState, team = false): boolean => team
-  ? (state.machines?.length ?? 0) >= 2 * MAX_MACHINES
-  : (state.machines ?? []).filter(m => !m.hostMachineId).length >= MAX_MACHINES
+/** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
+ *  document; each machine is its own part now. Team accounts' entries count apart, so a Mac's Team account never uses up
+ *  its owner's 20, and still have a bound. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
+export const MACHINES_PER_PERSON = 20
+export const MACHINE_LIMIT_MESSAGE = `You have ${MACHINES_PER_PERSON} machines in this Swarm, the most one person can add. Remove one before adding another.`
+/** How many more machines [contributorId] may add to [state], or with [team] Team accounts' entries. Buddy-only records count
+ *  as the person's machines. The command's check and the host's join rows both read this, so they never disagree. */
+export const machineRoom = (state: SuperTabState, contributorId: string, { team = false } = {}): number =>
+  Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId && !!m.hostMachineId === team).length)
+export const machineLimitReached = (state: SuperTabState, contributorId: string, options: { team?: boolean } = {}): boolean =>
+  machineRoom(state, contributorId, options) === 0
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
