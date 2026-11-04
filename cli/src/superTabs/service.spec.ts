@@ -334,6 +334,8 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   const t = setup()
   const help = (await t.ask({ action: 'help', tabId: 'tab', agentId: t.agentId }, owner) as { help: Record<string, unknown> }).help
   expect(String(help.post)).toContain('--mention')
+  // Task #2924: an agent with work in the project posts in its project chat itself, joining nobody there (#2207).
+  expect(String(help.post)).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.')
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask', 'person.tell']))
   expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
