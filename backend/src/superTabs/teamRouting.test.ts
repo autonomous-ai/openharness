@@ -305,6 +305,21 @@ describe('routing a teammate\'s work', () => {
       message: 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects. Route again.' })
   })
 
+  // Task #2901 (Ken, 2026-11-04): a route names no pick, so no single refusal decides it; it is refused once no candidate is left.
+  it('leaves out of a route that names no pick what cannot take it, and refuses it once nothing is left', () => {
+    const f = routed()
+    const pickless = (candidates: unknown[]) => {
+      const { pick: _pick, ...rest } = record(candidates)
+      return { ...rest, via: 'instructions', floor: 1, why: 'No ranking: the project\'s Routing instructions choose.' }
+    }
+    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: pickless([candidate('c0', 'mate-mac'), candidate('c1', 'mate-team')]) } as Command,
+      f.leadActor, {})
+    expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c1' }],
+      excluded: [{ title: 'c0 on mate-mac', reason: 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects.' }, { title: 'Owner Mac · claude' }] } })
+    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group, decision: pickless([candidate('c0', 'mate-mac')]) } as Command, f.leadActor, {})))
+      .toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED', message: 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects. Route again.' })
+  })
+
   it('refuses a person\'s reroute to a candidate whose machine can no longer take it', () => {
     const f = routed()
     const decision = { id: 'd1', conversationId: f.group, record: record([candidate('c0', 'owner-mac'), candidate('c1', 'mate-team')]),
