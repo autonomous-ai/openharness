@@ -223,6 +223,24 @@ class AgentCreationAttempt {
   String? _outcome;
   String? _agentId;
 
+  /// The machine's code for the refusal this attempt ended on, if it did.
+  String? _refusal;
+
+  /// The launch model the machine refused, so the agent runs its engine's
+  /// own (Desktop's `launchModelRefused`); null when it took it or none was
+  /// asked for.
+  ({String model, String? effort})? get launchModelRefused => _launchRefused;
+  ({String model, String? effort})? _launchRefused;
+
+  /// After the machine refused a launch model before launching anything: the
+  /// request may be sent again without it.
+  void _retryWithoutLaunchModel(({String model, String? effort}) refused) {
+    _launchRefused = refused;
+    _finished = false;
+    _outcome = null;
+    _refusal = null;
+  }
+
   bool get awaitingConfirmation => _awaitingConfirmation;
 
   /// The machine holds this request before starting anything (an engine it is installing), so it
@@ -7050,6 +7068,17 @@ class AppNotifier extends ChangeNotifier {
     AgentCreationAttempt? attempt,
     String? prompt,
     String? name,
+
+    /// A Swarm agent's role and skill mode for the machine's Swarm skill
+    /// (Desktop's `swarmRole`, `swarmSkillMode`): sent for Claude Code and
+    /// Codex only.
+    String? swarmRole,
+    String? swarmSkillMode,
+
+    /// The model and effort it starts on, as Desktop's Lead starts (`model`,
+    /// `effort`). A machine that refuses them before starting anything gets
+    /// the request again without them ([AgentCreationAttempt.launchModelRefused]).
+    ({String model, String? effort})? launchModel,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
     final task = prompt?.trim();
@@ -7078,8 +7107,14 @@ class AppNotifier extends ChangeNotifier {
       'codexHome': ?codexHome,
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
+      if (engine == 'claude' || engine == 'codex') ...{
+        'swarmRole': ?swarmRole,
+        'swarmSkillMode': ?swarmSkillMode,
+      },
+      'model': ?launchModel?.model,
+      'effort': ?launchModel?.effort,
     };
-    final created = _create(
+    Future<String?> ask() => _create(
       machineId,
       choices,
       swarmId: swarmId,
@@ -7087,6 +7122,22 @@ class AppNotifier extends ChangeNotifier {
       newDeskTab: newDeskTab,
       attempt: creation,
     );
+    final created = launchModel == null
+        ? ask()
+        : ask().then<String?>((error) {
+            if (error == null ||
+                !_launchModelRefusals.contains(creation._refusal)) {
+              return error;
+            }
+            // Refused before anything launched: the same request without them,
+            // so the agent starts on its engine's own model rather than not at
+            // all (Desktop's createAgent).
+            choices
+              ..remove('model')
+              ..remove('effort');
+            creation._retryWithoutLaunchModel(launchModel);
+            return ask();
+          });
     if (task == null || task.isEmpty) return created;
     // A task typed into New Harness is a message sent to a session too: the onboarding's first
     // message, if it is still waiting for one (`terminal_page.dart` counts every other send).
@@ -7289,6 +7340,12 @@ class AppNotifier extends ChangeNotifier {
     }
     return null;
   }
+
+  /// A machine's refusals of a launch model, made before anything launched.
+  static const _launchModelRefusals = {
+    'LAUNCH_MODEL_UNSUPPORTED',
+    'INVALID_LAUNCH_MODEL',
+  };
 
   String _creationFailureMessage(
     String code,
@@ -7551,8 +7608,10 @@ class AppNotifier extends ChangeNotifier {
         'SESSION_OPEN_IN_TERMINAL',
         'SESSION_BUSY_IN_TERMINAL',
         'SESSION_STOP_FAILED',
+        ..._launchModelRefusals,
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
+        creation._refusal = failure.code;
         return creation._complete(
           _creationFailureMessage(
             failure.code,
@@ -7605,6 +7664,7 @@ class AppNotifier extends ChangeNotifier {
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unconfirmed;
+        creation._refusal = failure['code'] as String;
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,

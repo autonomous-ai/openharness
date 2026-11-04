@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../core/models.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
@@ -412,6 +413,78 @@ class SuperTabClient {
       if (error != null) errors.add(error);
     }
     return errors;
+  }
+
+  /// Names already sent by [syncChosenNames]: Swarm, agent and name, so each is
+  /// sent once per run, a refused one included.
+  final _chosenNamesSent = <String>{};
+
+  /// What each Swarm's agents and their names were when [agentNamesChanged]
+  /// last looked.
+  final _agentNamesSeen = <String, String>{};
+
+  /// Whether Swarm [tabId]'s agents or the names it shows for them changed
+  /// since this last said so: a message or a task moving in it is not a change,
+  /// so the sync of chosen names does not run for it (review of #3021).
+  bool agentNamesChanged(String tabId) {
+    final snapshot = _loaded[tabId]?.snapshot;
+    if (snapshot == null) return false;
+    final now = [
+      for (final agent in snapshot.agents)
+        '${agent.id}:${snapshot.agentName(agent.id)}',
+    ].join('|');
+    if (_agentNamesSeen[tabId] == now) return false;
+    _agentNamesSeen[tabId] = now;
+    return true;
+  }
+
+  /// A name as the Swarm keeps it: one space between words, trimmed.
+  static String _spaced(String name) =>
+      name.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Sends the names people chose for their agents to the Swarms that show
+  /// something else (task #2920): an agent renamed before the rename reached
+  /// the Swarm shows its new name with no second rename. [native] reads the
+  /// harness an agent runs as on this person's own machines, null for one this
+  /// app cannot see or may not rename.
+  ///
+  /// Only a name the daemon says a person chose, never the creation name or an
+  /// engine's session title; a daemon that does not say sends nothing. Only for
+  /// an agent this person may rename (its contributor or its machine's owner,
+  /// as the Swarm decides), and never a Buddy, whose name its own settings set.
+  /// [tabId] narrows it to one Swarm, [machineId] and [harnessId] to one
+  /// harness: only what changed is looked at. Returns how many were sent.
+  Future<int> syncChosenNames(
+    Agent? Function(String machineId, String harnessId) native, {
+    String? tabId,
+    String? machineId,
+    String? harnessId,
+  }) async {
+    var sent = 0;
+    for (final MapEntry(key: swarm, value: controller)
+        in _loaded.entries.toList()) {
+      if (tabId != null && swarm != tabId) continue;
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents.toList()) {
+        if (machineId != null && agent.machineId != machineId) continue;
+        if (harnessId != null && agent.harnessId != harnessId) continue;
+        final person = controller.accountId;
+        if (agent.isBuddy ||
+            (agent.contributorId != person && agent.machineOwnerId != person)) {
+          continue;
+        }
+        final local = native(agent.machineId, agent.harnessId);
+        if (local == null || local.nameChosen != true) continue;
+        final name = _spaced(local.name);
+        if (name.isEmpty || name == _spaced(snapshot.agentName(agent.id))) {
+          continue;
+        }
+        if (!_chosenNamesSent.add('$swarm|${agent.id}|$name')) continue;
+        if (await controller.renameAgent(agent.id, name) == null) sent++;
+      }
+    }
+    return sent;
   }
 
   /// The coordinator's name in the project the machine's harness coordinates.
