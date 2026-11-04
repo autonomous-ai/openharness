@@ -399,9 +399,16 @@ SwarmHomeCache memoryHomeCache() {
   return cache;
 }
 
-/// Deletes [cache]'s folder.
-Future<void> removeHome(SwarmHomeCache cache) =>
-    deleteTempFolder(cache.file.parent);
+/// Deletes [cache]'s folder once the saves it has under way are done: one
+/// landing mid-delete failed the test ('Directory not empty', task #2759), or
+/// put the folder back after it. A save started under a widget test's fake
+/// clock never moves again once the test is over, so the wait gives up after
+/// a moment, as it does after every such test.
+Future<void> removeHome(SwarmHomeCache cache) async {
+  await homeSaved(cache)
+      .timeout(const Duration(milliseconds: 300), onTimeout: () {});
+  await deleteTempFolder(cache.file.parent);
+}
 
 /// Swarm Home C's project screen is up for the project named [name]: its
 /// #name and ☰, and no tab bar: none of direction B's tabs (Buddy, Tasks,
