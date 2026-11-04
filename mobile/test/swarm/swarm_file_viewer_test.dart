@@ -173,6 +173,7 @@ void main() {
       tester.widget<Text>(find.text('fn main() {}')).style,
       Tty.of(context).style(),
     );
+    await closed(tester);
   });
 
   testWidgets('a Markdown file is rendered, and Show source shows it as '
