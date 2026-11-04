@@ -56,9 +56,10 @@ bool swarmShowsRead(SuperTabMessage message) =>
 /// own request so the backend decides what the reader may see.
 ///
 /// In memory only, for the account's session ([SwarmSession]), and at most
-/// [kept]: the one asked for longest ago goes first. A message found is kept;
-/// one gone, refused or not answered is asked again only when it is drawn
-/// again [retryAfter] later, so nothing reads in a loop.
+/// [kept]: the one drawn longest ago goes first. Any answer is asked for again
+/// only when it is drawn again [retryAfter] later, so nothing reads in a loop;
+/// a message found shows meanwhile, as the reader may since have lost its chat,
+/// and stays when the later read is not answered.
 class SwarmMessageReads extends ChangeNotifier {
   SwarmMessageReads({
     this.retryAfter = const Duration(minutes: 1),
@@ -91,9 +92,7 @@ class SwarmMessageReads extends ChangeNotifier {
         identical(known.reader, reader) &&
         known.generation == reader.generation;
     if (current &&
-        (known.reading ||
-            known.value.state == SwarmReadState.found ||
-            clock.now().difference(known.at) < retryAfter)) {
+        (known.reading || clock.now().difference(known.at) < retryAfter)) {
       _reads[url] = known;
       return known.value;
     }
@@ -149,10 +148,12 @@ class SwarmMessageReads extends ChangeNotifier {
       appLog.warn('swarm', 'One message not read: ${failure.runtimeType}');
     }
     if (stale()) return;
+    final kept =
+        value.state == SwarmReadState.failed && read.value.message != null;
     read
       ..reading = false
       ..at = clock.now()
-      ..value = value;
+      ..value = kept ? read.value : value;
     notifyListeners();
   }
 
