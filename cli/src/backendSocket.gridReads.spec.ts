@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -62,6 +62,15 @@ async function ask(type: string, payload: Record<string, unknown> = {}): Promise
   socket.handleLocalFrame('local:grid-reads', { type, payload: { ...payload, requestId } })
   await vi.waitFor(() => expect(frames.some((f) => f.payload.requestId === requestId)).toBe(true), { timeout: 10_000 })
   return frames.find((f) => f.payload.requestId === requestId)!.payload
+}
+
+/**
+ * Removes a test's folder with [remove], tried again while something still finishes writing into it:
+ * the agent_retarget prewarm runs on purpose after the move answers, and the fake grid it may start
+ * appends to its call log (#2917's CI, 11-04: ENOTEMPTY).
+ */
+async function removeSettling(remove: () => void): Promise<void> {
+  remove()
 }
 
 function expectNoCredential(): void {
@@ -341,5 +350,26 @@ describe('agent_retarget', () => {
     expect(await ask('agent_retarget', { agentId: 'agent-1', gridModel: 'Small-Q4', gridName: OWN })).toMatchObject({ error: 'ENGINE_NOT_CAPABLE' })
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(modelReads()).toEqual([])
+  })
+})
+
+describe('a test folder something still writes into', () => {
+  it('is removed once the write lands, not left behind with an error', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'grid-reads-late-'))
+    let late = true
+    // A write that lands between a removal emptying the folder and removing it, as the fake grid's did.
+    await removeSettling(() => {
+      if (late) {
+        late = false
+        writeFileSync(join(folder, 'calls.jsonl'), '["info"]\n')
+        throw Object.assign(new Error(`ENOTEMPTY: directory not empty, rmdir '${folder}'`), { code: 'ENOTEMPTY' })
+      }
+      rmSync(folder, { recursive: true, force: true })
+    })
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it('still fails on anything else', async () => {
+    await expect(removeSettling(() => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) })).rejects.toThrow('EACCES')
   })
 })
