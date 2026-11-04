@@ -148,7 +148,9 @@ void main() {
     }
     watch.stop();
     // ignore: avoid_print
-    print('reads: $reads frames ${frames.map((f) => f.inMilliseconds).toList()}');
+    print(
+      'reads: $reads frames ${frames.map((f) => f.inMilliseconds).toList()}',
+    );
     await report(
       tester,
       'one window read',
