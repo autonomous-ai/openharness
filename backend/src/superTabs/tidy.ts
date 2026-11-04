@@ -2,7 +2,7 @@ import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
-import { githubRepository } from '../github/repository.js'
+import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
@@ -154,17 +154,35 @@ export const cancelReason = (group: Conversation): string => (group.assignment?.
 
 /** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
 const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
+/** A repository's name, or owner/name, as a result writes it next to "PR #N": "autonomous-harness PR #2716", "PR #12 in other/tool". */
+const REPO_NAME = '([A-Za-z0-9](?:[\\w.-]*\\w)?(?:/[A-Za-z0-9](?:[\\w.-]*\\w)?)?)'
+const NAME_BEFORE = new RegExp(`(?:^|[\\s(])${REPO_NAME}\\s+$`), NAME_AFTER = new RegExp(`^\\s+(?:in|of)\\s+${REPO_NAME}`, 'i')
+/** English compounds a result writes before "PR", which look like a repository's name and are none. */
+const COMPOUND = /^(?:follow-(?:up|on)|(?:re|co|pre|non|one)-\w+)$/i
+
+/** Whether [name] next to a "PR #N" names a repository other than the project's: owner/name, or a bare name shaped like a
+ *  repository's (a `.`, `_` or `-` in it), never an ordinary word. */
+function otherRepository(name: string | undefined, repository: GitHubRepository | null): boolean {
+  if (!name) return false
+  if (name.includes('/')) return name.toLowerCase() !== repository?.fullName.toLowerCase()
+  return /[._-]/.test(name) && !COMPOUND.test(name) && name.toLowerCase() !== repository?.name.toLowerCase()
+}
 
 /** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
  *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
- *  that PR was open (#558). Null when it names a number with no GitHub repository to read it in: it stays open. */
+ *  that PR was open (#558). A number another repository's name sits next to is that repository's, and never waited on
+ *  ("Ported from autonomous-harness PR #2716" held a task open forever, #2602). Null when it names a number with no GitHub
+ *  repository to read it in: it stays open. */
 export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
   const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
   const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
   appendPullRequestUrls(named, texts)
-  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)].map(match => match[1]!))
-  if (!numbers.length) return named.pullRequestUrls!
   const repository = githubRepository(repositoryUrl)
+  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)]
+    .filter(match => !otherRepository(NAME_BEFORE.exec(text!.slice(0, match.index))?.[1], repository)
+      && !otherRepository(NAME_AFTER.exec(text!.slice(match.index + match[0].length))?.[1], repository))
+    .map(match => match[1]!))
+  if (!numbers.length) return named.pullRequestUrls!
   if (!repository) return null
   return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
 }
