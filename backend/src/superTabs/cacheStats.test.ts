@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { recordCache, startCacheStats } from './cacheStats.js'
+import { recordCache, recordDeltaRows, startCacheStats } from './cacheStats.js'
 
 describe('swarm cache log', () => {
   it('counts by entry name and reason, and logs nothing in an empty window', () => {
@@ -19,6 +19,19 @@ describe('swarm cache log', () => {
         base: { hits: 1, full: 2, fullBytes: 3_000, patches: 0, patchParts: 0, patchBytes: 0, reloads: { cold: 1, age: 1 }, verify: 0, mismatches: 0 },
         group: { hits: 1, full: 0, fullBytes: 0, patches: 1, patchParts: 3, patchBytes: 900, reloads: {}, verify: 0, mismatches: 0 },
       } })
+      stop()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('counts the rows deltas read whole and those they reused, beside the entries (#2783)', () => {
+    vi.useFakeTimers()
+    try {
+      const log = vi.fn()
+      const stop = startCacheStats({ everyMs: 60_000, log })
+      recordDeltaRows({ stamps: 10, whole: 2 })
+      recordDeltaRows({ stamps: 5, whole: 1 })
+      vi.advanceTimersByTime(60_000)
+      expect(log).toHaveBeenCalledWith('swarm cache', { windowMs: 60_000, entries: {}, deltaRows: { deltas: 2, stamps: 15, whole: 3 } })
       stop()
     } finally { vi.useRealTimers() }
   })
