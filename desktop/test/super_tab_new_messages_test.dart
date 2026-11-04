@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shortcuts/key_cap.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/unread_line.dart';
@@ -569,6 +570,53 @@ void main() {
     await tester.pumpAndSettle();
     // Reading on saves the read mark a moment later (controller.dart `_saveSoon`).
     await tester.pump(const Duration(milliseconds: 300));
+  });
+
+  // Slack's Mark as read on its bar, with the key that does the same (#2743).
+  testWidgets('the bar\'s Mark as read, with its Esc hint, reads the chat '
+      'and clears the line where the reader is', (tester) async {
+    final server = _server(60)..markReadElsewhere('lead', 20);
+    final c = await show(tester, server);
+    await readOn(tester);
+    const markRead = ValueKey('super-unread-mark-read');
+    expect(
+      find.descendant(of: find.byKey(_jump), matching: find.byKey(markRead)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(markRead),
+        matching: find.text('Mark as read'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: find.byKey(_jump), matching: find.byType(KeyCap)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: find.byType(KeyCap), matching: find.text('esc')),
+      findsOneWidget,
+    );
+    final reading = find.text('Update 45');
+    final before = tester.getTopLeft(reading).dy;
+    await tester.tap(find.byKey(markRead));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    expect(c.unread(c.selected!), isFalse);
+    expect(server.readMarkPosts.last, {
+      'conversationId': 'lead',
+      'sequence': 60,
+    });
+    // No jump: what the reader was reading stays under their eye.
+    expect(tester.getTopLeft(reading).dy, moreOrLessEquals(before, epsilon: 1));
+    await tester.dragUntilVisible(
+      find.text('Update 21'),
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      const Offset(0, 200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(_line), findsNothing);
   });
 
   testWidgets('with the message list focused, Esc dismisses the bar and '
