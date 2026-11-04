@@ -110,8 +110,7 @@ void main() {
           part(member['id'] as String, 1, member),
       ],
     };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
       'decisions': <Object>[],
     };
@@ -195,12 +194,7 @@ void main() {
         backend([
           message('m1', 1, text: 'From Nova', author: 'agent-builder'),
           message('m2', 2, text: 'From Ann', author: 'person-ann'),
-          message(
-            'm3',
-            3,
-            text: 'Task root',
-            source: {'kind': 'task-line'},
-          ),
+          message('m3', 3, text: 'Task root', source: {'kind': 'task-line'}),
         ]),
       );
 
@@ -364,6 +358,13 @@ void main() {
         'next': null,
         'reactionSeq': 1,
       };
+      // Nothing after it: the backend's newest stepped back (a Swarm read
+      // still saying 2 reads on from what is shown).
+      fake.routes['$messages?after='] = (_) => {
+        'messages': <Object>[],
+        'next': null,
+        'reactionSeq': 1,
+      };
       await pump(tester, fake);
 
       await tester.longPress(find.text('Plan'));
@@ -386,13 +387,7 @@ void main() {
     ) async {
       final fake = backend(
         [
-          message(
-            'm1',
-            1,
-            author: 'agent-lead',
-            text: 'Root',
-            thread: 'm1',
-          ),
+          message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
           message('m2', 2, text: 'My reply', thread: 'm1', replyTo: 'm1'),
         ],
         threads: [line('m1', 1, 2)],
@@ -410,6 +405,13 @@ void main() {
         'messages': [
           message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
         ],
+        'next': null,
+        'reactionSeq': 1,
+      };
+      // Nothing after it: the backend's newest stepped back (a Swarm read
+      // still saying 2 reads on from what is shown).
+      fake.routes['$messages?after='] = (_) => {
+        'messages': <Object>[],
         'next': null,
         'reactionSeq': 1,
       };
