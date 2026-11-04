@@ -30,7 +30,8 @@ describe('agentFrame', () => {
     const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
     expect(frame).toHaveProperty('nameChosen', false)
-    expect(frame.title).toContain('cd /Users')
+    // The name it shows is the title, which is why the flag is needed.
+    expect(frame.name).toContain('cd /Users')
   })
   it('carries only the owning machine’s cached token snapshot, including a measured zero', async () => {
     const context = { selectedModel: null, terminalAvailable: true }
