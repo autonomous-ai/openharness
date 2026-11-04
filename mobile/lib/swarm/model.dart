@@ -534,8 +534,17 @@ class SuperTabProject {
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
-          : null;
+          : null,
+      leadWaiting = {
+        for (final entry in row['leadWaiting'] as List? ?? const [])
+          if (entry is Map && entry['id'] is String) entry['id'] as String,
+      };
   final String id, name, ownerId, leadConversationId;
+
+  /// The person's messages the server keeps for this project's Lead: a
+  /// Personal Swarm's chat with none, whose Lead their computer starts
+  /// (backend leadStart.ts). Empty from a server before it.
+  final Set<String> leadWaiting;
 
   /// Read as the desktop's model reads it; the phone starts no agents.
   final String skillMode;
