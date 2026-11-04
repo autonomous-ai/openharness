@@ -85,5 +85,5 @@
 
 ### Finish
 
-- [ ] `cd backend && npm test` (whole backend unit suite) and `npx tsc --noEmit`: green.
+- [ ] `npx tsc --noEmit` and the tests of what changed, locally; the PR's CI runs the whole backend suite once it is ready, and its green run is the suite evidence (Ken, 2026-11-04).
 - [ ] Red/green evidence in a PR comment; mark the PR ready; add the review step.

@@ -168,6 +168,10 @@ function otherRepository(name: string | undefined, repository: GitHubRepository 
   return /[._-]/.test(name) && !COMPOUND.test(name) && name.toLowerCase() !== repository?.name.toLowerCase()
 }
 
+/** How a pull request an archive waits on ended: merged, closed, or missing, a number GitHub knows no pull request by in
+ *  that repository (another repository's, #2602). */
+export type SettledPullRequest = 'merged' | 'closed' | 'missing'
+
 /** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
  *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
  *  that PR was open (#558). A number another repository's name sits next to is that repository's, and never waited on
@@ -234,7 +238,7 @@ export function reviewClosable(state: SuperTabState, review: Conversation, now: 
 const pullNumber = (url: string) => `#${url.slice(url.lastIndexOf('/') + 1)}`
 
 /** The one quiet line a closed review gets, naming each pull request and how it ended. */
-export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, 'merged' | 'closed'>>, now: number): MessageDraft | null {
-  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url]}`).join(', ')
+export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, SettledPullRequest>>, now: number): MessageDraft | null {
+  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url] === 'missing' ? 'not found' : settled[url]}`).join(', ')
   return leadLine(state, review, now, `Closed: ${prs}; no Swarm review is needed now.`)
 }
