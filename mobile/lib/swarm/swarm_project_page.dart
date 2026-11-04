@@ -33,6 +33,7 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_switch_pm.dart';
 import 'swarm_task_status.dart';
 import 'swarm_terminal_row.dart';
 import 'swarm_thread.dart' show SwarmThreadFocus;
@@ -803,7 +804,9 @@ SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
 /// design system's menu surface (the theme's), of Open terminal first for
 /// someone who may write (Tony, 11-01: the PM's terminal on this phone, by
-/// the Buddy row's rule and words, [swarmTerminalAction]), its Status
+/// the Buddy row's rule and words, [swarmTerminalAction]), then Switch PM…
+/// for whoever may switch it, while no switch is under way (Desktop's
+/// project menu, [swarmCanSwitchPm]), its Status
 /// ([SwarmProjectStatusSheet]; the chat shows no box of it), its Leaderboard,
 /// its Team and its project chat's Notifications ([showSwarmNotifySheet]),
 /// while that chat is read. It goes with the header: losing the project
@@ -869,14 +872,15 @@ class _ProjectMenu extends StatelessWidget {
             computers: computers,
           )
         : null;
+    final switchPm = allowed() && swarmCanSwitchPm(reader, projectId);
     return MenuTheme(
       data: MenuThemeData(
         submenuIcon: MenuTheme.of(context).submenuIcon,
-        // Home C sits near the top of the phone. Six rows at their 48-point
+        // Home C sits near the top of the phone. Seven rows at their 48-point
         // layout height, panel padding, and a small edge fit without scrolling.
         style: AppMenu.style(
           maxHeight:
-              6 * (minTouchTarget + AppSpace.xs) +
+              7 * (minTouchTarget + AppSpace.xs) +
               AppMenu.panelPadding.vertical +
               AppSpace.xs,
         ),
@@ -890,6 +894,12 @@ class _ProjectMenu extends StatelessWidget {
               terminal.label,
               terminal.enabled ? terminal.onTap : null,
               value: terminal.value,
+            ),
+          if (switchPm)
+            row(
+              'swarm-project-menu-switch-pm',
+              'Switch PM…',
+              () => unawaited(showSwarmSwitchPm(context, reader, projectId)),
             ),
           row('swarm-project-menu-status', 'Status', onStatus),
           row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
