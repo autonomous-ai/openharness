@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buddyTmpParent } from './agentTmp.js'
 import { BUDDY_ENGINE_HOMES, markBuddyNarrow, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
-  judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
+  judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount, buddyGrantLive, buddyAccountFile, buddyLaunchFile } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
 // folder, except where secrets and other people's data live. A throwaway home stands in for the person's: the guard is
@@ -892,3 +892,69 @@ describe('engine homes outside the defaults', () => {
     expect(engineHomesOutsideDefaults(dataDir, {})).toEqual([])
   })
 })
+
+describe('passing its owner\'s words to their own harnesses on this Mac (#2626)', () => {
+  afterAll(() => { writeBuddyAccount('person-1', dataDir); grant() })
+  // The launch id its folder holds, as the launch writes it (swarmSkills.ts lockBuddyFolder): what a grant must name.
+  mkdirSync(join(root, '.claude'), { recursive: true })
+  writeFileSync(buddyLaunchFile(root), 'launch-1\n')
+  const live = () => buddyGrantLive(reads, root, Date.now(), buddyAccountFile(dataDir))
+  const owner = (command: string, guard = script) => answer('Bash', { command, description: 'x' }, guard)
+
+  it('runs harness tell and harness reply, the words given after --, while its owner is with it here', () => {
+    expect(live()).toBe(true)
+    for (const command of ["harness tell lead-session -- 'Builders are done: run the verifier.'", 'harness reply verifier --json -- yes',
+      'harness tell web -- "it\'s fine, ship it" now']) expect(bash(command), command).toBe('allow')
+  })
+
+  it.each([
+    ['another machine', 'harness tell web --machine laptop -- hi'],
+    ['another machine, after the name', 'harness tell --machine laptop web -- hi'],
+    ['a port or an agent', 'harness tell web --port 1 -- hi'],
+    ['an option it does not know', 'harness reply web --all -- hi'],
+    ['a name that is an option', 'harness tell --json -- hi'],
+    ['two names', 'harness tell web api -- hi'],
+    ['no words', 'harness tell web --'],
+    ['no --', 'harness tell web hi'],
+    ['another harness verb', 'harness show web'],
+    ['reading what a harness answered', 'harness wait web'],
+    ['listing the harnesses', 'harness ps'],
+    ['a key in the words', 'harness tell web -- sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'],
+  ])('refuses %s', (_, command) => {
+    expect(bash(command)).toBe('deny')
+  })
+
+  it('is refused in narrow mode, which holds no grant', () => {
+    expect(bash("harness tell web -- 'hi'", narrow)).toBe('deny')
+  })
+
+  it.each([
+    ['no list at all', () => rmSync(reads.file, { force: true })],
+    ['a grant taken back', () => grantBuddyWide(reads, { session: 'harness', wide: false })],
+    ['a grant from before a relaunch', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-0' })],
+    ['a grant for another account', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-2', launch: 'launch-1' })],
+    ['a grant over an hour old', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-1' }, Date.now() - 61 * 60_000)],
+    ['a grant dated ahead', () => grantBuddyWide(reads, { session: 'harness', wide: true, account: 'person-1', launch: 'launch-1' }, Date.now() + 10 * 60_000)],
+    ['a grant naming another session than its list', () => writeFileSync(reads.file, JSON.stringify({ version: 1, session: 'harness', files: [], links: [],
+      wide: { ...grantFor(), session: 'harness-0' } }))],
+    ['nobody signed in on this machine', () => writeBuddyAccount(null, dataDir)],
+    ['another account signed in on this machine', () => writeBuddyAccount('person-2', dataDir)],
+  ])('is refused by its guard and by the machine with %s', (_, set) => {
+    set()
+    const refused = owner("harness tell web -- 'hi'")
+    expect(refused.permissionDecision).toBe('deny')
+    expect(refused.permissionDecisionReason).toContain('while they are with you')
+    expect(live()).toBe(false)
+    writeBuddyAccount('person-1', dataDir)
+    grant()
+    expect(live()).toBe(true)
+  })
+
+  it('the machine holds no grant for a folder launched again', () => {
+    writeFileSync(buddyLaunchFile(root), 'launch-2\n')
+    expect(live()).toBe(false)
+    writeFileSync(buddyLaunchFile(root), 'launch-1\n')
+    expect(live()).toBe(true)
+  })
+})
+
