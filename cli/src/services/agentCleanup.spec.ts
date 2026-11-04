@@ -147,6 +147,23 @@ it('rechecks retention after waiting on activity or another orphan close', async
   cascade.cleanup.port.stop()
 })
 
+// 11-04 on the Mac Studio (task #2744): Tern's last group was archived, so no membership kept it. A task its host receives
+// while the cleanup waits on its activity keeps it; another just as idle with no task still closes.
+it('keeps an agent whose assignment arrives inside the close window, and still closes one idle with no task', async () => {
+  const t = setup([kid('tern'), kid('heron')], { tern: 2 * IDLE_CLOSE_MS, heron: 2 * IDLE_CLOSE_MS })
+  const roster = [{ tabId: 'tab', active: false, agent: { harnessId: 'tern', machineId: 'machine' } }, { tabId: 'tab', active: false, agent: { harnessId: 'heron', machineId: 'machine' } }]
+  retainContributions(dir, 'machine', roster)
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  t.lastActivity.mockImplementationOnce(async () => {
+    retainContributions(dir, 'machine', roster, Date.now(), [{ tabId: 'tab', assignmentId: 'work', harnessId: 'tern' }])
+    return NOW - IDLE_CLOSE_MS
+  })
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['heron', 'idle']])
+  t.cleanup.port.stop()
+})
+
 describe('closing the harnesses a closed harness started', () => {
   it('closes them now, working or not, with one line each, and only those another agent started there', async () => {
     // Lead itself is gone: it was closed.
