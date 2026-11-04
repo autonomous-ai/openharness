@@ -231,7 +231,16 @@ export async function loadDelta(tx: Transaction, tabId: string, since: number, k
 async function heldRows(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[], held: DeltaRows):
   Promise<Array<[PartKind, Array<Record<string, unknown>>]>> {
   const counted = { stamps: 0, whole: 0 }
-  const rows = await Promise.all((await changedRows(tx, [tabId], new Date(since), kinds, STAMP_FIELDS)).map(async ([kind, stamps]) => {
+  // A kind with nothing held (the Swarm's first delta of it here) is read whole in one read: by key and version first it
+  // would take two reads for the same rows.
+  const cold = kinds.filter(kind => !held.get(kind)?.size), warm = kinds.filter(kind => held.get(kind)?.size)
+  const whole = cold.length ? await changedRows(tx, [tabId], new Date(since), cold) : []
+  for (const [kind, rows] of whole) {
+    held.set(kind, new Map(rows.map(row => [row._id as string, row])))
+    counted.stamps += rows.length
+    counted.whole += rows.length
+  }
+  const rows = await Promise.all((warm.length ? await changedRows(tx, [tabId], new Date(since), warm, STAMP_FIELDS) : []).map(async ([kind, stamps]) => {
     const known = held.get(kind)
     const same = (row: Record<string, unknown>) => { const kept = known?.get(row._id as string); return kept && rowStamp(kept) === rowStamp(row) ? kept : null }
     const missing = stamps.filter(row => !same(row)).map(row => row._id as string)
@@ -244,7 +253,7 @@ async function heldRows(tx: Transaction, tabId: string, since: number, kinds: re
     return [kind, rows] as [PartKind, Array<Record<string, unknown>>]
   }))
   recordDeltaRows(counted)
-  return rows
+  return [...whole, ...rows]
 }
 
 /** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)

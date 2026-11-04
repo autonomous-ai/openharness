@@ -183,9 +183,10 @@ describe('the delta a refresh reads', () => {
     const row = { _id: 't:g1', tabId: 't', key: 'g1', version: 1, changedAt: { $date: new Date(10).toISOString() }, ordinal: 1, data: { id: 'g1' } }
     const whole: string[] = []
     const aggregateRaw = vi.fn(async ({ pipeline }: { pipeline: Array<Record<string, Record<string, unknown>>> }) => {
-      const match = pipeline[0]!.$match!
-      if (match._id) whole.push(match.tabId as string)
-      return [{ ...row, tabId: match._id ? match.tabId : (match.tabId as { $in: string[] }).$in[0] }]
+      const match = pipeline[0]!.$match!, tabId = match._id ? match.tabId as string : (match.tabId as { $in: string[] }).$in[0]!
+      // A whole row: its projection takes the data.
+      if (pipeline[1]?.$project?.data) whole.push(tabId)
+      return [{ ...row, tabId }]
     })
     const tx = { swarmGroup: { aggregateRaw } }
     const db = { $transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body(tx)) }
