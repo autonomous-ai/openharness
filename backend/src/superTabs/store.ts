@@ -76,6 +76,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
+import { scheduleMessageId, scheduleRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3522,18 +3523,24 @@ export class SuperTabStore {
           woken = true
         }
       }
+      // Whether this poll's update request is new, so lines may go into it: one already stored keeps its row as it is, with
+      // none of them (writeMessages keepStored). Read once, for the digest and the schedule both.
+      let updateFresh: boolean | undefined
+      const updateOpen = async () => woken && (updateFresh ??= !await tx.superTabMessage.findUnique({ where: { id: update!.id }, select: { id: true } }))
+      let digestDraft: MessageDraft | undefined
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
         const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more, notices.some(n => n.otherAccount))
         // One message when an update request goes in this poll: the PM gets one turn, not two. Never into one already stored: its row
         // would be kept as it is, with no lines, or fail the poll (writeMessages keepStored).
-        const merged = woken && !await tx.superTabMessage.findUnique({ where: { id: update!.id }, select: { id: true } })
+        const merged = await updateOpen()
         if (merged) {
           update!.text = `${update!.text}\n\n${text}`
           update!.source = { ...update!.source, notices: notices.length }
         } else {
-          written.push(digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length))
+          digestDraft = digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length)
+          written.push(digestDraft)
         }
         // By status too: two polls racing digest each row once. One by one: no `in` on this hot collection (hotFilters).
         for (const { delivery } of notices) await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'digested' } })
@@ -3541,6 +3548,31 @@ export class SuperTabStore {
       } else if (refused) {
         // Every row of the page refused: no digest, and still seen.
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: 0, cancelled: refused }))
+      }
+      // The built-in schedule (pmSchedule.ts): its slot is recorded in this same write, woken or not, so two racing polls wake
+      // the coordinator once. Its lines go into the update request, else the notice digest, so the PM gets one turn; none while
+      // its last wake is still unread, so a PM deep in a long turn finds one, not one per slot.
+      const scheduled = led ? scheduleRequest(state, target, this.now()) : null
+      if (scheduled) {
+        const project = projectOf(state, led!.id)
+        const previous = project.schedule?.lastSlot
+        project.schedule = { lastSlot: scheduled.slot }
+        let placed: 'update' | 'digest' | 'own' | 'skipped-open' | 'nothing-due' = 'nothing-due'
+        if (scheduled.draft) {
+          const open = previous !== undefined && !!await tx.superTabDelivery.findFirst({ where: { tabId, agentId,
+            messageId: scheduleMessageId(tabId, project.id, previous), status: { in: ['queued', 'claimed', 'uncertain'] } }, select: { id: true } })
+          const into = open ? null : await updateOpen() ? update! : digestDraft ?? null
+          if (open) placed = 'skipped-open'
+          else if (into) {
+            into.text = `${into.text}\n\n${scheduled.draft.text}`
+            into.source = { ...into.source, schedule: scheduled.slot }
+            placed = into === digestDraft ? 'digest' : 'update'
+          } else {
+            written.push(scheduled.draft)
+            placed = 'own'
+          }
+        }
+        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed }))
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
