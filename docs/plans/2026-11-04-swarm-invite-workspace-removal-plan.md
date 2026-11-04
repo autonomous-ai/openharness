@@ -68,7 +68,7 @@ docs/plans/2026-10-27-swarm-workspaces.md (Roles, Identity).
 - Produces: `Invitation.invitedBy?: string`; `CommandContext.inviteeRemoved?: boolean` (set by the store for
   `invite.create` when the inviter lacks `workspace.invite` and the email's account was removed from the Workspace).
 
-- [ ] **Step 1: Write the failing tests** in `describe('a Swarm invitation for someone the Workspace removed')`:
+- [x] **Step 1: Write the failing tests** in `describe('a Swarm invitation for someone the Workspace removed')`:
   - `refuses a plain member's invitation, at create and at accept, and keeps the removal and the decline`: member's
     create for a removed email → 403 `WORKSPACE_ROLE_REQUIRED`; a member's invitation sent before the removal, accepted
     after → `WORKSPACE_ACCESS_REVOKED` (404 not available over the route); member row keeps `removedAt`, the Workspace's
@@ -78,15 +78,15 @@ docs/plans/2026-10-27-swarm-workspaces.md (Roles, Identity).
     `addedBy` = admin; decline cleared.
   - `lets a person never removed join through a member's invitation as today`: accept 200, guest row with
     `addedBy` = the member.
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
   Run: `npx vitest run --config vitest.super-tabs.config.ts integration/superTabWorkspaces.test.ts -t "someone the Workspace removed"`
   Expected: FAIL (create 200 instead of 403; accept 200; `addedBy` the Swarm owner).
-- [ ] **Step 3: Commit the failing tests**
-- [ ] **Step 4: Implement**: store `invitedBy` on create; the store sets `context.inviteeRemoved` for `invite.create`
+- [x] **Step 3: Commit the failing tests**
+- [x] **Step 4: Implement**: store `invitedBy` on create; the store sets `context.inviteeRemoved` for `invite.create`
   (only when `context.workspaceRole` lacks `workspace.invite`); `invite.create` refuses with `WORKSPACE_ROLE_REQUIRED`
   when it is set; on `invite.accept` in a Workspace Swarm, when `removedFromWorkspace`, require the inviter's active
   member row with `workspace.invite`, else `WORKSPACE_ACCESS_REVOKED`; pass `invitedBy ?? ownerId` as `addedBy`; fix the
   stale comment.
-- [ ] **Step 5: Run the tests and see them pass**, plus the file's other tests and the backend unit tests of the
+- [x] **Step 5: Run the tests and see them pass**, plus the file's other tests and the backend unit tests of the
   changed modules.
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**

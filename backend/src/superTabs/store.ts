@@ -74,7 +74,7 @@ import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type Re
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
-import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
+import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
@@ -1507,8 +1507,20 @@ export class SuperTabStore {
       if (command.type === 'invite.accept' && !hostMachineId && original.workspaceId) {
         const email = user.email.trim().toLowerCase()
         const invite = original.invitations.find(i => i.id === command.inviteId && i.email === email && i.expiresAt > this.now())
-        // Only the Swarm's owner invites (invite.create), so the guest is added on the owner's authority.
-        if (invite) await addMember(tx, original.workspaceId, { id: user.sub, email }, 'guest', original.ownerId, stableId('workspace-guest', tabId, user.sub, operationId))
+        if (invite) {
+          // Workspace owners, admins and members may invite to a Swarm (invite.create). Someone the Workspace removed comes
+          // back only on the word of an owner or admin, as a Workspace invitation needs, read now rather than when it was
+          // sent: otherwise a member's invitation would undo the removal and its auto-join decline (task #2939).
+          if (await removedFromWorkspace(tx, original.workspaceId, user.sub)) {
+            const sender = invite.invitedBy ? await activeMember(tx, original.workspaceId, invite.invitedBy) : null
+            if (!sender || !workspaceCan(sender.role as WorkspaceRole, 'workspace.invite')) {
+              fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask one of its owners or admins to invite you.`, 403)
+            }
+          }
+          // On the inviter's authority; an invitation from before that was recorded was the Swarm owner's or a member's.
+          await addMember(tx, original.workspaceId, { id: user.sub, email }, 'guest', invite.invitedBy ?? original.ownerId,
+            stableId('workspace-guest', tabId, user.sub, operationId))
+        }
       }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
@@ -1706,6 +1718,11 @@ export class SuperTabStore {
       if ((command.type === 'invite.create' || command.type === 'invite.revoke') && actor.kind === 'person' && original.workspaceId) {
         const member = await activeMember(tx, original.workspaceId, actor.userId)
         if (member) context.workspaceRole = member.role as WorkspaceRole
+        // Only an owner or admin may bring back someone the Workspace removed; for anyone else, the account the email names.
+        if (command.type === 'invite.create' && !(member && workspaceCan(member.role as WorkspaceRole, 'workspace.invite'))) {
+          const invitee = await tx.user.findUnique({ where: { email: command.email.trim().toLowerCase() }, select: { id: true } })
+          if (invitee && await removedFromWorkspace(tx, original.workspaceId, invitee.id)) context.inviteeRemoved = true
+        }
       }
       // A Ready for review counts the machines the project may use (reviewCapacity.ts), by the same team access as work.assign.
       if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review') || addsAgent(original, actor, command)) {

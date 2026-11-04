@@ -449,6 +449,9 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
+  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
+   *  from before it was recorded. */
+  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
