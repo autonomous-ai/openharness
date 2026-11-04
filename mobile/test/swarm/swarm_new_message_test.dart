@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderSliverMultiBoxAdaptor;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
@@ -12,7 +12,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/shared/theme/app_theme.dart' show AppPalette;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_new_message_sheet.dart';
@@ -20,6 +19,7 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart' show SwarmIconButton;
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -295,71 +295,40 @@ void main() {
   bool sheetOpen() => find.byType(SwarmNewMessageSheet).evaluate().isNotEmpty;
 
   group('Home', () {
-    testWidgets('has no compose in its header; the + floats at its bottom '
-        'right, 56 points round, in the accent, said as New message', (
-      tester,
-    ) async {
+    testWidgets('the + is in the header, between Search and You, a thumb '
+        'wide, said as New message; nothing floats over the list (anh Dee, '
+        '2026-11-04)', (tester) async {
       await pump(tester, backend());
 
       expect(key('swarm-compose'), findsNothing);
-      expect(tester.getSize(key('swarm-new-message')), const Size(56, 56));
-      final corner = tester.getBottomRight(key('swarm-new-message'));
-      expect(corner.dx, closeTo(390 - 16, 0.5), reason: '16 in from the side');
-      expect(corner.dy, closeTo(844 - 16, 0.5), reason: '16 up from the foot');
       expect(
         tester
-            .widget<Material>(
-              inside(key('swarm-new-message'), find.byType(Material)),
-            )
-            .color,
-        AppPalette.accent,
+            .widget<Scaffold>(find.byType(Scaffold).first)
+            .floatingActionButton,
+        isNull,
+      );
+      final plus = tester.getRect(key('swarm-new-message'));
+      final search = tester.getRect(key('swarm-home-search'));
+      final you = tester.getRect(key('swarm-you-button'));
+      expect(plus.width, greaterThanOrEqualTo(44));
+      expect(plus.height, greaterThanOrEqualTo(44));
+      expect(plus.center.dy, closeTo(search.center.dy, 0.5), reason: 'one row');
+      expect(plus.left, greaterThanOrEqualTo(search.right), reason: 'after');
+      expect(plus.right, lessThanOrEqualTo(you.left), reason: 'before You');
+      expect(
+        plus.bottom,
+        lessThanOrEqualTo(tester.getTopLeft(key('swarm-home-list')).dy),
+        reason: 'over the list, not on it',
       );
       expect(find.bySemanticsLabel('New message'), findsOneWidget);
-    });
-
-    testWidgets("the + clears Home's last row once scrolled to the end", (
-      tester,
-    ) async {
-      final fake = backend();
-      // More projects than a screen holds.
-      serve(
-        fake,
-        projects: [
-          ...readable,
-          for (var i = 0; i < 16; i++)
-            projectRow('p-$i', 'Project $i', 'lead-p-$i'),
-        ],
-      );
-      await pump(tester, fake);
-      await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
-      await tester.pumpAndSettle();
-
-      final position = tester
-          .state<ScrollableState>(find.byType(Scrollable).first)
-          .position;
-      expect(position.pixels, position.maxScrollExtent, reason: 'at its end');
-      // Home's last row, whatever it is: it ends above the +.
-      final list = tester.renderObject<RenderSliverMultiBoxAdaptor>(
-        find.descendant(
-          of: find.byType(ListView).first,
-          matching: find.byType(SliverList),
-        ),
-      );
-      final last = list.lastChild!;
-      expect(
-        last.localToGlobal(Offset(0, last.size.height)).dy,
-        lessThan(tester.getTopLeft(key('swarm-new-message')).dy),
-      );
     });
 
     testWidgets('a second tap on + before New message is up opens no second '
         'sheet', (tester) async {
       await pump(tester, backend());
-      final plus = tester.widget<SwarmNewMessageButton>(
-        key('swarm-new-message'),
-      );
-      plus.onPressed();
-      plus.onPressed();
+      final plus = tester.widget<SwarmIconButton>(key('swarm-new-message'));
+      plus.onPressed!();
+      plus.onPressed!();
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmNewMessageSheet), findsOneWidget);

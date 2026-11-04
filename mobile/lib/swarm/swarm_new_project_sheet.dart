@@ -28,8 +28,9 @@ import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_uploads.dart';
 
-/// New project from the phone (Tony, 10-30): Swarm Home's last Projects row
-/// ([SwarmNewProjectRow]) opens a sheet ([showSwarmNewProjectSheet]) that
+/// New project from the phone (Tony, 10-30): the Swarm switcher's New
+/// project row (Home's title, since 2026-11-04) opens a sheet
+/// ([showSwarmNewProjectSheet]) that
 /// creates a project in a Swarm the person may write in and starts its
 /// Product Manager on the Swarm machine they pick, as Desktop's New Project
 /// does through the Swarm (desktop `super_tabs/launch.dart` `startInSwarm`,
@@ -1032,67 +1033,6 @@ class SwarmNewProjectSteps with ChangeNotifier {
       failure.statusCode < 500 &&
       failure.statusCode != 408 &&
       failure.statusCode != 429;
-}
-
-/// Swarm Home's last Projects row, in a project row's shape: a plus, then
-/// "New project". Shown only to someone who may write in a Swarm Home shows
-/// ([swarmMayCreateProject]).
-class SwarmNewProjectRow extends StatelessWidget {
-  const SwarmNewProjectRow({super.key, required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: 'New project',
-      excludeSemantics: true,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            HapticFeedback.selectionClick();
-            onTap();
-          },
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: SwarmRow.height),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpace.l,
-                vertical: AppSpace.m,
-              ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    child: Icon(
-                      LucideIcons.plus300,
-                      size: 18,
-                      color: AppPalette.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(width: AppSpace.s),
-                  Expanded(
-                    child: Text(
-                      'New project',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.label(
-                        color: AppPalette.textSecondary,
-                        height: 1.3,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// A project New project made: the Swarm, and the project.
