@@ -14,6 +14,7 @@ import { PM_HOMES } from './teamDaemon.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
+import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
@@ -1602,6 +1603,41 @@ describe('contributed machine executor', () => {
       vi.mocked(f.core.agents.stopped!).mockImplementation(async id => id === 'stopped' || id === 'still-stopped')
       await f.machine.tick()
       expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running', 'reopened'], stoppedHarnessIds: ['stopped'] })
+    })
+
+    // The review of #2953: the backend refuses new work only for a session the idle cleanup closed, never one stopped for
+    // Change agent or a restart, so the report names those apart, and publishes when one is named.
+    it('names the stopped sessions the idle cleanup closed, and publishes when one is added', async () => {
+      const f = fixture(); quiet(f)
+      const dataDir = mkdtempSync(join(tmpdir(), 'swarm-closed-'))
+      onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+      ;(f.core as { dataDir: string }).dataDir = dataDir
+      // One the cleanup closed that runs again (resumed) is not named: only a stopped one is.
+      recordCleanupClose(dataDir, 'running', f.deps.now())
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+      expect(lastBody(f)).not.toHaveProperty('closedHarnessIds')
+      recordCleanupClose(dataDir, 'stopped', f.deps.now())
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f)).toMatchObject({ stoppedHarnessIds: ['stopped'], closedHarnessIds: ['stopped'] })
+    })
+
+    it('drops the closed sessions alone for a backend that refuses them', async () => {
+      const f = fixture(); quiet(f)
+      const dataDir = mkdtempSync(join(tmpdir(), 'swarm-closed-'))
+      onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+      ;(f.core as { dataDir: string }).dataDir = dataDir
+      recordCleanupClose(dataDir, 'stopped', f.deps.now())
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.closedHarnessIds) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: closedHarnessIds', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(posts(f).map(c => 'closedHarnessIds' in (c[3] as object))).toContain(false)
+      expect(lastBody(f)).toMatchObject({ stoppedHarnessIds: ['stopped'] })
+      expect(lastBody(f)).not.toHaveProperty('closedHarnessIds')
     })
 
     it('reports nothing new from a backend that names no recorded session', async () => {

@@ -5395,3 +5395,41 @@ describe('the Next-up queue (work.queue)', () => {
     expect(f.state).toEqual(once)
   })
 })
+
+// 11-04 13:57 VN on the Mac Studio: the CLI's idle cleanup closed Tern, its machine's next reading listed the session
+// stopped, and six seconds after the close the PM assigned Tern a task, which was lost at once (task #2744).
+describe('assigning an agent whose session was closed', () => {
+  /** A worker on machine 'host', whose reading at [receivedAt] lists [running] and [stopped], and of those [cleaned] as closed
+   *  by its idle cleanup. */
+  function closed(running: string[], stopped: string[], receivedAt = 1000, cleaned: string[] = stopped) {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId: 'owner', membershipGeneration: f.state.people.find(p => p.id === 'owner')!.generation,
+      generation: 'g1', cwd: '/repo', engines: ['codex'], maxAgents: 4, paused: false, observation: { generation: 'g1', receivedAt,
+        resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(cleaned.length ? { closedHarnessIds: cleaned } : {}) } }]
+    return { f, group, worker }
+  }
+
+  it('is refused, saying to start a new agent, and changes nothing', () => {
+    const { f, group, worker } = closed([], ['worker'])
+    const before = JSON.stringify(f.state)
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker }))
+      .toThrow(expect.objectContaining({ code: 'AGENT_CLOSED', message: expect.stringContaining('session was closed. Start a new agent') }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // The review of #2953: Change agent stops the old terminal before the rebind moves the member to its new one, and a host
+  // mid-restart lists its sessions stopped for a moment. Either is stopped, never closed by the cleanup, and keeps its task.
+  it('goes ahead when the reading lists it running, is stale, lists it stopped but not closed, or cannot prove a resumed session stopped', () => {
+    for (const { f, group, worker } of [closed(['worker'], []), closed(['worker'], ['worker']), closed([], ['worker'], -100_000), closed([], ['worker'], 1000, [])]) {
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: worker, status: 'working' })
+    }
+    // A reservation renewed by a resume: an older host lists the earlier run stopped and cannot say which (closedAgents.ts).
+    const resumed = closed([], ['worker'])
+    resumed.f.state.harnessReservations = [{ machineId: 'host', harnessId: 'worker', generation: 'g2', renewed: true } as never]
+    resumed.f.run({ type: 'work.assign', conversationId: resumed.group, agentId: resumed.worker })
+    expect(resumed.f.state.conversations.find(c => c.id === resumed.group)!.assignment).toMatchObject({ agentId: resumed.worker })
+  })
+})

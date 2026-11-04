@@ -143,9 +143,12 @@ export function relayedReadings(pool: Json, pools: Json[], now = Date.now()): { 
 }
 /** A running member keeps its engine and memory, but still needs a live terminal and the task's tools and devices. Its
  *  allowance is information ([usedUp]). */
-function memberRefusals(running: boolean | null, tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
+function memberRefusals(running: boolean | null, closed: boolean, tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
   return [
-    ...(running === false ? ['Its terminal is not running.'] : []),
+    // A session its machine's idle cleanup closed never comes back as this agent: the backend refuses to assign it (superTabs/
+    // closedAgents.ts sessionClosed), so the reason says what to do (task #2744). One listed stopped alone may be a Change
+    // agent before its rebind (review of #2953).
+    ...(running === false ? [closed ? 'Its session was closed. Start a new agent.' : 'Its terminal is not running.'] : []),
     ...tools.map(tool => requiredToolReason(tool, reportedTools[tool], toolProbeErrors[tool])).filter((reason): reason is string => reason !== null),
     ...devices.filter(device => reportedDevices[device] !== true).map(device => `Required device unavailable: ${device}.`),
   ]
@@ -632,7 +635,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
+      const closed = Array.isArray(observed.closedHarnessIds) && observed.closedHarnessIds.includes(m.harnessId)
+      return { ...memberProbe(m, fresh ? [...memberRefusals(running, closed, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...kept, ...teammates(m.contributorId)] : [OFFLINE],
         allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
     }),
@@ -662,7 +666,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const inspected = byEngine.get(String(object(m.configuration).engine))!
       const allowance = quotaOf2(inspected.quota)
       const capacity = object(inspected.capacity)
-      const refusals = memberRefusals(live.has(String(m.harnessId)), needs.tools, needs.devices,
+      const refusals = memberRefusals(live.has(String(m.harnessId)), false, needs.tools, needs.devices,
         object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
       probes.push({ ...memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),
