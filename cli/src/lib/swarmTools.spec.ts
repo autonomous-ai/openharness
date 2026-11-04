@@ -27,12 +27,31 @@ describe('SWARM_TOOLS_SKILL', () => {
   it('says an agent with work in the project posts in its chat without joining it', () => {
     expect(SWARM_TOOLS_SKILL).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; `--to` there adds no agent, so name only the coordinator.')
   })
+  // Task #2963 (Ken, 2026-11-04): 402 of 437 agent posts in a day reached the PM as their only recipient; 1 named it.
+  it('says a post reaches only who it names, a reply its author, an unnamed one in a task its assignee, and the coordinator by status', () => {
+    const at = SWARM_TOOLS_SKILL.indexOf('### Who a post reaches')
+    const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Reactions'))
+    expect(section).toContain('`@Name` in TEXT names an agent of this conversation the same way')
+    expect(section).toContain('A reply (`--reply-to`) also reaches the agent who wrote the message it answers.')
+    expect(section).toContain('A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you.')
+    expect(section).toContain('The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work')
+    expect(section).not.toContain('reaches the project\'s coordinator')
+    expect(section).toContain('its result says when it reached no agent.')
+    expect(section).not.toContain('Nothing is dropped')
+  })
   // Task #2901 (Ken, 2026-11-04): PMs took the route's top line against the project's Routing instructions.
   it('says the route ranks nothing and names no pick, and that a start gives the Routing rule that chose it', () => {
     expect(SWARM_TOOLS_SKILL).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
     expect(SWARM_TOOLS_SKILL).toContain('choose by your project\'s Routing instructions')
     expect(SWARM_TOOLS_SKILL).toContain('`routeDecisionId` and `overrideReason`: the Routing rule that chose it')
     expect(SWARM_TOOLS_SKILL).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on|ranks who could/)
+  })
+  // Task #2954 (Ken, 11-04): a PM typed --mention with Ken's email and a machine's privacy hook stopped its session.
+  it('says to tag people by username, display name or id, never by email', () => {
+    const tagging = SWARM_TOOLS_SKILL.split('\n').filter(line => /--mention|tags? /.test(line))
+    expect(tagging.join('\n')).toContain('`--mention PERSON` tags a person by the username, display name or id shown in status')
+    for (const line of tagging) expect(line).not.toMatch(/by the id or email|@email/)
+    expect(SWARM_TOOLS_SKILL).toContain('Never type a person\'s email: name them by username.')
   })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)

@@ -1,7 +1,7 @@
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { writtenNameOf } from './personNames.js'
+import { agentWrittenNameOf } from './personNames.js'
 
 /** One agent that joined or left one chat in a command. */
 export type MemberChange = { group: Conversation; agent: Agent; added: boolean }
@@ -49,7 +49,8 @@ export function actorLabel(state: SuperTabState, key: string): string | undefine
     return agent && quotedName(agent.displayName ?? agent.name)
   }
   const person = state.people.find(p => p.id === id)
-  return person && (writtenNameOf(state, id) ?? person.email.split('@')[0])
+  // Agents read these rows: by name, never an email someone took as their name (review of #2954).
+  return person && (agentWrittenNameOf(state, id) ?? person.email.split('@')[0])
 }
 
 /**

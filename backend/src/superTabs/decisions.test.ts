@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -55,6 +55,11 @@ describe('asking a person for decisions', () => {
     expect(ask(owner)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(ask(asAgent(s.lead), 'stranger')).toThrow('person in this Swarm')
     expect(ask(asAgent(s.lead), 'peer', 2)).toThrow('recommend one of its options')
+    // Someone who cannot read the conversation is named by username, never email (task #2954).
+    const group = s.state.conversations.find(c => c.id === s.group)!
+    const narrowed = { ...group, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } }
+    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
+      .toThrow(/^peer cannot read this conversation\.$/)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
       questions: [{ ...question('One option only'), options: ['Yes'] }] }).success).toBe(false)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
@@ -67,7 +72,7 @@ describe('asking a person for decisions', () => {
       ask: { personId: 'peer', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning the feature on' } }, asAgent(s.worker))
     expect(needs.decisions).toEqual([expect.objectContaining({ personId: 'peer', askerAgentId: s.worker, assignmentId: s.assignmentId,
       question: 'Ship to everyone, or behind a flag?', recommended: 0, unblocks: 'Turning the feature on' })])
-    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer@example.com.', recipients: [s.lead] })
+    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer.', recipients: [s.lead] })
     // Without a person and options it reaches the Lead as before, who asks.
     const plain = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(s.worker))
     expect(plain.decisions ?? []).toEqual([])

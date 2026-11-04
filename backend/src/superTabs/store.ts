@@ -1,7 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
-import { shownNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -18,7 +18,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -1700,7 +1700,7 @@ export class SuperTabStore {
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
-          orderBy: { sequence: 'desc' }, take: Math.max(PAIR_CHAIN_LIMIT, LOOP_NOTICE_AT), select: { author: true, recipientIds: true, createdAt: true, source: true } })
+          orderBy: { sequence: 'desc' }, take: LOOP_NOTICE_AT, select: { author: true, recipientIds: true, createdAt: true, source: true } })
         context.recent = recent.map(m => ({ author: m.author as unknown as Author, recipients: m.recipientIds, createdAt: m.createdAt.getTime(), source: m.source }))
       }
       if (command.type === 'work.status' && command.status === 'stopped') {
@@ -3032,16 +3032,20 @@ export class SuperTabStore {
     // The main Buddy counts none of a session thread's replies, as it reads none (buddySessions.ts).
     const counted = buddy ? threadRows.filter(r => !r.routing && (own || !(isBuddyChat(group) && r.session))) : threadRows
     const summaries = counted.length ? threadSummaries(state, group, counted) : []
-    const threads = buddy ? summaries.map(t => ({ ...t, authors: t.authors.map(authorForBuddy) })) : summaries
+    // An agent reads people by name, never email (task #2954): the usernames are worked out only for a read that has a person.
+    const names = actor.kind === 'agent' && (page.some(namesPerson) || summaries.some(t => t.authors.some(a => a.kind === 'person')))
+      ? lazyUsernames(state) : null
+    const named = names ? summaries.map(t => ({ ...t, authors: t.authors.map(a => authorForAgent(state, a, names)) })) : summaries
+    const threads = buddy ? named.map(t => ({ ...t, authors: t.authors.map(authorForBuddy) })) : named
     // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115), and
     // an agent's rows without its membership (delta review 1 of #2258).
-    const shown = (buddy ? page.map(rowForBuddy) : page).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
+    const shown = (buddy ? page.map(rowForBuddy) : page).map(m => names ? rowForAgent(state, names, m) : m).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
       ? { ...m, ...(m.thread && hidden.has(m.thread) ? { thread: null } : {}), ...(m.replyTo && hidden.has(m.replyTo) ? { replyTo: null } : {}) } : m)
     // Whose Buddy hears a row is its person's own: its news shows to that Buddy alone.
     const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
     // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
     // A project session of a person's one Buddy chat reads no excerpt: the main chat may hold any project's material (spec: Guard).
-    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
+    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, state, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
     // Only the rows this reader is shown get file links, each signed afresh for this read (fileLinks.ts).
     const linked = await this.linked(tabId, shown)
     // A person's read of new messages is where a message reaches them (task #2840): every app reads `after` once a push or its
@@ -3076,12 +3080,14 @@ export class SuperTabStore {
 
   /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session
    *  thread's, never a reply only in its thread), by the conversation's sequence index, at most 50 rows read for 10 kept. */
-  private async sessionExcerpt(tx: Transaction, tabId: string, conversationId: string, from: number,
+  private async sessionExcerpt(tx: Transaction, state: SuperTabState, tabId: string, conversationId: string, from: number,
     rowRead: (m: Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession' | 'buddyProject'>) => boolean) {
     const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { lte: from } }, orderBy: [{ sequence: 'desc' }, { id: 'desc' }],
       take: 50, select: { id: true, sequence: true, text: true, author: true, createdAt: true, thread: true, alsoInChat: true, buddySession: true, source: true, recipientIds: true, buddyProject: true } })
     const main = rows.filter(r => !r.buddySession && (!r.thread || r.thread === r.id || r.alsoInChat) && rowRead(r))
-    return sessionContext(main.map(r => ({ ...r, author: r.author as unknown as ContextRow["author"] })))
+    // A Buddy is an agent: it reads people by name, never email (task #2954).
+    const names = lazyUsernames(state)
+    return sessionContext(main.map(r => ({ ...r, author: authorForAgent(state, r.author as unknown as Author, names) as ContextRow['author'] })))
   }
 
   /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
@@ -4103,7 +4109,9 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
-      const shown = row && isBuddy(target) ? rowForBuddy(row) : row
+      // An agent reads people by name, never email (task #2954).
+      const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row
+      const shown = named && isBuddy(target) ? rowForBuddy(named) : named
       // A voice message reaches an agent as its words, marked as one (voiceMessages.ts); people hear the clip.
       const message = shown && { ...shown, text: agentText(shown.text, shown.attachments) }
       // Only a claim's answer is typed: an acknowledgement reads nothing for it.

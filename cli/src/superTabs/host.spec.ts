@@ -891,12 +891,26 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'How is it going?' })
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain('Message message from sam@example.com:\nHow is it going?')
+    expect(prompt).toContain('Message message from sam:\nHow is it going?')
     expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message'")
     expect(prompt).toContain('Ask questions and post results in this conversation.')
     expect(prompt).toContain('Answer each message once')
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
+  })
+  // Task #2954 (Ken, 11-04): agents copied an author's email into commands and pull requests until a machine's privacy hook
+  // stopped their sessions. A person is named by the name the server gives, and an older server's email never shows.
+  it('names a person by the name the server gives, and never by email', async () => {
+    const named = setup({ author: { kind: 'person', id: 'p1', name: 'sam', displayName: 'Sam Lee' }, text: 'Ship it?' })
+    await named.open().tick()
+    expect(vi.mocked(named.core.turns.deliver).mock.calls[0]![1]).toContain('Message message from Sam Lee:\nShip it?')
+    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?',
+      source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'p2', name: 'kim@example.com' } } })
+    await older.open().tick()
+    const prompt = vi.mocked(older.core.turns.deliver).mock.calls[0]![1] as string
+    expect(prompt).toContain('opened by kim.')
+    expect(prompt).toContain('Message message from sam:\nShip it?')
+    expect(prompt).not.toContain('@example.com')
   })
   // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): a top-level message is answered below it, a
   // thread reply in its thread, and a Buddy session's thread stays its own.
@@ -1017,6 +1031,15 @@ describe('Super Tab native delivery handoff', () => {
       const prompt = await delivered(t)
       expect(prompt).toContain('In a thread Ken started')
       expect(reads.filter(id => id === 'root')).toHaveLength(1)
+    })
+    it('names a thread\'s people by name, never by email (task #2954)', async () => {
+      const root = { ...ROOT, author: { kind: 'person', id: 'ken', name: 'ken@example.com' } }
+      const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([root], [{ id: 'root', replies: 3,
+        authors: [{ kind: 'person', id: 'dee', name: 'dee@example.com' }, { kind: 'person', id: 'sam', name: 'sam', displayName: 'Sam Lee' }] }]) })
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from dee, Sam Lee.')
+      expect(prompt).toContain('Replying to ken (2026-11-02 09:15 UTC):')
+      expect(prompt).not.toContain('@example.com')
     })
     it('a thread\'s only reply has no thread line', async () => {
       const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })
@@ -1565,13 +1588,14 @@ describe('the super-tab command in delivered input', () => {
     return String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
   }
   // anh Dee, task #2926: a Buddy's proposal is its owner's own message; its goal, scope and priority ride in its source for the PM.
+  // Named, never by email (task #2954).
   it('hands the PM a proposal\'s goal, scope and priority after its owner\'s words', async () => {
     const author = { kind: 'person', id: 'peer', name: 'peer@example.com' }
     const source = { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', goal: 'Desktop keeps drafts offline', scope: 'Desktop only', priority: 'high' }
-    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('Message message from peer@example.com:\nKeep my drafts when I go offline\n\n'
+    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('Message message from peer:\nKeep my drafts when I go offline\n\n'
       + 'Proposal details from their Buddy, for the PM:\nGoal: Desktop keeps drafts offline\nScope: Desktop only\nPriority: high')).toBe(true)
     // A proposal from before keeps its details in its Buddy's reply, and any other row is as it was.
-    expect((await delivered({ text: 'Offline drafts', author, source: { kind: 'buddy-proposal', personId: 'peer' } })).endsWith('Message message from peer@example.com:\nOffline drafts')).toBe(true)
+    expect((await delivered({ text: 'Offline drafts', author, source: { kind: 'buddy-proposal', personId: 'peer' } })).endsWith('Message message from peer:\nOffline drafts')).toBe(true)
   })
   it('marks a message the server says an agent of another account wrote, right before it (audit M3)', async () => {
     const author = { kind: 'agent', id: 'team-agent', name: 'Tester' }

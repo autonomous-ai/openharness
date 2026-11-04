@@ -1175,7 +1175,7 @@ describe('decisions asked of one person (v2)', () => {
     const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
-    const notAsked = `Not asked ${peer.email}: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
+    const notAsked = `Not asked peer: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
     expect(needs.body.data.result.notAsked).toBe(notAsked)
     const after = await assignment()
     expect(after).toMatchObject({ status: 'needs_human', result: 'Ship how?' })
@@ -1188,7 +1188,7 @@ describe('decisions asked of one person (v2)', () => {
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
-      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked ${peer.email}.`)
+      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked peer.`)
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
   })
 

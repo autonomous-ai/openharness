@@ -39,14 +39,17 @@ import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { peopleNamed, personName } from './personName.js'
 
-const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
 const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
 /** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
 const BUDDY_POST_HELP = `${POST_ABOUT} TEXT is one argument, the message itself in quotes: 'your message', or "it's done" when it holds an apostrophe. A Buddy never passes - for TEXT: its message is checked for secrets, so one read from stdin is refused and nothing is posted.`
 const POST_FLAGS = '[--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
-const MENTION_HELP = ' --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links. Nobody is tagged who cannot read the conversation.'
+// By username, display name or id, never email: a PM typed --mention with Ken's email and a machine's privacy hook stopped it
+// (task #2954). An email still resolves for older callers (mentionCommand), and the server still reads @email in TEXT.
+const MENTION_HELP = ' --mention tags a person, by the username, display name or id shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email. Nobody is tagged who cannot read the conversation.'
 /** What the command entry says after how its JSON is passed, the same for everyone. A task's review plan (#2382) is said in
  *  its brief (backend superTabs/model.ts renderWorkTask), for whoever opens its review (project instructions, phase 4). */
 const COMMAND_ABOUT = 'send one of the commands below.'
@@ -185,21 +188,26 @@ function statusView(answer: Record<string, unknown>, agentId: string): Record<st
   return { ...answer, state: { ...state, conversations } }
 }
 
-/** A post's mentions name people by id or email; the backend takes person ids. A name that is nobody in the Swarm is refused
- *  here, before anything is sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such
- *  a post reads the Swarm, for its people. */
+/** A post's mentions name people by id, username or display name, or (older callers) email (personName.ts peopleNamed); the
+ *  backend takes person ids. A name that is nobody in the Swarm, or that two people go by, is refused here, before anything is
+ *  sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such a post reads the Swarm,
+ *  for its people. */
 async function mentionCommand(command: Record<string, unknown>, swarm: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
   if (command.type !== 'message.send' || !Array.isArray(command.mentions)) return command
   const people = list((await swarm()).people)
   const ids = command.mentions.map(name => {
-    const person = people.find(p => p.id === name || typeof name === 'string' && typeof p.email === 'string' && p.email.toLowerCase() === name.toLowerCase())
-    if (!person) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the id or email shown in status.`, 400)
-    return person.id
+    const named = typeof name === 'string' ? peopleNamed(people, name) : []
+    if (!named.length) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the username or id shown in status.`, 400)
+    if (named.length > 1) {
+      const usernames = named.map(p => String(p.username ?? p.id)).join(', ')
+      throw new SuperTabHostError('MENTION_AMBIGUOUS', `${String(name)} is the name of more than one person here (${usernames}). Tag them by username or id.`, 400)
+    }
+    return named[0]!.id
   })
   return { ...command, mentions: [...new Set(ids)] }
 }
 
-/** The instructions with each note's asker named (`askedByName`: their username, else their email), as the status read has
+/** The instructions with each note's asker named (`askedByName`: their username, never their email, task #2954), as the status read has
  *  them, so the printed notes say who asked rather than an id (final review). Only a document with notes reads the Swarm; a
  *  member the read does not have, or a read that fails, keeps the id alone. */
 async function withAskerNames(document: Record<string, unknown>, state: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
@@ -207,7 +215,7 @@ async function withAskerNames(document: Record<string, unknown>, state: () => Pr
   const people = await state().then(read => list(read.people), () => [])
   const nameOf = (id: unknown) => {
     const person = people.find(p => p.id === id)
-    return typeof person?.username === 'string' && person.username ? person.username : typeof person?.email === 'string' ? person.email : null
+    return typeof person?.username === 'string' && person.username ? person.username : personName(person) ?? null
   }
   return { ...document, notes: document.notes.map(note => {
     const name = nameOf(object(note).askedBy)

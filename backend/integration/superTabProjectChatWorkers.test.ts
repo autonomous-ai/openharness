@@ -57,7 +57,7 @@ describe('an agent with a task in the project, in its project chat', () => {
     const below = String((await run(tab, post('Also the phone, please.'))).result.messageId)
     expect(await members()).toEqual([lead])
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
-    expect(rows.find(m => m.id === line)).toMatchObject({ author: { kind: 'agent', id: engineer }, thread: asked, recipientIds: [lead] })
+    expect(rows.find(m => m.id === line)).toMatchObject({ author: { kind: 'agent', id: engineer }, thread: asked, recipientIds: [] })
     expect(rows.find(m => m.id === inThread)!.recipientIds).toEqual([engineer])
     expect(rows.find(m => m.id === below)!.recipientIds).toEqual([engineer, lead])
     const deliveries = await store.deliveries(host, tab, engineer)

@@ -217,12 +217,13 @@ describe('instructions', () => {
       expect(await ask(parts, 'p4')).toMatchObject({ ok: true, value: { projectId: 'p4' } })
     })
   })
+  // Never an email, whom an agent would copy into a command (task #2954): an older server's row without a username reads by its prefix.
   it('names who asked for each note, as the status read has them, and keeps the id of one it does not', async () => {
     const notes = [{ id: 'n1', text: 'Ship Fridays.', askedBy: FIXTURE.collaboratorId, at: 1, expiresAt: null },
       { id: 'n2', text: 'Ask Ana.', askedBy: '6a000000000000000000000f', at: 2, expiresAt: null }]
     const s = swarm((_method, path) => path === instructionsPath('p2', FIXTURE.leadId) ? ok({ ...document, projectId: 'p2', notes }) : undefined)
     expect(await s.ask({ action: 'instructions', tabId: T, agentId: FIXTURE.leadId, projectId: 'p2' }, owner)).toMatchObject({ ok: true, value: { notes: [
-      { id: 'n1', askedBy: FIXTURE.collaboratorId, askedByName: 'dev@example.com' }, { id: 'n2', askedBy: '6a000000000000000000000f' }] } })
+      { id: 'n1', askedBy: FIXTURE.collaboratorId, askedByName: 'dev' }, { id: 'n2', askedBy: '6a000000000000000000000f' }] } })
     const value = (await s.ask({ action: 'instructions', tabId: T, agentId: FIXTURE.leadId, projectId: 'p2' }, owner)) as { value: { notes: Json[] } }
     expect(value.value.notes[1]).not.toHaveProperty('askedByName')
   })

@@ -108,9 +108,12 @@ describe('the Swarm cards on the devices', () => {
     cards.cards([card('t1', [lead('l1', { chat: { kind: 'lead', id: 'c1', name: 'Lead', working: false }, notice: notice({ chat: 'lead' }) })])])
     expect(swarmCards.mock.calls[1][0][0].leads[0]).toMatchObject({ chat: { kind: 'lead', id: 'c1' }, notice: { chat: 'lead' } })
     expect(swarmCards.mock.calls[1][0][0].leads[0].chat).not.toHaveProperty('since')
+    // A tag in a task chat (#2965), in its thread.
+    cards.cards([card('t1', [lead('l1', { notice: notice({ chat: 'group', chatId: 'g1', thread: 'r1' }) })])])
+    expect(swarmCards.mock.calls[2][0][0].leads[0].notice).toEqual(notice({ chat: 'group', chatId: 'g1', thread: 'r1' }))
     swarmCards.mockClear()
     const badChats = [chat({ kind: 'other' }), chat({ id: 'bad id' }), chat({ name: 5 }), chat({ working: 'yes' }), chat({ since: -1 }), 'chat']
-    const badNotices = [notice({ chat: 'group' }), notice({ chatId: 'bad id' }), notice({ id: '' }), notice({ text: 5 }), notice({ at: -1 }), 7]
+    const badNotices = [notice({ chat: 'other' }), notice({ chatId: 'bad id' }), notice({ id: '' }), notice({ text: 5 }), notice({ at: -1 }), 7]
     for (const bad of badChats) cards.cards([card('t1', [lead('l1', { chat: bad })])])
     for (const bad of badNotices) cards.cards([card('t1', [lead('l1', { notice: bad })])])
     // The Lead stays, without what was not sound.
