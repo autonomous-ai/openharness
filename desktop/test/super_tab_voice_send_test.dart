@@ -8,50 +8,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/voice_send.dart';
 
-import 'support/super_tab_fixture.dart';
-
-/// A server with #2887's voice route: [voiceAnswers] are given in turn, the
-/// last one again; a [SuperTabFailure] in it is thrown.
-class _VoiceServer extends ConversationServer {
-  final voiceReads = <String>[];
-  List<Object> voiceAnswers = [
-    {
-      'voice': {
-        'durationMs': 1000,
-        'waveform': List.filled(48, 3),
-        'transcribed': true,
-      },
-    },
-  ];
-
-  @override
-  Future<Map<String, dynamic>> request(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) async {
-    if (method == 'POST' && path.contains('/voice')) {
-      voiceReads.add(path);
-      final answer =
-          voiceAnswers[(voiceReads.length - 1).clamp(
-            0,
-            voiceAnswers.length - 1,
-          )];
-      if (answer is SuperTabFailure) throw answer;
-      return answer as Map<String, dynamic>;
-    }
-    return super.request(method, path, body: body);
-  }
-}
+import 'support/voice_server.dart';
 
 final _wav = Uint8List.fromList(List.filled(44 + 3200, 1));
 
 void main() {
-  late _VoiceServer server;
+  late VoiceServer server;
   late SuperTabController c;
 
   setUp(() async {
-    server = _VoiceServer()..append('Hello');
+    server = VoiceServer()..append('Hello');
     c = server.controller();
     await c.refresh();
   });
@@ -61,15 +27,7 @@ void main() {
     c.dispose();
   });
 
-  Map<String, dynamic>? sent() {
-    for (final post in server.posts.reversed) {
-      final command = post['command'];
-      if (command is Map && command['type'] == 'message.send') {
-        return Map<String, dynamic>.from(command);
-      }
-    }
-    return null;
-  }
+  Map<String, dynamic>? sent() => server.lastSend();
 
   test(
     'a take goes up as a voice file, is read once, and is sent alone',
