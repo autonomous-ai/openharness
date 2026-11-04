@@ -169,7 +169,10 @@ void main() {
       await shot('open');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-attachment-image:a1')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('super-attachment-image:a1')),
+        findsNothing,
+      );
       await tester.pumpWidget(const SizedBox());
       await c.flush();
     }, skip: shots == null);
