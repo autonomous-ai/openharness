@@ -1997,7 +1997,15 @@ describe('any agent of the project', () => {
       const reviewer = f.add('reviewer', 'owner', step)
       f.run({ type: 'work.assign', conversationId: step, agentId: reviewer })
       const chat = () => f.state.conversations.find(c => c.id === 'lead')!
-      return { f, task, step, engineer, reviewer, chat }
+      /** A new agent assigned a task of its own in the project, with its assignment in [status]. */
+      const assigned = (name: string, status?: 'done' | 'lost' | 'stopped') => {
+        const own = f.group(), agentId = f.add(name, 'owner', own)
+        f.define(own)
+        f.run({ type: 'work.assign', conversationId: own, agentId })
+        if (status) f.state.conversations.find(c => c.id === own)!.assignment!.status = status
+        return { agentId, get task() { return f.state.conversations.find(c => c.id === own)! } }
+      }
+      return { f, task, step, engineer, reviewer, chat, assigned }
     }
 
     it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator as before', () => {
@@ -2017,7 +2025,7 @@ describe('any agent of the project', () => {
     })
 
     it('refuses everyone else there, and still adds no agent to the project chat', () => {
-      const { f, task, engineer, chat } = working()
+      const { f, task, engineer, chat, assigned } = working()
       // Of this project, with no task or step in it: added to a task it is not assigned.
       const idle = f.add('idle', 'owner', task)
       // Its task ended: cancelled, or lost to another agent.
@@ -2043,10 +2051,19 @@ describe('any agent of the project', () => {
       f.define(stoppingTask)
       f.run({ type: 'work.assign', conversationId: stoppingTask, agentId: stopping })
       f.state.agents.find(a => a.id === stopping)!.workDecision = 'stop'
+      // A task lost to another agent or stopped, and one archived, whatever its status (security reviews of #2924).
+      const lost = assigned('lost', 'lost').agentId, stopped = assigned('stopped', 'stopped').agentId
+      const archive = assigned('archived')
+      archive.task.archived = true
       const before = structuredClone(f.state)
       // Another project's agent does not read this chat at all; a Buddy posts only in its own chat (buddies.ts).
-      const refusals: Array<[string, string]> = [[idle, 'FORBIDDEN'], [ended, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
-      for (const [agentId, code] of refusals) expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
+      const refusals: Array<[string, string]> = [[idle, 'FORBIDDEN'], [ended, 'FORBIDDEN'], [lost, 'FORBIDDEN'], [stopped, 'FORBIDDEN'],
+        [archive.agentId, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
+      for (const [agentId, code] of refusals) {
+        expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
+        expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId)))
+          .toThrow(expect.objectContaining({ code }))
+      }
       // Naming an agent that is not in it, or adding one, is refused as before (#2207), the working Engineer's post too.
       const notMember = expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' })
       expect(() => f.run(post('Look at this.', null, [idle]), actorOf(engineer))).toThrow(notMember)
@@ -2056,6 +2073,63 @@ describe('any agent of the project', () => {
       }
       expect(f.state).toEqual(before)
       expect(chat().agentIds).not.toContain(engineer)
+    })
+
+    // Decided, not by accident (security reviews of #2924): a done task's agent posts its result line in main until the task
+    // archives with its merged pull request.
+    it('lets a done task\'s agent post there until its task archives', () => {
+      const { f, chat, assigned } = working()
+      const done = assigned('done', 'done')
+      f.run(post('Shipped: the login bug is fixed.'), actorOf(done.agentId))
+      expect(chat().agentIds).not.toContain(done.agentId)
+      done.task.archived = true
+      expect(() => f.run(post('One more thing.'), actorOf(done.agentId))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    })
+
+    // Security review 1 of #2924: posting there is no joining, so a Team account's agent marks nothing Team-written there and
+    // no main-account member is told to stop.
+    it('marks nothing Team-written when a Team account\'s agent posts there', () => {
+      const { f, engineer, chat } = working()
+      f.state.agents.find(a => a.id === engineer)!.teamAccount = true
+      const effects = f.run(post('I am on it.'), actorOf(engineer))
+      expect(chat().teamWritten).toBeUndefined()
+      expect(effects.messages.map(m => m.conversationId === 'lead' ? m.text : null)).toEqual(['I am on it.'])
+      expect(effects.messages).toHaveLength(1)
+    })
+
+    // River, 2026-11-04 (#2924): an agent with work in the project reacts there (👀 on an ask it takes), with no other right.
+    it('lets it react there without joining', () => {
+      const { f, engineer, reviewer, chat } = working()
+      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+      const members = [...chat().agentIds]
+      for (const agentId of [engineer, reviewer]) {
+        expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId)).result.changed).toBe(true)
+      }
+      expect(chat().agentIds).toEqual(members)
+    })
+
+    // River, 2026-11-04 (#2924): a person answering an agent's line in main, in its thread or right below it, reaches that agent
+    // as a delivery; it joins nothing. Right below, the coordinator is told too, as a new ask there may be its.
+    it('delivers a person\'s reply to the agent whose line it answers, in its thread or right below it', () => {
+      const { f, engineer, chat, assigned } = working()
+      const members = [...chat().agentIds]
+      const line = f.run(post('I am on it.'), actorOf(engineer)).messages.at(-1)!
+      const inThread = f.run(post('Thanks, which build?', line.id), owner,
+        { reply: { id: line.id, conversationId: 'lead', author: line.author, createdAt: 0, thread: line.id } }).messages.at(-1)!
+      expect(inThread).toMatchObject({ replyTo: line.id, thread: line.id, recipients: [engineer] })
+      const below = f.run(post('Also the phone build, please.'), owner, { above: { author: line.author } }).messages.at(-1)!
+      expect(below.recipients).toEqual([engineer, f.lead])
+      // Below a person's or the coordinator's line, or with nothing read above it, the coordinator alone, as before.
+      expect(f.run(post('And the web?'), owner, { above: { author: below.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(f.run(post('And the web?'), owner).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(chat().agentIds).toEqual(members)
+      // An agent whose work there ended is not told: the coordinator hears it, as any post there.
+      const done = assigned('ended')
+      const ended = f.run(post('Done here.'), actorOf(done.agentId)).messages.at(-1)!
+      done.task.assignment!.status = 'cancelled'
+      expect(f.run(post('Wait, one more?', ended.id), owner,
+        { reply: { id: ended.id, conversationId: 'lead', author: ended.author, createdAt: 0, thread: ended.id } }).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(f.run(post('Hello?'), owner, { above: { author: ended.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
     })
   })
 
