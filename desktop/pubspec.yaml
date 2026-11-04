@@ -116,7 +116,7 @@ dependencies:
   # as a file chip does. See CLAUDE.md on what a plugin costs.
   video_player: ^2.14.0
   # The composer's mic on macOS and the web, as the phone records (#2665):
-  # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
+  # 16 kHz mono PCM16 streamed into a WAV. Windows too. Linux draws no mic.
   record: ^7.1.1
   # video_player on Windows, through Media Foundation, which plays a voice
   # message's WAV with no extra codec. BSD-3-Clause. Keep exact: see RELEASE.md.

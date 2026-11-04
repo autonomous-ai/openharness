@@ -156,7 +156,7 @@ void main() {
     });
   });
 
-  test('a recorder only where recording works: macOS and the web', () {
+  test('a recorder only where recording works: macOS, Windows and the web', () {
     expect(
       superTabVoiceRecorder(web: false, platform: TargetPlatform.macOS),
       isNotNull,
@@ -171,7 +171,7 @@ void main() {
     );
     expect(
       superTabVoiceRecorder(web: false, platform: TargetPlatform.windows),
-      isNull,
+      isNotNull,
     );
   });
 

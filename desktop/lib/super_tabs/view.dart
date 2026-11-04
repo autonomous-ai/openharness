@@ -147,7 +147,7 @@ class SuperTabView extends StatefulWidget {
   final SwarmLinkSwarms? linkSwarms;
 
   /// Makes the microphone the composers' mic records with
-  /// ([superTabVoiceRecorder]: macOS and the web); without it, no mic shows.
+  /// ([superTabVoiceRecorder]: macOS, Windows and the web); without it, no mic shows.
   final SuperTabVoiceRecorder Function()? voiceRecorder;
 
   @override
