@@ -337,13 +337,7 @@ void main() {
     await tester.enterText(key('swarm-find-field'), 'x');
     await tester.pump();
     expect(c.find.query, 'x');
-    expect(
-      find.descendant(
-        of: key('swarm-find-count'),
-        matching: find.text('1 of 2'),
-      ),
-      findsOneWidget,
-    );
+    expect(tester.widget<Text>(key('swarm-find-count')).data, '1 of 2');
     for (final button in [
       'swarm-find-older',
       'swarm-find-newer',
