@@ -223,6 +223,29 @@ describe('assigning a step', () => {
     expect(f.group(id).assignment).toMatchObject({ status: 'working' })
     expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
   })
+
+  // Ken, 2026-11-04: ~18 of 51 steps moved after 30 quiet minutes in two days were a Reviewer or Tester waiting on the
+  // Engineer's fix. A Tester's verdict has no set form, and a step agent's failed check on its own step counted as the
+  // assignee's, so nothing marked the wait.
+  it('waits for the fix after a failed check on its own step, as after a failed check on the task', () => {
+    const f = stepsFixture()
+    const id = f.step('Test', f.as(f.dev), f.task, [{ description: 'Works offline on a Mac', independent: false }])
+    const tester = f.add('tester', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: tester }, f.as(f.dev))
+    const check = (passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId: f.group(id).assignment!.id,
+      checkId: f.group(id).checks[0]!.id, passed, evidence: passed ? 'Signs in offline' : 'Sign-in fails offline, steps below' } as Command, f.as(tester))
+    check(true)
+    expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+    check(false)
+    expect(f.group(id).assignment!.changesRequestedAt).toBe(f.now)
+    // The Engineer works on the fix (its own status renews only its own task), while the step stays quiet past 30 minutes.
+    f.tick(QUIET_RUNNING_MS + 5 * 60_000)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing the offline sign-in' } as Command, f.as(f.dev))
+    sweepLiveness(f.state, f.now)
+    expect(f.group(id).assignment).toMatchObject({ status: 'working' })
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
+    expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+  })
 })
 
 describe('a step closes with its task', () => {
@@ -692,6 +715,27 @@ describe('an Engineer waiting on its own steps', () => {
       expect(task()).toMatchObject({ status: 'lost' })
     })
   }
+
+  // Diego, 2026-11-04 (#2578): a step lost inside the PM's poll left its task recorded as waiting on it, so the same poll woke
+  // the PM with a false stall and the Engineer lost its task 30 seconds later instead of after its 30 minutes.
+  it('gets its 30 minutes when its Reviewer goes quiet and the step is lost in the PM\'s poll, with no stall woken', () => {
+    const { f, id, reviewFor, task } = reviewing()
+    reviewFor(36)
+    f.tick(QUIET_RUNNING_MS + 5 * MIN)
+    const rows = sweepForLead(f.state, f.now)
+    expect(f.group(id).assignment).toMatchObject({ status: 'lost' })
+    expect(rows.filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(30_000)
+    expect(sweepForLead(f.state, f.now).filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(QUIET_RUNNING_MS - 30_000 - MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepForLead(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
 
   it('a step in Ready waits on its task owner and never wakes the PM as a stalled review', () => {
     const { f, id, stepStatus } = reviewing()

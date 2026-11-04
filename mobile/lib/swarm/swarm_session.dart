@@ -16,6 +16,7 @@ import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
 import 'swarm_kept.dart';
 import 'swarm_mark_all.dart';
+import 'swarm_message_reads.dart';
 import 'swarm_notices.dart';
 import 'swarm_profile.dart';
 import 'swarm_request.dart';
@@ -67,6 +68,10 @@ class SwarmSession extends ChangeNotifier {
 
   /// The project chats read for Activity, a few at a time ([SwarmChatPeeks]).
   final peeks = SwarmChatPeeks();
+
+  /// Messages read one at a time: quoted originals and what message links
+  /// point at ([SwarmMessageReads]), dropped with the session.
+  final messageReads = SwarmMessageReads();
 
   /// Activity, in place of Needs you: its filters, counts and handled rows.
   /// Made when a screen first asks for it.
@@ -319,6 +324,7 @@ class SwarmSession extends ChangeNotifier {
     _held.clear();
     _activity?.dispose();
     peeks.dispose();
+    messageReads.dispose();
     inbox.removeListener(_needsChanged);
     _announcer.clear();
     inbox.dispose();

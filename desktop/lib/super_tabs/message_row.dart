@@ -11,6 +11,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
+import 'identity_card.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'message_link.dart';
 import 'message_link_preview.dart';
@@ -21,6 +22,38 @@ import 'pull_requests.dart';
 import 'reactions.dart';
 import 'swarm_type.dart';
 import 'voice_length.dart';
+
+/// The face [message]'s row shows for its sender, shown as [author]: the
+/// [agent] or [person] who wrote it, while they are in the Swarm.
+Widget superTabMessageAvatar(
+  SuperTabMessage message, {
+  required String author,
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+  double size = SuperTabMessageRow.avatarSize,
+}) {
+  const radius = grid.AppDesktop.messageAvatarRadius;
+  if (agent != null) {
+    return SuperTabAvatar.agent(
+      agent,
+      name: author,
+      size: size,
+      engineBadge: false,
+      radius: radius,
+    );
+  }
+  if (person != null && !message.fromAgent) {
+    return SuperTabAvatar.person(person, size: size, radius: radius);
+  }
+  // Someone no longer in the Swarm keeps the face their recorded name gives.
+  return SuperTabAvatar(
+    identity: '${message.author['kind']}:${message.authorId}',
+    name: message.fromAgent ? author : superTabPersonName(message.authorName),
+    size: size,
+    pattern: message.fromAgent,
+    radius: radius,
+  );
+}
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -61,9 +94,14 @@ class SuperTabMessageRow extends StatefulWidget {
     this.link,
     this.linkTarget,
     this.onOpenLink,
+    this.identity,
   });
 
   final SuperTabMessage message;
+
+  /// Who wrote it, for the card hovering or focusing its name or avatar shows
+  /// (Huy, 11-04); without it the avatar keeps its tooltip.
+  final SuperTabIdentityFacts Function()? identity;
 
   /// The live card [message] is (live_card.dart), drawn in place of its pull
   /// request links; null for a plain message.
@@ -266,30 +304,49 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
-  Widget _avatar(SuperTabMessage message) {
-    const size = SuperTabMessageRow.avatarSize;
-    const radius = grid.AppDesktop.messageAvatarRadius;
-    if (widget.agent case final agent?) {
-      return SuperTabAvatar.agent(
-        agent,
-        name: widget.author,
-        size: size,
-        engineBadge: false,
-        radius: radius,
-      );
+  Widget _avatar(SuperTabMessage message) => superTabMessageAvatar(
+    message,
+    author: widget.author,
+    agent: widget.agent,
+    person: widget.person,
+  );
+
+  /// The sender's name: opens the agent when it is one, and shows the card
+  /// on hover or keyboard focus, so a person's name takes focus too.
+  Widget _name(TextStyle style, bool finger) {
+    final name = fingerTarget(
+      enabled: finger,
+      Align(
+        alignment: Alignment.centerLeft,
+        widthFactor: 1,
+        heightFactor: 1,
+        child: Text(widget.author, style: style),
+      ),
+    );
+    final identity = widget.identity;
+    if (identity == null) {
+      return InkWell(onTap: widget.onOpenAgent, child: name);
     }
-    if (widget.person case final person? when !message.fromAgent) {
-      return SuperTabAvatar.person(person, size: size, radius: radius);
-    }
-    // Someone no longer in the Swarm keeps the face their recorded name gives.
-    return SuperTabAvatar(
-      identity: '${message.author['kind']}:${message.authorId}',
-      name: message.fromAgent
-          ? widget.author
-          : superTabPersonName(message.authorName),
-      size: size,
-      pattern: message.fromAgent,
-      radius: radius,
+    return SuperTabHoverCard(
+      facts: identity,
+      child: widget.onOpenAgent == null
+          ? Focus(
+              child: Builder(
+                builder: (context) => DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Focus.of(context).hasFocus
+                            ? DesktopChrome.focusRing
+                            : Colors.transparent,
+                      ),
+                    ),
+                  ),
+                  child: name,
+                ),
+              ),
+            )
+          : InkWell(onTap: widget.onOpenAgent, child: name),
     );
   }
 
@@ -434,10 +491,16 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           child: widget.grouped
                               ? _groupedTime(context, active)
                               : ExcludeSemantics(
-                                  child: Tooltip(
-                                    message: _identityDetails,
-                                    child: _avatar(message),
-                                  ),
+                                  child: switch (widget.identity) {
+                                    final identity? => SuperTabHoverCard(
+                                      facts: identity,
+                                      child: _avatar(message),
+                                    ),
+                                    null => Tooltip(
+                                      message: _identityDetails,
+                                      child: _avatar(message),
+                                    ),
+                                  },
                                 ),
                         ),
                         const SizedBox(width: SuperTabMessageRow.avatarGap),
@@ -454,21 +517,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
-                                      InkWell(
-                                        onTap: widget.onOpenAgent,
-                                        child: fingerTarget(
-                                          enabled: finger,
-                                          Align(
-                                            alignment: Alignment.centerLeft,
-                                            widthFactor: 1,
-                                            heightFactor: 1,
-                                            child: Text(
-                                              widget.author,
-                                              style: authorStyle,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
+                                      _name(authorStyle, finger),
                                       if (message.fromAgent)
                                         Tooltip(
                                           message: _identityDetails,

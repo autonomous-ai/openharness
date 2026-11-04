@@ -28,6 +28,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'import_agent_dialog.dart';
+import 'project_add_people.dart';
 import 'leaderboard/format.dart';
 import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
@@ -514,6 +515,13 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         _choice.scope == SuperTabRosterScope.project && projectId != null
         ? state?.projectById(projectId)
         : null;
+    // In a private project its owner brings Swarm people in from the People +, instead of inviting to the Swarm
+    // (Diego, 2026-11-04).
+    final addsToProject =
+        scoped != null &&
+        scoped.isPrivate &&
+        scoped.ownerId == c.accountId &&
+        c.canWrite;
     final members = state?.teamAgents ?? const <SuperTabAgent>[];
     bool inScope(SuperTabAgent a) =>
         scoped == null ||
@@ -620,8 +628,14 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       // People and Agents: the two roles in one team (Quiet Swarm, screen 4).
       SuperTabSectionHeading(
         'People',
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
+        onAdd: addsToProject
+            ? () => unawaited(showProjectAddPeople(context, c, scoped))
+            : c.isOwner
+            ? widget.onInvite
+            : null,
+        addTooltip: addsToProject
+            ? 'Add people to this project'
+            : 'Invite people',
       ),
       // Points are the last 7 days, the period on hover; who waits on whom is
       // Activity's Needs you (Quiet Swarm, 2026-11-02).

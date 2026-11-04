@@ -179,6 +179,10 @@ Avoid repeatedly drawing cards inside a dialog.
 
 The terminal's chosen color palette remains independent from UI focus blue.
 All modal veils share one 95% token: black in dark appearance, white in light.
+The chat's picture viewer is the one exception: `AppDesktop.mediaVeil`, a
+see-through black in both appearances, with its own white ink and control fills
+(`mediaInk`, `mediaInkMuted`, `mediaControl`, `mediaControlHover`), because a
+picture reads best on dark.
 Cmd-N and Cmd-P must have exactly the same backdrop darkness, including coverage
 of the native footer. Popovers have no independent full-window veil.
 

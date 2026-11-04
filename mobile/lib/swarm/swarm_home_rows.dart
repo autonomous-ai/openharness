@@ -136,8 +136,9 @@ class SwarmInvitationRow extends StatelessWidget {
 /// waits is on its way ([tagsLoading]). No dot for how its team is: one on
 /// every row said little, and the name already says what waits on the person
 /// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
-/// were the same on every row. A tap opens it; a long press offers its pin
-/// ([onLongPress]).
+/// were the same on every row. A private project has a lock at its end,
+/// after its tags, as the desktop's sidebar marks it. A tap opens it; a long
+/// press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
@@ -166,7 +167,10 @@ class SwarmHomeProjectRow extends StatelessWidget {
     AppTheme.watch(context);
     final news = project.news;
     final bright = news.bold || news.tags > 0;
-    final name = '#${project.project.name}';
+    // A private project's lock takes the # mark's place, as the desktop's
+    // sidebar marks it (#2876): the row's right side is for its notifications.
+    final private = project.project.isPrivate;
+    final name = private ? project.project.name : '#${project.project.name}';
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -179,6 +183,16 @@ class SwarmHomeProjectRow extends StatelessWidget {
           ),
           child: Row(
             children: [
+              if (private) ...[
+                Icon(
+                  LucideIcons.lock300,
+                  key: const ValueKey('swarm-project-private'),
+                  size: 14,
+                  color: AppPalette.textSecondary,
+                  semanticLabel: 'Private project',
+                ),
+                const SizedBox(width: AppSpace.xs),
+              ],
               Expanded(
                 child: Semantics(
                   label: bright && news.tags == 0 ? 'Unread messages' : null,

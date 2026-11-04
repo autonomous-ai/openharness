@@ -6,6 +6,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'decisions.dart';
 import 'model.dart';
+import 'private_project_lock.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -51,22 +52,46 @@ class SuperTabDecisionList extends StatelessWidget {
         // chat, and is named so (as notifications.dart does).
         final c = d.controller;
         final hidden = c.snapshot?.conversation(decision.conversationId);
-        final place = hidden == null || !c.hiddenByBuddies(hidden)
-            ? decision.conversationTitle
-            : '#${decision.projectName}';
-        yield _note(
-          '${decision.askerName} asked $count '
-          '${count == 1 ? 'question' : 'questions'} · '
-          '${decision.projectName} · $place',
+        final legacyChannel = hidden != null && c.hiddenByBuddies(hidden);
+        final project = c.snapshot?.projects
+            .where((p) => p.id == decision.projectId)
+            .firstOrNull;
+        final privateProject = legacyChannel && project?.isPrivate == true;
+        yield _noteRich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text:
+                    '${decision.askerName} asked $count '
+                    '${count == 1 ? 'question' : 'questions'} · '
+                    '${decision.projectName} · ',
+              ),
+              if (privateProject)
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: PrivateProjectLock(
+                    size: 12,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              TextSpan(
+                text: legacyChannel
+                    ? '${privateProject ? ' ' : '#'}${decision.projectName}'
+                    : decision.conversationTitle,
+              ),
+            ],
+          ),
         );
       }
       yield SuperTabDecisionCard(decisions: d, decision: decision);
     }
   }
 
-  static Widget _note(String text) => Padding(
+  static Widget _note(String text) => _noteRich(TextSpan(text: text));
+
+  static Widget _noteRich(TextSpan text) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
-    child: Text(text, style: DesktopChrome.metadata()),
+    child: Text.rich(text, style: DesktopChrome.metadata()),
   );
 }
 

@@ -1456,8 +1456,8 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
 /*
  * THE THREAD FACE (spec 2026-11-03-dial-thread-face, mockup round-thread): a Lead whose face chat is a thread. The teal
  * ring at the glass edge, "Thread" (Buddy: "Thread · Buddy"), the thread's title on two lines, no pet, and the card of the
- * thread's last message with a teal spine, its meta line (who, how many replies) and up to three lines; "Waiting for ..."
- * until one comes. "‹ chat" at the left edge says which way out. Inter has no hooked arrow, so the label leads with ›.
+ * thread's last message with its meta line (who, how many replies) and up to three lines; "Waiting for ..." until one
+ * comes. A sideways swipe leaves it. Inter has no hooked arrow, so the label leads with one drawn in boxes.
  */
 // The next line of `*cursor` in `w` px, copied to `out`.
 static void thread_line(const char **cursor, const ht_font_t *font, int w, char out[HT_TEXT_BYTES])
@@ -1518,20 +1518,12 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     }
     if (rows == 0) rows = 1;
     int h = 26 + rows * 38 + (meta[0] ? 28 : 0);
-    // x 63..403, symmetric, so "‹ chat" has room at the edge. Three lines under a two-line title end at y 369: its corners
-    // are 180 px from the centre at most, inside the ring's 226 px inner edge, so all three lines stay.
+    // x 63..403, symmetric. Three lines under a two-line title end at y 369: its corners are 180 px from the centre at most,
+    // inside the ring's 226 px inner edge, so all three lines stay. No spine and no "chat" label (Diego, 2026-11-04).
     ht_box(f, 63, top, 340, h, 28, card, color(mix_black(TEAL, 70)));
-    ht_box(f, 63, top + 18, 7, h - 36, 3, teal, teal);
     if (meta[0]) focus_put(f, 75, top + 13, 316, small, teal, card, meta, true);
     if (!recap) focus_put(f, 75, top + 17, 316, body, DIM, card, buddy ? "Waiting for your Buddy…" : "Waiting for the PM…", true);
     else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, wait ? ACCENT : FG, card, text[i], true);
-    // The way out: a chevron at the left edge, small "chat" under it.
-    uint16_t out = color(mix_black(TEAL, 85));
-    // At the screen's vertical centre, where the glass is widest: "‹" just above y 233, "chat" just below, 15 px in from the
-    // edge, so every corner of both runs is 6 px or more inside the ring's inner edge (r 226.5), and 8 px clear of the card.
-    int cw = ht_measure(&ht_mono_16, "chat"), vw = ht_measure(body, "\u2039");
-    ht_text(f, 15 + (cw - vw) / 2, 233 - body->height, vw, body, out, bg, "\u2039");
-    ht_text(f, 15, 234, cw, &ht_mono_16, out, bg, "chat");
 }
 /*
  * A SWARM PANE'S FACE (spec §4): the agent face, built from the Lead. The project on the upper arc; working: the pet

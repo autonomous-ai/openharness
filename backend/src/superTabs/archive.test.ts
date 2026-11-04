@@ -16,6 +16,7 @@ describe('pull request states for archiving', () => {
     const { github, prs } = setup()
     expect(await prs.state('https://github.com/acme/app/pull/7')).toBe('merged')
     expect(await prs.state('https://github.com/acme/app/pull/8')).toBe('open')
+    expect(await prs.state('https://github.com/acme/app/pull/9')).toBe('missing')
     const minted = github.calls.filter(c => c.path.endsWith('/access_tokens'))
     expect(minted).toHaveLength(1)
     expect(minted[0]!.body).toMatchObject({ permissions: { pull_requests: 'read', metadata: 'read' } })

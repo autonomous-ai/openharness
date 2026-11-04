@@ -20,6 +20,9 @@ export interface Person {
   generation: string
   /** Their own short status (profile.ts); only Swarm members read it. */
   status?: import('./profile.js').PersonStatus
+  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
+   *  Only Swarm members read it, for the local time on a person's card. */
+  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
@@ -392,6 +395,10 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
+  queueRank?: number
+  /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
+  notBefore?: string
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -693,7 +700,8 @@ export interface CommandEffects {
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
-  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string } }>
+  /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
+  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
@@ -997,6 +1005,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const project of visible.projects ?? []) {
       const lead = project.lead
       if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+      // Which of its person's machines starts the Lead of a Personal project (leadStart.ts) is a machine too.
+      delete project.leadClaim
     }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules

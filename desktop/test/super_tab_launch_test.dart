@@ -89,6 +89,9 @@ class SuperTabFixtureConnection extends WsConn {
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
 
+  /// The code a [failCreation] failure names, as a daemon's refusal does.
+  String? failCreationCode;
+
   /// The machine's Claude Code takes no model or effort flags: refused before
   /// any receipt, as the daemon does (`LAUNCH_MODEL_UNSUPPORTED`).
   bool refuseLaunchModel = false;
@@ -390,7 +393,10 @@ class SuperTabFixtureConnection extends WsConn {
         return {
           'creationId': payload['creationId'],
           'state': 'failed',
-          'failure': {'detail': 'Fixture engine unavailable'},
+          'failure': {
+            'detail': 'Fixture engine unavailable',
+            'code': ?failCreationCode,
+          },
         };
       }
       return {

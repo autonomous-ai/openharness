@@ -9,6 +9,7 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -70,6 +71,7 @@ Future<void> pumpSidebar(
             controller: controller,
             app: app,
             needsHuman: (_) => 0,
+            attention: SuperTabAttention.of(controller),
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},
             onNotifications: onNotifications ?? () {},
@@ -154,10 +156,71 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 }
 
 void main() {
+  testWidgets(
+    'private projects use a leading lock and keep notifications at the right',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final server = ConversationServer();
+      final controller = await projectSidebar(server);
+      server.tag('message-1', conversationId: 'lead');
+      await controller.refresh();
+      final attention = SuperTabAttention.of(controller);
+      await attention.mentions.load();
+      await controller.setNotify('empty-lead', SuperTabNotify.muted);
+      await pumpSidebar(tester, controller, app);
+
+      final privateRow = find.byKey(const ValueKey('super-group-empty-lead'));
+      final privateLock = inRow(
+        'super-group-empty-lead',
+        find.byIcon(AppIcons.lock),
+      );
+      final privateName = inRow(
+        'super-group-empty-lead',
+        find.text('sample-project'),
+      );
+      final publicName = inRow('super-group-lead', find.text('web-project'));
+      final badge = inRow(
+        'super-group-lead',
+        find.byKey(const ValueKey('super-mentions-lead')),
+      );
+      final muted = inRow(
+        'super-group-empty-lead',
+        find.byKey(const ValueKey('super-muted-empty-lead')),
+      );
+
+      expect(privateRow, findsOneWidget);
+      expect(privateLock, findsOneWidget);
+      expect(
+        inRow('super-group-empty-lead', find.byTooltip('Private project')),
+        findsOneWidget,
+      );
+      expect(inRow('super-group-empty-lead', find.text('#')), findsNothing);
+      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+      expect(badge, findsOneWidget);
+      expect(muted, findsOneWidget);
+      expect(
+        tester.getCenter(privateLock).dx,
+        lessThan(tester.getCenter(privateName).dx),
+      );
+      expect(
+        tester.getCenter(badge).dx,
+        greaterThan(tester.getCenter(publicName).dx),
+      );
+      expect(
+        tester.getCenter(muted).dx,
+        greaterThan(tester.getCenter(privateName).dx),
+      );
+
+      await disposeSidebar(tester, controller);
+    },
+  );
+
   for (final scale in [1.0, 2.0]) {
     testWidgets(
       'flat navigation shares text and selection bounds; a project row '
-      'opens its chat and shows its workgroups at ${scale}x',
+      'opens its chat on every click and lists no tasks at ${scale}x',
       (tester) async {
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final app = createApp(connected: true);
@@ -203,16 +266,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(controller.selectedId, 'lead');
         expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
-        // A second click shows its workgroups (no chevrons: Quiet Swarm).
+        // A second click keeps its chat and lists no tasks: they are in the
+        // project's Tasks view (task #2569).
         await tester.tap(project);
         await tester.pumpAndSettle();
-        // A workgroup with no work is in The rest, which starts folded (#2309).
-        await tester.tap(
-          find.byKey(const ValueKey('super-task-group-lead-rest')),
-        );
-        await tester.pumpAndSettle();
-        final work = find.byKey(const ValueKey('super-group-offline'));
-        expect(work, findsOneWidget);
+        expect(controller.selectedId, 'lead');
+        expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
         final textX = tester
             .getTopLeft(inRow('super-group-lead', find.text('web-project')))
             .dx;
@@ -220,38 +279,28 @@ void main() {
           find.text('Activity'),
           find.text('Manage'),
           sample,
-          // A workgroup's number is grey, with no #: it is no channel.
-          inRow('super-group-offline', find.text('12  Offline editing')),
-          // Its group's heading lines up with it.
-          inRow('super-task-group-lead-rest', find.text('The rest')),
         ]) {
           expect(tester.getTopLeft(label).dx, textX, reason: '$label');
         }
-        // Unread is a bold name, with no dot in either row (Dee, 2026-10-29).
-        expect(unreadDot('offline'), findsNothing);
+        // Unread is a bold name, with no dot (Dee, 2026-10-29).
         expect(unreadDot('lead'), findsNothing);
-        for (final row in [activity, manage, work]) {
+        for (final row in [activity, manage, empty]) {
           final bounds = tester.getRect(row);
           expect(bounds.left, tester.getRect(project).left);
           expect(bounds.right, tester.getRect(project).right);
         }
 
-        await tester.tap(work);
+        await controller.select('offline');
         await tester.pumpAndSettle();
-        expect(controller.selectedId, 'offline');
         await tester.tap(empty);
         await tester.pumpAndSettle();
         expect(controller.selectedId, 'empty-lead');
-        expect(find.text('No workgroups yet'), findsNothing);
-        await tester.tap(empty);
-        await tester.pumpAndSettle();
-        expect(find.text('No workgroups yet'), findsOneWidget);
-        expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-        // Another click hides them again.
-        await tester.tap(empty);
-        await tester.pumpAndSettle();
-        expect(controller.selectedId, 'empty-lead');
-        expect(find.text('No workgroups yet'), findsNothing);
+        for (var click = 0; click < 2; click++) {
+          await tester.tap(empty);
+          await tester.pumpAndSettle();
+          expect(controller.selectedId, 'empty-lead');
+          expect(find.text('No workgroups yet'), findsNothing);
+        }
 
         // The plain rows retain keyboard operation and do not create tabs.
         Focus.of(tester.element(find.text('Activity'))).requestFocus();
@@ -276,17 +325,17 @@ void main() {
           grid.AppSurface.selectedFill,
         );
         expect(
-          rowMaterial(tester, 'super-group-offline').color,
+          rowMaterial(tester, 'super-group-empty-lead').color,
           Colors.transparent,
         );
 
-        // Returning to the already selected workgroup still leaves it.
-        await tester.tap(work);
+        // Returning to the already selected chat still leaves it.
+        await tester.tap(empty);
         await tester.pumpAndSettle();
         expect(controller.devicesSelected, isFalse);
-        expect(controller.selectedId, 'offline');
+        expect(controller.selectedId, 'empty-lead');
         expect(
-          rowMaterial(tester, 'super-group-offline').color,
+          rowMaterial(tester, 'super-group-empty-lead').color,
           grid.AppSurface.selectedFill,
         );
         expect(rowMaterial(tester, 'super-manage').color, Colors.transparent);
@@ -296,8 +345,8 @@ void main() {
     );
   }
 
-  testWidgets('reads like a chat app: Activity, Projects A to Z with their '
-      'workgroups, Buddies, then Manage; no # product-managers', (
+  testWidgets('reads like a chat app: Activity, Projects A to Z, Buddies, '
+      'then Manage; no # product-managers, no tasks', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -312,19 +361,13 @@ void main() {
     });
     server.state['leadsConversationId'] = 'leads';
     final controller = await projectSidebar(server);
-    controller
-      ..toggleProject('lead')
-      ..toggleProject('empty');
     await pumpSidebar(tester, controller, app);
 
     final order = [
       find.byKey(const ValueKey('super-activity')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-empty-lead')),
-      find.text('No workgroups yet'),
       find.byKey(const ValueKey('super-group-lead')),
-      // Its one workgroup has no work: The rest, folded (#2309).
-      find.byKey(const ValueKey('super-task-group-lead-rest')),
       find.text('Buddies'),
       find.byKey(const ValueKey('super-buddy-lead')),
       find.byKey(const ValueKey('super-buddy-empty')),
@@ -337,15 +380,24 @@ void main() {
         reason: '${order[i - 1]} above ${order[i]}',
       );
     }
-    for (final (key, name) in [
-      ('empty-lead', 'sample-project'),
-      ('lead', 'web-project'),
+    for (final (key, name, isPrivate) in [
+      ('empty-lead', 'sample-project', true),
+      ('lead', 'web-project', false),
     ]) {
-      expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
+      expect(
+        inRow(
+          'super-group-$key',
+          isPrivate ? find.byIcon(AppIcons.lock) : find.text('#'),
+        ),
+        findsOneWidget,
+      );
       expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
     }
     expect(find.byKey(const ValueKey('super-group-leads')), findsNothing);
     expect(find.text('product-managers'), findsNothing);
+    // Tasks are in each project's Tasks view (task #2569).
+    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+    expect(find.text('No workgroups yet'), findsNothing);
     expect(
       inRow('super-buddy-lead', find.text('(web-project)')),
       findsOneWidget,

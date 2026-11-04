@@ -56,16 +56,7 @@ class SuperTabAttachments extends StatelessWidget {
         voices.add(file);
         continue;
       }
-      // A browser's fetch follows a redirect off the attachments host, so
-      // there a picture stays a chip that opens in a new tab. A picture over
-      // the form's limit is a chip too: every reader would fetch and decode
-      // it whole to draw it in place. So is one whose link this app refuses.
-      final inPlace =
-          file.isImage &&
-          file.size <= kSuperTabFormAttachmentMaxBytes &&
-          !kIsWeb &&
-          !ref(file).refused;
-      (inPlace ? pictures : chips).add(file);
+      (superTabShowsInPlace(ref(file)) ? pictures : chips).add(file);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -95,6 +86,17 @@ class SuperTabAttachments extends StatelessWidget {
     );
   }
 }
+
+/// Whether a message draws [ref]'s picture in place, and the viewer pages
+/// through it. A browser's fetch follows a redirect off the attachments
+/// host, so there a picture stays a chip that opens in a new tab. A picture
+/// over the form's limit is a chip too: every reader would fetch and decode
+/// it whole to draw it in place. So is one whose link this app refuses.
+bool superTabShowsInPlace(SuperTabFileRef ref) =>
+    ref.file.isImage &&
+    ref.file.size <= kSuperTabFormAttachmentMaxBytes &&
+    !kIsWeb &&
+    !ref.refused;
 
 class _AttachmentChip extends StatefulWidget {
   const _AttachmentChip({super.key, required this.file});

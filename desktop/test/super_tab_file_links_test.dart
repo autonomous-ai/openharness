@@ -471,7 +471,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(server.fileLinkReads, hasLength(1));
       expect(opened, [Uri.parse(_signed('p1', 'shot.png', sig: 'later'))]);
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byKey(const ValueKey('super-image-close')));
       await tester.pumpAndSettle();
       await close(tester, c);
     });
