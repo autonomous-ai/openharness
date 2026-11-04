@@ -14908,7 +14908,7 @@ class AppNotifier extends ChangeNotifier {
       ),
     );
     if (revealAgentView(machineId, agentId)) return;
-    if (_openSwarmAgentTerminal(machineId, agentId)) return;
+    if (openSwarmAgentTerminal(machineId, agentId)) return;
     // A Swarm tab shows only its chats' terminals: a pane added to it would
     // be closed by its view, and the click would open nothing (#2792).
     if (activeSwarm.isUtility ||
@@ -14924,7 +14924,7 @@ class AppNotifier extends ChangeNotifier {
   /// A loaded Swarm's agent running on [machineId] as [harnessId]: its Swarm
   /// comes forward and opens its terminal beside the chat it waits in (Huy,
   /// #2792). False when no Swarm this reader has loaded holds it.
-  bool _openSwarmAgentTerminal(String machineId, String harnessId) {
+  bool openSwarmAgentTerminal(String machineId, String harnessId) {
     for (final controller in superTabs.loadedControllers) {
       if (controller.accessRevoked) continue;
       final agent = controller.snapshot?.agents
