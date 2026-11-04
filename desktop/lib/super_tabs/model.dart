@@ -508,6 +508,11 @@ class SuperTabProject {
         for (final member in row['members'] as List? ?? const [])
           superTabMap(member)['id'] as String,
       ],
+      memberGenerations = {
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String:
+              superTabMap(member)['generation'] as String?,
+      },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
@@ -530,6 +535,10 @@ class SuperTabProject {
   bool get hasInstructions => coordinatorName != null;
   final bool isPrivate;
   final List<String> memberIds;
+
+  /// Each member's generation when they were added (null when the backend sent none): a member whose person now has
+  /// another generation left the Swarm and came back, and is no longer in the project.
+  final Map<String, String?> memberGenerations;
   final int updateMinutes;
 
   /// What the coordinator last said of the project's progress, shown in the
