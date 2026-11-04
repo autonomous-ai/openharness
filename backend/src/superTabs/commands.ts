@@ -714,11 +714,23 @@ export function joinsProject(state: SuperTabState, group: Conversation, agentId:
   const project = groupProject(state, group)
   return agentProjectId(state, target) === project.id && group.id !== project.leadConversationId
 }
+/** Whether [actor] is an agent doing work in [group], its project's chat: assigned a task or step of that project that is
+ *  not archived and did not end lost, stopped or cancelled, and not stopping itself (Dee, 2026-11-04, #2924: the agent doing
+ *  the work answers people there itself). Never a Buddy, nor another project's agent (projectAgent). */
+function worksInProjectChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  if (!project || !projectAgent(state, actor, project.id) || agent(state, actor.agentId).workDecision === 'stop') return false
+  return state.conversations.some(c => c.assignment?.agentId === actor.agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
+    && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
+}
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
- *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). */
+ *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). An agent with
+ *  work in the project posts in its project chat without joining it, so the chat keeps only its coordinator among agents
+ *  and opens no second terminal (#2207). */
 export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
   const group = open(state, conversationId)
   if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
+    if (worksInProjectChat(state, actor, group)) return group
     if (!joinsProject(state, group, actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
     group.agentIds.push(actor.agentId)
   }
@@ -3132,7 +3144,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'message.send': {
       const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
       const group = postable(state, actor, command.conversationId)
-      if (joining) teamJoin(groupProject(state, group), actor.agentId, group)
+      // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
+      if (joining && group.agentIds.includes(actor.agentId)) teamJoin(groupProject(state, group), actor.agentId, group)
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
