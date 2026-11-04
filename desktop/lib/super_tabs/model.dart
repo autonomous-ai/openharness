@@ -476,7 +476,8 @@ class SuperTabConversation {
   /// task, and from a server that does not say.
   final String? requesterId;
 
-  /// When it shipped (its first Done); null until it has, and from a server
+  /// Its first Done, or its merge once one is recorded: not proof that it merged
+  /// (a pull request card's `merged` is); null until then, and from a server
   /// that does not say.
   final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
