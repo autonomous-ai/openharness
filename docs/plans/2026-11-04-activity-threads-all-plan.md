@@ -38,7 +38,10 @@ today), and Desktop asks for 50 more each time the list reaches its end; the Thr
   sweep) and tags already hold.
 - Concurrency: N/A because the read writes nothing; it runs as today, outside a transaction.
 - Read cost: one more page reads 2×50 more candidates' roots by `_id` and summaries by root id (SuperTabThread `_id`);
-  the mark rows are already loaded once by the inbox read. Measured per page in the PR.
+  the mark rows are already loaded once by the inbox read. Measured per page in the PR. Only the open Activity view asks
+  for pages: each of its refreshes (every Swarm change, at most every 3 s while open) reads the pages it shows, up to
+  250 threads (500 candidates). Closed, the reads on every Swarm change ask for none and cost what they did (30, 60
+  candidates), and the next visit starts at 50 again (review of #2993).
 - Scale: at 10x threads per person the cap (500 marks, 250 answered) bounds a read; the first metric to warn is the
   threads read's p95 in the route's timing.
 - Compatibility: an old Desktop sends no `read` and gets 30 as today; a new Desktop on an old backend gets 400 and reads

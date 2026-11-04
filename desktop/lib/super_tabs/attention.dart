@@ -104,14 +104,18 @@ class SuperTabAttention extends ChangeNotifier {
   /// Threads lists them 50 at a time as the reader scrolls (task #2835).
   static const readPage = 50, readMax = 250;
 
-  /// How many read threads the next read asks for.
+  /// How many read threads the next read asks for while Activity is open: the pages it shows. Closed, a read asks for
+  /// none and gets the server's 30 as before, so the reads on every Swarm change cost what they did (review of #2993); the
+  /// next visit starts at the first page again.
   int readWanted = readPage;
 
   /// The server takes `read`; false on one before it (it refuses the query), which answers its own number and cannot page.
+  /// Not asked again in this session on purpose: it changes only with a backend release, and the next session asks.
   bool readPaging = true;
 
   /// Whether the end of the read threads can ask for more.
   bool get canReadMore =>
+      _open &&
       loaded &&
       more &&
       readPaging &&
@@ -317,6 +321,7 @@ class SuperTabAttention extends ChangeNotifier {
 
   void closed() {
     _open = false;
+    readWanted = readPage;
     _trailing?.cancel();
     _trailing = null;
     _newThisVisit.clear();
@@ -418,14 +423,16 @@ class SuperTabAttention extends ChangeNotifier {
       var full = followSupported;
       if (full) {
         try {
+          // Read pages only for the open view (see [readWanted]).
+          final paged = readPaging && _open;
           try {
             answer = await controller.request(
               'GET',
-              readPaging ? '$_path/threads?read=$readWanted' : '$_path/threads',
+              paged ? '$_path/threads?read=$readWanted' : '$_path/threads',
             );
           } on SuperTabFailure catch (failure) {
             // A server before paging refuses `read`: read as it takes it.
-            if (failure.statusCode != 400 || !readPaging) rethrow;
+            if (failure.statusCode != 400 || !paged) rethrow;
             readPaging = false;
             if (!current()) return;
             answer = await controller.request('GET', '$_path/threads');
