@@ -5127,8 +5127,9 @@ describe('a machine its owner removed from a Swarm', () => {
 })
 
 // Stability roadmap 2.4 (2026-10-28): every running agent's host read its delivery list each second, which kept a 5-pod
-// backend busy with almost nothing waiting. The server now says over the daemon socket when an agent has work; the read
-// every 30 s stays as the safety net, and the read each second comes back whenever the server has not said it pushes.
+// backend busy with almost nothing waiting. The server now says over the daemon socket when an agent has work, and tells
+// again of what is still queued (task #2800); a Lead's read every 30 s stays, and the read each second comes back whenever
+// the server has not said it pushes.
 describe('deliveries the server pushes', () => {
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
     .filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
@@ -5147,8 +5148,25 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(11)
   })
 
-  it('reads an idle agent\'s list every 30 s once the server pushes', async () => {
+  // Task #2800 (Watch Production): GET deliveries was 84% empty, mostly these 30 s reads. While the server pushes, it also tells
+  // again of a delivery still queued after 10 s (backend superTabs/deliveryRepush.ts), so an idle worker's list is read only
+  // when told: a push, the server's 4-minute repeat, a reconnect.
+  it('reads an idle worker\'s list only when told once the server pushes', async () => {
     const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    await seconds(t, host, 180)
+    expect(reads(t)).toBe(1)
+    t.push(announced)
+    await host.tick()
+    expect(reads(t)).toBe(2)
+  }, 20_000)
+
+  // A Lead's poll runs its project's time checks (backend liveness.ts SWEEP_EVERY_MS): it keeps its 30 s read.
+  it('still reads a Lead\'s list every 30 s', async () => {
+    const t = setup(), host = t.open()
+    t.row.lead = true
     t.idle()
     t.push(announced)
     await host.tick()
@@ -5156,6 +5174,20 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(1)
     await seconds(t, host, 1)
     expect(reads(t)).toBe(2)
+  })
+
+  // A read that failed is not a list read: it is tried again after its backoff, told or not.
+  it('reads again after a failed read\'s backoff, without waiting to be told', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    t.revoke()
+    await host.tick()
+    expect(reads(t)).toBe(1)
+    t.revoke(false)
+    t.send()
+    await seconds(t, host, 30)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
 
   it('reads the agent\'s list at once when the server says work waits, and types it', async () => {
@@ -5182,17 +5214,20 @@ describe('deliveries the server pushes', () => {
     await vi.waitFor(() => expect(t.core.turns.deliver).toHaveBeenCalledTimes(1))
   })
 
-  // The Lead's rule for this change: a lost push never loses work.
-  it('still types work whose push was lost, within 30 s', async () => {
+  // The Lead's rule for this change: a lost push never loses work. The server tells again within 25 s (deliveryRepush.ts);
+  // the host types it at once then, and reads nothing on a timer meanwhile.
+  it('types work whose push was lost as soon as the server tells again', async () => {
     const t = setup(), host = t.open()
     t.idle()
     t.push(announced)
     await host.tick()
     t.wait(500)
     t.send()
-    await seconds(t, host, 29)
+    await seconds(t, host, 60)
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    await seconds(t, host, 1)
+    expect(reads(t)).toBe(1)
+    t.push(waiting)
+    await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
 
