@@ -3823,6 +3823,22 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(loads()).toBeLessThanOrEqual(3)
   })
 
+  // Task #2800: while the server pushes, a host picks up terminal requests only when told (cli superTabs/terminal.ts), so a push
+  // lost on the way is told again by the sender's own wait, at each re-check of a request still waiting for its host: inside
+  // the 10 s pickup window, and with no read the wait does not already make.
+  it('tells the host again of a request still waiting for pickup at each re-check, and never of one picked up', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const told: unknown[] = []
+    const at = new SuperTabStore(db, Date.now, null, { terminalWaiting: waiting => { told.push(waiting) } })
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([{ machineId: 'test-host', tabId: tab, agentId: worker }])
+    expect(await claim()).toHaveLength(1)
+    told.length = 0
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([])
+  })
+
   it('expires an unread answer after two minutes, without waiting for another request', async () => {
     const { tab, lead, worker } = await terminalFixture()
     const requestId = await answered(tab, worker, host, lead)
