@@ -447,6 +447,13 @@ void main() {
 
     testWidgets('a signed link is kept by its file, not its address: a new '
         'link to the same picture fetches nothing again', (tester) async {
+      // The first picture arrives a second later, as on a slow CI runner
+      // (batch #2935): the next read must wait for it, not for a fixed time.
+      storage.hold = Completer<void>();
+      Zone.root.createTimer(
+        const Duration(seconds: 1),
+        () => storage.hold!.complete(),
+      );
       await show(
         tester,
         _row('p1', name: 'p.png', mime: 'image/png', expiresAt: _ms + 600000),
