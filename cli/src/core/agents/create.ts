@@ -226,9 +226,6 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
-    // A Buddy starts no MCP server (docs/swarms.md, Buddies), so none of a grid's web tools either: its permission mode's
-    // --strict-mcp-config would otherwise load exactly the grid's server. Relaunches drop it the same way (launchOverrides.ts).
-    if (grid && input.swarmRole === 'buddy') { const { mcpUrl: _web, ...withoutWeb } = grid; grid = withoutWeb }
     const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native) }) : null
     if (!current()) return stale()
     if (built && !built.ok) {
@@ -407,9 +404,9 @@ export function createAgentCreator({
     }
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
-    // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
-    // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
-    const machineMcp = swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
+    // as every relaunch reads them again (`buildLaunchOverrides`). A Buddy's too: it launches like its owner's own session
+    // (task #2832).
+    const machineMcp = machineMcpLaunchArgs(engine, cwd)
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).

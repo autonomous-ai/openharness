@@ -15,6 +15,7 @@ import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
+import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
 import '../swarm/swarm_session.dart';
 import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
@@ -325,6 +326,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             conversationId: conversationId,
             messageId: null,
             decisionId: null,
+            threadId: null,
           ));
           return;
         }
@@ -383,6 +385,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       conversationId: link.conversationId,
       messageId: link.messageId,
       decisionId: null,
+      threadId: null,
     ));
   }
 
@@ -412,7 +415,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         swarmChatRoute(
           swarmId: target.swarmId,
           conversationId: target.conversationId,
-          messageId: target.messageId,
+          // A message only in its thread: the chat at the thread's root, the
+          // thread open over it at that message, as Activity opens a reply.
+          messageId: target.threadId ?? target.messageId,
+          threadId: target.threadId,
+          threadFocus: target.threadId != null && target.messageId != null
+              ? SwarmThreadFocus.message(target.messageId!)
+              : null,
         ),
       ),
     );
