@@ -713,6 +713,62 @@ void main() {
     });
   });
 
+  testWidgets('a thread row names people by their shown name, never their '
+      'email', (tester) async {
+    await withClock(Clock.fixed(_now), () async {
+      final server = swarm();
+      (server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@autonomous.ai',
+        'role': 'member',
+        'name': 'Diego',
+      });
+      final diego = {
+        'kind': 'person',
+        'id': 'diego',
+        'name': 'diego@autonomous.ai',
+      };
+      server.followedThreads = {
+        'unread': [
+          unreadThread('message-1', text: 'Mentions look read')
+            ..['root'] = {
+              ...(unreadThread('message-1')['root'] as Map),
+              'author': diego,
+              'text': 'Mentions look read',
+            }
+            ..['lastReplier'] = diego,
+          unreadThread('message-2', text: 'Gone')
+            ..['root'] = {
+              ...(unreadThread('message-2')['root'] as Map),
+              'author': {
+                'kind': 'person',
+                'id': 'left',
+                'name': 'left@autonomous.ai',
+              },
+              'text': 'Gone',
+            }
+            ..['lastReplier'] = {
+              'kind': 'agent',
+              'id': 'kestrel',
+              'name': 'Builder',
+              'displayName': 'Kestrel',
+            },
+        ],
+        'read': [],
+        'more': false,
+      };
+      await show(tester, await loaded(tester, server));
+      await tester.tap(_key('super-activity-tab-threads'));
+      await tester.pumpAndSettle();
+      expect(find.text('Diego: Mentions look read'), findsOneWidget);
+      expect(find.textContaining('Diego replied'), findsOneWidget);
+      // Someone who left: the recorded email's name, as the chat shows them.
+      expect(find.text('left: Gone'), findsOneWidget);
+      expect(find.textContaining('Kestrel replied'), findsOneWidget);
+      expect(find.textContaining('@', findRichText: true), findsNothing);
+    });
+  });
+
   testWidgets('a thread with no replier names only its project, a private '
       'one with the lock', (tester) async {
     await withClock(Clock.fixed(_now), () async {
