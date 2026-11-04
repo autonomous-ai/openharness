@@ -75,7 +75,17 @@ Every other wait after the password is bounded: the sign-in code is minted throu
 
 **Files:** cli/src/team/script.ts, cli/src/team/script.spec.ts
 
-- [ ] Failing spec: a stand-in npm that never ends is stopped after the limit, said as "took too long", and the install
-      goes on to the next package and exits 0.
-- [ ] `TEAM_ENGINES_INSTALL`: each npm runs in the background with a watchdog (output to /dev/null so nothing holds
-      osascript open), killed after `HARNESS_TEAM_ENGINE_SECONDS` (default 180 s).
+- [x] Failing spec: a stand-in npm that never ends is stopped after the limit, said plainly (the account works without
+      them; `harness team setup` installs them), nothing else is tried, nothing is left running, and setup goes on.
+- [x] `TEAM_ENGINES_INSTALL`: both packages in one npm run first (each alone if that fails); npm runs in the background
+      with its output on /dev/null, waited on a second at a time, stopped after `HARNESS_TEAM_ENGINE_SECONDS` (480 s).
+
+## Task 5: the waiting step says the step and the time so far (River, 2026-11-04, after Scholes: it finished in ~7 min)
+
+**Files:** cli/src/team/{script,admin,command,autoSetup}.ts, desktop/lib/super_tabs/team_account_setup.dart,
+desktop/lib/state/app_state.dart, their tests.
+
+- [x] Failing specs: the script says each step (as the owner, into its private stage); the admin runner hands each new
+      step on while the script runs; setup says `password`, the script's steps, then `report`; status answers `step` and
+      `elapsedMs` while running. Failing widget test: the step's sentence and "Step 5 of 8 · 2 min 5 s so far."
+- [x] The code that passes them.
