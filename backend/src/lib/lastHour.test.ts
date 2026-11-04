@@ -95,10 +95,17 @@ describe('the line\'s size (review of #1880)', () => {
     const { h, minute, last } = hour({ cpuPerMinute: 1_000 })
     const name = (i: number) => `GET /api/super-tabs/:tabId/projects/:projectId/conversations/:conversationId/part-${i}`
     for (let i = 0; i < 120; i++) h.request(name(i), i < 40 ? 10_000 - i : 1, false)
-    h.db(new Map(Array.from({ length: 120 }, (_, i) => [`http ${name(i)}`, { n: 1, ms: 1, bytes: i >= 40 && i < 60 ? 9_000_000 - i : 1 }] as const)
-      .concat(Array.from({ length: 40 }, (_, i) => [`web-ws a-rather-long-frame-type-name-${i}`, { n: 1, ms: 1, bytes: 5_000_000 - i }] as const))))
-    h.busy(new Map(Array.from({ length: 120 }, (_, i) => [`http ${name(i)}`, i >= 60 && i < 80 ? 50_000 - i : 1] as const)
-      .concat(Array.from({ length: 40 }, (_, i) => [`job a-rather-long-timer-function-name-${i}`, 40_000 - i] as const))))
+    const db = new Map<string, { n: number; ms: number; bytes: number }>(), busy = new Map<string, number>()
+    for (let i = 0; i < 120; i++) {
+      db.set(`http ${name(i)}`, { n: 1, ms: 1, bytes: i >= 40 && i < 60 ? 9_000_000 - i : 1 })
+      busy.set(`http ${name(i)}`, i >= 60 && i < 80 ? 50_000 - i : 1)
+    }
+    for (let i = 0; i < 40; i++) {
+      db.set(`web-ws a-rather-long-frame-type-name-${i}`, { n: 1, ms: 1, bytes: 5_000_000 - i })
+      busy.set(`job a-rather-long-timer-function-name-${i}`, 40_000 - i)
+    }
+    h.db(db)
+    h.busy(busy)
     minute()
     const line = last()
     expect(Buffer.byteLength(JSON.stringify(line))).toBeLessThanOrEqual(12_000)

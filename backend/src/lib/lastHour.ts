@@ -25,6 +25,8 @@ export type LastHourOptions = {
   top?: number
   /** Names one map keeps, `other` included. */
   maxKeys?: number
+  /** Bytes the line's JSON may take; its lists are shortened to fit. */
+  maxBytes?: number
   now?: () => number
   /** This process's user + system CPU so far, in ms. */
   cpuMs?: () => number
@@ -67,7 +69,7 @@ const ranked = (rows: Array<[string, Totals]>, by: (t: Totals) => number, n: num
 
 const processCpuMs = () => { const used = process.cpuUsage(); return (used.user + used.system) / 1000 }
 
-export function createLastHour({ pod = `${hostname()}:${process.pid}`, minutes = 60, top = 40, maxKeys = 300, now = () => performance.now(),
+export function createLastHour({ pod = `${hostname()}:${process.pid}`, minutes = 60, top = 40, maxKeys = 300, maxBytes = 12_000, now = () => performance.now(),
   cpuMs = processCpuMs, log = (m, c) => logger.info(m, c) }: LastHourOptions = {}): LastHour {
   const ring: Minute[] = []
   const fresh = (): Minute => ({ startedAt: now(), cpuMs: 0, requests: new Map(), work: new Map(), busy: false })
@@ -94,25 +96,40 @@ export function createLastHour({ pod = `${hostname()}:${process.pid}`, minutes =
     const httpDbBytes = all.dbBytes
     for (const t of work.values()) { all.dbQueries += t.dbQueries; all.dbBytes += t.dbBytes; all.busyMs += t.busyMs }
 
-    const routeRows = [...requests], workRows = [...work], half = Math.max(1, Math.floor(top / 2))
-    const shown = new Set([...ranked(routeRows, t => t.ms, top), ...ranked(routeRows, t => t.dbBytes, half), ...(busy ? ranked(routeRows, t => t.busyMs, half) : [])])
-    const shownWork = new Set([...ranked(workRows, t => t.dbBytes, half), ...(busy ? ranked(workRows, t => t.busyMs, half) : [])])
+    const routeRows = [...requests], workRows = [...work]
     const busyOf = (t: Totals, perRequest: boolean) => busy ? { busyMs: Math.round(t.busyMs), ...(perRequest ? { busyMsPerRequest: per(t.busyMs, t.n) } : {}) } : {}
-    return {
+    const totals = {
       pod, windowMs: ring.length ? Math.round(now() - ring[0]!.startedAt) : 0, minutes: ring.length,
       requests: all.n, errors: all.errors, cpuMs: Math.round(cpu), cpuMsPerRequest: per(cpu, all.n),
       dbQueries: all.dbQueries, dbBytes: Math.round(all.dbBytes), dbBytesPerRequest: Math.round(per(httpDbBytes, all.n)), ...busyOf(all, false),
       routeCount: requests.size,
-      routes: Object.fromEntries([...shown].map(key => {
-        const t = requests.get(key)!
-        return [key, { n: t.n, perMinute: per(t.n, ring.length), errors: t.errors, ms: Math.round(t.ms), dbQueries: t.dbQueries, dbBytes: Math.round(t.dbBytes),
-          dbBytesPerRequest: Math.round(per(t.dbBytes, t.n)), ...busyOf(t, true) }]
-      })),
-      work: Object.fromEntries([...shownWork].map(key => {
-        const t = work.get(key)!
-        return [key, { dbQueries: t.dbQueries, dbBytes: Math.round(t.dbBytes), ...busyOf(t, false) }]
-      })),
     }
+    /** The `limit` routes with the most time, plus half as many by DB bytes and by busy time, and the work by the same. */
+    const lists = (limit: number) => {
+      const half = Math.max(1, Math.floor(limit / 2))
+      const shown = new Set([...ranked(routeRows, t => t.ms, limit), ...ranked(routeRows, t => t.dbBytes, half), ...(busy ? ranked(routeRows, t => t.busyMs, half) : [])])
+      const shownWork = new Set([...ranked(workRows, t => t.dbBytes, half), ...(busy ? ranked(workRows, t => t.busyMs, half) : [])])
+      return {
+        routes: Object.fromEntries([...shown].map(key => {
+          const t = requests.get(key)!
+          return [key, { n: t.n, perMinute: per(t.n, ring.length), errors: t.errors, ms: Math.round(t.ms), dbQueries: t.dbQueries, dbBytes: Math.round(t.dbBytes),
+            dbBytesPerRequest: Math.round(per(t.dbBytes, t.n)), ...busyOf(t, true) }]
+        })),
+        work: Object.fromEntries([...shownWork].map(key => {
+          const t = work.get(key)!
+          return [key, { dbQueries: t.dbQueries, dbBytes: Math.round(t.dbBytes), ...busyOf(t, false) }]
+        })),
+      }
+    }
+    // The container runtime splits a log line past 16 KiB, and the scan would read half a JSON line: shorten the lists,
+    // lowest-ranked first, until the line fits. The totals above always cover every route.
+    const full = lists(top), listed = Object.keys(full.routes).length
+    let picked = full
+    for (let limit = top; limit > 1 && Buffer.byteLength(JSON.stringify({ ...totals, routesCut: 0, ...picked })) > maxBytes;) {
+      limit = Math.max(1, Math.floor(limit * 3 / 4))
+      picked = lists(limit)
+    }
+    return { ...totals, routesCut: listed - Object.keys(picked.routes).length, ...picked }
   }
 
   return {
