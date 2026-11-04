@@ -340,9 +340,6 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
   late int _index = widget.index.clamp(0, widget.images.length - 1);
   final _zoom = TransformationController();
   final _focus = FocusScopeNode(debugLabel: 'Image viewer');
-
-  /// What had the keys before it opened, given them back as it closes.
-  FocusNode? _before;
   int _turns = 0;
   Size _viewport = Size.zero;
 
@@ -360,8 +357,8 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
     _zoom.addListener(_zoomed);
     _load();
     // Its keys are its own, whatever had them: Esc closes it, not what is
-    // under it, and nothing typed reaches the composer.
-    _before = FocusManager.instance.primaryFocus;
+    // under it, and nothing typed reaches the composer. Closed, its scope
+    // gives them back to what had them.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focus.requestFocus();
     });
@@ -373,12 +370,6 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
       ..removeListener(_zoomed)
       ..dispose();
     _focus.dispose();
-    final before = _before;
-    if (before != null && before.context != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (before.context != null) before.requestFocus();
-      });
-    }
     super.dispose();
   }
 
