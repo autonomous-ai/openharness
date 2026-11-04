@@ -225,6 +225,55 @@ void main() {
     expect(c.readMark('lead'), 5);
   });
 
+  testWidgets('with newer pages not read yet, the bar\'s count is a floor', (
+    tester,
+  ) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    expect(c.hasNewer('lead'), isTrue);
+    // Down past the line in wheel steps, as a reader scrolls.
+    final list = tester.getCenter(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+    );
+    for (var step = 0; step < 4; step++) {
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(position: list, scrollDelta: const Offset(0, 100)),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isFalse);
+    expect(c.hasNewer('lead'), isTrue);
+    expect(
+      find.descendant(
+        of: find.byKey(_jump),
+        matching: find.textContaining(RegExp(r'^\d+\+ new messages · Jump$')),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  // Review of #2896, item 1.
+  testWidgets('once the line\'s message is no longer held (Jump to latest '
+      'read the newest page in its place), no bar leads to it', (tester) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    expect(c.hasNewer('lead'), isTrue);
+    final latest = find.byWidgetPredicate(
+      (w) =>
+          w.key == const ValueKey('super-jump-latest') ||
+          w.key == const ValueKey('super-new-messages'),
+    );
+    expect(latest, findsOneWidget);
+    await tester.tap(latest);
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').any((m) => m.id == 'message-6'), isFalse);
+    expect(find.byKey(_jump), findsNothing);
+    expect(find.textContaining('0 new messages'), findsNothing);
+  });
+
   // Review of #2131, item 2.
   testWidgets('the reader\'s own reply in a thread does not read the chat', (
     tester,
