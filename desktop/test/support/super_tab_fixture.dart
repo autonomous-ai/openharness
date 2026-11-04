@@ -1567,6 +1567,21 @@ class ConversationServer {
             agent['displayName'] = shown;
           }
         }
+      } else if (command['type'] == 'agent.rename') {
+        // As the backend's: its contributor renames it, for every reader.
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        if (agent == null || agent['contributorId'] != (reader ?? 'owner')) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the person who runs this agent can rename it.',
+            statusCode: 403,
+          );
+        }
+        revision++;
+        agent['displayName'] = (command['name'] as String).trim();
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';

@@ -5566,3 +5566,149 @@ describe('assigning an agent whose session was closed', () => {
     expect(resumed.f.state.conversations.find(c => c.id === resumed.group)!.assignment).toMatchObject({ agentId: resumed.worker })
   })
 })
+
+describe('agent.rename (renaming a harness renames its agent, task #2912)', () => {
+  const rename = (agentId: string, name: string): Command => ({ type: 'agent.rename', agentId, name })
+  const shownTo = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) =>
+    visibleState(f.state, reader).agents.find(a => a.id === agentId)!.displayName
+  const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
+
+  it('lets the agent\'s contributor rename it, and every reader sees the new name', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(rename(agentId, '  Darren\'s PM  '), peer)
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+    expect(shownTo(f, peer, agentId)).toBe('Darren\'s PM')
+    // A later command does not hand it a generated name again.
+    f.run({ type: 'conversation.create', title: 'Later', brief: 'Anything.', checks: [] })
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+  })
+
+  it('lets the machine owner rename it', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
+    f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
+    expect(shownTo(f, owner, agentId)).toBe('Studio')
+  })
+
+  it('refuses a teammate who is neither, the Swarm owner, an agent and a Buddy, writing nothing', () => {
+    const f = fixture(), agentId = peerContributorAgent(f), other = f.add('other', 'owner')
+    const buddyId = f.add('buddy', 'owner')
+    f.state.agents.find(a => a.id === buddyId)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
+    const before = JSON.stringify(f.state)
+    for (const [actor, code] of [
+      [owner, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: buddyId, machineOwnerId: 'host-owner' }, 'BUDDY_FORBIDDEN'],
+    ] as Array<[Actor, string]>) {
+      expect(() => f.run(rename(agentId, 'Stolen'), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code }))
+    }
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  it('refuses a role\'s name, another agent\'s name, an empty or invisible name', () => {
+    const f = fixture(), agentId = f.add('mine'), taken = f.add('taken')
+    f.run(rename(taken, 'Quinn'))
+    for (const name of ['Lead', 'Engineer 2', 'Reviewer', 'quinn', ' ', '​​']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_ROLE|AGENT_NAME_TAKEN|INVALID_AGENT_NAME)$/) }))
+    }
+    expect(commandSchema.safeParse(rename(agentId, 'x'.repeat(201))).success).toBe(false)
+    // Its own name again is no conflict.
+    f.run(rename(taken, 'Quinn'))
+  })
+
+  // Security review 2 of #3015: an agent's name passes every rule a person's does, and tells nobody what they cannot read.
+  it('refuses the Swarm\'s own voices, a web address or link, and a blank made of Braille (security review 2)', () => {
+    const f = fixture(), agentId = f.add('mine')
+    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)', '[Approve](//ev.il)',
+      'Lead\u2800', '\u2800', '\u2800\u2800\u2800']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(INVALID_AGENT_NAME|AGENT_NAME_ROLE|INVALID_NAME|NAME_RESERVED)$/) }))
+    }
+  })
+
+  it('refuses a name a person here goes by: their name, username or email', () => {
+    const f = fixture(), agentId = f.add('mine')
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    for (const name of ['minh nguyen', 'Ｍinh Nguyen', 'peer', '@Peer', 'peer@example.com', 'owner']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_TAKEN|NAME_TAKEN)$/) }))
+    }
+  })
+
+  it('does not tell a reader that an agent they cannot read has a name (security review 2)', () => {
+    const f = fixture()
+    f.invite()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: '' }).result
+    const hidden = f.add('hidden', 'owner', other.conversationId as string)
+    f.run(rename(hidden, 'Quinn'))
+    const mine = f.add('mine', 'peer')
+    // The peer reads nothing of the private project: the name is not taken for them, and no refusal says it exists.
+    f.run(rename(mine, 'Quinn'), peer)
+    expect(shownTo(f, peer, mine)).toBe('Quinn')
+    // The owner reads both, so a second Quinn is refused for them.
+    const third = f.add('third', 'owner')
+    expect(() => f.run(rename(third, 'Quinn'))).toThrow(expect.objectContaining({ code: 'AGENT_NAME_TAKEN' }))
+  })
+
+  it('refuses a viewer', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
+  it('refuses a non-member and an agent of the machine owner\'s Team account, writing nothing', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    const team = f.add('team-agent', 'owner')
+    const before = JSON.stringify(f.state)
+    // Not a member of this Swarm at all.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'stranger', email: 'stranger@example.com' }), 'non-member').toThrow()
+    // A Team account's session acts as an agent, here one the machine owner runs: never as the person.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'agent', agentId: team, machineOwnerId: 'host-owner' }), 'team session').toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // Task #2912, security review 2: Add agent sends the typed harness name, so it gets the same rules; a name that fails them
+  // gives the agent a member name instead, as a role's name does, and the add still succeeds.
+  it('agent.add gives a member name to a name that is the Swarm\'s voice, a link, a person\'s or another agent\'s', () => {
+    const f = fixture()
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    f.run(rename(f.add('first'), 'Quinn'))
+    const group = f.group()
+    const named = (name: string, harnessId: string) => {
+      const id = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+      f.run({ type: 'conversation.create', title: `After ${harnessId}`, brief: 'Anything.', checks: [] })
+      return f.state.agents.find(a => a.id === id)!.displayName
+    }
+    for (const [i, name] of ['System', 'Everyone', '[Approve](https://ev.il)', 'minh nguyen', 'peer@example.com', 'quinn', 'Lead\u2800'].entries()) {
+      expect(named(name, `h${i}`), name).not.toBe(name)
+      expect(named(name, `h${i}`)).toBeTruthy()
+    }
+    expect(named('Release notes', 'ok')).toBe('Release notes')
+  })
+
+  // The row Add agent writes in the project chat names the agent as readers see it, never the name the rules refused.
+  it('agent.add in the project chat writes no refused name into its row', () => {
+    const f = fixture()
+    for (const [i, name] of ['[Approve](https://ev.il)', '[Approve](//ev.il)', 'System'].entries()) {
+      const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+      const row = effects.messages.find(m => m.text.includes('to the project'))!.text
+      expect(row, name).not.toContain(name)
+      // Both halves name the agent as its readers' lists show it: its member name, not "Agent".
+      const shown = visibleState(f.state, owner).agents.find(a => a.id === effects.result.agentId)!.displayName!
+      expect(row, name).toBe(`owner added "${shown}" to the project. The project chat holds only its coordinator among agents, so "${shown}" works in its tasks.`)
+    }
+  })
+
+  it('cleans credentials out of the name', () => {
+    const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
+    expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
+    expect(removed).toEqual(['github'])
+  })
+})

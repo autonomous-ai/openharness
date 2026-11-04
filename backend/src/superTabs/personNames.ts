@@ -15,8 +15,9 @@ export const MAX_NAME_LENGTH = 40
 export function nameRefusal(name: string): { code: 'INVALID_NAME' | 'NAME_RESERVED'; message: string } | null {
   // Read as every compare here reads it: width variants folded (NFKC), so `ＰＭ` is `PM` (review 2 of #2794).
   const folded = name.normalize('NFKC')
-  // A web address would show as a link in the lines the server writes (review 2 of #2794).
-  if (/:\/\/|^www\./i.test(folded)) return { code: 'INVALID_NAME', message: 'Use a name, not a web address.' }
+  // A web address would show as a link in the lines the server writes (review 2 of #2794), a protocol-relative one too
+  // ("//ev.il", security review 2 of #3015).
+  if (/\/\/|^www\./i.test(folded)) return { code: 'INVALID_NAME', message: 'Use a name, not a web address.' }
   // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
   if (isRoleName(folded) || reserved(folded) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(folded)) {
     return { code: 'NAME_RESERVED', message: `${name} is a role's name. Choose another.` }
