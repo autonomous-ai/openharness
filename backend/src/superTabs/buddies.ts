@@ -225,9 +225,11 @@ const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)�
  *  that read as a label as often as an ask ("Report: …", "File: …", "Pass: …") are left out: in doubt, the Buddy shows the line. */
 const SEND_LEAD = /^(?:(?:ok(?:ay)?|yes|yeah|sure|please|pls|can you|could you|would you|go ahead and|and|then|just|ừ|vâng|được|làm ơn|hãy)[\s,]+)*(?:post|send|share|propose|tell|forward|submit|raise|gửi|đăng|chuyển|nói|đề xuất)(?=[\s,]|$)/iu
 const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|đừng|không|chưa)(?![\p{L}])|n['’]t(?![\p{L}])/iu
+/** "Tell me why …", "send us …", "nói cho tôi …": a question to the Buddy, not an ask to send (security review 2 of #3055). */
+const TO_ME = /(?:^|[^\p{L}])(?:post|send|share|tell|forward|gửi|chuyển|nói)\s+(?:(?:cho|với)\s+)?(?:me|us|tôi|mình)(?![\p{L}])/iu
 const asksToSend = (lead: string): boolean => {
   const said = lead.normalize('NFKC').trim()
-  return SEND_LEAD.test(said) && !NEGATED.test(said) && !/[.!?;\n]/u.test(said) && said.split(/\s+/u).length <= 10
+  return SEND_LEAD.test(said) && !NEGATED.test(said) && !TO_ME.test(said) && !/[.!?;\n]/u.test(said) && said.split(/\s+/u).length <= 10
 }
 
 /** The whole lines the owner's own message offers to post: all of it, each quoted line in it, and all after its first colon
@@ -251,8 +253,10 @@ const shownLine = (said: string): string | null => {
   const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
   if (!marker) return null
   const after = said.slice(marker.index! + marker[0].length)
-  const quoted = /^\s*["“]([^"”]*)["”]/u.exec(after)
-  return comparable(quoted ? quoted[1]! : unquoted(after))
+  // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote is part of the
+  // line the owner read, so it never ends it early; with no such pair, all of it counts whole.
+  const quoted = /^\s*(?:“([^“”]*)”|"([^"]*)")/u.exec(after)
+  return comparable(quoted ? quoted[1] ?? quoted[2]! : unquoted(after))
 }
 
 /** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or the line
