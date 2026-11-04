@@ -200,7 +200,7 @@ const newestIn = (tabId: string, conversationId: string, sequence: Record<string
 /** Each chat's newest main message the person reads: the row at its stored main sequence, read alone; the LATEST_SCAN rows
  *  before it only for a chat where that row is not one (an older chat's newest row may be a thread reply or a hidden copy).
  *  `more` when such a chat has none in that range. */
-async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
+export async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
   const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top }] : [] })
   const pick = async (rows: Row[]) => {
     const shown = (await readable(db, tabId, rows, state)).filter(isMain)

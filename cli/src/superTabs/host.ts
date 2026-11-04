@@ -1053,7 +1053,7 @@ export class SuperTabHost {
   private async poll(): Promise<void> {
     this.passWait = null
     // Each second, unless the server pushes Swarm changes: then when told, and in full each minute (hostFeed.ts due).
-    const data = (await this.sources.feed.due()).roster
+    const read = await this.sources.feed.due(), data = read.roster
     if (this.stopped) return
     // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
     const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
@@ -1063,7 +1063,7 @@ export class SuperTabHost {
     // shared member. Membership outlives its task, terminal view and host process.
     // Retention only pauses cleanup when it fails; it must never hold up delivery.
     try {
-      retainContributions(this.core.dataDir, this.machineId, data)
+      retainContributions(this.core.dataDir, this.machineId, data, Date.now(), read.assignments)
       this.retentionError = null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -23,6 +23,7 @@ import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
+import { cleanupClosed } from './cleanupCloses.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -256,6 +257,7 @@ export class ContributedMachines {
   private progressRefusedUntil = 0
   private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
+  private closedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
   /** Whether git is reading session folders beside the pass now. */
@@ -508,6 +510,8 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
+      // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
+      const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
         try {
         if (this.stopped || !identifier(row.tabId)) return
@@ -529,6 +533,7 @@ export class ContributedMachines {
           if (!ids.includes(id) && this.core.agents.byAgent(id) && !await this.core.agents.stopped?.(id)) reopened.push(id)
         }
         const running = [...ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), ...reopened]
+        const closed = stopped.filter(id => cleaned.has(id))
         const pending = startsOf(row)
         looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
@@ -540,7 +545,7 @@ export class ContributedMachines {
           const wanted = object(object(start.request).requirements).tools
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
-        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
+        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), [...closed].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
           privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
@@ -629,6 +634,7 @@ export class ContributedMachines {
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
           quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(closed.length ? { closedHarnessIds: closed } : {}),
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         due.push({ tab: String(row.tabId), observation, localModels, signature })
@@ -848,7 +854,8 @@ export class ContributedMachines {
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { refusedStarts: _refusedStarts, ...unrefused } = observation
+    const { closedHarnessIds: _closed, ...unclosed } = observation
+    const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
     const { harnessTokens: _tokens, ...untokened } = unreasoned
@@ -861,13 +868,14 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('refusedStarts' in observation ? [observation] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
       ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
     const refuse = (attempt: Record<string, unknown>) => {
-      if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
+      if ('closedHarnessIds' in attempt) this.closedRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('profiles' in attempt) this.profilesRefusedUntil = began + FIELD_REFUSED_MS
       else if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS

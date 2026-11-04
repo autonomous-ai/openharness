@@ -23,7 +23,7 @@ export interface AgentCleanupServiceOptions {
   /** Swapped in tests. */
   create?: typeof createAgentCleanup
   /** The Swarm's side of this service, while the Swarm is on (serviceProcess.ts, superTabs/inServices.ts). */
-  swarm?: Pick<SwarmServices, 'retainedHarnesses'>
+  swarm?: Pick<SwarmServices, 'retainedHarnesses' | 'recordCleanupClose'>
 }
 
 /** The core API the cleanup runs on here: the light services' (processCoreApi.ts), with the two ways it acts. */
@@ -51,7 +51,7 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
   const cleanup = (options.create ?? createAgentCleanup)(agentCleanupCoreApi(options.dataDir, () => agents, ask), {
     // A core that cannot say leaves none: nothing is closed on a list that may be stale.
     refresh: async () => { agents = agentsIn(await ask('live', {}).catch(() => null)) ?? [] },
-    ...(options.swarm ? { retained: options.swarm.retainedHarnesses } : {}),
+    ...(options.swarm ? { retained: options.swarm.retainedHarnesses, closed: options.swarm.recordCleanupClose } : {}),
   })
   const service = (options.run ?? runServiceProcess)({
     name: 'agentCleanup',

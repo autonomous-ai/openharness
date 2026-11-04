@@ -917,3 +917,60 @@ describe('reading many thread ranges at once', () => {
     expect(filterOf(reads.find(e => !e.command?.hint)!)).not.toHaveProperty('$or')
   }, 60_000)
 })
+
+// anh Dee, 11-04 (#2742): "remove these messages", the "<machine> left the Swarm: ..." lines in every project chat. Those already
+// stored are read by nobody, and a project chat whose newest row is one does not stay unread.
+describe('a machine-left line stored before #2742', () => {
+  const left = { text: 'Studio left the Swarm: its host confirmed its cleanup.', author: personAuthor(owner),
+    source: { kind: 'machine-left', machine: 'Studio' } }
+  /** The project chat as a person's first load serves it, with their read mark there. */
+  const served = async (tabId: string, as: AuthUser) => {
+    const data = (await get(`/api/super-tabs/${tabId}/parts`, as)).body.data
+    const chat = (data.groups as any[]).find(g => g.key === 'lead')!.data
+    return { lastMainSequence: chat.lastMainSequence as number, mark: (data.derived.readMarks ?? {}).lead as number | undefined }
+  }
+
+  it('is in no page and no preview', async () => {
+    const s = await scene()
+    await send(s.tabId, 'lead', 'Project latest')
+    await insert(s.tabId, 'lead', [left])
+    for (const as of [owner, peer]) {
+      const page = (await get(`/api/super-tabs/${s.tabId}/conversations/lead/messages`, as)).body.data.messages as any[]
+      expect(page.map(m => m.text)).toContain('Project latest')
+      expect(JSON.stringify(page)).not.toContain('left the Swarm')
+      expect(latestOf((await inbox(s.tabId, as)).body.data).lead).toBe('Project latest')
+    }
+  })
+
+  it('leaves a person who had read the chat with it read, though their app sends no read', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, 'lead', 'Project latest')
+    await markRead(s.tabId, 'lead', latest.sequence, peer)
+    await insert(s.tabId, 'lead', [left])
+    // Desktop and the phone count a chat unread while its newest main row is past their mark, and send no read at or below
+    // the mark the server holds: the chat's newest main row is served as the newest one people read.
+    expect(await served(s.tabId, peer)).toEqual({ lastMainSequence: latest.sequence, mark: latest.sequence })
+    // Asked again, from what this server already learned, the answer is the same.
+    expect((await served(s.tabId, peer)).lastMainSequence).toBe(latest.sequence)
+  })
+
+  it('serves a poll the same number when the project chat is sent again, as for a reply in a thread', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, 'lead', 'Project latest')
+    await markRead(s.tabId, 'lead', latest.sequence, peer)
+    await insert(s.tabId, 'lead', [left])
+    const { cursor } = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
+    // A reply only in a thread: the chat comes again whole from the change feed, its newest main row still the hidden line.
+    await send(s.tabId, 'lead', 'A reply', { replyTo: latest.id })
+    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    const chat = (changes.groups as any[]).find(g => g.key === 'lead')
+    expect(chat?.data.lastMainSequence).toBe(latest.sequence)
+  })
+
+  it('serves a row people read after the line as the chat\'s newest', async () => {
+    const s = await scene()
+    await insert(s.tabId, 'lead', [left])
+    const after = await send(s.tabId, 'lead', 'After the line')
+    expect((await served(s.tabId, peer)).lastMainSequence).toBe(after.sequence)
+  })
+})

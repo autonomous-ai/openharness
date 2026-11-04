@@ -9,6 +9,7 @@ import { PrismaClient, type Prisma, type SuperTabDelivery } from '@prisma/client
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
+import { DOWN_REMOVE_MS } from '../src/superTabs/closedAgents.js'
 import { stableId } from '../src/superTabs/model.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
@@ -2347,19 +2348,21 @@ describe('an agent closed on its machine', () => {
     expect(await ids(f)).toContain(idle)
   })
 
+  // A session its machine lists stopped takes no task at all (closedAgents.ts sessionClosed, task #2744); one it has only
+  // stopped listing can still be assigned while the report that removes it after DOWN_REMOVE_MS is being written.
   it('does not lose an assignment that lands while it is being removed (the report retries against it)', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
     const second = String((await f.execute({ type: 'conversation.create', title: 'Second', brief: 'More', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
-    await reports(f, 30, [f.harness.worker], [f.harness.other])
+    await reports(f, DOWN_REMOVE_MS / 1000, [f.harness.worker])
     let raced = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (raced) return
       raced = true
       await f.execute({ type: 'work.assign', conversationId: second, agentId: idle })
     }), () => f.clock.now)
-    await reports(f, 10, [f.harness.worker], [f.harness.other], racing)
+    await reports(f, 10, [f.harness.worker], [], racing)
     expect(raced).toBe(true)
     const state = (await f.timed.read(owner, f.tab)).state
     const group = state.conversations.find(c => c.id === second)!

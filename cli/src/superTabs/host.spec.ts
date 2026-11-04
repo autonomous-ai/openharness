@@ -1403,6 +1403,17 @@ describe('a delivery poll or claim that keeps failing', () => {
   })
 })
 
+// Task #2744: Tern's last group was archived, so its roster row no longer kept it from the idle cleanup when its next task came.
+it('keeps a harness its poll lists an assignment for, though its groups are archived', async () => {
+  const t = setup()
+  vi.mocked(t.core.account.backend).mockImplementation(async () => ({ status: 200, body: { data: hostForm([], { assignments: [
+    { tabId: 'tab', assignmentId: 'work-1', harnessId: 'tern' }] }) } }))
+  const host = t.open()
+  await host.tick()
+  expect([...retainedHarnesses(t.dir)]).toEqual(['tern'])
+  host.stop()
+})
+
 it('confirms a stopped assignment only with fresh native evidence, including after contribution removal', async () => {
   const t = setup()
   const stopped = vi.fn(async (id: string) => id === 'gone')

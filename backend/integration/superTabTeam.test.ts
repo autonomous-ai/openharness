@@ -771,11 +771,11 @@ describe('one machine: a Mac and its Harness Team account', () => {
     // A host repeating its confirmation gets its own receipt back.
     await expect(cleaned(person, 'personal-mac')).resolves.toBeDefined()
     await expect(cleaned(team, 'team-mac')).resolves.toBeDefined()
-    expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text))
-      .toEqual(['MacBook Pro left the Swarm: its host confirmed its cleanup.'])
+    // No chat says it left (anh Dee, 11-04, #2742).
+    expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text)).toEqual([])
   })
 
-  it('leaves 30 minutes after its removal while its host keeps reporting without confirming, and the project\'s chat says why', async () => {
+  it('leaves 30 minutes after its removal while its host keeps reporting without confirming, and no chat says so', async () => {
     let now = Date.now()
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Silent host')).id
@@ -801,12 +801,12 @@ describe('one machine: a Mac and its Harness Team account', () => {
     now = removedAt + 30 * 60_000
     await report()
     expect(await listed()).toEqual([])
-    expect(await said()).toEqual(['MacBook Pro left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.'])
-    // Its cleanup still reaches its host, whose late confirmation closes it without another line.
+    expect(await said()).toEqual([])
+    // Its cleanup still reaches its host, whose late confirmation closes it, still without a line.
     expect((await rosterRows(timed, person, 'personal-mac')).filter(r => r.tabId === tab && 'cleanup' in r)).toEqual([{ tabId: tab, cleanup: { machineId: 'personal-mac', removalId } }])
     await timed.execute(person, tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'personal-mac', removalId } })
     expect((await storedState(tab)).machineCleanups).toBeUndefined()
-    expect(await said()).toHaveLength(1)
+    expect(await said()).toEqual([])
   })
 
   // Diego's Mac, 2026-10-28, after #1955: the Mac and its team account were removed together and went past the fallback
