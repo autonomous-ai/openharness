@@ -772,6 +772,26 @@ void main() {
       expect(activity.mentionsUnread, 0);
     });
 
+    test('a tag answered in a chat this Swarm does not hold is read: it '
+        'could never be read past or marked read here', () async {
+      final server = withAgent();
+      // An archived task chat: the server lists its tags, the snapshot
+      // does not hold it.
+      server.tag('message-1', conversationId: 'archived', messageSequence: 5);
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+        ..['resolvedBy'] = 'answer';
+      server.state['mentionsWaiting'] = 0;
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.controller.snapshot?.conversation('archived'), isNull);
+      expect(activity.mentions.earlier, hasLength(1));
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+      expect(activity.mentionRows, isEmpty);
+    });
+
     test('each folded tag counts once', () async {
       final server = withAgent();
       for (var i = 1; i <= 3; i++) {
