@@ -188,6 +188,30 @@ class SuperTabAttention extends ChangeNotifier {
   int mentionsIn(String conversationId) =>
       tagsIn(conversationId) + decisionsIn(conversationId);
 
+  /// A project row's red number (task #2927, Slack's channel badge): the
+  /// reader's tags in [conversationId]'s main stream that they have not read
+  /// past, so opening the chat clears it. Tags in its threads and its tasks,
+  /// decisions and tasks waiting on the reader are in Activity, which counts
+  /// each of these too (`SuperTabActivity.mentionUnread`): the row never says
+  /// more than Activity. A muted chat never counts.
+  int chatTagsIn(String conversationId) {
+    if (controller.accessRevoked ||
+        controller.notifyOf(conversationId) == SuperTabNotify.muted) {
+      return 0;
+    }
+    final mark = controller.readMark(conversationId);
+    return mentions.waiting
+        .where(
+          (m) =>
+              m.conversationId == conversationId &&
+              m.threadId == null &&
+              m.resolvedBy != 'read' &&
+              m.resolvedBy != 'done' &&
+              (m.messageSequence ?? _unknown) > mark,
+        )
+        .length;
+  }
+
   /// What a conversation's red number counts, for its hover label.
   String? badgeTooltipIn(String conversationId) {
     final tags = tagsIn(conversationId);

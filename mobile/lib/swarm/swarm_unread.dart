@@ -92,8 +92,9 @@ bool swarmUnreadShown(SwarmReader reader, SuperTabConversation group) =>
 /// project chat or any of its open work shows unread, as the desktop's
 /// sidebar reads a collapsed project — never for closed work, a private chat
 /// or the person's Buddy chat, which has a row of its own — or while tags
-/// count there. Its number counts only its project chat ([swarmChatCount]),
-/// which opening the project reads. Task tags stay on their own rows and in
+/// count there. Its number counts only its project chat's tags, which opening
+/// the project reads; decisions asked there are on that chat's own row
+/// ([swarmChatCount]) and in Activity (#2927). Task tags stay on their own rows and in
 /// Activity. A tag counts only in a listed chat under its own project.
 /// One pass over the Swarm's chats for every project.
 Map<String, SwarmProjectNews> swarmProjectNews(
@@ -133,7 +134,14 @@ Map<String, SwarmProjectNews> swarmProjectNews(
       unread.add(projectId);
       hasWaitingTag.add(projectId);
       if (group.id == snapshot.projectById(projectId)?.leadConversationId) {
-        tags[projectId] = count;
+        // Its chat's tags alone (#2927): decisions are in Activity and on
+        // the chat's own row.
+        tags[projectId] = _countIn(
+          reader,
+          group,
+          waiting[group.id] ?? const [],
+          0,
+        );
       }
     }
   }
