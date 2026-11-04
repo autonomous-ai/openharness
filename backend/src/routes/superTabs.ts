@@ -4,7 +4,7 @@ import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
-import { attachmentsFromEnv, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
@@ -31,7 +31,7 @@ import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
-import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
+import { READ_THREADS_ASKED_MAX, readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
 import { activityWait } from '../superTabs/activity.js'
 import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
@@ -81,7 +81,9 @@ const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
-const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional() })
+// `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
+const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
+  derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
@@ -109,6 +111,9 @@ const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
+/** The followed-threads read's query (read/followedThreads.ts): how many read threads to answer. */
+const threadsQuery = z.object({ read: z.string().regex(/^[1-9][0-9]{0,2}$/).transform(Number)
+  .refine(n => n <= READ_THREADS_ASKED_MAX, `At most ${READ_THREADS_ASKED_MAX}.`).optional() }).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
@@ -518,7 +523,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId,
-      req.query.machines === 'light' ? { lightMachines: true } : {}), nothingChanged)))
+      { ...(req.query.machines === 'light' ? { lightMachines: true } : {}), ...(req.query.derivedEtag ? { derivedEtag: req.query.derivedEtag } : {}) }),
+      nothingChanged)))
   // The whole readings on demand, for a client that takes lines in its changes (read/changes.ts).
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
@@ -531,11 +537,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
     })
   // A person's followed threads, unread first (read/followedThreads.ts): Desktop's Threads view, read as the inbox is.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/threads',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+  // `read`: how many read threads to answer (Activity's Threads asks 50 at a time, task #2835); 30 when not asked.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof threadsQuery> }>('/api/super-tabs/:tabId/threads',
+    { preHandler: [validateParams(tabParams), validateQuery(threadsQuery)] }, async (req, reply) => {
       const wait = await threadsWait(req.user!, req.params.tabId)
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
+      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId, req.query.read))
     })
   // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
@@ -596,21 +603,30 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // Super Tab route's body handling changes.
   await app.register(async scope => {
     // One byte over the limit, so the store sees an oversized file and refuses it rather than keeping a cut one.
-    await scope.register(multipart, { limits: { fileSize: MAX_FORM_ATTACHMENT_BYTES + 1, files: 1, fields: 1, parts: 2 } })
+    // The file may come gzipped, said by `contentEncoding: gzip` between the two (attachments.ts formFileBody): the limit
+    // here is on what arrives, and the store's cap on what it unpacks to.
+    await scope.register(multipart, { limits: { fileSize: MAX_FORM_ATTACHMENT_BYTES + 1, files: 1, fields: 2, parts: 3 } })
     scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments',
       { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
-        let conversationId: string | null = null, uploaded: unknown = null, stored: unknown = null
+        let conversationId: string | null = null, encoding: 'gzip' | null | undefined, uploaded: unknown = null, stored: unknown = null
         try {
           for await (const part of req.parts()) {
             if (part.type === 'field') {
-              if (part.fieldname !== 'conversationId' || conversationId !== null || uploaded) fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400)
-              conversationId = id.safeParse(part.value).data ?? fail('INVALID_ATTACHMENT', 'Name the conversation to attach the file to.', 400)
+              if (part.fieldname === 'conversationId' && conversationId === null && encoding === undefined && !uploaded) {
+                conversationId = id.safeParse(part.value).data ?? fail('INVALID_ATTACHMENT', 'Name the conversation to attach the file to.', 400)
+              } else if (part.fieldname === 'contentEncoding' && conversationId !== null && encoding === undefined && !uploaded) {
+                encoding = part.value === 'gzip' ? 'gzip' : fail('INVALID_ATTACHMENT', 'Send the file gzipped or as it is.', 400)
+              } else fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400)
             } else {
               if (!conversationId || uploaded) { part.file.resume(); fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400) }
+              const body = formFileBody(part.file, encoding ?? null)
               try {
                 uploaded = await store.upload(req.user!, req.params.tabId, conversationId,
-                  { name: part.filename, mime: part.mimetype, body: part.file }, req.query.asAgentId)
-              } catch (error) { stored = error; throw error } finally { part.file.resume() }
+                  { name: part.filename, mime: part.mimetype, body }, req.query.asAgentId)
+              } catch (error) {
+                stored = unpackFailed(body) ? new SuperTabError('INVALID_ATTACHMENT', 'The file was not valid gzip.', 400) : error
+                throw stored
+              } finally { stopUnpacking(part.file, body); part.file.resume() }
             }
           }
         } catch (error) {

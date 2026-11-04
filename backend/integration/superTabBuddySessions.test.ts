@@ -64,7 +64,7 @@ async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) 
   await report()
   const host = (command: Command) => execute(command, peer, undefined, 'peer-mac')
   /** peer's main Buddy, their one Buddy of the Swarm in their Swarm chat (Dee, 10-31), added and started by peer-mac's host. */
-  const added = await execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
+  const added = await execute({ type: 'buddy.create', machineId: 'peer-mac', engine }, peer)
   const chat = String(added.result.conversationId)
   await host({ type: 'agent.startDispatch', startId: String(added.result.startId) })
   const mainHarness = randomUUID()
@@ -219,7 +219,7 @@ describe('a Buddy thread session', () => {
     const harnessId = (await f.store.read(peer, f.tab)).state.agents.find(x => x.id === agentId)!.harnessId
     const before = await f.store.messages(peer, f.tab, f.chat, {})
     await expect(f.reply(b, 'No room', { newSession: true })).rejects.toMatchObject({ code: 'MACHINE_FULL',
-      message: 'Peer Mac is already running as many agents as it allows. End a session there, or try again when one finishes.' })
+      message: 'Peer Mac is set to run at most 2 agents and runs 2. Its owner can change that in its settings, or try again when one finishes.' })
     const state = (await f.store.read(peer, f.tab)).state
     expect(state.conversations.find(c => c.id === f.chat)!.buddySessions!.map(e => e.thread)).toEqual([a])
     expect(state.machines!.find(m => m.machineId === 'peer-mac')!.maxAgents).toBe(2)
@@ -349,7 +349,7 @@ describe('a Buddy thread session', () => {
     const { agentId, first } = await f.session(root, 'Measure prod CPU for the last day', { sessionProjectId: 'lead' })
     const plain = await f.session(plainRoot, 'Ask the PM for it')
     const mainAsk = await f.say('Send the other thing to the PM')
-    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, goal: 'CPU fix',
+    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, text: 'Measure prod CPU for the last day', goal: 'CPU fix',
       scope: 'Backend', priority: 'normal' }, peer, as)
     await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
     await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
@@ -357,11 +357,12 @@ describe('a Buddy thread session', () => {
     await expect(propose(first)).resolves.toBeTruthy()
   })
 
-  it('starts only beside a Buddy running Claude Code: a Codex Buddy added before Codex was refused gets none (security review 1)', async () => {
+  // Ken, 11-04 (#2832): Codex sessions were refused only because Codex ran no Buddy guard, and the guard is gone.
+  it('starts beside a Codex Buddy too, on Codex', async () => {
     const f = await swarm({ engine: 'codex' })
     const root = await f.say('Start')
-    await expect(f.reply(root, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_ENGINE' })
-    expect((await f.store.read(peer, f.tab)).state.starts?.some(s => s.request.buddySession)).toBe(false)
+    const startId = String((await f.reply(root, 'x', { newSession: true })).result.startId)
+    expect((await f.store.read(peer, f.tab)).state.starts?.find(s => s.id === startId)?.request).toMatchObject({ engine: 'codex', buddySession: expect.anything() })
   })
 
   it('ends a start that timed out through its own path: its thread says so, the main chat says nothing, and its place frees (security review 1)', async () => {

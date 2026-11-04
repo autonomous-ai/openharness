@@ -195,6 +195,15 @@ it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
     expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
   }
 })
+// Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+it('posts an answer right below one message with --answers, never with --reply-to too', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--answers', 'msg-1', '--to', 'a1'], where).payload.command)
+    .toEqual({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, answers: 'msg-1', recipientIds: ['a1'] })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload.command).not.toHaveProperty('answers')
+  for (const tail of [['--answers'], ['--answers', '../x'], ['--answers', 'a', '--answers', 'b'], ['--answers', 'a', '--reply-to', 'b'], ['--reply-to', 'b', '--answers', 'a']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
 it('parses repeated --attach, allows empty text with a file, and refuses empty text alone', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '', 'op-1', '--attach', 'a.png', '--reply-to', 'm1', '--attach', 'b.log'], where).payload)
     .toMatchObject({ attach: [resolve('a.png'), resolve('b.log')], command: { text: '', replyTo: 'm1' } })
@@ -722,47 +731,59 @@ it('refuses, from a harness, a --machine or --port other than this computer\'s o
     expect(opened.at(-1)).toMatchObject({ machineId: 'macbook' })
   }
 })
-// Windows has no cheap check of a pty host pane (second review, item 4): while this computer runs a Buddy, an agent's shell
-// may not name an agent.
-it('refuses --agent from an agent\'s shell on Windows while this computer runs a Buddy, and leaves a person\'s terminal alone', async () => {
-  let buddiesHere = true
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { agents: [] }
-    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere } : { ok: true })
-  const print = vi.fn()
-  const deps = { where: () => where, print, platform: 'win32' as const, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
-  for (const env of [{ HARNESS_PANE: 'p1:%3' }, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }]) {
-    buddiesHere = true
-    expect(await superTabCommand([...prefix, 'status'], { ...deps, env })).toBe(1)
-    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('This Windows computer runs a Buddy')
-    buddiesHere = false
-    expect(await superTabCommand([...prefix, 'status'], { ...deps, env })).toBe(0)
-  }
-  buddiesHere = true
-  expect(await superTabCommand([...prefix, 'status'], { ...deps, env: {} })).toBe(0)
-})
-// The re-check of #2093 (minor 6): on Windows, --machine asked the other machine's daemon whether a Buddy runs, which it
-// does not answer for another computer, and a pty host pane was no pane for the other-machine refusal.
-it('on Windows, refuses another machine from a harness\'s pane, and asks this computer\'s daemon about its Buddies', async () => {
-  const opened: Where[] = []
-  let buddiesHere = false
+// Windows' parents, as `harness-pty ps` lists them: this command under pane process 700, under the PTY host.
+const windowsPane = async () => [
+  { pid: process.pid, parentPid: 700, executable: 'node.exe', startMarker: 'w:30', args: '' },
+  { pid: 700, parentPid: 600, executable: 'claude.exe', startMarker: 'w:20', args: '' },
+  { pid: 600, parentPid: 1, executable: 'harness-pty.exe', startMarker: 'w:10', args: '' },
+]
+const windowsAlone = async () => [{ pid: process.pid, parentPid: 1, executable: 'node.exe', startMarker: 'w:30', args: '' }]
+// A Buddy on the computer used to refuse every agent's shell there (second review, item 4). Now each is told apart by its pane.
+it('on Windows, a Buddy on the computer refuses no other agent, and a pane speaks as its own harness', async () => {
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list'
     ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] }
-    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere } : { ok: true })
+    : type === 'terminal_info' ? { command: 'claude', path: 'C:\\work', pid: 700 }
+    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere: true } : { ok: true })
+  const print = vi.fn()
+  const deps = { where: () => where, print, platform: 'win32' as const, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
+  expect(await superTabCommand([...prefix, 'status'], { ...deps, env: { HARNESS_PANE: 'p1:%3' }, readProcesses: windowsPane })).toBe(0)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'win-harness' }), 30_000)
+  // Outside Harness: an agent's shell and a person's terminal alike, with its --agent.
+  for (const env of [{ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }, {}]) {
+    expect(await superTabCommand([...prefix, 'status'], { ...deps, env, readProcesses: windowsAlone })).toBe(0)
+  }
+})
+// As a private tmux server's pane on a Mac: a command may not name a pane on Windows that its parents are not in.
+it('on Windows, refuses a command naming another harness\'s pane, and one under the PTY host naming none', async () => {
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'builder', engine: 'claude', tmuxPane: '%9', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%9' }] } }] }
+    : type === 'terminal_info' ? { command: 'claude', path: 'C:\\work', pid: 555 } : { ok: true })
+  const print = vi.fn()
+  const deps = { where: () => where, print, platform: 'win32' as const, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
+  expect(await superTabCommand(['--tab', 'tab', 'status'], { ...deps, env: { HARNESS_PANE: 'p1:%9' }, readProcesses: windowsPane })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error)
+    .toBe('This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.')
+  expect(await superTabCommand(['--tab', 'tab', 'status'], { ...deps, env: {}, readProcesses: windowsPane })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error)
+    .toBe('Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.')
+  expect(request.mock.calls.some(([type]) => type === 'super_tabs')).toBe(false)
+})
+// The re-check of #2093 (minor 6): a pty host pane was no pane for the other-machine refusal, and --machine asked the other
+// machine's daemon about this computer.
+it('on Windows, refuses another machine from a harness\'s pane, asking this computer\'s daemon', async () => {
+  const opened: Where[] = []
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] }
+    : { ok: true })
   const print = vi.fn()
   const deps = { where: () => where, print, platform: 'win32' as const,
     open: async (to: Where) => { opened.push(to); return { request, close: vi.fn(), machineId: to.machineId } as never } }
-  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: { HARNESS_PANE: 'p1:%3' } })).toBe(1)
+  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: { HARNESS_PANE: 'p1:%3' }, readProcesses: windowsPane })).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('this computer\'s own Harness only')
-  expect(opened).toEqual([where])
-  // A Claude Code shell with no Harness pane: this computer's daemon is asked about its Buddies, not the other machine's.
-  buddiesHere = true
-  opened.length = 0
-  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' } })).toBe(1)
-  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('This Windows computer runs a Buddy')
   expect(opened).toEqual([where])
   // A person's terminal chooses its machine.
   opened.length = 0
-  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: {} })).toBe(0)
+  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: {}, readProcesses: windowsAlone })).toBe(0)
   expect(opened.at(-1)).toMatchObject({ machineId: 'macbook' })
 })
 // Re-check 2 of #2093 (important 6): pane ids restart in every tmux server, so a private server counted up to a Builder's
@@ -789,16 +810,6 @@ it('takes a pane\'s harness only when the daemon\'s own pane process is among th
   expect(await superTabCommand(['--tab', 'tab', 'status'], deps)).toBe(0)
   expect(request).toHaveBeenCalledWith('terminal_info', { agentId: 'builder-harness' }, 10_000)
   expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'builder-harness' }), 30_000)
-})
-// Re-check 2 of #2093 at 0648a8690 (minor 8): a failed Swarm answer is no "Swarm off" on Windows' backstop either.
-it('refuses --agent from an agent\'s shell on Windows when this computer\'s Swarm cannot answer', async () => {
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { agents: [] }
-    : payload.action === 'buddyCheck' ? { error: 'SERVICE_FAILED', service: 'superTabs' } : { ok: true })
-  const print = vi.fn()
-  expect(await superTabCommand([...prefix, 'status'], { where: () => where, print, platform: 'win32', env: { HARNESS_PANE: 'p1:%3' },
-    open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })).toBe(1)
-  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe('Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.')
-  expect(request.mock.calls.filter(([type, payload]) => type === 'super_tabs' && (payload as Record<string, unknown>)?.action !== 'buddyCheck')).toEqual([])
 })
 
 // A Buddy's read verbs (Ken, 10-29): archived tasks a page at a time, and a task's older messages, with no new verb.
@@ -861,7 +872,7 @@ describe("a Buddy's usage line and JSON hints", () => {
 
   it('has no stdin form for a Buddy: its post line takes TEXT, and its JSON goes in single quotes', async () => {
     const { run } = buddyDeps(true)
-    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to')
+    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to')
     expect(await run(['propose', 'op-1', '{"goal":'])).toMatch(/^The propose JSON is not valid \(.*\)\. Pass it as one argument, with the JSON in single quotes: propose OPERATION_ID '\{\.\.\.\}' \(an apostrophe inside it as \\u0027\)\.$/)
     expect(await run(['propose'])).toContain("A line break without \\ before it ends the command; send it again with the JSON in single quotes: propose OPERATION_ID '{...}'")
     expect(await run(['propose', 'op-1'])).toBe("propose needs its JSON after OPERATION_ID: propose op-1 JSON, with the JSON in single quotes: propose OPERATION_ID '{...}' (an apostrophe inside it as \\u0027).")
@@ -897,18 +908,17 @@ describe("a Buddy's usage line and JSON hints", () => {
     expect(ok.request).toHaveBeenCalled()
     expect(ok.asked.some(([, payload]) => payload?.action === 'buddyCheck')).toBe(false)
   })
-  // Windows cannot check a pty host pane (buddyPane.ts): an agent's shell on a computer running a Buddy gets a Buddy's words.
-  it('words it for a Buddy on Windows from an agent\'s shell while this computer runs one', async () => {
-    const wording = async (buddiesHere: boolean, env: NodeJS.ProcessEnv) => {
-      const print = vi.fn(), request = vi.fn(async (_type: string, payload?: Record<string, unknown>) =>
-        payload?.action === 'buddyCheck' ? { ok: true, buddiesHere } : { agents: [] })
-      await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready'], { where: () => where, print, platform: 'win32', env, pane: undefined,
+  it('words it for a Buddy on Windows from a Buddy\'s own pane alone', async () => {
+    const wording = async (buddy: boolean) => {
+      const print = vi.fn(), request = vi.fn(async (type: string, payload?: Record<string, unknown>) =>
+        payload?.action === 'buddyCheck' ? { ok: true, buddy }
+        : type === 'agents_list' ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] } : { ok: true })
+      await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready'], { where: () => where, print, platform: 'win32', env: {}, pane: 'p1:%3',
         open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })
       return JSON.parse(print.mock.calls.at(-1)![0]).error as string
     }
-    expect(await wording(true, { HARNESS_PANE: 'p1:%3' })).toContain('post GROUP TEXT OPERATION_ID')
-    expect(await wording(false, { HARNESS_PANE: 'p1:%3' })).toContain('post GROUP TEXT|- OPERATION_ID')
-    expect(await wording(true, {})).toContain('post GROUP TEXT|- OPERATION_ID')
+    expect(await wording(true)).toContain('post GROUP TEXT OPERATION_ID')
+    expect(await wording(false)).toContain('post GROUP TEXT|- OPERATION_ID')
   })
 })
 

@@ -14,17 +14,28 @@ typedef SuperTabMoreAction = ({
   List<({String label, VoidCallback onPressed})> choices,
 });
 
+/// A change to the message itself, set apart under a rule at the menu's end:
+/// the author's own Edit message and Delete message. [danger] draws it red.
+typedef SuperTabMoreChange = ({
+  String label,
+  IconData icon,
+  VoidCallback onPressed,
+  bool danger,
+});
+
 /// The ⋯ of a message's hover bar: the choices that have no button of their
 /// own. Each closes the menu, then runs.
 class SuperTabMessageMoreMenu extends StatefulWidget {
   const SuperTabMessageMoreMenu({
     super.key,
     required this.actions,
+    this.changes = const [],
     this.color,
     this.hoverColor,
     this.hoverFill,
   });
   final List<SuperTabMoreAction> actions;
+  final List<SuperTabMoreChange> changes;
 
   /// The ⋯'s ink and lift, for a menu drawn on the picture viewer's veil
   /// ([AppIconButton] by default).
@@ -86,6 +97,16 @@ class _SuperTabMessageMoreMenuState extends State<SuperTabMessageMoreMenu> {
                   AppMenuItem(label: choice.label, onPressed: choice.onPressed),
               ],
             ),
+        if (widget.actions.isNotEmpty && widget.changes.isNotEmpty)
+          const AppMenuDivider(),
+        for (final (index, change) in widget.changes.indexed)
+          AppMenuItem(
+            focusNode: widget.actions.isEmpty && index == 0 ? _first : null,
+            label: change.label,
+            icon: change.icon,
+            danger: change.danger,
+            onPressed: change.onPressed,
+          ),
       ],
       builder: (context, menu, _) => AppIconButton(
         icon: AppIcons.ellipsis,

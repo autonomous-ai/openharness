@@ -44,6 +44,61 @@ describe('the lease on a worker\'s task', () => {
   })
 })
 
+describe('a task waiting on a person (task #2969)', () => {
+  // 2026-11-04: an Engineer asked Huy, set needs_human with a 10:00 default, printed nothing, and lost its task after 30 minutes.
+  const asked = 1_000_000, HOUR = 60 * MINUTE
+  const waiting = (patch: Partial<Assignment> = {}, report: { receivedAt: number; harnessProgress?: Record<string, number> } | undefined = { receivedAt: asked + 2 * HOUR, harnessProgress: { h: asked } }) =>
+    swarm(assignment({ status: 'needs_human', result: 'Mockup OK?', leaseUntil: asked + LEASE_MS, progressAt: asked, ...patch }), report)
+
+  it('stays its agent\'s for 2 hours while the agent is alive on its machine, whatever its screen does', () => {
+    for (const status of ['needs_human', 'blocked'] as const) {
+      const idle = waiting({ status })
+      expect(sweepLiveness(idle, asked + 2 * HOUR)).toEqual([])
+      expect(idle.conversations[1]!.assignment!.status).toBe(status)
+      // Even a session that reports no progress at all.
+      expect(sweepLiveness(waiting({ status }, { receivedAt: asked + 2 * HOUR, harnessProgress: {} }), asked + 2 * HOUR)).toEqual([])
+    }
+  })
+
+  it('is lost once its session is stopped, its machine is offline past the grace, or it is no longer running', () => {
+    const stopped = waiting()
+    stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    expect(status(stopped, asked + 2 * HOUR).status).toBe('lost')
+    const offline = waiting()
+    expect(status(offline, asked + 2 * HOUR + 3 * MINUTE).status).toBe('lost')
+    const gone = waiting()
+    gone.machines![0]!.observation!.runningHarnessIds = []
+    expect(status(gone, asked + 2 * HOUR).status).toBe('lost')
+  })
+
+  it('is lost when no report ever showed its session, as before', () => {
+    const unseen = waiting()
+    unseen.machines = []
+    expect(status(unseen, asked + 2 * HOUR).status).toBe('lost')
+  })
+
+  it('runs 30 minutes from the person\'s answer, then is lost if the agent stays quiet', () => {
+    const answeredAt = asked + HOUR
+    const answered = (now: number) => {
+      const state = waiting({}, { receivedAt: now, harnessProgress: { h: asked } })
+      state.conversations[1]!.ledger = { waiting: { assignmentId: 'a1', since: asked, messageId: 'm', answeredAt } } as never
+      return state
+    }
+    expect(status(answered(answeredAt + QUIET_RUNNING_MS), answeredAt + QUIET_RUNNING_MS).status).toBe('needs_human')
+    expect(status(answered(answeredAt + QUIET_RUNNING_MS + 1), answeredAt + QUIET_RUNNING_MS + 1)).toMatchObject({ status: 'lost', lost: { reason: expect.stringContaining('no progress') } })
+  })
+
+  it('keeps today\'s 30-minute rule for a working assignment', () => {
+    const working = (now: number) => swarm(assignment({ leaseUntil: asked + LEASE_MS, progressAt: asked }), { receivedAt: now, harnessProgress: { h: asked } })
+    expect(status(working(asked + QUIET_RUNNING_MS), asked + QUIET_RUNNING_MS).status).toBe('working')
+    expect(status(working(asked + QUIET_RUNNING_MS + 1), asked + QUIET_RUNNING_MS + 1).status).toBe('lost')
+  })
+
+  it('has no loss time while it waits for the person, so a machine\'s report is not scheduled for it', () => {
+    expect(nextLossAt(waiting(), 'm')).toBeUndefined()
+  })
+})
+
 describe('a task waiting for review', () => {
   // 2026-10-29: five Engineers who had pushed and handed over lost their tasks after 30 quiet minutes waiting for a Reviewer.
   const handedOver = 1_000_000
@@ -672,6 +727,8 @@ describe('the next time a machine\'s worker can lose its task (DB 2.5)', () => {
 describe('a task lost outside any command says Stuck in its project-chat thread', () => {
   const lost = () => {
     const f = stepsFixture()
+    // Asked for in a person's message, whose thread is the task's (taskLine.ts); a task no message asked for says nothing there.
+    f.group(f.task).cards = { ...f.group(f.task).cards, line: { messageId: 'ask', conversationId: 'lead' } }
     const root = f.group(f.task).cards!.line!.messageId
     const worker = f.state.agents.find(a => a.id === f.dev)!
     const text = `Stuck: ${worker.displayName ?? worker.name} stopped. Next: another engineer takes it over.`

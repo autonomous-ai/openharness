@@ -13,11 +13,16 @@ import { identifier, object } from './wire.js'
 /** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is never
  *  stopped in any case). Absent in a file from before Leads were kept.
  *  `buddies`: the Buddies here, which a close never stops (Diego, 10-30): only their person removing them, or the machine's
- *  owner with Stop Harness. Absent in a file from before Buddies were kept, which names none until the next roster. */
-interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[]; buddies?: string[] }
+ *  owner with Stop Harness. Absent in a file from before Buddies were kept, which names none until the next roster.
+ *  `assigned`: when the host first received each assignment its harnesses hold, epoch ms. Such a harness is in `harnesses`
+ *  while it holds it and for ASSIGNED_GRACE_MS after it came, whatever its groups (task #2744). Absent in older files. */
+interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[]; buddies?: string[]; assigned?: Record<string, number> }
 export const retentionFile = (dataDir: string) => join(dataDir, 'super-tabs', 'retained.json')
 export const RETENTION_LAPSE_MS = 7 * 24 * 60 * 60_000
 const REFRESH_MS = 60 * 60_000
+/** How long a harness stays kept after the host first received an assignment for it: an assignment that ends at once (the
+ *  PM moves it, the agent answers in a second) never leaves the harness to a cleanup that was about to close it. */
+export const ASSIGNED_GRACE_MS = 60_000
 
 function read(file: string): Retention {
   if (statSync(file).size > 4 * 1024 * 1024) throw new Error('Super Tab retention is too large. Automatic cleanup is paused.')
@@ -25,7 +30,8 @@ function read(file: string): Retention {
   try { value = object(JSON.parse(readFileSync(file, 'utf8'))) } catch { /* reported below */ }
   if (value.version !== 2 || !identifier(value.machineId) || !Array.isArray(value.harnesses) || !value.harnesses.every(identifier)
     || (value.leads !== undefined && (!Array.isArray(value.leads) || !value.leads.every(identifier)))
-    || (value.buddies !== undefined && (!Array.isArray(value.buddies) || !value.buddies.every(identifier)))) {
+    || (value.buddies !== undefined && (!Array.isArray(value.buddies) || !value.buddies.every(identifier)))
+    || (value.assigned !== undefined && !Object.entries(object(value.assigned)).every(([id, at]) => identifier(id) && Number.isFinite(at)))) {
     throw new Error('Super Tab retention is unreadable. Automatic cleanup is paused.')
   }
   return value as unknown as Retention
@@ -68,7 +74,9 @@ export function mayBeBuddy(dataDir: string, agentId: string, now = Date.now()): 
   try { return (read(file).buddies ?? []).includes(agentId) } catch { return true }
 }
 
-export function retainContributions(dataDir: string, machineId: string, rows: unknown[], now = Date.now()): void {
+/** [assignments]: the host form's assignment rows for this machine, which hold their harnesses (task #2744: Tern's last group
+ *  was archived, so membership alone no longer kept it). */
+export function retainContributions(dataDir: string, machineId: string, rows: unknown[], now = Date.now(), assignments: unknown[] = []): void {
   if (!identifier(machineId)) throw new Error('Invalid Super Tab retention machine.')
   const file = retentionFile(dataDir)
   // This machine's confirmed roster is authoritative: it replaces an unreadable
@@ -92,7 +100,16 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
     else if (row.active === false && !buddies.has(agent.harnessId)) continue
     ids.add(agent.harnessId)
   }
-  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort(), buddies: [...buddies].sort() }
+  const assigned: Record<string, number> = {}
+  const before = previous?.machineId === machineId ? previous.assigned ?? {} : {}
+  for (const item of assignments) {
+    const row = object(item)
+    if (identifier(row.tabId) && identifier(row.harnessId)) assigned[row.harnessId] = before[row.harnessId] ?? now
+  }
+  for (const [id, at] of Object.entries(before)) if (!(id in assigned) && now - at < ASSIGNED_GRACE_MS) assigned[id] = at
+  for (const id of Object.keys(assigned)) ids.add(id)
+  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort(), buddies: [...buddies].sort(),
+    assigned: Object.fromEntries(Object.entries(assigned).sort(([a], [b]) => a.localeCompare(b))) }
   if (previous && JSON.stringify(previous) === JSON.stringify(next)) {
     if (now - statSync(file).mtimeMs > REFRESH_MS) utimesSync(file, new Date(now), new Date(now))
     return

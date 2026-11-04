@@ -1,8 +1,8 @@
 /** The window pull (Scholes's goals, piece 6: "token maxxing"): a subscription's weekly window that resets soon with quota
- *  left loses that quota at the reset, so the route spends it first. A candidate whose account would otherwise leave part of
- *  its weekly window unused is made cheaper by that part of the task, never stronger: a stronger model still ranks first, and
- *  a candidate the route leaves out stays out (route.ts RoutePlugin). The route's members are idle agents, so an idle agent on
- *  such an account takes the next queued task it can run.
+ *  left loses that quota at the reset, so the route says so on the candidate, for the Routing instructions to weigh. A
+ *  candidate whose account would otherwise leave part of its weekly window unused leans cheaper by that part of the task, never
+ *  stronger, and a candidate the route leaves out stays out (route.ts RoutePlugin). Since task #2901 that is a note, never the
+ *  order. The route's members are idle agents, so an idle agent on such an account is noted as able to take queued work.
  *
  *  The windows ride on the candidates (routeCommand.ts probeMachine reads them from each machine's last report; one older
  *  than 45 s is unknown quota, which this leaves alone). What it reads besides is the route history every maker shares: the
@@ -21,9 +21,9 @@ export const RESETS_SOON_MS = 48 * 3_600_000
 export const WEEK_MS = 7 * 86_400_000
 /** Less than this many percent of a week left unused is a rounding error, not quota worth moving work for. */
 export const MIN_UNUSED_PERCENT = 1
-/** The most the pull takes off a candidate's price: half. An expiring window makes a choice look at most half as costly,
- *  never free, so a choice with a clearly better record (piece 3, measured cost and results) still beats one whose only edge
- *  is quota about to reset (Lead, 10-31). */
+/** The most the pull leans off a candidate's price: half. An expiring window makes a choice look at most half as costly,
+ *  never free, so a choice with a clearly better record (piece 3, measured cost and results) still outweighs one whose only
+ *  edge is quota about to reset (Lead, 10-31). */
 export const MAX_DISCOUNT = 0.5
 /** How long a pick nobody has started or assigned yet still holds its account's quota. A route is acted on within minutes;
  *  one older than this was dropped, and holding quota for it would keep the window from pulling at all. */
@@ -54,11 +54,11 @@ const round = (n: number) => Math.round(n * 100) / 100
 /** A reset is told as how far away it is, as the route's labels tell it. */
 const inTime = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : `${Math.round(ms / 3_600_000)}h`
 
-/** The pull's word on one candidate: its price less up to half ([MAX_DISCOUNT]), by the part of the task its account's weekly
+/** The pull's word on one candidate: its price leaning less by up to half ([MAX_DISCOUNT]), by the part of the task its account's weekly
  *  window would otherwise leave unused. Only on a candidate whose quota is known to carry the task (fit `fits`; a reading
  *  of its weekly window alone is complete on either engine, route.ts sizeUp): one that would run out partway trades wasted
- *  weekly quota for a stalled task, and one whose weekly window could not be read (`unknown`) would, since price ranks before
- *  fit, beat an account known to fit on half a reading (review of f97c022). The reason names the window, never the account or
+ *  weekly quota for a stalled task, and one whose weekly window could not be read (`unknown`) would read as
+ *  cheaper than an account known to fit on half a reading (review of f97c022). The reason names the window, never the account or
  *  the machine a reading was relayed from, since every reader of the route log sees it. */
 export function windowPullAdjust(p: Readonly<Probe & { fit: Fit }>, now: number, held: readonly Commitment[]): Adjustment | null {
   if (p.fit.status !== 'fits' || p.fit.spend.weekly <= 0 || p.fit.effectiveCost <= 0) return null
@@ -66,7 +66,7 @@ export function windowPullAdjust(p: Readonly<Probe & { fit: Fit }>, now: number,
   if (!left) return null
   const discount = p.fit.effectiveCost * MAX_DISCOUNT * Math.min(1, left.unused / p.fit.spend.weekly)
   const why = `its account's weekly window resets in ${inTime(left.resetsIn)}, and at this week's pace about ${Math.round(left.unused)}% of it would go unused`
-  return { cost: -round(discount), reason: p.kind === 'member' ? `${why}; this idle agent takes queued work first` : `${why}; this task spends it first` }
+  return { cost: -round(discount), reason: p.kind === 'member' ? `${why}; this idle agent could take queued work to use it` : `${why}; prefer this account to use it before the reset` }
 }
 
 /** The plug-in for one route. [pending]: picks of the Swarm's other routes not started or assigned yet, which the route's

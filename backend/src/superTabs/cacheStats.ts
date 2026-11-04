@@ -14,6 +14,15 @@ interface Counts {
 }
 
 let entries = new Map<string, Counts>()
+/** The read cache's deltas (parts/load.ts loadDelta with held rows): how many, how many changed rows they listed by key and
+ *  version, and how many of those they read whole. The rest came from the delta before (#2783). */
+let deltaRows = { deltas: 0, stamps: 0, whole: 0 }
+
+export function recordDeltaRows(rows: { stamps: number; whole: number }): void {
+  deltaRows.deltas++
+  deltaRows.stamps += rows.stamps
+  deltaRows.whole += rows.whole
+}
 
 export function recordCache(name: string, event: CacheEvent, detail: { bytes?: number; parts?: number; reason?: ReloadReason } = {}): void {
   const key = name.split(':', 1)[0]!
@@ -36,9 +45,10 @@ export function startCacheStats({ everyMs = 60_000, log = (message: string, cont
   { everyMs?: number; log?: (message: string, context: Record<string, unknown>) => void } = {}): () => void {
   let since = Date.now()
   const timer = setInterval(() => {
-    const now = Date.now(), window = entries
+    const now = Date.now(), window = entries, rows = deltaRows
     entries = new Map()
-    if (window.size) log('swarm cache', { windowMs: now - since, entries: Object.fromEntries(window) })
+    deltaRows = { deltas: 0, stamps: 0, whole: 0 }
+    if (window.size || rows.deltas) log('swarm cache', { windowMs: now - since, entries: Object.fromEntries(window), ...rows.deltas ? { deltaRows: rows } : {} })
     since = now
   }, everyMs)
   timer.unref()

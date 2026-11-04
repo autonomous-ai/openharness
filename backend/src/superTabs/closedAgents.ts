@@ -21,6 +21,24 @@ export const STOPPED_REMOVE_MS = 30_000
 const removable = (state: SuperTabState, target: Agent): boolean =>
   !isBuddy(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
+/** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
+ *  very generation, since an older host lists the earlier run stopped and cannot say which. */
+const provedStopped = (state: SuperTabState, target: Agent, report: Pick<MachineObservation, 'stoppedHarnessIds' | 'stoppedReservations'>): boolean => {
+  if (!report.stoppedHarnessIds.includes(target.harnessId)) return false
+  const reservation = state.harnessReservations?.find(r => r.machineId === target.machineId && r.harnessId === target.harnessId)
+  return !reservation || !reservation.renewed || !!report.stoppedReservations?.some(r => r.harnessId === target.harnessId && r.generation === reservation.generation)
+}
+
+/** Whether [target]'s machine, reading now, proves its idle cleanup closed its session: a fresh reading that lists it closed
+ *  and stopped, not running. Such an agent takes no task (commands.ts work.assign): on 11-04 the idle cleanup closed Tern on
+ *  the Mac Studio and the PM assigned it six seconds later, so the task was lost at once (task #2744). A session merely
+ *  listed stopped may be a Change agent before its rebind, or a host mid-restart, and keeps taking work (review of #2953). */
+export function sessionClosed(state: SuperTabState, target: Agent, now: number): boolean {
+  const reading = state.machines?.find(m => m.machineId === target.machineId)?.observation
+  return !!reading && now - reading.receivedAt <= MACHINE_FRESH_MS && !reading.runningHarnessIds.includes(target.harnessId)
+    && !!reading.closedHarnessIds?.includes(target.harnessId) && provedStopped(state, target, reading)
+}
+
 /**
  * The agents of [machineId] that [report], arriving now over the reading in [state], shows closed: not listed running, down
  * for a while, and either proved stopped (the proof the slot count accepts, machines.ts machineSlots; STOPPED_REMOVE_MS) or
@@ -40,12 +58,7 @@ export function closedAgents(state: SuperTabState, machineId: string, report: Pi
     if (!removable(state, target)) return false
     if (!target.downSince) return false
     const down = now - Date.parse(target.downSince)
-    if (report.stoppedHarnessIds.includes(target.harnessId)) {
-      const reservation = state.harnessReservations?.find(r => r.machineId === machineId && r.harnessId === target.harnessId)
-      // Older hosts can prove a first launch stopped, but cannot tell a resumed runtime from its predecessor.
-      return down >= STOPPED_REMOVE_MS
-        && (!reservation || !reservation.renewed || !!report.stoppedReservations?.some(r => r.harnessId === target.harnessId && r.generation === reservation.generation))
-    }
+    if (report.stoppedHarnessIds.includes(target.harnessId)) return down >= STOPPED_REMOVE_MS && provedStopped(state, target, report)
     return down >= DOWN_REMOVE_MS && report.runningHarnessIds.length > 0 && fresh.runningHarnessIds.length > 0
   })
 }

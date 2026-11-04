@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -33,6 +34,8 @@ import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
+import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
+import { profiled } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -869,8 +872,8 @@ describe('private swarm projects on the real control API', () => {
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207), and the task's message with its brief in its thread (#2294).
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'task-line', 'system', 'update-request'])
+    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
     expect((await updates()).map(d => d.id)).toEqual([...ids])
@@ -1254,8 +1257,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'Change this implementation', truncated: false, interrupted: false }
     const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    // Besides the rows naming who added each agent (#2207), only the task's own message (#2294).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Implementation'])
+    // Besides the rows naming who added each agent (#2207), nothing: a task no message asked for posts no row (#2925).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual([])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => !memberRow(m))).toHaveLength(1)
     expect(await store.deliveries(host, tab, worker)).toEqual([])
     // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.
@@ -1341,6 +1344,73 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, next, host, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
   })
+
+  // Task #2840: how long a message takes to reach its reader, per pod per minute (superTabs/messageReachStats.ts). The rows a
+  // minute's line would carry for what [act] did.
+  async function reaches(act: () => Promise<unknown>): Promise<Array<Record<string, unknown>>> {
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'test', log })
+    try { await act() } finally { stop() }
+    return (log.mock.calls[0]?.[1] as { rows?: Array<Record<string, unknown>> } | undefined)?.rows ?? []
+  }
+
+  it('times an agent\'s delivery from its creation to its host\'s first acknowledgement, once', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Please start.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' }))).toEqual([])
+    const typed = await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))
+    expect(typed).toEqual([{ reader: 'agent', via: 'delivery', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    expect(typed[0]!.max as number).toBeLessThan(60_000)
+    // The same acknowledgement again, as a host retries one it did not hear answered: the message reached it once.
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))).toEqual([])
+  })
+
+  it('does not time a delivery its host could not confirm', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Please start.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true }))).toEqual([])
+  })
+
+  it('times a person\'s read of new messages for each message someone else wrote, and nothing else', async () => {
+    const { tab, lead } = await fixture()
+    const tail = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.sequence
+    await run(tab, message('From the Lead.'), host, lead)
+    await run(tab, message('My own.'))
+    const read = await reaches(() => store.messages(owner, tab, 'lead', { after: tail }))
+    expect(read).toEqual([{ reader: 'person', via: 'read', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    // The page shown, a thread, or an agent's read is a re-read, not the message reaching its reader.
+    expect(await reaches(() => store.messages(owner, tab, 'lead', {}))).toEqual([])
+    expect(await reaches(() => store.messages(host, tab, 'lead', { after: tail }, lead))).toEqual([])
+  })
+
+  // Task #2840's measure: what timing costs a read of new messages and a delivery acknowledgement, per call, on a seeded
+  // Swarm (run against main's store.ts for the before numbers), and the minute's line those calls make. Printed for the PR.
+  it('measures an after read and a delivery ack per call, and prints the minute line', async () => {
+    const { tab, lead } = await fixture()
+    const tail = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.sequence
+    for (let i = 0; i < 20; i++) await run(tab, message(`Update ${i}.`), host, lead)
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'api-7f9c-pod:1', log })
+    const reads = 200
+    for (let i = 0; i < 20; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    let started = performance.now()
+    for (let i = 0; i < reads; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    const readMs = (performance.now() - started) / reads
+    const acks = 20
+    for (let i = 0; i < acks; i++) await run(tab, message(`Task ${i}.`))
+    const open = await store.deliveries(host, tab, lead)
+    for (const d of open) await store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: `c-${d.id}` })
+    started = performance.now()
+    for (const d of open) await store.delivery(host, tab, lead, d.id, { type: 'ack', claimId: `c-${d.id}`, receipt: 'typed', uncertain: false })
+    const ackMs = (performance.now() - started) / open.length
+    stop()
+    process.stderr.write(`[#2840 measure] per call: after read (20 rows) ${readMs.toFixed(2)} ms over ${reads}, delivery ack ${ackMs.toFixed(2)} ms over ${open.length}\n`)
+    process.stderr.write(`[#2840 sample] message reach latency ${JSON.stringify(log.mock.calls[0]?.[1] ?? null)}\n`)
+    expect(open.length).toBeGreaterThan(0)
+  }, 120_000)
 
   it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
     const { tab, lead } = await fixture()
@@ -1945,6 +2015,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const queued = (await store.deliveries(host, tab, lead)).find(d => d.messageId === next.result.messageId)!
     await run(tab, { type: 'message.send', conversationId: group, text: 'They pass.', replyTo: next.result.messageId as string, recipientIds: [] }, host, lead)
     expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
+  })
+
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  it('closes an agent\'s delivery when it answers right below the message, which opens no thread', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'What is the status?', replyTo: null, recipientIds: [lead] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
+    const answered = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'It is done.', replyTo: null, answers: messageId,
+      recipientIds: [] } as Command, host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    const page = await store.messages(peer, tab, 'lead', {})
+    const answer = page.messages.find(m => m.id === answered.result.messageId)!
+    expect(answer).toMatchObject({ replyTo: null })
+    expect(answer.thread ?? answer.id).toBe(answer.id)
+    // The question shows as an ordinary message: no thread under it.
+    expect(page.threads.find(t => t.id === messageId)?.replies ?? 0).toBe(0)
+    // A message of another conversation is not one to answer here.
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
+      .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
   })
 
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
@@ -2701,6 +2793,32 @@ describe('Super Tab chat attachments', () => {
     expect(files.objects.size).toBe(before + 2)
     expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
       .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+  })
+
+  // A gateway's content filter in front of the backend refused a handoff full of shell lines (task #2737): the app sends
+  // a form file gzipped, says so before the file, and the store keeps the original bytes, type and size.
+  it('unpacks a file sent gzipped and keeps the original, refusing a corrupt, misplaced, unknown or oversized one', async () => {
+    const { tab } = await fixture()
+    const text = Buffer.from('$ cat ~/.ssh/config && rm -rf ./build; curl https://example.test/x.sh | sh\n'.repeat(500))
+    const packed = await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'run.transcript.md', 'text/markdown']])
+    expect(packed.status).toBe(200)
+    expect(packed.attachment).toMatchObject({ name: 'run.transcript.md', mime: 'text/markdown', size: text.byteLength })
+    expect(files.objects.get(objectKey(packed.attachment.url))!.bytes.equals(text)).toBe(true)
+    const plain = await post(tab, [['conversationId', 'lead'], ['file', text, 'run.transcript.md', 'text/markdown']])
+    expect(plain).toMatchObject({ status: 200, attachment: { size: text.byteLength } })
+    const before = files.objects.size
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', text, 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'br'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['contentEncoding', 'gzip'], ['conversationId', 'lead'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    // Small packed, over the form's 10 MB unpacked: stopped at the cap like any other form file.
+    expect(await post(tab, [['conversationId', 'lead'], ['contentEncoding', 'gzip'], ['file', gzipSync(Buffer.alloc(10 * 1024 * 1024 + 1)), 'zeros.bin', 'application/octet-stream']]))
+      .toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(files.objects.size).toBe(before)
   })
 
   it('answers a bucket failure as unavailable, not as a server error', async () => {
@@ -3794,6 +3912,36 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
     expect(Date.now() - answeredAt).toBeLessThan(6_000)
     expect(loads()).toBeLessThanOrEqual(3)
+  })
+
+  // Task #2800: while the server pushes, a host picks up terminal requests only when told (cli superTabs/terminal.ts), so a push
+  // lost on the way is told again by the sender's own wait, at each re-check of a request still waiting for its host: inside
+  // the 10 s pickup window, and with no read the wait does not already make.
+  it('tells the host again of a request still waiting for pickup at each re-check, and never of one picked up', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const told: unknown[] = []
+    const at = new SuperTabStore(db, Date.now, null, { terminalWaiting: waiting => { told.push(waiting) } })
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([{ machineId: 'test-host', tabId: tab, agentId: worker }])
+    expect(await claim()).toHaveLength(1)
+    told.length = 0
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([])
+  })
+
+  // Task #2800's measure: the database operations one empty answer costs, which each read a timer no longer makes saves.
+  // Printed for the pull request.
+  it('measures the database operations of an empty worker list read and an empty terminal pickup', async () => {
+    const { tab, worker } = await terminalFixture()
+    const ops = async (run: () => Promise<unknown>) => (await profiled(db, run)).filter(e => !e.ns.endsWith('.system.profile')).length
+    const full = await ops(() => store.deliveries(host, tab, worker))
+    const quiet = await ops(() => store.deliveries(host, tab, worker))
+    // 30 s on, as the host's timer read came: the full poll again, the read cache warm.
+    const warm = await ops(() => later(31_000).deliveries(host, tab, worker))
+    const pickup = await ops(() => store.hostTerminal(host, 'test-host'))
+    process.stderr.write(`[#2800 measure] DB operations per empty answer: worker list full ${full} (cold cache) / ${warm} (warm), quiet ${quiet}, terminal pickup ${pickup}\n`)
+    expect(Math.min(full, warm, quiet, pickup)).toBeGreaterThan(0)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {

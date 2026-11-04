@@ -115,6 +115,9 @@ dependencies:
   # It has no Linux or Windows implementation, so there the bubble's play
   # opens the file as a file chip does. See CLAUDE.md on what a plugin costs.
   video_player: ^2.14.0
+  # The composer's mic on macOS and the web, as the phone records (#2665):
+  # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:
@@ -137,6 +140,13 @@ dev_dependencies:
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
+dependency_overrides:
+  # 2.12.2 rewrote the macOS player in Swift against the macOS 26 SDK
+  # (`AVAsset.load(_:isolation:)`); the release runner's Xcode 16 cannot build
+  # it, which failed every Desktop build since #2887. 2.12.1 is the last
+  # Objective-C release. Lift this once release-desktop.yml builds on Xcode 26.
+  video_player_avfoundation: 2.12.1
+
 flutter:
   fonts:
     - family: Roboto Mono

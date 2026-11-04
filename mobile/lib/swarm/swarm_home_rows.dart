@@ -130,9 +130,9 @@ class SwarmInvitationRow extends StatelessWidget {
 
 /// One project on Home, on one line as Slack's channels (Tony, 2026-11-03):
 /// its name as a channel's ("#openharness") — bold and bright with something
-/// new in it, quiet otherwise — its Swarm faint after it where Home shows
-/// several, the first to go when the row is short, and at its end the tags
-/// waiting in it ("@2", filled), or a skeleton in their place while what
+/// new in it, quiet otherwise — and at its end the tags
+/// waiting in it ("@2", filled), else a dot while it is unread (anh Dee,
+/// 2026-11-04), or a skeleton in the tags' place while what
 /// waits is on its way ([tagsLoading]). No dot for how its team is: one on
 /// every row said little, and the name already says what waits on the person
 /// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
@@ -143,7 +143,6 @@ class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
-    this.swarmName,
     this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
@@ -153,9 +152,6 @@ class SwarmHomeProjectRow extends StatelessWidget {
   static const double height = minTouchTarget;
 
   final SwarmHomeProject project;
-
-  /// Its Swarm, where Home shows several.
-  final String? swarmName;
 
   /// What waits in its Swarm is not read yet: its tags may still come.
   final bool tagsLoading;
@@ -197,21 +193,9 @@ class SwarmHomeProjectRow extends StatelessWidget {
                 child: Semantics(
                   label: bright && news.tags == 0 ? 'Unread messages' : null,
                   child: Text.rich(
-                    TextSpan(
-                      text: name,
-                      children: [
-                        if (swarmName case final swarm?)
-                          TextSpan(
-                            text: '  $swarm',
-                            style: AppType.caption(
-                              color: AppPalette.textFaint,
-                              height: 1.3,
-                            ),
-                          ),
-                      ],
-                    ),
+                    TextSpan(text: name),
                     key: const ValueKey('swarm-project-name'),
-                    semanticsLabel: [name, ?swarmName].join(', '),
+                    semanticsLabel: name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppType.label(
@@ -235,6 +219,20 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   width: 36,
                   height: 20,
                   radius: 10,
+                ),
+              ] else if (news.bold) ...[
+                // Unread, as anh Dee's Home draws it (2026-11-04); heard in
+                // the name's words.
+                const SizedBox(width: 12),
+                SizedBox.square(
+                  key: const ValueKey('swarm-project-unread'),
+                  dimension: AppSpace.s,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: AppPalette.textPrimary,
+                      shape: const CircleBorder(),
+                    ),
+                  ),
                 ),
               ],
             ],

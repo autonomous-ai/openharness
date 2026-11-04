@@ -11,10 +11,10 @@ import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
-import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
+import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
@@ -101,7 +101,22 @@ function projectSessionPrompt(tabId: string, chat: string, thread: string, mode:
 }
 
 /** Why a thread session that is not Claude Code's never starts. */
-export const BUDDY_SESSION_ENGINE = 'A thread session runs only with Claude Code, under its Buddy guard.'
+/** Why a Buddy start launched nothing on this machine: the server's own words (backend buddyContract.ts BUDDY_OWN_MACHINE_REFUSAL). */
+export const BUDDY_NOT_OWN_MACHINE = 'A Buddy runs only on your own machine. Pick one of yours.'
+
+/**
+ * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
+ * like their own Claude Code or Codex session, so it launches only where those rights are its owner's own. The Swarm starts a
+ * Buddy only on its owner's own machine (backend commands.ts buddy.create, BUDDY_OWN_MACHINE); here the machine checks again,
+ * by what it knows itself: its own host dispatched the start (every Buddy start is a machine's own, backend `poolGeneration`),
+ * it is not a Harness Team account, and the account signed in to Harness here is the Buddy's owner. The start's record must say
+ * the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
+ */
+export function buddyOnOwnMachine(input: Json, start: Json, buddyOf: Json): boolean {
+  const owner = buddyOf.personId
+  return identifier(owner) && input.hostDispatch === true && !isTeamDaemon() && input.signedIn === owner
+    && start.machineOwnerId === owner && start.contributorId === owner && !start.hostGrant
+}
 
 /** The thread a Buddy start's session is for, if it is one (backend `AgentStartRequest.buddySession`). */
 export function buddySessionThread(request: Json): string | null {
@@ -335,11 +350,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           return { error: 'START_FAILED', startId, detail }
         }
       }
-      // A Buddy thread session runs only under Claude Code, whose Buddy guard hook holds it: a Codex session would run without
-      // that hook (security review 1 of #2345). The backend refuses one too; this refuses it here before anything launches.
-      if (request.buddySession !== undefined && request.engine !== 'claude') {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_SESSION_ENGINE } }))
-        return { error: 'START_FAILED', startId, detail: BUDDY_SESSION_ENGINE }
+      // A Buddy launches with its owner's full rights, so only on its owner's own machine and account (task #2832), before
+      // anything is reserved or launched.
+      if (request.buddyOf !== undefined && !buddyOnOwnMachine(input, start, object(request.buddyOf))) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_NOT_OWN_MACHINE } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_NOT_OWN_MACHINE }
       }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
@@ -389,10 +404,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // Buddy's Claude Code traces covers it (host.ts buddyWorktree and ownScrub; security reviews of #2345 and #2375). The
       // backend's folder for it only admits the start.
       const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
+      // Its folder recorded as its owner's, checked above, before it launches: every launch and relaunch of a Buddy requires it
+      // (lib/swarmSkills.ts; security review 2 of #2832). Only a folder named for this start: one the request names could share
+      // its name with another folder, so a Buddy there has no record and does not launch.
+      if (buddy && (homeFolder || request.worktree)) markBuddyOwner(worktreeFolderName(`super-tab/${startId}`), String(object(request.buddyOf).personId))
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
-      // A Buddy of one project launches with no wide guard: its folder is marked before its launch (lib/buddyGuard.ts).
-      if (buddy && request.buddyNarrow === true) markBuddyNarrow(worktreeFolderName(`super-tab/${startId}`))
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000
@@ -410,16 +427,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. A Claude Buddy runs
-      // past its folder's guard, which allows reads and its Super Tab commands, and the rest is refused without a prompt
-      // nobody answers (lib/buddyGuard.ts, Ken 10-29). A Codex Buddy reads in its read-only sandbox and asks before anything
-      // outside it: with full permissions it could push and open pull requests with its person's own GitHub login (Lead, 10-29).
+      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session, in
+      // full mode, and uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const asks = !buddy ? null : request.engine === 'claude' ? 'buddy' : request.engine === 'codex' ? 'readOnlyAsk' : null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
-        ...(asks ? { permissionMode: asks } : projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
+        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).

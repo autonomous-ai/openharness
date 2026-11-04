@@ -11,6 +11,7 @@ import '../measurement/hub_usage.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
+import '../super_tabs/visible_tick.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_session.dart';
 import '../widgets/terminal_panel.dart';
@@ -52,7 +53,8 @@ class SharedHarnessPanel extends StatefulWidget {
   State<SharedHarnessPanel> createState() => _SharedHarnessPanelState();
 }
 
-class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
+class _SharedHarnessPanelState extends State<SharedHarnessPanel>
+    with WidgetsBindingObserver, VisibleTick<SharedHarnessPanel> {
   late WsConn _connection;
   late TerminalSession _terminal;
   late SharedTerminalWatch _watch;
@@ -124,7 +126,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
       onChanged: () {
         if (mounted && generation == _generation) setState(() {});
       },
-    );
+    )..seen = onScreen;
     _lastViewerState = '';
     _connection = WsConn(
       wsBaseUrl: widget.notifier.config.wsBaseUrl,
@@ -261,6 +263,16 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     _terminal.transportLost(reason);
     unawaited(_connection.close());
   }
+
+  // A stopped terminal is asked for again only while the pane can be seen.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _watch.seen = onScreen;
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _watch.seen = onScreen;
 
   @override
   void didUpdateWidget(SharedHarnessPanel oldWidget) {

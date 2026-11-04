@@ -1399,14 +1399,11 @@ class SuperTabThread {
   final int replies, lastSequence;
   final DateTime? lastAt;
 
-  /// What its root's row says after the time; null for a message that is no
-  /// ask, and for a state this app does not know.
-  String? get askTag => switch (ask) {
-    'proposal' => '✋ Proposal',
-    'on-it' => '● On it',
-    'shipped' => '✓ Shipped',
-    _ => null,
-  };
+  /// What its root's row says after the time: a Buddy's proposal nobody has
+  /// answered yet; null for any other message. A task's state is no tag: its
+  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
+  /// so an older server's On it and Shipped draw nothing.
+  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
@@ -1446,6 +1443,8 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
+      deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
       reactions = List.unmodifiable(
         SuperTabReactionCount.listFromJson(row['reactions']),
@@ -1494,6 +1493,15 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+
+  /// When its author last changed its text, as the backend's `message.edit`
+  /// records it; null for one never edited.
+  final DateTime? editedAt;
+
+  /// When its author deleted it. Only a message with replies is still read
+  /// after that: its tombstone, which keeps its thread.
+  final DateTime? deletedAt;
+  bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
   final List<SuperTabReactionCount> reactions;
 
@@ -1509,6 +1517,10 @@ class SuperTabMessage {
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
+
+  /// What was typed into an agent's terminal, a scheduled prompt too: no chat
+  /// row and nothing unread (Ken 11-04, task #2849). Its answer still is one.
+  bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 

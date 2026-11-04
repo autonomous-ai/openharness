@@ -866,8 +866,9 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
 
 // Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
 // on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
-/** `terminal`: a terminal request waits, not a delivery (lib/swarmDeliveryPushes.ts announceSwarmTerminal). */
-export interface SwarmDeliveriesMsg { tabId: string; agentId: string; terminal?: true }
+/** `terminal`: a terminal request waits, not a delivery (lib/swarmDeliveryPushes.ts announceSwarmTerminal). `pushes` is that
+ *  socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it. */
+export type SwarmDeliveriesMsg = { tabId: string; agentId: string; terminal?: true } | { pushes: true }
 
 const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
 

@@ -83,6 +83,7 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
+import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/join_machine.dart';
@@ -794,6 +795,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
           agentId.substring(0, slash),
           agentId.substring(slash + 1),
         );
+        return;
+      }
+      // A reply's notice carries its message link: the click opens it as the link does, in its thread.
+      if (machineId == SystemNotifications.messageNoticeMachine) {
+        unawaited(swarmMessageLinkInbox.accept(agentId));
         return;
       }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
@@ -7416,42 +7422,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         topInset: _native ? 0 : _tabBarHeight,
         onOpened: onOpened,
         ownsPointer: (position) => _owns(_notificationsButtonKey, position),
-        onOpen: (row) async {
-          final destination = swarmDestinations(app)
-              .where(
-                (item) =>
-                    item.machineId == row.machineId &&
-                    item.agentId == row.agentId,
-              )
-              .firstOrNull;
-          if (destination == null) return false;
-          final readToken = app.agentUnread.readTokenFor(
-            row.machineId,
-            row.agentId,
-          );
-          final questionId = app
-              .questionFor(row.machineId, row.agentId)
-              ?.requestId;
-          final opened = await activateSwarmDestination(
-            app,
-            destination,
-            destinationSwarmId: app.activeSwarmId,
-          );
-          // Opening acknowledges this notification. Its question stays pending
-          // until the daemon confirms an answer, independently of unread state.
-          if (opened &&
-              app.agentUnread.readTokenFor(row.machineId, row.agentId) ==
-                  readToken &&
-              app.questionFor(row.machineId, row.agentId)?.requestId ==
-                  questionId) {
-            app.readAgentNotification(
-              row.machineId,
-              row.agentId,
-              readToken: readToken,
-            );
-          }
-          return opened;
-        },
+        onOpen: (row) => openInboxNotification(app, row),
       ),
     );
   }

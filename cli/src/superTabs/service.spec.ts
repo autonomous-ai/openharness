@@ -146,6 +146,18 @@ describe('five-part task commands', () => {
       expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
     })
   }
+  // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which still settles it.
+  it('sends an answer as a reply to a backend that refuses answers, once, with the same operation', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { answers?: unknown } }).command.answers
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "answers"' } } } as never
+      : original(...args))
+    const post = { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: null, answers: 'm1', recipientIds: [] }
+    expect(await send(t, post)).toMatchObject({ ok: true })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
+    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
+      command: { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: 'm1', recipientIds: [] } })
+  })
   it('renders a task\'s review plan into its brief as the backend does', async () => {
     const t = setup()
     const review = { focus: ' Check revoked access first. ', reviews: 2 }
@@ -334,6 +346,8 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   const t = setup()
   const help = (await t.ask({ action: 'help', tabId: 'tab', agentId: t.agentId }, owner) as { help: Record<string, unknown> }).help
   expect(String(help.post)).toContain('--mention')
+  // Task #2924: an agent with work in the project posts in its project chat itself, joining nobody there (#2207).
+  expect(String(help.post)).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.')
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask', 'person.tell']))
   expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
@@ -552,7 +566,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
   const giveBack = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, creationOf: vi.fn(() => null), stop }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, ended: vi.fn(), creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
@@ -572,10 +586,25 @@ it('keeps host capacity separate from account authority and closes it on disconn
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
 })
 
+// Issue #2989: a start the Swarm failed gives its reservation back at once. Only this machine's own host, which read that
+// verdict from the Swarm, may say so: a relayed caller with machine access could otherwise free memory still starting.
+it('ends a failed start\'s reservation only for a caller on this machine', async () => {
+  const core = fakeCore()
+  const ended = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended, creationOf: vi.fn(() => null), stop: vi.fn() }))
+  const service = superTabService(core, { reservations: factory })
+  const closed = new AbortController().signal
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, visitor, closed)).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(ended).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'endCapacity', creationId: 'native-creation-id' }, { local: true, owner: false }, closed))
+    .toMatchObject({ ok: true, returned: true })
+  expect(ended).toHaveBeenCalledWith('native-creation-id', closed)
+})
+
 it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
   const core = fakeCore()
   const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
-  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), creationOf, stop: vi.fn() }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended: vi.fn(), creationOf, stop: vi.fn() }))
   let options: SuperTabHostOptions = {}
   const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
     options = given
@@ -667,6 +696,22 @@ describe('routeHistory', () => {
     const [person, lead] = moved.value.decisions as Array<Record<string, unknown>>
     expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
     expect(lead).not.toHaveProperty('account')
+  })
+  // Task #2901: a route names no pick; the start or assignment the coordinator made records the candidate it matched, and that
+  // candidate's account and spend are what the open decision holds (the backend keeps every candidate's slim fit).
+  it('takes the title, account and spend of the candidate a pick-less decision\'s start chose', async () => {
+    const slim = (account: string, weekly: number) => ({ account, spend: { '5-hour': weekly * 7, weekly } })
+    const record = { via: 'instructions', assessment: { size: 'small' }, candidates: [{ id: 'c0', title: 'New agent · Claude opus high · a', fit: slim('ka', 1) },
+      { id: 'c1', title: 'New agent · Codex default default · b', fit: slim('kb', 2) }] }
+    const chosen = { id: 'd1', conversationId: 'g1', record, override: null, outcome: null, assignmentId: 'as1', createdAt: '2026-11-04T10:00:00Z',
+      final: { kind: 'new', startId: 's', machineId: 'b', engine: 'codex', model: 'default', effort: 'default', candidateId: 'c1' } }
+    const waiting = { ...chosen, id: 'd2', final: null, assignmentId: null }
+    const { value } = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([chosen, waiting]))
+    const [started, unstarted] = value.decisions as Array<Record<string, unknown>>
+    expect(started).toMatchObject({ title: 'New agent · Codex default default · b', account: 'kb', spend: { '5-hour': 14, weekly: 2 }, size: 'small', via: 'instructions' })
+    // Nothing chosen yet holds nothing, and says so.
+    expect(unstarted).toMatchObject({ title: 'not chosen yet' })
+    expect(unstarted).not.toHaveProperty('account')
   })
   it('gives every attempt of the group, newest first, with only what the route needs and no more than fifty', async () => {
     const t = setup()
@@ -760,6 +805,20 @@ describe('which messages still need an answer', () => {
     // A person's email is passed as the backend sent it.
     expect((value.messages[0]!.author as { name: string }).name).toBe('sam@example.com')
   })
+  // An answer right below a message settles the agent's delivery and has no replyTo (task #2929): its delivery says it was answered.
+  it('marks a message answered when the caller\'s delivery of it was answered, as by an answer right below it', async () => {
+    const t = setup()
+    const delivery = (status: string) => [{ id: 'd1', agentId: t.agentId, status }, { id: 'd2', agentId: 'someone-else', status: 'answered' }]
+    const feed = [
+      { id: 'q1', sequence: 1, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('answered') },
+      { id: 'q2', sequence: 2, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('delivered') },
+      { id: 'a1', sequence: 3, author: { kind: 'agent', id: t.agentId, name: 'Lead' }, recipientIds: [], replyTo: null },
+    ]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/messages') ? { messages: feed, next: null } : swarmData(t.agent, path) } }))
+    const value = (await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner) as { value: { messages: Record<string, unknown>[] } }).value
+    expect(value.messages.map(m => m.answered)).toEqual([true, false, undefined])
+  })
   it('names the thread root on each thread reply only, so an agent reading one feed sees which thread a reply is in', async () => {
     const t = setup()
     const feed = [
@@ -845,8 +904,9 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
-// Project instructions, phase 4: the route ranks by facts and notes the rest; no build, review or grid rule is the help's.
-it('tells every agent what the route leaves out, how it ranks the rest, and which kinds of work may go to the grid', async () => {
+// Project instructions, phase 4: the route shows facts and notes the rest; no build, review or grid rule is the help's. Task #2901:
+// it ranks nothing and names no pick, so the help sends the choice to the Routing instructions and asks for the rule followed.
+it('tells every agent what the route leaves out, that it ranks the rest by nothing, and which kinds of work may go to the grid', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
   expect(help.route).toContain('The route leaves out what cannot run, and says why')
   // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
@@ -857,8 +917,11 @@ it('tells every agent what the route leaves out, how it ranks the rest, and whic
   for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
   expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
   expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
-  expect(help.route).toContain('It ranks the rest by strength, then price and quota fit, then an idle agent before a new one')
-  expect(help.route).toContain('Your project\'s instructions say how to choose')
+  expect(help.route).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
+  expect(help.route).toContain('weekly % left and reset time')
+  expect(help.route).toContain('choose by your project\'s Routing instructions')
+  expect(help.route).toContain('routeDecisionId and overrideReason, the Routing rule that chose it')
+  expect(help.route).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on/)
   expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)
   expect(help.commands.map(c => c.type)).not.toContain('rule.set')
 })
@@ -1295,7 +1358,8 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain('--answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread.')
     // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
     expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
@@ -1336,7 +1400,7 @@ describe('a Buddy\'s help', () => {
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>, asker: Parameters<ReturnType<typeof setup>['ask']>[1] = owner) =>
     object(object(await t.ask({ action: 'help', ...payload }, asker)).help)
   const expectBuddy = (each: Record<string, unknown>) => {
-    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
+    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--answers MESSAGE_ID \| --reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
     expect(String(each.post)).toContain(QUOTED)
     expect(String(each.post)).not.toContain('TEXT|-')
     expect(String(each.post)).not.toContain(STDIN_HINT)

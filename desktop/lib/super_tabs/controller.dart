@@ -43,6 +43,27 @@ String superTabOperationId() {
   ).join();
 }
 
+/// Runs [task] for each of [items], two at a time, and returns the results in
+/// order. Every Swarm command rewrites the whole Swarm row, so twenty at once
+/// hit SWARM_BUSY (503); two keep a batch moving without that.
+Future<List<R>> superTabTwoAtATime<T, R>(
+  Iterable<T> items,
+  Future<R> Function(T item) task,
+) async {
+  final queue = items.toList();
+  final results = List<R?>.filled(queue.length, null);
+  var next = 0;
+  Future<void> worker() async {
+    while (next < queue.length) {
+      final at = next++;
+      results[at] = await task(queue[at]);
+    }
+  }
+
+  await Future.wait([worker(), worker()]);
+  return [for (final r in results) r as R];
+}
+
 /// The id the backend gives the message a person sends with receipt
 /// [operationId]: `stableId(state.id, actorKey(actor), operationId)`, the
 /// first 24 hex of sha256 over the JSON of those parts (backend
@@ -169,6 +190,10 @@ class SuperTabOutgoing {
 /// before.
 const kSwarmPushLease = Duration(minutes: 5);
 
+/// How often a pushing server repeats that word on one socket (backend lib/swarmClientPushes.ts
+/// `PUSHES_REPEAT_MS`). A word off this beat is a socket that (re)connected.
+const kSwarmPushRepeat = Duration(minutes: 4);
+
 /// While the server pushes, a Swarm nothing was said of is still read this
 /// often: the safety net for a push lost on the way.
 const kSwarmPushSafetyNet = Duration(seconds: 60);
@@ -176,6 +201,10 @@ const kSwarmPushSafetyNet = Duration(seconds: 60);
 /// While the server pushes, which Swarms the account is in is still read this
 /// often; a change to one asks for a read at once (`SuperTabClient`).
 const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
+
+/// While a Swarm's reads are refused, the account's Swarm list is read for it
+/// at most this often to learn whether it is gone (task #2767).
+const kSwarmListRecheckEvery = Duration(minutes: 1);
 
 /// The files waiting in a Swarm's boxes: by conversation, and by a thread's
 /// conversation and root.
@@ -698,6 +727,9 @@ class SuperTabController extends ChangeNotifier {
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
 
+  /// When the Swarm was last read (Manage ▸ Backlog's "Synced", #2774).
+  DateTime? get syncedAt => _partsReadAt;
+
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).
   final _rows = <String, Map<String, Map<String, dynamic>>>{};
@@ -734,6 +766,14 @@ class SuperTabController extends ChangeNotifier {
   /// back reads at once.
   bool get away => _away;
   bool _away = false;
+
+  /// The page or window is hidden ([SuperTabClient.pageVisible]), set before [away]. While the
+  /// server pushes, a hidden Swarm reads only what it is told (task #2953): its safety net waits
+  /// for the return, which reads at once.
+  bool pageHidden = false;
+
+  bool get _restsHidden =>
+      pageHidden && _pushing && !(_toldMain || _toldMachine);
   set away(bool value) {
     if (_away == value) return;
     _away = value;
@@ -868,6 +908,10 @@ class SuperTabController extends ChangeNotifier {
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
 
+  /// The reply the open thread was opened at, to bring into view lit once
+  /// its panel holds it ([SuperTabThreadPanel] takes it); null otherwise.
+  ({String root, String messageId})? threadTarget;
+
   /// A thread restored open, whose replies its first read of the Swarm brings.
   bool _reopenThread = false;
 
@@ -876,6 +920,10 @@ class SuperTabController extends ChangeNotifier {
   /// every device, and this controller keeps reading with nothing shown, so
   /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
+
+  /// Whether the open thread's pane is on screen, as its read mark counts it:
+  /// its replies are being read.
+  bool get threadPaneOnScreen => openedThread != null && !_threadUnshown;
 
   /// The pane of the open thread is on screen.
   void threadPaneShown() {
@@ -1604,9 +1652,11 @@ class SuperTabController extends ChangeNotifier {
   /// Opens [root]'s thread of the selected conversation beside the chat.
   /// [shown] false opens it with its pane not on screen (the dial opened it
   /// in a background tab): nothing reads until [threadPaneShown].
-  void openThread(String root, {bool shown = true}) {
+  /// [at] names a reply to open the thread at, lit, as a link to it does.
+  void openThread(String root, {bool shown = true, String? at}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    threadTarget = at == null ? null : (root: root, messageId: at);
     _threadUnshown = !shown;
     _pruneThreadFiles();
     _seeThread(root);
@@ -1618,6 +1668,7 @@ class SuperTabController extends ChangeNotifier {
   void closeThread() {
     if (openedThread == null) return;
     openedThread = null;
+    threadTarget = null;
     _pruneThreadFiles();
     _saveSoon();
     _changed();
@@ -2023,7 +2074,7 @@ class SuperTabController extends ChangeNotifier {
   );
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request';
+      m.source['kind'] != 'update-request' && !m.terminalPrompt;
 
   /// [id]'s messages with its steps' rows merged in by time (task steps
   /// design): each step keeps its own conversation, shown inside its task.
@@ -2297,18 +2348,24 @@ class SuperTabController extends ChangeNotifier {
   /// thread's reply line instead ([threadUnread]). The server's newest
   /// main-stream message covers a chat not held here; an older server's
   /// newest message, and the newest held, stand in for it.
-  bool unread(SuperTabConversation group) =>
-      max(
-        group.lastMainSequence ?? group.lastMessageSequence,
-        _messages[group.id]?.reversed
-                .where(
-                  (m) => m.source['kind'] != 'update-request' && m.inMainStream,
-                )
-                .firstOrNull
-                ?.sequence ??
-            0,
-      ) >
-      readMark(group.id);
+  /// Held through the server's newest message, the rows held say it, so a
+  /// row the chat does not list (a terminal's prompt) is nothing new.
+  bool unread(SuperTabConversation group) {
+    final held = _messages[group.id];
+    final heldAll =
+        held != null &&
+        held.isNotEmpty &&
+        held.last.sequence >= group.lastMessageSequence;
+    return max(
+          heldAll ? 0 : group.lastMainSequence ?? group.lastMessageSequence,
+          held?.reversed
+                  .where((m) => _listed(m) && m.inMainStream)
+                  .firstOrNull
+                  ?.sequence ??
+              0,
+        ) >
+        readMark(group.id);
+  }
 
   void start() {
     if (_disposed) return;
@@ -2323,7 +2380,7 @@ class SuperTabController extends ChangeNotifier {
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
       _poll = Timer.periodic(_every, (_) {
-        if (_pollDue) unawaited(refresh());
+        if (_pollDue && !_restsHidden) unawaited(refresh());
         _checkReceipt();
       });
       return;
@@ -3088,6 +3145,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Renames the agent [agentId] for everyone in the Swarm (backend
+  /// `agent.rename`): only the person who runs it, or its machine's owner, may.
+  /// Null once the server took it; otherwise why it did not.
+  Future<String?> renameAgent(String agentId, String name) async {
+    final done = await command({
+      'type': 'agent.rename',
+      'agentId': agentId,
+      'name': name.trim(),
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves [taskId] right after [after] in its project's shared Next up, or to
   /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
   /// once the server took it; otherwise why it did not.
@@ -3263,6 +3334,18 @@ class SuperTabController extends ChangeNotifier {
   /// or the one shown next.
   void openNotice(String kind, String id) {
     noticeRequest = (kind: kind, id: id);
+    notifyListeners();
+  }
+
+  /// The agent whose terminal a Waiting on you notice asked to open
+  /// ([openAgentTerminal]), until the Swarm workspace on screen takes it.
+  ({String agentId, String? conversationId})? agentTerminalRequest;
+
+  /// Opens [agentId]'s terminal, focused, beside the chat it waits in
+  /// ([conversationId] when the notice names one), in the workspace on screen
+  /// or the one shown next.
+  void openAgentTerminal(String agentId, {String? conversationId}) {
+    agentTerminalRequest = (agentId: agentId, conversationId: conversationId);
     notifyListeners();
   }
 
@@ -3557,7 +3640,36 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     final loaded = _loadedMessageSequence(id);
-    final last = min(through ?? loaded, loaded);
+    var last = min(through ?? loaded, loaded);
+    // Rows the chat does not list (a terminal's prompt) just after what was
+    // read are read with it, so another device does not show them unread.
+    for (final m in _messages[id] ?? const <SuperTabMessage>[]) {
+      if (m.sequence <= last || !m.inMainStream) continue;
+      if (_listed(m) || m.sequence > loaded) break;
+      last = m.sequence;
+    }
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
+    if ((_readAt[id] ?? 0) >= last) return;
+    _readAt[id] = last;
+    _saveSoon();
+    _changed();
+  }
+
+  /// [id] was read through [sequence] outside its chat (Activity's Mark read
+  /// on a tag): kept here and sent to the server, as [markThreadRead] does for
+  /// a thread. Unlike [markRead] it does not stop at the loaded messages, as
+  /// the chat may not be open; it stops at the chat's newest message.
+  void markReadThrough(String id, int sequence) {
+    final group = snapshot?.conversation(id);
+    if (_disposed || accessRevoked || group == null || sequence <= 0) return;
+    final last = min(
+      sequence,
+      max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(id),
+      ),
+    );
+    _unreadHeld.remove(id);
     _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
@@ -3952,7 +4064,7 @@ class SuperTabController extends ChangeNotifier {
       try {
         final answer = await request(
           'GET',
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
+          '$_path/changes?${held.changesQuery}',
         );
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
@@ -3973,7 +4085,14 @@ class SuperTabController extends ChangeNotifier {
           );
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }
@@ -4357,6 +4476,40 @@ class SuperTabController extends ChangeNotifier {
     return seq is int && known != null && known != seq;
   }
 
+  /// The rows of [held] that [page], read whole, no longer has: from its
+  /// oldest row on (from the start when it reached it) and before [before]
+  /// (to the end when null). Each was deleted since it was read.
+  static Set<String> _deletedFrom(
+    Iterable<SuperTabMessage> held,
+    Map<String, dynamic> page,
+    int? before,
+  ) {
+    final rows = [
+      for (final row in page['messages'] as List)
+        SuperTabMessage.fromJson(superTabMap(row)),
+    ];
+    if (page['next'] != null && rows.isEmpty) return {};
+    final ids = {for (final m in rows) m.id};
+    final oldest = page['next'] == null
+        ? null
+        : rows.reduce((a, b) => superTabMessageOrder(a, b) <= 0 ? a : b);
+    return {
+      for (final m in held)
+        if (!ids.contains(m.id) &&
+            (before == null || m.sequence < before) &&
+            (oldest == null || superTabMessageOrder(m, oldest) >= 0))
+          m.id,
+    };
+  }
+
+  /// Where a query's page ends: its `before`, or null for the latest page.
+  static int? _beforeOf(String query) => int.tryParse(
+    Uri.splitQueryString(
+          query.startsWith('?') ? query.substring(1) : query,
+        )['before'] ??
+        '',
+  );
+
   static bool _sameMessages(
     List<SuperTabMessage>? shown,
     List<SuperTabMessage> next,
@@ -4366,6 +4519,8 @@ class SuperTabController extends ChangeNotifier {
       final a = shown[i], b = next[i];
       if (a.id != b.id ||
           a.text != b.text ||
+          a.editedAt != b.editedAt ||
+          a.deletedAt != b.deletedAt ||
           a.deliveries.length != b.deliveries.length ||
           !_sameReactions(a.reactions, b.reactions)) {
         return false;
@@ -4627,21 +4782,29 @@ class SuperTabController extends ChangeNotifier {
       // below them, and the rest waits for [showLatest].
       final skipped = query.startsWith('?after=') && answer['next'] != null;
       final keepPlace = skipped && _readingBack.contains(id);
+      // A page read whole, latest or before a point: it holds every row
+      // from its oldest on, so a held row it lacks was deleted (an edit or a
+      // delete moves `reactionSeq` as a reaction does).
+      ({Map<String, dynamic> page, int? before})? whole =
+          older || query.startsWith('?after=')
+          ? null
+          : (page: answer, before: _beforeOf(query));
       if (!_disposed && skipped && !keepPlace) {
         answer = await request('GET', _messagesPath(id));
+        whole = (page: answer, before: null);
       } else if (!_disposed && keepPlace) {
         // A changed reaction refreshes the page ending at the newest held:
         // the latest page, under rows read back, would leave a gap.
-        final shown = reacted
-            ? (await request(
-                    'GET',
-                    '${_messagesPath(id)}?before=${tail! + 1}',
-                  ))['messages']
-                  as List
-            : const [];
+        final page = reacted
+            ? await request('GET', '${_messagesPath(id)}?before=${tail! + 1}')
+            : null;
+        if (page != null) whole = (page: page, before: tail! + 1);
         answer = {
           ...answer,
-          'messages': [...shown, ...answer['messages'] as List],
+          'messages': [
+            ...page?['messages'] as List? ?? const [],
+            ...answer['messages'] as List,
+          ],
         };
       } else if (!_disposed &&
           reacted &&
@@ -4654,10 +4817,12 @@ class SuperTabController extends ChangeNotifier {
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',
         );
+        whole = (page: answer, before: tail + 1);
       } else if (!_disposed && reacted && arrived) {
         // New messages and a changed reaction at once: the rows already shown
         // need their counts too, so the latest page is read with the new ones.
         final page = await request('GET', _messagesPath(id));
+        whole = (page: page, before: null);
         answer = {
           ...answer,
           'messages': [
@@ -4757,6 +4922,12 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) {
           combined.putIfAbsent(m.id, () => m);
         }
+      }
+      if (whole != null) {
+        final gone = _deletedFrom(combined.values, whole.page, whole.before)
+          ..removeAll(incoming.map((m) => m.id));
+        combined.removeWhere((messageId, _) => gone.contains(messageId));
+        _rows[id]?.removeWhere((messageId, _) => gone.contains(messageId));
       }
       final sorted = combined.values.toList()..sort(superTabMessageOrder);
       // Past the cap the oldest rows go, where earlier history continues;

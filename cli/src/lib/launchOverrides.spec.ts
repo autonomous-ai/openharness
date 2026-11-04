@@ -27,6 +27,8 @@ const GRID: GridLaunchOverride = {
 }
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
+vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
@@ -43,8 +45,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    // A Buddy here reads its folder alone, whatever this machine is (wide mode reads the person's home: lib/buddyGuard.wide.spec.ts).
-    swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved, () => null), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
+    swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
@@ -437,17 +438,17 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
-  it('relaunches a Buddy with none of them: it starts no MCP server at all (review 3 of #2092)', async () => {
+  it('relaunches a Buddy with them, as its owner\'s own session (task #2832)', async () => {
     writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
     const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
       { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-buddy-')), swarmSkill: { role: 'buddy', key: 'harness-claude-buddy' } }, 'a', () => true)
     expect(buddy.ok).toBe(true)
-    expect(JSON.stringify(buddy)).not.toContain('lamp-mcp')
+    expect(JSON.stringify(buddy)).toContain('lamp-mcp')
   })
 
-  // The grid's web MCP is a server too: a Buddy moved onto a grid model drops it, and keeps everything that makes it a
-  // Buddy (docs/plans/2026-11-03-buddy-model-switch-design.md, "The Buddy's guard on a grid").
-  it('a Buddy moved onto a grid gets no web MCP and keeps its Buddy launch (#2354)', async () => {
+  // A Buddy moved onto a grid model keeps the grid's web tools, as its owner's own session would, and everything that makes it a
+  // Buddy (task #2832; before it, #2354 dropped them).
+  it('a Buddy moved onto a grid keeps its web MCP and its Buddy launch', async () => {
     const withMcp: GridLaunchOverride = { ...GRID, mcpUrl: 'https://api-grid.example/v1/grid/web-mcp/' }
     const cwd = mkdtempSync(join(tmpdir(), 'overrides-buddy-'))
     const buddy = { startedBy: null, cwd, swarmSkill: { role: 'buddy' as const, key: 'harness-claude-buddy' } }
@@ -456,10 +457,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', buddy, 'a', () => true)
     const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...buddy, gridLaunch: withMcp }, 'a', () => true)
     if (!own.ok || !grid.ok) throw new Error('Fixture launch failed')
-    expect(grid.overrides.extraArgs).not.toContain('--mcp-config')
-    expect(grid.overrides.extraArgs).not.toContain(CLAUDE_ALLOW_WEB_TOOLS_ARG)
-    expect(grid.overrides.env).not.toHaveProperty(GRID_KEY_VAR)
-    expect(JSON.stringify(grid.overrides)).not.toContain(withMcp.mcpUrl)
+    expect(grid.overrides.extraArgs).toEqual(expect.arrayContaining(['--mcp-config', CLAUDE_ALLOW_WEB_TOOLS_ARG]))
     // Claude Code's own web tools stay off, as on any grid.
     expect(grid.overrides.extraArgs).toContain(CLAUDE_DISALLOW_WEB_TOOLS_ARG)
     // What it gets on its own login, it gets on the grid: its folder for temporary files and its Buddy instructions.

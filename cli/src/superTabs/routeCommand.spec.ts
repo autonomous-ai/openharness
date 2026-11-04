@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
-import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
+import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
 import { placedHeavyWork } from './machineFit.js'
 import { inspectCapacity } from './start.js'
@@ -72,6 +72,8 @@ const input = { tabId: 'tab', conversationId: 'g1', assessment: { difficulty: 'm
 const opener = (make: (id: string) => ReturnType<typeof daemon> = id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })) => vi.fn(async (_w: unknown, id = '') => make(id)) as unknown as typeof openDaemon & Mock
 const recorded = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].action === 'command')![0]
 /** Each candidate's line, as the route log keeps it. */
+/** The answer's first new agent row: what a start there reads of its machine. */
+const firstNew = (answer: Answer) => (answer.candidates as Array<Record<string, unknown>>).find(r => r.kind === 'new')!
 const labels = (s: ReturnType<typeof scoped>) => (recorded(s).command.decision.candidates as Array<{ label: string }>).map(c => c.label)
 
 describe('routeTask', () => {
@@ -91,7 +93,7 @@ describe('routeTask', () => {
     rebound.state.agents = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'replacement' } : a)
     const s = scoped({ tab: rebound })
     const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['replacement'] })), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1' })]) })
     expect(recorded(s).command.decision.excluded.some((c: { title: string }) => c.title.startsWith('Multiply'))).toBe(false)
   })
   it('shows the group\'s project instructions and notes in its answer, and still answers when they cannot be read', async () => {
@@ -105,10 +107,10 @@ describe('routeTask', () => {
     expect(unread).toMatchObject({ ok: true, instructionsUnreadable: true })
     expect(unread).not.toHaveProperty('instructions')
   })
-  it('collects members and new agents, records and returns the first in the order, and never asks Jev', async () => {
+  it('collects members and new agents, records and returns them all, and never asks Jev', async () => {
     const s = scoped()
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'order', p: null, pick: { id: 'c0' }, warnings: ['w'] })
+    expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions', p: null, candidates: expect.arrayContaining([expect.objectContaining({ id: 'c0' })]), warnings: ['w'] })
     expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'instructions', 'command'])
     expect(recorded(s).command.decision).not.toHaveProperty('context')
     const record = recorded(s)
@@ -116,16 +118,18 @@ describe('routeTask', () => {
     // The idle member Multiply is a candidate. (The idle coordinator is too: 'routing by facts', below.)
     const titles = (record.command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles).toContain('Multiply · Claude sonnet medium · remote-1')
-    expect((result.alternatives as unknown[]).length).toBeLessThanOrEqual(2)
+    // Every recorded row is in the answer, members on the same account too: the coordinator may reuse a particular one.
+    expect((result.candidates as Array<{ id: string }>).map(r => r.id)).toEqual((record.command.decision.candidates as Array<{ id: string }>).map(c => c.id))
+    expect((result.candidates as Array<{ title: string }>).map(r => r.title)).toContain('Multiply · Claude sonnet medium · remote-1')
   })
-  it('ranks with the plug-ins its makers make: their reasons in the answer and the record, a failed one named in the warnings', async () => {
+  it('runs the plug-ins its makers make: their reasons in the answer and the record, a failed one named in the warnings', async () => {
     const s = scoped()
     const plugins: RoutePlugin[] = [{ name: 'Machine fit', adjust: c => c.kind === 'new' ? { strength: 5, reason: 'a fresh worktree here' } : null },
       { name: 'Broken', adjust: () => { throw new Error('secret') } }]
     const inputs: PluginInput[] = []
     const result = await routeTask(input, s, where as never, opener(), () => 'op', undefined, plugins.map(p => ({ name: p.name, make: async (i: PluginInput) => { inputs.push(i); return p } })))
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', notes: expect.arrayContaining(['Machine fit: a fresh worktree here']) },
-      why: expect.stringContaining('plug-ins'), warnings: ['w', 'The routing plug-in "Broken" was skipped: it failed. The route is ranked without it.'] })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', notes: expect.arrayContaining(['Machine fit: a fresh worktree here']) })]),
+      why: expect.stringContaining('Plug-ins'), warnings: ['w', 'The routing plug-in "Broken" was skipped: it failed. The route is shown without it.'] })
     expect(labels(s)[0]).toContain('Machine fit: a fresh worktree here')
     expect(JSON.stringify(result)).not.toContain('secret')
     // Each maker gets the task, the route's backend read, the group's history (read once, shared) and the agent's request.
@@ -138,8 +142,8 @@ describe('routeTask', () => {
       { name: 'Nobody', make: async () => ({ name: 'Nobody', adjust: () => ({ refuse: true, reason: 'no room' }) }) },
       { name: 'Broken', make: async () => ({ name: 'Broken', candidates: () => { throw new Error('secret') } }) },
       { name: 'Maker fails', make: async () => { throw new Error('secret') } }])
-    expect(none).toMatchObject({ error: 'NO_CANDIDATE', warnings: ['The routing plug-in "Maker fails" was skipped: its maker failed. The route is ranked without it.',
-      'The routing plug-in "Broken" was skipped: it failed. The route is ranked without it.'],
+    expect(none).toMatchObject({ error: 'NO_CANDIDATE', warnings: ['The routing plug-in "Maker fails" was skipped: its maker failed. The route is shown without it.',
+      'The routing plug-in "Broken" was skipped: it failed. The route is shown without it.'],
       leftOut: expect.arrayContaining([{ machine: 'remote-1', reasons: expect.arrayContaining(['Nobody: no room']) }]) })
   })
   it('reads instructions without notes as none, and cuts a long reason a machine is left out for', async () => {
@@ -154,10 +158,10 @@ describe('routeTask', () => {
     // m1 (remote-1) has a fresh week; m2 (mac) resets in 12 hours with 60% left.
     const machines = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: id === 'm2' ? reading('acct-soon', 40, 12 * 3_600_000) : reading('acct-fresh', 10, 5 * 86_400_000) }))
     const plain = await routeTask(input, scoped(), where as never, machines, () => 'op', undefined, [])
-    expect(plain).toMatchObject({ ok: true, pick: { title: expect.stringContaining('remote-1') } })
+    expect(plain).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1') })]) })
     const s = scoped()
     const pulled = await routeTask(input, s, where as never, machines, () => 'op')
-    expect(pulled).toMatchObject({ ok: true, pick: { title: expect.stringContaining('mac') } })
+    expect(pulled).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('mac') })]) })
     expect(labels(s)[0]).toContain('Window pull: its account\'s weekly window resets in 12h')
     expect(JSON.stringify(pulled)).not.toContain('acct-soon')
   })
@@ -186,8 +190,8 @@ describe('routeTask', () => {
       const { warnings, ...rest } = await pending as Answer
       const { warnings: plainWarnings, ...plainRest } = plain
       expect(rest).toEqual(plainRest)
-      expect(warnings).toEqual([...(plainWarnings as string[]), 'The routing plug-in "Slow" was skipped: its maker took longer than 3 s. The route is ranked without it.',
-        'The routing plug-in "Fails" was skipped: its maker failed. The route is ranked without it.'])
+      expect(warnings).toEqual([...(plainWarnings as string[]), 'The routing plug-in "Slow" was skipped: its maker took longer than 3 s. The route is shown without it.',
+        'The routing plug-in "Fails" was skipped: its maker failed. The route is shown without it.'])
     } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
@@ -195,16 +199,16 @@ describe('routeTask', () => {
     const heavy = (needs: Record<string, unknown>) => ({ ...input, assessment: { ...input.assessment, needs: { heavy: ['build'], ...needs } } })
     const reading = (resources: Record<string, unknown>) => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources, tools: { git: true }, devices: {} } }))
     const disky = { memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 20e9 }
-    const short = 'Machine fit: Short of free disk for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.'
+    const short = 'Machine fit: Short of free disk for a heavy build: it needs 8 GB memory and 30 GB disk free, so prefer an equally strong candidate that has it.'
     const answer = await routeTask(heavy({}), scoped(), where as never, reading(disky))
-    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    const shown = answer.candidates as Array<{ kind: string; notes?: string[] }>
     expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
     for (const c of shown) expect(c.notes).toContain(short)
     const folder = { describe: async () => null, isDirectory: async () => true }
-    expect(await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, reading(disky), () => 'op', folder)).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    expect(await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, reading(disky), () => 'op', folder)).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ notes: expect.arrayContaining([short]) })]) })
     // A read that measured no disk says so; its new agents' starts could not verify the disk either.
     const blind = await routeTask(heavy({}), scoped(), where as never, reading({ memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10 }))
-    expect(blind).toMatchObject({ pick: { kind: 'member', notes: expect.arrayContaining(['Machine fit: Free disk unknown here; a heavy build: it needs 8 GB memory and 30 GB disk free.']) } })
+    expect(blind).toMatchObject({ candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', notes: expect.arrayContaining(['Machine fit: Free disk unknown here; a heavy build: it needs 8 GB memory and 30 GB disk free.']) })]) })
   })
   it('answers work that starts heavy CI while the account is at its limit as waiting, with when to route it again', async () => {
     const base = scoped()
@@ -220,19 +224,19 @@ describe('routeTask', () => {
     expect(plain).not.toHaveProperty('waiting')
   })
   // Lead, 10-31: a routed heavy start is never refused on the machine the route offered.
-  it('ranks a machine between half the need and the need later, and the start there is admitted and counts as heavy', async () => {
+  it('notes a machine between half the need and the need, and the start there is admitted and counts as heavy', async () => {
     const between = { memoryTotalBytes: 16e9, memoryUsedBytes: 10e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
     const roomy = { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
     const machines = (id: string) => daemon(id, { capacity: { resources: id === 'm1' ? between : roomy, tools: { git: true }, devices: {} } })
     const heavy = { ...input, assessment: { ...input.assessment, needs: { heavy: ['build'] } } }
     const noMembers = tab(); noMembers.state.agents = agents.filter(a => a.id === 'a2') as never
     const answer = await routeTask(heavy, scoped({ tab: noMembers }), where as never, opener(machines))
-    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
-    const later = (answer.alternatives as Array<{ machineId: string; engine: string; notes?: string[] }>).find(c => c.machineId === 'm1')!
-    expect(later.notes).toContain('Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.')
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm2' })]) })
+    const later = (answer.candidates as Array<{ machineId: string; engine: string; notes?: string[] }>).find(c => c.machineId === 'm1')!
+    expect(later.notes).toContain('Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so prefer an equally strong candidate that has it.')
     // The start the route suggests, on that machine: its own check admits it, and later routes count it as heavy work there.
-    const hint = JSON.parse(String(answer.next).replace(/^Start with: start OPERATION_ID /, '').replace(/, then assign[\s\S]*$/, ''))
-    const request = { ...hint, machineId: 'm1', engine: later.engine }
+    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(String(answer.next))![1]!)
+    const request = { ...hint, machineId: 'm1', engine: later.engine, model: 'opus', effort: 'high' }
     expect(await inspectCapacity(machines('m1') as never, request)).toMatchObject({ allowed: true })
     expect(request.heavy).toEqual(['build'])
     expect(placedHeavyWork([{ request, requestedAt: Date.now() }], Date.now()).get('m1')).toMatchObject({ agents: 1, memoryBytes: 8e9 })
@@ -268,9 +272,9 @@ describe('routeTask', () => {
       expect(result).toMatchObject({ ok: true })
       expect(noted(s)).toEqual(['m1'])
       expect(JSON.stringify(recorded(s).command.decision.excluded)).not.toContain('lost this task')
-      // With no other machine, that account is the pick, with the note.
+      // With no other machine, that account is offered, with the note.
       const alone = await route(true, ['m1'])
-      expect(alone.result).toMatchObject({ ok: true, pick: { machineId: 'm1', notes: expect.arrayContaining([expect.stringContaining('Its account lost this task before')]) } })
+      expect(alone.result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm1', notes: expect.arrayContaining([expect.stringContaining('Its account lost this task before')]) })]) })
     })
     it('remembers the failed account after its agent is stopped and removed', async () => {
       expect(noted((await route(true, ['m1', 'm2'], true)).s)).toEqual(['m1'])
@@ -301,13 +305,13 @@ describe('routeTask', () => {
       expect(lineOf(candidates, 'Multiply')).toContain(note)
       expect(lineOf(candidates, 'Healthy')).not.toContain('lost its last task')
       expect(excluded.some(e => e.title.startsWith('Multiply'))).toBe(false)
-      expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a3' } })
+      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a3' })]) })
     })
     it('is offered with a note after its lost task is handed to another agent', async () => {
       const { result, candidates } = await route([...marked, healthy],
         [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
       expect(lineOf(candidates, 'Multiply')).toContain(note)
-      expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1', notes: [note] } })
+      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note] })]) })
     })
     it('carries no note once it finished a new task, which clears its mark', async () => {
       const { candidates } = await route([...agents, healthy],
@@ -337,7 +341,7 @@ describe('routeTask', () => {
     const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }, { id: 'r2', text: 7 }]
     const s = scoped({ tab: ruled })
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { model: 'sonnet' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ model: 'sonnet' })]) })
     const decision = recorded(s).command.decision
     expect(decision.candidates.some((c: { model: string }) => c.model === 'sonnet')).toBe(true)
     expect(JSON.stringify(decision)).not.toContain('Breaks the owner')
@@ -378,8 +382,8 @@ describe('routeTask', () => {
     const s = scoped({ context })
     const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
       engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })), () => 'op')
-    // The idle Claude Opus agent is a candidate at once; Codex's top tier, cheaper, ranks first.
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'codex' } })
+    // The idle Claude Opus agent is a candidate at once, beside Codex's top tier.
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', engine: 'codex' })]) })
     const decision = recorded(s).command.decision
     expect(decision.candidates.map((c: { title: string }) => c.title)).toContain('Multiply · Claude opus high · remote-1')
     expect(decision.why).not.toMatch(/same-engine/)
@@ -405,7 +409,7 @@ describe('routeTask', () => {
       const result = await routeTask(input, s, where as never, opener(), () => 'op')
       return { result, decision: 'error' in result ? null : recorded(s).command.decision }
     }
-    const opusNow = { ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } }
+    const opusNow = { ok: true, candidates: expect.arrayContaining([expect.objectContaining({ engine: 'claude', model: 'opus', machineId: 'm1' })]) }
 
     it('starts Claude Opus at once for a Claude build while Codex is out of quota for days, with no note', async () => {
       const { result, decision } = await routeWith(pool('m2', ['codex'], { usedPercent: 100, resetsIn: 3 * DAY }))
@@ -419,40 +423,43 @@ describe('routeTask', () => {
       expect(JSON.stringify(decision.excluded)).not.toMatch(/another engine/)
     })
   })
-  // Project instructions, phase 4: strength ranks, it does not filter. The idle Sonnet member is offered below the top tier.
-  it('ranks an idle Sonnet member below the top tier, and tells the server when a person named the model', async () => {
+  // Project instructions, phase 4: strength does not filter. The idle Sonnet member is offered beside the top tier.
+  it('offers an idle Sonnet member beside the top tier, and tells the server when a person named the model', async () => {
     const s = scoped({ policy: floorPolicy })
-    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', model: 'opus' } })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', model: 'opus' })]) })
     expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Multiply · Claude sonnet medium · remote-1', quality: 2 })]))
     expect(JSON.stringify(recorded(s).command.decision.excluded)).not.toContain('rated 3')
     const named = scoped({ policy: floorPolicy })
     expect(await routeTask({ ...input, assessment: { ...input.assessment, model: 'sonnet' } }, named, where as never, opener(), () => 'op'))
-      .toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+      .toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1' })]) })
     expect(recorded(named).command.decision.assessment).toMatchObject({ model: 'sonnet' })
   })
   it('tells the agent how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
-    // Cheapest first: the member on sonnet.
-    expect(member).toMatchObject({ pick: { kind: 'member', agentId: 'a1' } })
-    expect(member.next).toContain('"type":"work.assign","conversationId":"g1","agentId":"a1","routeDecisionId":"d1"')
+    expect(member).toMatchObject({ candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1' })]) })
+    // The chosen row's agent and the Routing rule that chose it: the route names none (task #2901).
+    expect(member.next).toContain('"type":"work.assign","conversationId":"g1","agentId":"AGENT","routeDecisionId":"d1","overrideReason":"RULE"')
     const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ policy: floorPolicy }), where as never, opener(), () => 'op')
-    expect(fresh).toMatchObject({ pick: { kind: 'new', engine: 'claude', model: 'opus', effort: 'high' } })
-    expect(fresh.next).toContain('"engine":"claude","model":"opus","effort":"high","routeDecisionId":"d1"')
+    expect(fresh).toMatchObject({ candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', engine: 'claude', model: 'opus', effort: 'high' })]) })
+    expect(fresh.next).toContain('"machineId":"MACHINE","engine":"ENGINE","model":"MODEL","effort":"EFFORT","routeDecisionId":"d1","overrideReason":"RULE"')
     // Without a branch the agent starts from the default one, and the hint says how to choose another.
     expect(fresh.next).toContain('"branchRef":"refs/remotes/origin/BRANCH"')
     expect(fresh.next).toContain('default branch, fetched first')
     // A complete start: every field its schema requires, with the defaults the help gives.
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(fresh.next as string)![1]!)
-    expect(hint).toEqual({ conversationId: 'g1', name: 'NAME', roleName: 'ROLE', cwd: '/absolute/repo/on/that/machine', worktree: true,
+    expect(hint).toEqual({ conversationId: 'g1', name: 'NAME', roleName: 'ROLE', cwd: 'CWD', worktree: true,
       requirements: { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
-      machineId: 'm2', engine: 'claude', model: 'opus', effort: 'high', routeDecisionId: 'd1' })
+      machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', routeDecisionId: 'd1', overrideReason: 'RULE' })
+    // Each new agent's row says the folder it starts in.
+    for (const row of (fresh.candidates as Array<{ kind: string; cwd?: string }>).filter(r => r.kind === 'new')) expect(row.cwd).toBe('/absolute/repo/on/that/machine')
     // The task's own repository, when the assessment named one, and no decision when none was recorded.
     const placed = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high', needs: { cwd: '/repo/api' } } },
       scoped({ record: { error: 'BACKEND_UNAVAILABLE' }, policy: floorPolicy }), where as never, opener(), () => 'op')
-    expect(JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(placed.next as string)![1]!)).toMatchObject({ cwd: '/repo/api' })
+    expect((placed.candidates as Array<{ kind: string; cwd?: string }>).find(r => r.kind === 'new')).toMatchObject({ cwd: '/repo/api' })
     expect(placed.next).not.toContain('routeDecisionId')
+    expect(placed.next).not.toContain('RULE')
   })
-  it('admits the pick on the requirements its start hint asks for, with the task\'s tools and devices', async () => {
+  it('admits a candidate on the requirements its start hint asks for, with the task\'s tools and devices', async () => {
     const needs = { tools: ['git', 'docker'], devices: ['/dev/ttyUSB0'] }
     const hard = { ...input, assessment: { ...input.assessment, difficulty: 'high', needs } }
     const daemons: ReturnType<typeof daemon>[] = []
@@ -474,7 +481,7 @@ describe('routeTask', () => {
       return d
     })
     const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ policy: floorPolicy }), where as never, make, () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new' })]) })
   })
   it('warns when the account\'s machines could not be read, and still offers the Lead\'s own machine', async () => {
     const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy, warnings: ['w'] }, machines: [], machinesUnreadable: true } }
@@ -505,7 +512,7 @@ describe('routeTask', () => {
     const os = 'Plan 9'
     const plan9 = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os }, tools: { git: true }, devices: {} } }))
     const s = scoped()
-    await withBlocked(os, async () => expect(await routeTask(input, s, where, plan9)).toMatchObject({ ok: true, pick: { kind: 'member' } }))
+    await withBlocked(os, async () => expect(await routeTask(input, s, where, plan9)).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member' })]) }))
     expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
       reason: expect.stringContaining('Swarm agents do not run on Plan 9 yet.') })]))
   })
@@ -600,14 +607,14 @@ describe('routeTask', () => {
   })
   it('names a member that has no name, model or effort of its own, and leaves the decision blank when it is unrecorded', async () => {
     const plain = tab(); plain.state.agents = [{ id: 'a1', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude' } }, agents[1]] as never
-    // A member launched on Claude's own model ranks first where the catalog rates that model 3; with no row it is unrated, at 1.
+    // A member launched on Claude's own model is rated 3 where the catalog rates that model 3; with no row it is unrated, at 1.
     const options = { tab: plain, record: { error: 'BACKEND_UNAVAILABLE' }, policy: floorPolicy }
     const rated = { ...options, policy: { ...floorPolicy, models: [...floorPolicy.models, { engine: 'claude', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true }] } }
     const easy = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, scoped(rated), where as never, opener())
-    expect(easy).toMatchObject({ unrecorded: true, pick: { kind: 'member', title: 'Member · Claude default default · remote-1' } })
+    expect(easy).toMatchObject({ unrecorded: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', title: 'Member · Claude default default · remote-1' })]) })
     expect(easy.next).not.toContain('routeDecisionId')
     const hard = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped(options), where as never, opener())
-    expect(hard).toMatchObject({ unrecorded: true, pick: { kind: 'new' } })
+    expect(hard).toMatchObject({ unrecorded: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new' })]) })
     expect(hard.next).not.toMatch(/routeDecisionId"|same routeDecisionId/)
   })
   it('returns a record refusal as an error, and only a transport failure as unrecorded', async () => {
@@ -630,21 +637,21 @@ describe('routeTask', () => {
     const s = scoped()
     const open = vi.fn(async () => { throw Object.assign(new Error('gone'), { code: 'MACHINE_UNAVAILABLE' }) })
     const result = await routeTask(input, s, where as never, open as never)
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1' })]) })
     const decision = recorded(s).command.decision
-    // The two members there, the idle coordinator among them.
-    expect(decision.candidates.map((c: { agentId?: string }) => c.agentId)).toEqual(['a1', 'lead'])
+    // The two members there, the idle coordinator among them, by title.
+    expect(decision.candidates.map((c: { agentId?: string }) => c.agentId)).toEqual(['lead', 'a1'])
     // New agents there stay excluded: nothing can start on a machine nobody can open.
     expect(decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'Machine is offline or unreachable.' })]))
     expect(decision.excluded.some((e: { title: string }) => e.title.startsWith('Multiply'))).toBe(false)
   })
-  it('ranks a member whose quota is known before one on a machine that cannot be read, and shows both', async () => {
+  it('shows a member whose quota is known and one on a machine that cannot be read', async () => {
     const two = tab(); two.state.agents = [...agents, { id: 'a2', name: 'Collab', machineId: 'theirs', harnessId: 'h2', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }] as never
     const s = scoped({ tab: two })
     const open = vi.fn(async (_w: unknown, id: string) => id === 'theirs' ? Promise.reject(new Error('not yours')) : daemon(id, { agents: id === 'm1' ? ['h1'] : [] })) as never
     // theirs is not in the account's list, m1 is; the collaborator's member there has an unknown quota.
     const result = await routeTask(input, s, where as never, open)
-    expect(result).toMatchObject({ ok: true, pick: { agentId: 'a1' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ agentId: 'a1' })]) })
     const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles.indexOf('Multiply · Claude sonnet medium · remote-1')).toBeLessThan(titles.indexOf('Collab · Claude sonnet medium · theirs'))
     expect(JSON.stringify(recorded(s).command.decision.excluded)).not.toContain('Collab')
@@ -688,7 +695,7 @@ describe('routeTask', () => {
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
     // 60% left less the 10% reserve and the 45% the open pick holds leaves 5% for a task that needs 30%.
     expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
-    expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
+    expect(result.warnings).toEqual(['w', NONE_COVERS])
   })
   it('keeps a queued start in the reroute quota hold until its linked work finishes', async () => {
     const queued = { id: 'queued', conversationId: 'g1', account: 'acct', spend: { '5-hour': 45 }, size: 'medium',
@@ -704,13 +711,16 @@ describe('routeTask', () => {
   })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
-    let refused = 0
-    s.mockImplementation(async payload => payload.action === 'command' && !refused++ ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
+    s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    const [phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
-    expect(phase1.command.decision.assessment.size).toBe('medium')
+    // With no pick, then with c0 standing in for one (task #2901), then in the shape from before phase 1.
+    const [current, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(current.command.decision).not.toHaveProperty('pick')
+    expect(phase1.command.decision).toMatchObject({ pick: 'c0', assessment: { size: 'medium' } })
     expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
     expect(v1.operationId).toBe(phase1.operationId)
+    expect(v1.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
     expect(v1.command.decision.assessment).not.toHaveProperty('size')
     expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
   })
@@ -730,28 +740,30 @@ describe('routeTask', () => {
     }
     const beforeKinds = refusing(['kind":"docs'])
     expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size']])
+    const kind = ['difficulty', 'risk', 'why', 'size', 'kind']
+    // Each refusal of the record with no pick tries it once more with c0 as the pick, the shape a backend from before task #2901 takes.
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size']])
     const beforePhase1 = refusing(['kind":"docs', 'size'])
     expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([['difficulty', 'risk', 'why', 'size', 'kind'], ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
     // A task with no kind never needs the extra try.
     const plain = refusing(['size'])
     await routeTask(input, plain, where as never, opener(), () => 'op')
-    expect(commands(plain)).toHaveLength(2)
+    expect(commands(plain)).toHaveLength(3)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
-    expect(result).toMatchObject({ ok: true, via: 'order', unrecorded: true })
+    expect(result).toMatchObject({ ok: true, via: 'instructions', unrecorded: true })
     expect(result).not.toHaveProperty('routeDecisionId')
     const lost = await routeTask(input, scoped({ recordThrows: true }), where as never, opener())
-    expect(lost).toMatchObject({ ok: true, via: 'order', unrecorded: true })
+    expect(lost).toMatchObject({ ok: true, via: 'instructions', unrecorded: true })
   })
-  it('says when the pick was the only candidate that can run the task', async () => {
+  it('says when one candidate is the only one that can run the task', async () => {
     const s = scoped()
     // Only the member's machine answers, and its engine is not installed for a new agent.
     const open = vi.fn(async (_w: unknown, id: string) => id === 'm1'
       ? daemon(id, { agents: ['h1'], engines: [{ engine: 'claude', installed: false }] }) as never : Promise.reject(new Error('gone')))
-    expect(await routeTask(input, s, where as never, open as never)).toMatchObject({ ok: true, via: 'only', pick: { agentId: 'a1' } })
+    expect(await routeTask(input, s, where as never, open as never)).toMatchObject({ ok: true, via: 'only', candidates: expect.arrayContaining([expect.objectContaining({ agentId: 'a1' })]) })
   })
   it('refuses an invalid assessment, an unknown group and a failed context read', async () => {
     const open = vi.fn()
@@ -833,6 +845,64 @@ describe('routeTask', () => {
       'Required tool not verified: git. Ask the machine owner to check it and refresh the machine reading.', 'Required device unavailable: /dev/x.'])
     const unknown = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quotaOf({}, 'claude', false), { ...requirements, tools: [], devices: [] })
     expect(unknown).toMatchObject({ allowed: true, reasons: [] })
+  })
+})
+
+// Ken, 2026-11-04 (task #2901): PMs took the route's pick, nearly always Opus or Astra, against the project's Routing
+// instructions. The answer lists the candidates by machine with every fact, names none, and says how to start the chosen one.
+describe('route answers with no pick (task #2901)', () => {
+  const weekly = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: {
+    five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    seven_day: { utilization: 25, resets_at: new Date(Date.now() + 4 * 86_400_000 + 30 * 60_000).toISOString() } } }] }
+  const both = () => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: weekly }))
+  type Row = { id: string; kind: string; machineId: string; title: string; quota: string; cwd?: string }
+
+  it('lists every candidate by machine, records each with no pick, and sends the choice to the Routing instructions', async () => {
+    const s = scoped()
+    const answer = await routeTask(input, s, where as never, both(), () => 'op')
+    expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions', p: null })
+    expect(answer).not.toHaveProperty('pick')
+    expect(answer).not.toHaveProperty('alternatives')
+    expect(answer.why).toContain('Routing instructions')
+    const rows = answer.candidates as Row[]
+    // mac (m2) before remote-1 (m1), whatever is stronger or cheaper.
+    const machines = rows.map(r => r.title.split(' · ').at(-1)!)
+    expect(machines).toEqual([...machines].sort((x, y) => x.localeCompare(y)))
+    expect(new Set(machines)).toEqual(new Set(['mac', 'remote-1']))
+    expect(rows[0]!.machineId).toBe('m2')
+    const decision = recorded(s).command.decision
+    expect(decision).not.toHaveProperty('pick')
+    expect(decision).toMatchObject({ via: 'instructions', why: answer.why })
+    // Any candidate the coordinator chooses is a recorded one.
+    const ids = new Set((decision.candidates as Array<{ id: string }>).map(c => c.id))
+    for (const row of rows) expect(ids.has(row.id)).toBe(true)
+  })
+  it('carries each candidate\'s weekly quota left and its reset, and a new agent\'s folder on its machine', async () => {
+    const answer = await routeTask(input, scoped(), where as never, both(), () => 'op')
+    const rows = answer.candidates as Row[]
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.quota).toMatch(/^fits: weekly 75% left, resets in 4d(1h)?$/)
+    for (const row of rows.filter(r => r.kind === 'new')) expect(row.cwd).toBe('/absolute/repo/on/that/machine')
+  })
+  it('says how to start or assign the chosen candidate, with the decision and the rule that chose it', async () => {
+    const answer = await routeTask(input, scoped(), where as never, both(), () => 'op')
+    const next = String(answer.next)
+    expect(next).toContain('"type":"work.assign","conversationId":"g1","agentId":"AGENT","routeDecisionId":"d1","overrideReason":"RULE"')
+    const hint = JSON.parse(/start OPERATION_ID (\{.*?\}), then/.exec(next)![1]!)
+    expect(hint).toMatchObject({ conversationId: 'g1', machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', routeDecisionId: 'd1', overrideReason: 'RULE' })
+    expect(next).toContain('Routing instructions')
+    expect(next).not.toMatch(/\bpick\b/)
+  })
+  it('records with c0 as the pick for a backend from before this, which takes a record only with one', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    s.mockImplementation(async payload => payload.action === 'command' && !('pick' in payload.command.decision)
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.pick: Required', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, both(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions' })
+    const [current, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(current.command.decision).not.toHaveProperty('pick')
+    expect(picked.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
+    expect(picked.operationId).toBe(current.operationId)
+    expect(picked.command.decision.candidates).toEqual(current.command.decision.candidates)
   })
 })
 
@@ -1059,7 +1129,7 @@ describe('routing contributed capacity', () => {
   it('routes using owner measurements and the contributed project without opening that machine', async () => {
     const { answer } = await runPool(healthy())
     expect(answer.ok).toBe(true)
-    expect(answer.next).toContain('/owner/project')
+    expect(JSON.stringify(answer.candidates)).toContain('"cwd":"/owner/project"')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
   })
@@ -1102,20 +1172,20 @@ describe('routing contributed capacity', () => {
     const now = Date.now(), pool = healthy(); Object.assign(pool.observation.resources, { projectDiskFreeBytes: 70e9 })
     const heavy = { id: 'h', request: { machineId: 'm1', heavy: ['build'], requirements: { memoryBytes: 4 * GiB, diskBytes: 15 * GiB } }, requestedAt: now - 60_000, error: null }
     const { answer } = await runPool(pool, false, { heavy: ['build'] }, undefined, { state: { starts: [heavy] } })
-    expect((answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
+    expect(JSON.stringify(answer.candidates)).not.toContain('Machine fit')
   })
   it('says on each row what its machine has: free slots, free memory less what starts hold, and free disk', async () => {
     const pool = { ...healthy(), availableSlots: 3 }
     const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
-    expect((answer.pick as { machine: string }).machine).toBe('3 slots free · 24.6 GB memory free (5.4 GB held by starts) · 196.8 GB disk free')
+    expect((firstNew(answer) as { machine: string }).machine).toBe('3 slots free · 24.6 GB memory free (5.4 GB held by starts) · 196.8 GB disk free')
     const plain = await runPool({ ...healthy(), availableSlots: 1 })
-    expect((plain.answer.pick as { machine: string }).machine).toBe('1 slot free · 30.0 GB memory free · 200.0 GB disk free')
+    expect((firstNew(plain.answer) as { machine: string }).machine).toBe('1 slot free · 30.0 GB memory free · 200.0 GB disk free')
   })
   it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start says it is heavy', async () => {
     const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
     const { answer } = await runPool(pool, true, { heavy: ['build'] })
-    const short = 'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.'
-    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    const short = 'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so prefer an equally strong candidate that has it. Its CPU is busy.'
+    const shown = answer.candidates as Array<{ kind: string; notes?: string[] }>
     expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
     for (const c of shown) expect(c.notes).toContain(short)
     expect((await runPool(healthy(), false, { heavy: ['build'] })).answer.next).toContain('"requirements":{"memoryBytes":4000000000,"diskBytes":15000000000')
@@ -1123,15 +1193,15 @@ describe('routing contributed capacity', () => {
     expect((await runPool(healthy(), false)).answer.next).not.toContain('heavy')
     // A reading with no CPU says nothing of it, and a machine that has what it needs says nothing at all.
     const roomy = await runPool(healthy(), true, { heavy: ['build'] })
-    expect((roomy.answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
+    expect(JSON.stringify(roomy.answer.candidates)).not.toContain('Machine fit')
   })
   // Review of #2426 (privacy): every reader of the route log reads the reasons, also for a machine the route shows nothing else
   // of. A paused machine offers no new agent, so its reading was never shown; its member's reason must not show it either.
   it('never shows a paused machine\'s measured memory, disk or CPU in its member\'s reason, the answer or the record', async () => {
     const pool = { ...healthy(), paused: true }; Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
     const { answer, s } = await runPool(pool, true, { heavy: ['build'] })
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', notes: expect.arrayContaining([
-      'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.']) } })
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', notes: expect.arrayContaining([
+      'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so prefer an equally strong candidate that has it. Its CPU is busy.']) })]) })
     for (const text of [JSON.stringify(answer), JSON.stringify(recorded(s).command.decision)]) {
       for (const measured of ['6.0 GB', '200.0 GB', '92%', '6 GB', '200 GB']) expect(text).not.toContain(measured)
     }
@@ -1140,7 +1210,7 @@ describe('routing contributed capacity', () => {
     const pool = healthy()
     pool.engines = ['opencode']
     const { answer, s } = await runPool(pool)
-    expect(answer).toMatchObject({ ok: true, pick: { engine: 'claude' } })
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ engine: 'claude' })]) })
     expect(recorded(s).command.decision.candidates.every((c: { engine: string }) => c.engine === 'claude')).toBe(true)
   })
   it('keeps a healthy contributed member pickable', async () => {
@@ -1176,9 +1246,20 @@ describe('routing contributed capacity', () => {
   it('withholds a contributed member absent from an explicit running-terminal list', async () => {
     const pool = healthy(); pool.observation.runningHarnessIds = []
     const { answer, s } = await runPool(pool, true)
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new' })]) })
     expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
       reason: 'Its terminal is not running.' })]))
+  })
+  // Task #2744: the idle cleanup closed Tern, and the PM assigned it anyway, over the route's pick; the reason says what to do.
+  // Only for one its idle cleanup closed: one listed stopped alone may be a Change agent before its rebind (review of #2953).
+  it('says a contributed member its idle cleanup closed was closed, and to start a new agent', async () => {
+    for (const [closed, reason] of [[['h1'], 'Its session was closed. Start a new agent.'], [[], 'Its terminal is not running.']] as const) {
+      const pool = healthy(); pool.observation.runningHarnessIds = []
+      Object.assign(pool.observation, { stoppedHarnessIds: ['h1'], closedHarnessIds: closed })
+      const { answer, s } = await runPool(pool, true)
+      expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new' })]) })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'), reason })]))
+    }
   })
   it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
     const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
@@ -1197,9 +1278,9 @@ describe('routing contributed capacity', () => {
     const project = { id: 'project-two', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/example/two' } }
     expect((await runPool(healthy(), false, {}, project)).answer.ok).not.toBe(true)
     const shared = { ...healthy(), scope: 'swarm', cwd: '/swarm-root' }
-    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/swarm-root/project-two')
+    expect(JSON.stringify((await runPool(shared, false, {}, project)).answer.candidates)).toContain('"cwd":"/swarm-root/project-two"')
     project.repository.machineId = 'm1'
-    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/elsewhere')
+    expect(JSON.stringify((await runPool(shared, false, {}, project)).answer.candidates)).toContain('"cwd":"/elsewhere"')
     expect((await runPool(shared, false, {}, { id: 'project-two' })).answer.ok).not.toBe(true)
     expect((await runPool(shared)).answer.ok).not.toBe(true)
   })
@@ -1223,7 +1304,7 @@ describe('routing contributed capacity', () => {
         const { answer } = await runPool(plan9)
         expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
         expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Plan 9 yet')
-        expect((await runPool(plan9, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+        expect((await runPool(plan9, true)).answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member' })]) })
       })
     })
 
@@ -1232,7 +1313,7 @@ describe('routing contributed capacity', () => {
       for (const members of [false, true]) {
         const onWindows = (await runPool(windows, members)).answer
         expect(onWindows.ok).toBe(true)
-        expect(onWindows.pick).toEqual((await runPool(healthy(), members)).answer.pick)
+        expect(onWindows.candidates).toEqual((await runPool(healthy(), members)).answer.candidates)
       }
     })
 
@@ -1282,7 +1363,7 @@ describe('routing contributed capacity', () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]
       const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } }, kind: 'tests' })
-      expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
+      expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ gridModel: 'qwen3' })]) })
       expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
     })
 
@@ -1327,7 +1408,7 @@ describe('routing contributed capacity', () => {
       const start = (extra: Record<string, unknown>) => ({ id: `s${Math.random()}`, request: { machineId: 'm1' }, harnessId: null, dispatched: false, error: null, ...extra })
       const failed = start({ error: 'Claude Code is not signed in.' }), queued = start({}), started = start({ harnessId: 'h9', dispatched: true })
       const stuck = await runPool(healthy(), true, {}, undefined, { state: { starts: [started, failed, queued] } })
-      expect(stuck.answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      expect(stuck.answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member' })]) })
       const rows = lines(stuck.s)
       expect(rows.filter(r => r.title.startsWith('New agent')).every(r => r.label.includes('last 2 starts'))).toBe(true)
       expect(rows.find(r => r.title.startsWith('Multiply'))!.label).not.toContain('last 2 starts')
@@ -1369,7 +1450,7 @@ describe('routing contributed capacity', () => {
     })
     it('routes elsewhere, with the note, while the required machine has no free slot', async () => {
       const full = await route(two(p => { p.availableSlots = 0 }), { machines: ['m3'] })
-      expect(full.answer).toMatchObject({ ok: true, pick: { machineId: 'm1', notes: expect.arrayContaining([ELSEWHERE]) } })
+      expect(full.answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm1', notes: expect.arrayContaining([ELSEWHERE]) })]) })
     })
     it('notes every machine when the required one is one the agent cannot see', async () => {
       const { answer, s } = await route(two(), { machines: [], unseenMachines: 1 })
@@ -1415,7 +1496,7 @@ describe('routing contributed capacity', () => {
     const s = scoped({ tab: { revision: 3, state: { id: 'tab', agents, conversations: groups } } })
     const make = opener(id => daemon(id, { devices: { '/dev/cu.usbmodem1': id === 'm2', '/dev/ttyUSB0': true } }))
     const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs: { devices: ['/dev/ttyUSB0'] } } }, s, where as never, make, () => 'op')
-    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm2' })]) })
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(answer.next as string)![1]!)
     expect(hint.requirements.devices).toEqual(['/dev/ttyUSB0', '/dev/cu.usbmodem1'])
   })
@@ -1440,7 +1521,7 @@ describe('routing contributed capacity', () => {
     expect((await runPool(p)).answer.ok).toBe(true)
     expect((await runPool({ ...p, observation: {} }, true)).answer.ok).not.toBe(true)
   })
-  it('lists API-key machines beside a subscription one, and offers the best row of every other machine as an alternative', async () => {
+  it('lists API-key machines beside a subscription one, a row for every engine of every machine', async () => {
     const keyed = (machineId: string) => ({ ...healthy(), machineId, name: `Keyed ${machineId}`, observation: { ...healthy().observation, runningHarnessIds: [],
       quotas: [{ engine: 'claude', known: true, windows: [] }] } })
     // The subscription machine has two engines, so its two best rows come before any other machine's.
@@ -1451,15 +1532,14 @@ describe('routing contributed capacity', () => {
     const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(), machines: [subscription, keyed('m2'), keyed('m3')] } },
       policy: { policy: enabled, warnings: [] }, machines: [] } } })
     const answer = await routeTask(input, s, where, opener())
-    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
-    expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
+    const rows = answer.candidates as Array<{ machineId: string; engine: string; quota: string }>
+    expect(new Set(rows.map(x => `${x.machineId} ${x.engine}`))).toEqual(new Set(['m1 claude', 'm1 codex', 'm2 claude', 'm3 claude']))
     // Each row says its account's weekly quota, which the project's order picks by (Ken, 2026-11-03).
-    expect((answer.pick as { quota: string }).quota).toBe('fits: weekly 80% left, resets in 5d')
-    expect((answer.alternatives as Array<{ quota: string }>).map(x => x.quota)).toEqual(['fits: weekly 80% left, resets in 5d', 'metered', 'metered'])
+    for (const row of rows) expect(row.quota).toBe(row.machineId === 'm1' ? 'fits: weekly 80% left, resets in 5d' : 'metered')
   })
   // The coordinator picks by the project's order among accounts, so every account is an alternative, once: a Claude account with
   // 99% left on a machine whose Codex was used up never reached it (Ken, 2026-11-03).
-  it('offers the best row of every engine on every machine as an alternative, and no second row of an account', async () => {
+  it('offers a row of every engine on every machine, with its weekly quota', async () => {
     const week = (usedPercent: number) => [{ name: 'weekly', usedPercent, resetsAt: Date.now() + 30 * 3_600_000 }]
     const box = (machineId: string) => Object.assign({ ...healthy(), machineId, name: `Box ${machineId}`, engines: ['claude', 'codex'] }, {
       observation: { ...healthy().observation, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: week(1) }, { engine: 'codex', known: true, windows: week(100) }] } })
@@ -1467,8 +1547,8 @@ describe('routing contributed capacity', () => {
     const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(), machines: ['m1', 'm2', 'm3'].map(box) } },
       policy: { policy: enabled, warnings: [] }, machines: [] } } })
     const answer = await routeTask(input, s, where, opener())
-    const rows = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ machineId: string; engine: string; quota: string }>
-    expect(rows.map(x => `${x.machineId} ${x.engine}`).sort()).toEqual(['m1 claude', 'm1 codex', 'm2 claude', 'm2 codex', 'm3 claude', 'm3 codex'])
+    const rows = answer.candidates as Array<{ machineId: string; engine: string; quota: string }>
+    expect(new Set(rows.map(x => `${x.machineId} ${x.engine}`))).toEqual(new Set(['m1 claude', 'm1 codex', 'm2 claude', 'm2 codex', 'm3 claude', 'm3 codex']))
     expect(rows.find(x => x.engine === 'claude')!.quota).toBe('fits: weekly 99% left, resets in 30h')
     expect(rows.find(x => x.engine === 'codex')!.quota).toBe('short: weekly 0% left, resets in 30h')
   })
@@ -1486,9 +1566,10 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s as never, where, opener())
     expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
-    expect(sent).toEqual([16, 12])
+    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those.
+    expect(sent).toEqual([16, 16, 12])
     const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
-    for (const row of [answer.pick, ...answer.alternatives as unknown[]] as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
+    for (const row of answer.candidates as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })
   it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
     const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
@@ -1510,6 +1591,18 @@ describe('routing contributed capacity', () => {
     offline.observation.receivedAt = 0
     const silent = await runPool(offline, false, {}, owners)
     expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
+  // Task #2806 (River, 11-04): a machine whose owner lets teammates' work run in their own account (backend machines.ts
+  // ownAccountWork). The teammate whose task lands there did not choose it, so the route says so, for new agents and members.
+  it('says a machine runs a teammate\'s work in its owner\'s own account, and says nothing for the owner\'s own project', async () => {
+    const said = 'Contributed laptop runs teammates\' work in Mate\'s own account.'
+    const pool = { ...healthy(), contributorId: 'mate', teamWork: { allowed: true, ownAccount: said } }
+    const teammate = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'owner' })).answer
+    const rows = teammate.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain(said)
+    const own = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'mate' })).answer
+    expect(JSON.stringify(own)).not.toContain(said)
   })
   // Task #2390 (Tony, 11-03): a machine its owner keeps for some projects (backend machines.ts machine.projects) is left out of
   // every other project's route, new agents and members alike, with why. The backend refuses it too.
@@ -1551,8 +1644,8 @@ describe('routing contributed capacity', () => {
 
     it('starts a teammate\'s project in the team account, under the Mac\'s name, without calling the Mac unfit', async () => {
       const { answer, candidates, excluded } = await route('owner')
-      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
-      expect(answer.next).toContain('/team/swarm/lead')
+      expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm1-team' })]) })
+      expect(JSON.stringify(answer.candidates)).toContain('"cwd":"/team/swarm/lead"')
       expect(candidates.filter(c => c.kind === 'new').map(c => c.machineId)).toEqual(expect.arrayContaining(['m1-team']))
       expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
       expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
@@ -1560,7 +1653,7 @@ describe('routing contributed capacity', () => {
 
     it('keeps the Mac\'s owner\'s own project with the owner, never the team account', async () => {
       const { answer, candidates } = await route('mate')
-      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm1' })]) })
       expect(candidates.some(c => c.machineId === 'm1-team')).toBe(false)
     })
 
@@ -1621,7 +1714,7 @@ describe('routing contributed capacity', () => {
         const reason = 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.'
         const refused = { ...relayed(), teamWork: { allowed: false, code: 'PRIVACY_CHECK_FAILED', reason } }
         const picked = await routeWith([fullMac(), refused, other()])
-        expect(picked.answer).toMatchObject({ ok: true, pick: { machineId: 'm9' } })
+        expect(picked.answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ machineId: 'm9' })]) })
         expect(picked.answer.leftOut).toEqual([{ machine: 'MacBook Pro', reasons: [reason] }])
         const none = await routeWith([fullMac(), refused])
         expect(none.answer).toMatchObject({ error: 'NO_CANDIDATE' })
@@ -1770,7 +1863,7 @@ describe('local models on the Swarm\'s grid', () => {
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so an agent on it would never start.' },
       { title: 'unnamed-host', reason: 'Its host, a machine of this Swarm, is offline, so an agent on it would never start.' },
     ])
-    expect(result).toMatchObject({ ok: true, pick: { gridModel: 'deepseek/deepseek-v4.1' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ gridModel: 'deepseek/deepseek-v4.1' })]) })
     // A linked task is routed like any other (project instructions, phase 4): the same is said for it. Nothing with the add-on off.
     Object.assign(t.state.conversations[1]!, { reviewOf: 'lead' })
     const review = scoped({ tab: t })
@@ -1786,11 +1879,12 @@ describe('local models on the Swarm\'s grid', () => {
     const s = scoped({ tab: t })
     // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
     const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
-    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
-    expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
-    expect(hint).not.toHaveProperty('model')
-    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: GRID })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', gridModel: 'qwen3', gridName: GRID })]) })
+    // The row's grid model and its name go in the start, in place of model and effort.
+    const row = (result.candidates as Array<Record<string, unknown>>).find(r => r.gridModel === 'qwen3')!
+    expect(row).toMatchObject({ engine: 'claude', gridName: GRID })
+    expect(result.next).toContain('takes its gridModel and gridName in place of model and effort')
+    expect(recorded(s).command.decision.candidates).toContainEqual(expect.objectContaining({ id: row.id, gridModel: 'qwen3', gridName: GRID }))
   })
 })
 
@@ -1831,7 +1925,7 @@ describe('routing by facts', () => {
     for (const row of rows.filter(r => r.machineId === 'm2')) expect(row.label).toContain('last 2 starts')
     expect(recorded(s).command.decision.excluded).toEqual([])
     // The answer says the same of what it offers.
-    const offered = [result.pick, ...(result.alternatives as unknown[])] as Array<{ machineId: string; notes?: string[] }>
+    const offered = result.candidates as Array<{ machineId: string; notes?: string[] }>
     expect(offered.filter(o => o.machineId === 'm1').every(o => o.notes?.some(n => n.includes('Its account lost this task before')))).toBe(true)
   })
 
@@ -1866,7 +1960,7 @@ describe('routing by facts', () => {
   it('says when the catalog could not be read, so no new agent is offered', async () => {
     const empty = scoped({ context: { ok: true, value: { agentId: 'lead', tab: tab(), policy: {}, machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
     const result = await routeTask(input, empty, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { kind: 'member' } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member' })]) })
     expect(result.warnings).toContain('The model catalog could not be read, or lists no models: no new agent on Claude Code or Codex is offered, only agents already in the Swarm and models served on its grid.')
     expect(recorded(empty).command.decision.excluded).toContainEqual({ title: 'New agents', reason: expect.stringContaining('The model catalog could not be read') })
   })
@@ -1878,13 +1972,13 @@ describe('routing by facts', () => {
     const s = scoped({ tab: t })
     // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
     const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true, kind: 'tests' } }, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { gridModel: 'llama3.2:3b', notes: [why] } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ gridModel: 'llama3.2:3b', notes: [why] })]) })
     expect(shown(s).every(r => r.gridModel === 'llama3.2:3b' && r.label.includes(why))).toBe(true)
   })
 
   it('gives a neutral next step: the role comes from the project\'s instructions', async () => {
     const hard = { ...input, assessment: { ...input.assessment, difficulty: 'high' } }
-    // Only the Sonnet member, so a stronger new agent is the pick.
+    // Only the Sonnet member, so a stronger new agent is offered too.
     const crew = (reviewOf?: string) => {
       const t = tab(); t.state.agents = [agents[0]] as never
       if (reviewOf) Object.assign(t.state.conversations[1]!, { reviewOf })
@@ -1893,7 +1987,7 @@ describe('routing by facts', () => {
     const build = await routeTask(hard, scoped({ tab: crew(), policy: floorPolicy }), where as never, opener(), () => 'op')
     const reviewing = await routeTask(hard, scoped({ tab: crew('lead'), policy: floorPolicy }), where as never, opener(), () => 'op')
     for (const answer of [build, reviewing]) {
-      expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+      expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new' })]) })
       expect(answer.next).toContain('"roleName":"ROLE"')
       expect(answer.next).not.toMatch(/Builder|Reviewer|"role":"reviewer"/)
     }
@@ -1924,11 +2018,11 @@ describe('cheap first, through the route', () => {
 
   it('a small, low-risk build\'s first attempt is started on Kimi K3, with why', async () => {
     const { answer, s } = await route(cheap())
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: KIMI, gridName: GRID, notes: [`Cheap first: ${GRID_FIRST}`] } })
-    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: KIMI, quality: 2 })
-    // A medium task keeps today's order: the grid model ranks below the strong ones.
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'new', gridModel: KIMI, gridName: GRID, notes: [`Cheap first: ${GRID_FIRST}`] })]) })
+    expect(recorded(s).command.decision.candidates).toContainEqual(expect.objectContaining({ gridModel: KIMI, quality: 2 }))
+    // A medium task still offers the strong ones.
     const medium = await route(cheap(), { ...small, assessment: { ...small.assessment, difficulty: 'medium' } })
-    expect(medium.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect(medium.answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', model: 'sonnet' })]) })
   })
 
   it('steps up: once the task had an attempt on Kimi K3, the next route leaves the grid out and starts a strong model (Sonnet is rated 3 in this table)', async () => {
@@ -1936,12 +2030,12 @@ describe('cheap first, through the route', () => {
       agents: [...agents, { id: 'a3', name: 'Kestrel', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'default', effort: 'default' } }],
       starts: [{ id: 's1', harnessId: 'h3', request: { conversationId: 'g1', machineId: 'm1', gridModel: KIMI, gridName: GRID } }] })
     const { answer, excluded } = await route(tried)
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
-    expect((answer.pick as Record<string, unknown>).gridModel).toBeUndefined()
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', model: 'sonnet' })]) })
+    expect((answer.candidates as Array<Record<string, unknown>>).every(r => r.gridModel === undefined)).toBe(true)
     expect(excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} Its earlier attempt ran on ${KIMI} on the Swarm's grid.` }))
     // A log that could not be read is no proof of a first attempt.
     const unread = await route(cheap(), small, { error: 'BACKEND_UNAVAILABLE' })
-    expect(unread.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect(unread.answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', model: 'sonnet' })]) })
     expect(unread.excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} ${EARLIER_UNREADABLE}` }))
   })
 
@@ -1953,7 +2047,7 @@ describe('cheap first, through the route', () => {
     built.state.conversations.push({ id: 'r1', title: 'Review: API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [{ description: 'Verdict' }],
       assignment: null, reviewOf: 'g1', task: { goal: 'Review it.', owns: ['docs/guide.md'] } } as never)
     const { answer, s, excluded } = await route(built, { ...small, conversationId: 'r1' })
-    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect(answer).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', model: 'sonnet' })]) })
     const candidates = recorded(s).command.decision.candidates as Array<{ gridModel?: string; quality: number }>
     expect(candidates.some(c => c.gridModel)).toBe(false)
     expect(candidates[0]!.quality).toBe(3)
@@ -1972,22 +2066,22 @@ describe('routing by measured cost and results', () => {
   const withCosts = (base: ReturnType<typeof scoped>, answer: (payload: Record<string, unknown>) => Promise<Answer>) =>
     vi.fn(async (payload: Record<string, any>) => payload.action === 'costs' ? answer(payload) : base(payload))
 
-  it('reads the last 7 days\' results and ranks the choice that costs less per shipped change first, with its numbers', async () => {
+  it('reads the last 7 days\' results and notes the choice that costs less per shipped change, with its numbers', async () => {
     const base = scoped()
-    // Sonnet ranks first today (cost 2 against Opus's 3); measured in full, Opus costs $3 per shipped change and Sonnet $9.
+    // Sonnet's catalog cost is 2 against Opus's 3; measured in full, Opus costs $3 per shipped change and Sonnet $9.
     const plain = await routeTask(input, scoped(), where as never, opener(), () => 'op')
-    expect(plain).toMatchObject({ pick: { model: 'sonnet' } })
+    expect(plain).toMatchObject({ candidates: expect.arrayContaining([expect.objectContaining({ model: 'sonnet' })]) })
     const s = withCosts(base, async () => ({ ok: true, value: { truncated: false, rows: [row('opus', 'high', 3), row('sonnet', 'medium', 9)] } }))
     const result = await routeTask(built, s, where as never, opener(), () => 'op')
     expect(s.mock.calls.filter(c => c[0].action === 'costs').map(c => c[0])).toEqual([{ action: 'costs', days: 7 }])
-    expect(result).toMatchObject({ ok: true, pick: { model: 'opus', notes: expect.arrayContaining([expect.stringMatching(/^measured results: build work, last 7 days: 8 of 10 first reviews passed, \$3\.00 per shipped change over 6/)]) } })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ model: 'opus', notes: expect.arrayContaining([expect.stringMatching(/^measured results: build work, last 7 days: 8 of 10 first reviews passed, \$3\.00 per shipped change over 6/)]) })]) })
     expect(labels(base)[0]).toContain('measured results: build work')
   })
 
   it('a failed read leaves today\'s ranking and says so', async () => {
     const s = withCosts(scoped(), async () => ({ error: 'FORBIDDEN' }))
     const result = await routeTask(built, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, pick: { model: 'sonnet' },
-      warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is ranked without it.']) })
+    expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ model: 'sonnet' })]),
+      warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is shown without it.']) })
   })
 })

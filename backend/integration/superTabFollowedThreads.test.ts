@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -471,6 +472,35 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(body.data.more).toBe(true)
   })
 
+  // Darren (11-04, task #2835): Activity's Threads lists every thread, 50 at a time; the read answers as many as asked.
+  it('answers as many read threads as asked, the newest replies first, and says when there are more', async () => {
+    const s = await scene()
+    const many = await insert(s.tabId, s.web, Array.from({ length: 60 }, (_, i) => ({ text: `Paged root ${i}`, author: personAuthor(peer) })))
+    await markRead(s.tabId, s.web, await sequenceOf(many.at(-1)!), peer)
+    await insert(s.tabId, s.web, many.map(thread => ({ text: 'Reply', author: agentAuthor(s.worker), thread })))
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    const top = await newestIn(s.tabId, s.web)
+    for (const root of many) await writeThreadMark(db, { tabId: s.tabId, personId: peer.sub, conversationId: s.web, threadId: root, sequence: top, now: Date.now() })
+    const page = async (query: string) => {
+      resetThreadsReads()
+      return call('GET', `/api/super-tabs/${s.tabId}/threads${query}`, peer)
+    }
+    const first = (await page('?read=50')).body.data
+    expect(first.unread).toEqual([])
+    expect(first.read).toHaveLength(50)
+    expect(first.more).toBe(true)
+    const all = (await page('?read=100')).body.data
+    expect(all.read).toHaveLength(60)
+    expect(all.more).toBe(false)
+    // The next page goes on where the first stopped: the same 50 first, newest reply first throughout.
+    expect(all.read.slice(0, 50).map((t: { rootId: string }) => t.rootId)).toEqual(first.read.map((t: { rootId: string }) => t.rootId))
+    const times = all.read.map((t: { lastReplyAt: string }) => Date.parse(t.lastReplyAt))
+    expect(times).toEqual(times.toSorted((a: number, b: number) => b - a))
+    // A client that asks for no number gets what it always did.
+    expect((await page('')).body.data.read).toHaveLength(MAX_READ_THREADS)
+    for (const bad of ['0', '251', '2.5', 'many']) expect((await page(`?read=${bad}`)).status, bad).toBe(400)
+  })
+
   it('refuses a Team session and an agent', async () => {
     const s = await followScene()
     const team = await threads(s.tabId, 'team')
@@ -514,7 +544,8 @@ describe('a person\'s followed threads (GET /threads)', () => {
     return { ...s, long }
   }
   /** One threads read under the profiler, after a warm read: its reply, and the operations each collection served. */
-  async function profiledThreads(tabId: string) {
+  async function profiledThreads(tabId: string, query = '') {
+    const threads = (id: string, as: AuthUser) => call('GET', `/api/super-tabs/${id}/threads${query}`, as)
     await threads(tabId, peer)
     await db.$runCommandRaw({ profile: 0 })
     await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
@@ -560,6 +591,133 @@ describe('a person\'s followed threads (GET /threads)', () => {
     expect(reply.body.data.read).toHaveLength(MAX_READ_THREADS)
     expect(reply.body.data.more).toBe(true)
   }, 120_000)
+
+  // Task #2835: a page of N read threads reads 2N candidates' roots by id and summaries by root id, nothing more.
+  it('reads each page of read threads by index, its cost bounded by the threads asked for', async () => {
+    const s = await longScene()
+    await backfillThreads(db, Date.now())
+    for (const [n, candidates] of [[50, 70], [100, 70]] as const) {
+      resetThreadsReads()
+      const { reply, rows } = await profiledThreads(s.tabId, `?read=${n}`)
+      const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+      expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+      expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
+      expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+      expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+      // At most 2N candidates, and here all 70 of the person's marks.
+      expect(summaries.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(Math.min(2 * n, candidates))
+      expect(messages.reduce((x, r) => x + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(candidates)
+      expect(reply.body.data.read).toHaveLength(Math.min(n, candidates))
+      // What each page read, for the pull request: THREADS_COST_OUT=<file> writes it there.
+      if (process.env.THREADS_COST_OUT) appendFileSync(process.env.THREADS_COST_OUT, `read=${n} ${JSON.stringify(rows.map(r => ({
+        collection: r.ns.split('.').at(-1), op: r.op, plan: r.planSummary, docs: r.docsExamined, keys: r.keysExamined, returned: r.nreturned })))}\n`)
+    }
+  }, 120_000)
+
+  // Ken's scan of 11-04 (task #2768): the unread threads' member check read each thread's newest 100 rows before the mark in
+  // one $or branch per thread, and long threads sent it to one $unionWith branch per thread. It reads their summaries now.
+  /** Web: 60 roots of the owner's; the first 10 hold 300 worker replies. Peer replied early in every third thread (i % 3 == 0)
+   *  and is tagged early in the next (i % 3 == 1); in a long thread both are more than 100 rows before the mark. Peer read the
+   *  chat, then each thread got one new worker reply. */
+  async function memberScene() {
+    const s = await scene()
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 60 }, (_, i) => ({ text: `Member root ${i}`, author: personAuthor(owner) })))
+    await insert(s.tabId, s.web, roots.flatMap((thread, i) => i % 3 === 0 ? [{ text: `Peer early ${i}`, author: personAuthor(peer), thread }]
+      : i % 3 === 1 ? [{ text: `Tags peer ${i}`, author: personAuthor(owner), thread, mentions: [peer.sub] }] : []))
+    for (let batch = 0; batch < 3; batch++) {
+      await insert(s.tabId, s.web, Array.from({ length: 1000 }, (_, i) => ({ text: `History ${batch}.${i}`, author: agentAuthor(s.worker), thread: roots[i % 10]! })))
+    }
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    await insert(s.tabId, s.web, roots.map(thread => ({ text: 'New reply', author: agentAuthor(s.worker), thread })))
+    return { ...s, roots, member: roots.filter((_, i) => i % 3 !== 2) }
+  }
+
+  it('counts the person in a thread they wrote or were tagged in long before their mark, once the Swarm\'s summaries are backfilled', async () => {
+    const s = await memberScene()
+    // Before the backfill: each thread's newest 100 rows before the mark, as before, so a long thread's early rows are not seen.
+    const long = new Set(s.roots.slice(0, 10))
+    const before = (await threads(s.tabId, peer)).body.data
+    expect(before.unread.map((t: any) => t.rootId).sort()).toEqual(s.member.filter(r => !long.has(r)).sort())
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    const after = (await threads(s.tabId, peer)).body.data
+    expect(after.unread.map((t: any) => t.rootId).sort()).toEqual([...s.member].sort())
+    // Every thread listed before is listed the same way after.
+    expect(after.unread.filter((t: any) => !long.has(t.rootId))).toEqual(before.unread)
+  }, 120_000)
+
+  it('learns whether the person is in each unread thread from its summary, in one read, never from its messages', async () => {
+    const s = await memberScene()
+    await backfillThreads(db, Date.now())
+    const { reply, rows } = await profiledThreads(s.tabId)
+    const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+    console.info(`threads cost, 60 unread candidates (10 of 300 rows): ${rows.filter(r => r.op !== 'getmore').length} reads\n` +
+      rows.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 80)} docs=${r.docsExamined ?? 0}`).join('\n'))
+    expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+    // No message read by the thread index: the chat's rows past the mark, and the 60 roots by id.
+    expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
+    expect(messages.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(2 * 61)
+    // The 60 candidates' summaries in one read by id, one small row each.
+    expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+    expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+    expect(summaries.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(60)
+    expect(reply.body.data.unread).toHaveLength(s.member.length)
+  }, 120_000)
+
+  // Ken's scan of 11-04 16:40 (task #2838): since #2962 the threads route returned 2.8x the database bytes per call (203 KB to
+  // ~580 KB). The member check read each candidate's whole summary: the root's source, and the first and newest row of every
+  // author with their names, though it asks only whether one person wrote or was tagged there.
+  /** Web: 60 roots of an agent's, each with a source as large as a route's; 6 agents with display names reply in each, and the
+   *  owner and outsider are tagged. Peer replied early in every third thread (i % 3 == 0), is tagged early in the next
+   *  (i % 3 == 1), and is not in the rest. Peer read the chat, then each thread got one new worker reply. */
+  async function crowdedScene() {
+    const s = await scene()
+    const named = (id: string): Author => ({ ...agentAuthor(id), displayName: `${id} the agent on Elvis-MacBook-Pro.local` })
+    const source = { kind: 'route-fixture', candidates: Array.from({ length: 12 }, (_, i) => ({ agent: `candidate-${i}`, why: 'x'.repeat(80) })) }
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 60 }, (_, i) => ({ text: `Crowded root ${i}`, author: named('lead'), source })))
+    await insert(s.tabId, s.web, roots.flatMap((thread, i) => [
+      ...i % 3 === 0 ? [{ text: `Peer early ${i}`, author: personAuthor(peer), thread }] : [],
+      ...i % 3 === 1 ? [{ text: `Tags peer ${i}`, author: named('agent-0'), thread, mentions: [peer.sub] }] : [],
+      ...Array.from({ length: 6 }, (_, a) => ({ text: `Agent ${a} on ${i}`, author: named(`agent-${a}`), thread, mentions: [owner.sub, outsider.sub] })),
+    ]))
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    await insert(s.tabId, s.web, roots.map(thread => ({ text: 'New reply', author: agentAuthor(s.worker), thread })))
+    await backfillThreads(db, Date.now())
+    return { ...s, roots, member: roots.filter((_, i) => i % 3 !== 2) }
+  }
+
+  it('reads of each candidate\'s summary only the rows that name the person: the bytes follow their threads, not every author', async () => {
+    const s = await crowdedScene()
+    const { reply, rows } = await profiledThreads(s.tabId)
+    const summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+    const bytes = (of: typeof rows) => of.reduce((n, r) => n + (r.responseLength ?? 0), 0)
+    console.info(`threads read, 60 unread candidates, 40 naming the person: ${bytes(rows)} database bytes in all, ${bytes(summaries)} of them summaries\n` +
+      rows.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 60)} docs=${r.docsExamined ?? 0} returned=${r.nreturned ?? 0} bytes=${r.responseLength ?? 0}`).join('\n'))
+    expect(reply.body.data.unread.map((t: any) => t.rootId).sort()).toEqual([...s.member].sort())
+    // Still one read by id, examining one summary per candidate (#2962's gain).
+    expect(summaries.filter(r => r.op !== 'getmore')).toHaveLength(1)
+    expect(summaries[0]!.planSummary).toMatch(/^IXSCAN \{ _id: 1 \}/)
+    expect(summaries.reduce((n, r) => n + (r.docsExamined ?? 0), 0)).toBeLessThanOrEqual(60)
+    // Only the 40 summaries that name the person come back, each with only the parts that do: a few hundred bytes each.
+    expect(summaries.reduce((n, r) => n + (r.nreturned ?? 0), 0)).toBe(s.member.length)
+    expect(bytes(summaries)).toBeLessThanOrEqual(s.member.length * 400)
+  }, 120_000)
+
+  it('keeps reading a Swarm Buddy chat\'s rows to learn whether the person is in a thread: its summary cannot hide a lost project\'s row', async () => {
+    let chat = ''
+    const s = await scene(f => f.edit(state => { chat = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.sub)!).id }))
+    const [root] = await insert(s.tabId, chat, [{ text: 'Buddy root', author: agentAuthor('peer-buddy') }])
+    // Peer's own reply in a session of the Secret project, which they do not read: it must not make them a member.
+    await insert(s.tabId, chat, [{ text: 'Secret session words', author: personAuthor(peer), thread: root!, buddySession: true, buddyProject: s.secret }])
+    await markRead(s.tabId, chat, await newestIn(s.tabId, chat), peer)
+    await insert(s.tabId, chat, [{ text: 'Buddy reply', author: agentAuthor('peer-buddy'), thread: root! }])
+    expect((await threads(s.tabId, peer)).body.data.unread).toEqual([])
+    await backfillThreads(db, Date.now())
+    resetThreadsReads()
+    expect((await threads(s.tabId, peer)).body.data.unread).toEqual([])
+    resetInboxReads()
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+  })
 })
 
 describe('a thread the person is tagged in, in a chat they never opened (GET /threads)', () => {

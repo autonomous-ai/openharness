@@ -671,9 +671,13 @@ class SwarmActivity extends ChangeNotifier {
       final reader = inbox.reader(id);
       if (reader == null || reader.accessRevoked) continue;
       if (!_feeds.containsKey(id)) {
-        final feed = _feeds[id] = SwarmActivityFeed(reader);
+        final feed = _feeds[id] = SwarmActivityFeed(reader)
+          ..onReply = (entry) => session.announceReply(id, entry);
         if (shown) feed.opened();
-        feed.addListener(_changed);
+        feed
+          ..addListener(_changed)
+          // Gone with the feed: disposing it drops what listens.
+          ..addListener(() => session.repliesListed(id, feed));
       }
       if (_marks.containsKey(id) || _answered(id)) continue;
       _marks[id] = _SwarmMarks(reader, store, accountId, onLoaded: _changed);

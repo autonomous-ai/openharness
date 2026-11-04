@@ -1,14 +1,15 @@
 /** `harness super-tab route GROUP JSON`: any agent's routing step (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md).
  * Reads the tab, the model catalog and the account's machines; probes each machine once per engine with the same admission
- * `start` uses; leaves out what cannot run and ranks the rest by strength, price, quota fit and idle members, with what else
- * it knows as notes (docs/plans/2026-10-30-project-instructions-design.md, Routing); and records the decision in the tab. */
+ * `start` uses; leaves out what cannot run and lists the rest by machine with their facts and what else it knows as notes
+ * (docs/plans/2026-10-30-project-instructions-design.md, Routing), ranking none and naming no pick (task #2901); and records
+ * the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -143,9 +144,12 @@ export function relayedReadings(pool: Json, pools: Json[], now = Date.now()): { 
 }
 /** A running member keeps its engine and memory, but still needs a live terminal and the task's tools and devices. Its
  *  allowance is information ([usedUp]). */
-function memberRefusals(running: boolean | null, tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
+function memberRefusals(running: boolean | null, closed: boolean, tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
   return [
-    ...(running === false ? ['Its terminal is not running.'] : []),
+    // A session its machine's idle cleanup closed never comes back as this agent: the backend refuses to assign it (superTabs/
+    // closedAgents.ts sessionClosed), so the reason says what to do (task #2744). One listed stopped alone may be a Change
+    // agent before its rebind (review of #2953).
+    ...(running === false ? [closed ? 'Its session was closed. Start a new agent.' : 'Its terminal is not running.'] : []),
     ...tools.map(tool => requiredToolReason(tool, reportedTools[tool], toolProbeErrors[tool])).filter((reason): reason is string => reason !== null),
     ...devices.filter(device => reportedDevices[device] !== true).map(device => `Required device unavailable: ${device}.`),
   ]
@@ -289,6 +293,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       // Offline is said once, by the reading's own age below.
       ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string'
         ? { teammatesRefused: teamWork.reason, projectOwnerId: projectOwner } : {}),
+      // Its owner lets teammates' work run in their own account (backend machines.ts ownAccountWork, task #2806): the teammate
+      // whose task lands there did not choose that, so the route says it (River, 11-04).
+      ...(teamWork.allowed === true && typeof teamWork.ownAccount === 'string' ? { ownAccount: teamWork.ownAccount, projectOwnerId: projectOwner } : {}),
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
@@ -400,44 +407,58 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
     command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
-  // A backend from before every engine on every machine was shown keeps 12 candidates (Ken, 2026-11-03): the best 12 go.
-  if (recorded.error === 'VALIDATION_ERROR' && offered.length > OLD_RECORD_MAX) { offered = offered.slice(0, OLD_RECORD_MAX); recorded = await record('current') }
+  // A backend from before task #2901 takes a record only with a pick: c0 stands in for one, so its decision log and the starts
+  // linked to it still work (route.ts recordOf).
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('picked')
+  // A backend from before every engine on every machine was shown keeps 12 candidates (Ken, 2026-11-03): the first 12 go.
+  if (recorded.error === 'VALIDATION_ERROR' && offered.length > OLD_RECORD_MAX) { offered = offered.slice(0, OLD_RECORD_MAX); recorded = await record('picked') }
   // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
   // the shape it knows. A task with no kind has nothing to leave out at the first step.
   if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
   if (recorded.error === 'VALIDATION_ERROR') recorded = await record('v1')
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
-  const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
-  // What the agent choosing reads of a candidate: where it runs, and what the route knows of it beside the ranking.
-  // A new agent's row says what its machine has for a start; a member needs no new start, and a paused machine, which offers
-  // no new agent, shows no reading (review of #2426).
-  const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
+  // What the agent choosing reads of a candidate: where it runs, and what the route knows of it beside its facts.
+  // A new agent's row says what its machine has for a start and the folder it starts in; a member needs no new start, and a
+  // paused machine, which offers no new agent, shows no reading (review of #2426).
+  const cwdOn = (machineId: string) => text(machines.get(machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine'
+  const publicOf = (s: Shown) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
-    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' ? { cwd: cwdOn(s.machineId) } : {}),
+    ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+  // Every recorded row: the coordinator may reuse a particular member (the same Reviewer for its next round, Routing rule 3),
+  // so none is hidden behind another on its account.
+  const shownRows = offered
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
-    pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, why: verdict.why,
-    alternatives: alternativesTo(verdict.pick, offered).map(publicOf),
+    via: verdict.via, p: verdict.p, why: verdict.why,
+    candidates: shownRows.map(publicOf),
     leftOut: leftOut(choice.excluded, choice.shown),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : []), ...skipped],
-    next: verdict.pick.kind === 'member'
-      ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
-      // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without
-      // instructions takes no roleName (it came with them, phase 2).
-      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
-        cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
-        worktree: true, requirements: startRequirements(assessment.needs), ...(assessment.needs.heavy ? { heavy: assessment.needs.heavy } : {}),
-        machineId: verdict.pick.machineId, engine: verdict.pick.engine,
-        // A local model is named by the grid alone: no subscription model or effort goes with it.
-        ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
-        ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. `
-        + `Put the agent's name for NAME${instructions ? ' and its role in the project\'s instructions for ROLE' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
+    next: nextOf(shownRows, input.conversationId, typeof routeDecisionId === 'string' ? routeDecisionId : undefined, !!instructions, assessment.needs),
   }
+}
+
+/** How to act on the route: the candidates are in no order of merit (task #2901), so it names none. A member is assigned, a new
+ *  agent started, each with the chosen row's own fields; RULE is the Routing rule that chose it, which the backend asks for
+ *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
+function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs']): string {
+  const choose = 'Choose one candidate by the project\'s Routing instructions (Order and quota); the list is by machine name, not by merit.'
+  const decided = routeDecisionId ? { routeDecisionId, overrideReason: 'RULE' } : {}
+  const assign = `Assign a member with: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
+  // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without instructions
+  // takes no roleName (it came with them, phase 2).
+  const start = `Start a new agent with: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
+    cwd: 'CWD', worktree: true, requirements: startRequirements(needs), ...(needs.heavy ? { heavy: needs.heavy } : {}),
+    machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign the started agent${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
+    + 'Put the chosen row\'s machineId, engine, model, effort and cwd for MACHINE, ENGINE, MODEL, EFFORT and CWD; a row on a model served on the Swarm\'s grid takes its gridModel and gridName in place of model and effort. '
+    + `Put the agent's name for NAME${instructions ? ' and its role in the project\'s instructions for ROLE' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`
+  const rule = routeDecisionId ? ' Put the Routing rule that chose it for RULE (urgency, context or a machine the work needs where it departs from the order).' : ''
+  return [choose, ...(rows.some(r => r.kind === 'member') ? [assign] : []), ...(rows.some(r => r.kind === 'new') ? [start] : [])].join(' ') + rule
 }
 
 /** Each machine none of whose candidates is offered, with why, for the Lead's answer: the decision kept the exclusions, but the
@@ -454,14 +475,6 @@ export function leftOut(excluded: Excluded[], shown: Array<{ machineName: string
 }
 const MAX_LEFT_OUT = 20, MAX_REASONS = 4
 
-/** The next two rows, and the best row of every other machine, so the agent choosing can take another machine. */
-/** The best new agent and the best member of every engine on every machine, in rank order, the pick's own left out: the project's
- *  order picks between accounts, then whether to reuse an agent there, so each is in front of the agent choosing once (Ken,
- *  2026-11-03). */
-function alternativesTo<T extends { id: string } & Parameters<typeof slotOf>[0]>(pick: T, shown: T[]): T[] {
-  const seen = new Set([slotOf(pick)])
-  return shown.filter(s => { const best = !seen.has(slotOf(s)); seen.add(slotOf(s)); return best })
-}
 
 /** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
 export const LOCAL_FRESH_MS = 45_000
@@ -612,6 +625,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
     const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
     const kept = typeof pool.keptForOthers === 'string' ? [pool.keptForOthers] : []
+    /** A note, never a refusal: a teammate's work here runs in the machine owner's own account, whoever's grant an agent has. */
+    const ownAccount = typeof pool.ownAccount === 'string' && pool.contributorId !== pool.projectOwnerId ? [pool.ownAccount] : []
     const newReasons = [...blocked, ...kept, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
@@ -632,12 +647,13 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
+      const closed = Array.isArray(observed.closedHarnessIds) && observed.closedHarnessIds.includes(m.harnessId)
+      return { ...memberProbe(m, fresh ? [...memberRefusals(running, closed, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...kept, ...teammates(m.contributorId)] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
@@ -662,7 +678,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const inspected = byEngine.get(String(object(m.configuration).engine))!
       const allowance = quotaOf2(inspected.quota)
       const capacity = object(inspected.capacity)
-      const refusals = memberRefusals(live.has(String(m.harnessId)), needs.tools, needs.devices,
+      const refusals = memberRefusals(live.has(String(m.harnessId)), false, needs.tools, needs.devices,
         object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
       probes.push({ ...memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),

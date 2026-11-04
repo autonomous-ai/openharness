@@ -449,6 +449,9 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
+  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
+   *  from before it was recorded. */
+  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -616,7 +619,10 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
@@ -699,8 +705,12 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
+  messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
+  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
@@ -711,6 +721,9 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
+   *  agent's own `message.react`. */
+  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -965,6 +978,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens

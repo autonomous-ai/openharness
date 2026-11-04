@@ -7,7 +7,8 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machinesRule } from './cachePatch.js'
+import { accessRule, baseRule, dormantAgentRule, dormantProjectRule, dormantRule, FEED_MAIN_KINDS, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machineFeedRule,
+  machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
 import { retryTransient } from './retry.js'
@@ -26,6 +27,9 @@ export const DIRECT = new CacheView(null, null)
 
 /** A miss loads the feed from this long before its reader's cursor, so readers polling a few seconds apart share it. */
 const FEED_SLACK_MS = 15_000
+/** ... and from at least this long before the read, so a phone (5 s), a background window (15 s) or a CLI reading a minute
+ *  or two after the poller that loaded it reads the held feed too, not every changed part itself (#2783). */
+export const FEED_REACH_MS = 120_000
 
 /** A Swarm's live machine parts, held at both stamps: a machine's reading moves only the machine stamp. */
 export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabId: string) =>
@@ -37,6 +41,11 @@ const base = (db: Db, view: CacheView, tabId: string) => Promise.all([
   view.get(tabId, 'parts', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId)))), baseRule),
   readMachines(db, view, tabId),
 ])
+
+/** The head, members and agents of a Swarm (parts/load.ts loadAccess), held at its main stamp and patched from those kinds
+ *  alone (cachePatch.ts accessRule): what a one-group read checks its reader against (read/service.ts oneGroup, task #2875). */
+export const readAccess = (db: Db, view: CacheView, tabId: string): Promise<SwarmParts> =>
+  view.get(tabId, 'access', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadAccess(tx, tabId)))), accessRule)
 
 /** The parts loadActive gives for `named`, as one Swarm read (design section 3.1). */
 export async function readParts(db: Db, view: CacheView, tabId: string, named: ReadNamed = {}): Promise<SwarmParts> {
@@ -107,10 +116,26 @@ const pickFinished = (finished: Part<AgentStart>[], named: ReadNamed): Part<Agen
   return [...finished.filter(s => ids.has(s.key)), ...(named.startAgentIds ?? []).flatMap(agent => index!.get(agent) ?? [])]
 }
 
+/** The Swarms whose last delta's rows a process keeps (store.loadDelta `held`), most recently read last. Each keeps only its
+ *  last delta's rows of each kind: about what changed in its last 30 s (the overlap) and more. */
+export const DELTA_ROWS_SWARMS = 256
+
 /** The read cache's delta (cache.ts): one snapshot, as a base load is (final review, Important 5), and tried again on a
- *  transient error as one is. */
-export const readDelta = (db: Pick<PrismaClient, '$transaction'>) => (tabId: string, since: number, kinds: readonly PartKind[]): Promise<SwarmDelta> =>
-  retryTransient(() => db.$transaction(tx => store.loadDelta(tx, tabId, since, kinds)))
+ *  transient error as one is. It keeps each Swarm's rows its last delta read, so the next reads whole only what moved since
+ *  (#2783). */
+export function readDelta(db: Pick<PrismaClient, '$transaction'>): (tabId: string, since: number, kinds: readonly PartKind[]) => Promise<SwarmDelta> {
+  const held = new Map<string, store.DeltaRows>()
+  return (tabId, since, kinds) => {
+    const rows = held.get(tabId) ?? new Map()
+    held.delete(tabId)
+    held.set(tabId, rows)
+    for (const oldest of held.keys()) {
+      if (held.size <= DELTA_ROWS_SWARMS) break
+      held.delete(oldest)
+    }
+    return retryTransient(() => db.$transaction(tx => store.loadDelta(tx, tabId, since, kinds, rows)))
+  }
+}
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {
@@ -187,13 +212,18 @@ export async function readLastChangedAts(db: Db, view: CacheView, tabIds: string
   })] as const)))
 }
 
-/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */
+/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else
+ *  read. The feed is held in two entries by the stamp each depends on (#2783): a machine's reading refreshes only its
+ *  machine part, and every other kind stays as held. */
 export async function readChanged(db: Db, view: CacheView, tabId: string, since: number): Promise<Part[]> {
   const direct = async () => (await store.loadChanged(db, [tabId], new Date(since))).get(tabId) ?? []
   if (!view.available) return direct()
-  const feed = await view.get(tabId, 'feed', 'all', async () => {
-    const from = since - FEED_SLACK_MS
-    return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
-  }, feedRule)
-  return since >= feed.from ? feed.parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since) : direct()
+  const load = (kinds: readonly PartKind[]) => async () => {
+    const from = Math.min(since - FEED_SLACK_MS, view.at - FEED_REACH_MS)
+    return { from, parts: (await store.loadChanged(db, [tabId], new Date(from), kinds)).get(tabId) ?? [] }
+  }
+  const [main, machines] = await Promise.all([view.get(tabId, 'feed', 'main', load(FEED_MAIN_KINDS), feedRule),
+    view.get(tabId, 'machine-feed', 'all', load(['machine']), machineFeedRule)])
+  if (since < main.from || since < machines.from) return direct()
+  return [...main.parts, ...machines.parts].filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since)
 }

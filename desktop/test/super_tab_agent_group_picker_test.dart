@@ -304,4 +304,44 @@ void main() {
       });
     }
   }
+
+  // Review of #2951 (Kite): a terminal opens where the backend opens one, in
+  // a conversation holding the agent that is not archived; open ones first,
+  // a finished one the Desktop holds only when no open one does.
+  test('where a terminal can open: open groups, else held finished ones, never archived', () async {
+    final groups = server.state['conversations'] as List;
+    groups.addAll(<Map<String, dynamic>>[
+      {
+        ...conversationFixture('done', 'Finished'),
+        'projectId': 'lead',
+        'agentIds': ['agent'],
+        'dormant': true,
+      },
+      {
+        ...conversationFixture('gone', 'Archived'),
+        'projectId': 'lead',
+        'agentIds': ['agent'],
+        'archived': true,
+      },
+    ]);
+    final c = server.controller();
+    await c.refresh();
+    await c.loadDormant('lead');
+    List<String> ids() =>
+        superTabAgentTerminalGroups(c, 'agent').map((g) => g.id).toList();
+    expect(c.snapshot!.conversation('done'), isNotNull);
+    expect(ids(), ['lead', 'offline']);
+    for (final group in groups.take(2)) {
+      group['agentIds'] = <String>[];
+    }
+    await c.refresh();
+    expect(ids(), ['done']);
+    expect(superTabOpenTerminalBlocked(c, 'agent'), isNull);
+    (groups[2] as Map)['agentIds'] = <String>[];
+    await c.refresh();
+    expect(ids(), isEmpty);
+    expect(superTabOpenTerminalBlocked(c, 'agent'), isNotNull);
+    await c.flush();
+    c.dispose();
+  });
 }

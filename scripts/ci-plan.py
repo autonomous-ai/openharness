@@ -63,7 +63,7 @@ ALSO.update({f"desktop/{path}": "mobile" for path in (
     "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
     "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
     "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
-    "test/support/real_fonts.dart")})
+    "lib/super_tabs/roster.dart", "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -122,8 +122,9 @@ NOT_READS = {
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
+    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
+                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/buddyGuard.claude.spec.ts": ("test data: files in a temporary repository", {"docs/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
@@ -263,50 +264,139 @@ REUSE_ERRORS = (OSError, RuntimeError, ValueError, KeyError, TypeError, Attribut
                 zipfile.BadZipFile, json.JSONDecodeError)
 
 
-def plan_reuse(root, head, base, suites, evidence):
-    """Reuse what the passed head's exact ci/required run proved, for suites main's commits left alone.
+BATCH_MEMBERS_MAX = 40
 
-    Fails closed: any doubt or unreadable evidence leaves every suite to run as before."""
+
+def batch_members(root, head, base):
+    """The tested heads a batch branch merged, in merge order: read from its own merges, never from the PR's text.
+
+    Every commit on the head's first-parent line down to the base branch is a two-parent merge; its second parent is a
+    member PR's tested head, or a main commit merged again, which brings only main's commits."""
+    members, commit = [], head
+    for _ in range(BATCH_MEMBERS_MAX + 1):
+        if is_ancestor(root, commit, base):
+            break
+        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if len(parents) != 2:
+            raise Rerun(f"{commit[:12]} on its first-parent line is not a merge and not on the base branch")
+        first, second = (sha(value) for value in parents)
+        if not is_ancestor(root, second, base) and second not in members:
+            members.append(second)
+        commit = first
+    else:
+        raise Rerun(f"its first-parent line has more than {BATCH_MEMBERS_MAX} merges before the base branch")
+    if not members:
+        raise Rerun("it merges no member PR")
+    return members[::-1]
+
+
+def reuse_sources(root, head, base):
+    """The commits whose passed runs may stand for this head's components, and how they were found: the passed head of
+    GitHub's Update branch (its second parent is a main commit), or the member heads a batch branch merged."""
+    parents = git(root, "rev-list", "--parents", "-n", "1", head).split()[1:]
+    if len(parents) == 2 and is_ancestor(root, sha(parents[1]), base):
+        passed, main = update_parents(root, head, base)
+        return [passed], dict(kind="update", passed_head=passed, main_parent=main)
+    members = batch_members(root, head, base)
+    return members, dict(kind="batch", members=members)
+
+
+def passed_receipt(evidence, commit):
+    """The exact passed ci/required run of a tested commit, or ValueError."""
+    gate = evidence.passed_gate(commit)
+    receipt = gate["receipt"]
+    if receipt["source_sha"] != commit or receipt["status"] != "passed":
+        raise ValueError("the passed head's ci/required receipt names another source")
+    return gate
+
+
+def run_origin(evidence, commit, gate, suite):
+    """Where a passed run's result for this suite was proved: the run itself, or the run it reused (an earlier one)."""
+    receipt = gate["receipt"]
+    earlier = receipt.get("reused") or {}
+    if suite in earlier:
+        record = earlier[suite]
+        origin, run_id, attempt = sha(record["origin_sha"]), record["run_id"], record["run_attempt"]
+        found = evidence.ran(origin, run_id, attempt, suite)
+        return origin, run_id, attempt, found["tree"], found["url"]
+    return commit, gate["run_id"], gate["run_attempt"], receipt["source_tree"], gate["url"]
+
+
+def plan_reuse(root, head, base, suites, evidence):
+    """Reuse what an exact passed ci/required run proved, for suites nothing else in this head changed the inputs of.
+
+    After Update branch the run is the passed head's; in a batch PR, a member PR's (task #2720). Fails closed: any doubt
+    or unreadable evidence leaves the suite, or every suite, to run as before."""
     reuse = dict(status="none", reason=None, passed_head=None, main_parent=None, rerun={})
     reused = {}
     try:
         if evidence is None:
             raise Rerun("no CI evidence reader")
-        passed, main = update_parents(root, head, base)
-        reuse.update(passed_head=passed, main_parent=main)
+        origins, source = reuse_sources(root, head, base)
+        reuse.update(source)
         changed = own_shared_change(root, head, base)
         if changed:
             raise Rerun(f"this PR changes {changed}, which its own CI run reads")
-        gate = evidence.passed_gate(passed)
-        receipt = gate["receipt"]
-        if receipt["source_sha"] != passed or receipt["status"] != "passed":
-            raise ValueError("the passed head's ci/required receipt names another source")
-        earlier = receipt.get("reused") or {}
+        probed = {}
+        if source["kind"] == "update":
+            try:
+                probed[origins[0]] = passed_receipt(evidence, origins[0])
+            except REUSE_ERRORS:
+                # A batch PR that merged main again: its earlier head never ran alone, but its members did.
+                try:
+                    origins = batch_members(root, head, base)
+                    reuse.update(kind="batch", members=origins, passed_head=None, main_parent=None)
+                except Rerun:
+                    pass
+        batch = reuse["kind"] == "batch"
+        gates, unread = [], {}
+        for commit in origins:
+            if not batch:
+                # An update has one source: doubt reruns all.
+                gates.append((commit, probed[commit] if commit in probed else passed_receipt(evidence, commit)))
+                continue
+            try:
+                gates.append((commit, passed_receipt(evidence, commit)))
+            except REUSE_ERRORS as error:
+                # Its changes stay in every other member's diff to the head: it is only no candidate.
+                unread[commit] = str(error) or type(error).__name__
+        if batch and not gates:
+            raise Rerun("no member's passed run could be verified: " + "; ".join(f"{c[:12]}: {e}" for c, e in unread.items()))
         for suite in sorted(suites):
-            if suite not in receipt["suites"]:
-                reuse["rerun"][suite] = "the passed head's run did not run it"
-                continue
-            if suite in earlier:
-                record = earlier[suite]
-                origin, run_id, attempt = sha(record["origin_sha"]), record["run_id"], record["run_attempt"]
-                found = evidence.ran(origin, run_id, attempt, suite)
-                tree, url = found["tree"], found["url"]
+            reasons = []
+            for commit, gate in gates:
+                if suite not in gate["receipt"]["suites"]:
+                    reasons.append(f"member {commit[:12]}'s run did not run it" if batch else "the passed head's run did not run it")
+                    continue
+                if batch:
+                    try:
+                        origin, run_id, attempt, tree, url = run_origin(evidence, commit, gate, suite)
+                    except REUSE_ERRORS as error:
+                        reasons.append(f"member {commit[:12]}'s earlier run could not be verified: {str(error) or type(error).__name__}")
+                        continue
+                else:
+                    origin, run_id, attempt, tree, url = run_origin(evidence, commit, gate, suite)
+                scope, reason = reuse_blocker(root, suite, origin, head)
+                if scope == "all":
+                    raise Rerun(reason)
+                if scope == "suite":
+                    reasons.append(reason)
+                    continue
+                why = (f"passed in run {run_id} on {origin[:12]}, merged here as member {commit[:12]}; nothing else in the "
+                       f"batch or on main changes its inputs ({reason})" if batch else
+                       f"passed in run {run_id} on {origin[:12]}; main's new commits change none of its inputs ({reason})")
+                reused[suite] = dict(origin_sha=origin, origin_tree=sha(tree), run_id=run_id, run_attempt=attempt, run_url=url,
+                                     reason=why)
+                break
             else:
-                origin, run_id, attempt, tree, url = passed, gate["run_id"], gate["run_attempt"], receipt["source_tree"], gate["url"]
-            scope, reason = reuse_blocker(root, suite, origin, head)
-            if scope == "all":
-                raise Rerun(reason)
-            if scope == "suite":
-                reuse["rerun"][suite] = reason
-                continue
-            reused[suite] = dict(origin_sha=origin, origin_tree=sha(tree), run_id=run_id, run_attempt=attempt, run_url=url,
-                                 reason=f"passed in run {run_id} on {origin[:12]}; main's new commits change none of its inputs ({reason})")
+                reasons += [f"member {c[:12]}'s passed run could not be read: {e}" for c, e in unread.items()]
+                reuse["rerun"][suite] = "; ".join(reasons)
     except Rerun as refusal:
         return {}, dict(reuse, rerun={}, reason=str(refusal))
     except REUSE_ERRORS as error:
         return {}, dict(reuse, rerun={}, reason=f"earlier evidence could not be verified: {str(error) or type(error).__name__}")
-    reuse.update(status="applied" if reused else "none",
-                 reason=f"reused {len(reused)} of {len(suites)} suites from the passed head's run")
+    whence = "the batch's member runs" if reuse.get("kind") == "batch" else "the passed head's run"
+    reuse.update(status="applied" if reused else "none", reason=f"reused {len(reused)} of {len(suites)} suites from {whence}")
     return reused, reuse
 
 
@@ -420,13 +510,17 @@ def verify_reuse(root, receipt, base, evidence):
     reused = check_reused_records(receipt.get("reused"), receipt.get("suites") or [], head, receipt.get("event"))
     if not reused:
         return {}
+    reuse = receipt.get("reuse")
+    if not isinstance(reuse, dict):
+        raise ValueError("reused results name no update merge or batch")
     try:
-        passed, main = update_parents(root, head, base)
+        if reuse.get("kind") == "batch":
+            if reuse.get("members") != batch_members(root, head, base):
+                raise ValueError("reused results name other members than the batch head's merges")
+        elif (reuse.get("passed_head"), reuse.get("main_parent")) != update_parents(root, head, base):
+            raise ValueError("reused results name other parents than the head's update merge")
     except Rerun as refusal:
         raise ValueError(f"reused results refused: {refusal}") from None
-    reuse = receipt.get("reuse")
-    if not isinstance(reuse, dict) or (reuse.get("passed_head"), reuse.get("main_parent")) != (passed, main):
-        raise ValueError("reused results name other parents than the head's update merge")
     changed = own_shared_change(root, head, base)
     if changed:
         raise ValueError(f"reused results refused: this PR changes {changed}, which its own CI run reads")

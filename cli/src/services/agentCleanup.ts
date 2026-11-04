@@ -59,6 +59,10 @@ export interface AgentCleanupDeps {
   /** The Super Tab members the Swarm keeps here (superTabs/retention.ts `retainedHarnesses`, through
    *  superTabs/inServices.ts): absent while the Swarm is off, when none is kept. */
   retained?: (dataDir: string) => ReadonlySet<string>
+  /** Told of each harness this closed (superTabs/cleanupCloses.ts `recordCleanupClose`, through superTabs/inServices.ts):
+   *  the Swarm then refuses it new work, as it does not one stopped for Change agent (review of #2953). False when it
+   *  could not record it. Absent while the Swarm is off. */
+  closed?: (dataDir: string, agentId: string) => boolean
 }
 
 const NONE_RETAINED: ReadonlySet<string> = new Set()
@@ -118,6 +122,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     if (retainedHarnesses(core.dataDir).has(s.agentId)) return { error: 'SESSION_RETAINED' }
     const result: AgentCloseResult = await (core.agents.closeStarted?.(s.agentId, mode) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
     if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}. Its conversation is kept.`)
+    if (result.closed && deps.closed && !deps.closed(core.dataDir, s.agentId)) {
+      log(`[agent-cleanup] could not tell the Swarm it closed ${label(s)}: a task given to it now is lost.`)
+    }
     return result
   }
   const failed = (s: RegisteredSession, why: string, result: AgentCloseResult): void =>
@@ -227,6 +234,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   return { port, look, closeStartedBy }
 }
 
-export function startAgentCleanup(core: CoreApi, ports: CorePorts, retained?: AgentCleanupDeps['retained']): void {
-  ports.agentCleanup = createAgentCleanup(core, retained ? { retained } : {}).port
+/** [swarm]: the Swarm's side, while it is on (superTabs/inCore.ts, through core/main.ts). */
+export function startAgentCleanup(core: CoreApi, ports: CorePorts, swarm?: Pick<AgentCleanupDeps, 'retained' | 'closed'>): void {
+  ports.agentCleanup = createAgentCleanup(core, swarm ?? {}).port
 }

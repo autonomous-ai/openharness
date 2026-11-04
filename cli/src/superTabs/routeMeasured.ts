@@ -1,19 +1,20 @@
 /** Routing by what choices actually cost and how they did (Scholes's goals, piece 3, 2026-10-31): a routing plug-in (route.ts
- * RoutePlugin) that moves a candidate within its strength by its choice's measured results for the task's kind of work, over
- * the project's last 7 days (backend superTabs/costs/read.ts, the same read as `harness super-tab costs`, which counts only
+ * RoutePlugin) that notes on a candidate its choice's measured results for the task's kind of work, over the project's last
+ * 7 days (backend superTabs/costs/read.ts, the same read as `harness super-tab costs`, which counts only
  * the groups the routing agent may read and refuses a Buddy).
  *
  * - Cost: the full cost per shipped change, every ended attempt of the choice (failed and lost ones too) and every review of
  *   its work, rework rounds included. A choice's own attempts alone made one that passes 6 of 10 first reviews look cheaper
  *   than one that passes 9 of 10, its extra review rounds left out (Lead, 2026-10-31). The measured choices of the kind are
- *   ranked by it on the catalog's cost scale, so they keep their place against unmeasured ones on average.
- * - Results: a first-review pass rate clearly under another measured choice's (their 95% ranges apart) ranks the choice after
- *   its strength's other choices, never below a weaker strength. With 5 to 10 reviews the ranges nearly always overlap, so
+ *   put on the catalog's cost scale by it, so they compare with unmeasured ones on average.
+ * - Results: a first-review pass rate clearly under another measured choice's (their 95% ranges apart) is said, so another
+ *   choice of its strength is preferred, never a weaker strength. With 5 to 10 reviews the ranges nearly always overlap, so
  *   cost decides.
  * - Only with enough of it: at least MIN_SHIPPED shipped changes for cost and MIN_FIRST_REVIEWS first reviews for the pass
- *   rate (the nightly reflection's own thresholds, costs/reflection.ts); otherwise today's ranking.
- * It never adds or refuses a candidate: what may run is the route's, and only its order changes. The kind is the word the
- * routing agent gives in its assessment (`kind`); none, or one nothing was measured for, ranks as today. */
+ *   rate (the nightly reflection's own thresholds, costs/reflection.ts); otherwise nothing is said.
+ * It never adds or refuses a candidate: what may run is the route's, and since task #2901 its finding is a note, never the
+ * order. The kind is the word the routing agent gives in its assessment (`kind`); none, or one nothing was measured for, says
+ * nothing. */
 import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
 import { catalogRow, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import type { PluginMaker } from './routePlugins.js'
@@ -24,7 +25,8 @@ export const MEASURED = 'measured results'
 export const DAYS = 7
 export const MIN_FIRST_REVIEWS = 5
 export const MIN_SHIPPED = 3
-/** How far a clearly worse pass rate moves a candidate: after its strength's other choices, before the next strength's. */
+/** Which way a clearly worse pass rate leans, in catalog strength: less than one step, since only another choice of its
+ *  strength is preferred. It moves nothing (task #2901). */
 const WORSE = -0.5
 const Z = 1.96
 /** Well under the makers' 3 s (routePlugins.ts MAKER_TIMEOUT_MS), so a slow read is said as this piece's own failure. */
@@ -43,7 +45,7 @@ const count = (v: unknown): v is number => Number.isInteger(v) && (v as number) 
 const money = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
 
-/** The rows of a costs answer it can rank by, or null when the answer is no summary. A row it cannot read is dropped; a
+/** The rows of a costs answer it can go by, or null when the answer is no summary. A row it cannot read is dropped; a
  *  backend before full costs sends none, read as unknown. */
 export function measuredFrom(answer: unknown): Measured | null {
   const reply = object(answer), value = object(reply.value)
@@ -65,13 +67,13 @@ const saidWhy = new Set<string>()
 function sayOnce(why: string): void {
   if (saidWhy.has(why)) return
   saidWhy.add(why)
-  console.warn(`[super-tabs] the route could not read cost results: ${why}; it ranks without them`)
+  console.warn(`[super-tabs] the route could not read cost results: ${why}; the route is shown without them`)
 }
 const reasonOf = (answer: Record<string, unknown>) =>
   `${String(answer.error)}${Number.isInteger(answer.status) ? ` (${answer.status as number})` : ''}`
 
 /** The project's measures, read through the route's own backend request: null when refused, failed, slower than [ms] or
- *  unreadable, so the route ranks as today. A refusal is logged by its code, never its detail. The read is the costs
+ *  unreadable, so the route has no measured notes. A refusal is logged by its code, never its detail. The read is the costs
  *  command's, about 0.1 to 0.3 s beyond a plain request on the openharness Swarm (2026-10-31). */
 export async function readMeasured(request: ScopedRequest, ms = READ_MS): Promise<Measured | null> {
   const answer = await within(request({ action: 'costs', days: DAYS }).catch(() => { sayOnce('the request failed'); return null }), ms)
@@ -104,14 +106,14 @@ const KIND = /^[a-z][a-z0-9-]{0,39}$/
 const costed = (r: MeasuredRow) => r.shipped >= MIN_SHIPPED && r.fullCostPerShipped !== null
 const reviewed = (r: MeasuredRow) => r.firstReviews >= MIN_FIRST_REVIEWS
 
-/** The plug-in over [measured]: pure, so the route ranks every candidate with the same numbers. */
+/** The plug-in over [measured]: pure, so the route notes every candidate with the same numbers. */
 export function measuredPlugin(measured: Measured): RoutePlugin {
-  /** Per kind: its rows, and the measured costs' scale on the catalog's: dollars per cost point, so the measured choices keep
-   *  their mean place against unmeasured ones. Null when fewer than two choices have a cost to compare. */
+  /** Per kind: its rows, and the measured costs' scale on the catalog's: dollars per cost point, so the measured choices compare
+   *  with unmeasured ones on average. Null when fewer than two choices have a cost to compare. */
   const byKind = new Map<string, { rows: MeasuredRow[]; scale: number | null; results: boolean }>()
   const scaleOf = (rows: MeasuredRow[], catalog: Catalog) => {
     // Only the catalog's own choices set the scale: a run of a model nobody offers (an effort the catalog has no row for, a
-    // model never reported) would move every candidate without being one (review of #2423).
+    // model never reported) would shift every candidate's measured cost without being one (review of #2423).
     const scaled = rows.filter(r => costed(r) && listed(r, catalog))
     const points = scaled.reduce((sum, r) => sum + catalogRow(catalog, r.engine, r.model, r.effort)!.cost, 0)
     const dollars = scaled.reduce((sum, r) => sum + r.fullCostPerShipped!, 0)
@@ -126,7 +128,7 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       let ofKind = byKind.get(kind)
       if (!ofKind) {
         const rows = measured.rows.filter(r => r.kind === kind)
-        // A kind with no first review at all has no results to go by: cost alone ranks it as nothing else does.
+        // A kind with no first review at all has no results to go by: cost alone would judge it as nothing else is.
         ofKind = { rows, scale: rows.some(r => r.firstReviews > 0) ? scaleOf(rows, catalog) : null, results: rows.some(r => r.firstReviews > 0) }
         byKind.set(kind, ofKind)
       }
@@ -142,17 +144,17 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       if (!costed(mine) && !worse) return null
       const pass = !reviewed(mine) ? `first reviews too few to compare (${mine.firstReviews})`
         : `${mine.firstReviewPassed} of ${mine.firstReviews} first reviews passed${worse
-          ? `, clearly fewer than ${nameOf(best!.r, catalog)}'s ${best!.r.firstReviewPassed} of ${best!.r.firstReviews}, so it ranks after its strength's other choices` : ''}`
+          ? `, clearly fewer than ${nameOf(best!.r, catalog)}'s ${best!.r.firstReviewPassed} of ${best!.r.firstReviews}, so prefer another choice of its strength` : ''}`
       let cost: string, shift = 0
       if (!costed(mine)) cost = `too few shipped changes with known costs to compare cost (${mine.shipped} shipped)`
       else {
         const estimated = mine.fullCostKnown !== null && mine.fullCostKnown < 1 ? `; ${Math.round((1 - mine.fullCostKnown) * 100)}% of the costs estimated` : ''
         const full = `$${mine.fullCostPerShipped!.toFixed(2)} per shipped change over ${mine.shipped} (failed attempts and every review round included${estimated})`
-        if (ofKind.scale === null) cost = `${full}; no other choice for ${kind} work has a cost to compare, so its place is unchanged`
+        if (ofKind.scale === null) cost = `${full}; no other choice for ${kind} work has a cost to compare it with`
         else {
           const points = mine.fullCostPerShipped! / ofKind.scale
           shift = points - candidate.cost
-          cost = `${full}; ranked as cost ${points.toFixed(1)} instead of ${candidate.cost}`
+          cost = `${full}; cost ${points.toFixed(1)} in the catalog's terms, against its listed ${candidate.cost}`
         }
       }
       return { reason: `${kind} work, last ${DAYS} days: ${pass}, ${cost}${measured.truncated ? '; only the newest attempts were read' : ''}`,

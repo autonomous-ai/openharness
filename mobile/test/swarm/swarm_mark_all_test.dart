@@ -485,11 +485,14 @@ void main() {
     bool bold(WidgetTester tester, String projectId) =>
         tester.widget<SwarmHomeProjectRow>(row(projectId)).project.news.bold;
 
-    /// Opens Sort and filter, where Mark all read is (2026-11-03).
+    /// Opens Sort and filter, where Mark all read is (2026-11-03), from the
+    /// Swarm switcher (2026-11-04).
     Future<void> openView(WidgetTester tester) async {
-      await tester.tap(key('swarm-home-view'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      for (final k in ['swarm-title-button', 'swarm-switch-view']) {
+        await tester.tap(key(k));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+      }
     }
 
     /// Mark all read, from Sort and filter: the sheet closes, then it marks.

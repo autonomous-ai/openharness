@@ -576,51 +576,67 @@ void main() {
   });
 
   group('notifications view', () {
-    testWidgets('the entry counts what waits; the view lists only that', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..append('Earlier ask')
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Earlier ask', createdAt: minutesAgo(90))
-        ..tag('message-2', text: 'Ship it?', createdAt: minutesAgo(3));
-      server.mentions[0]
-        ..['resolvedAt'] = minutesAgo(80)
-        ..['resolvedBy'] = 'reply';
-      server.state['mentionsWaiting'] = 1;
-      await showView(tester, server);
-      expect(
-        find.descendant(of: notificationsEntry(), matching: find.text('1')),
-        findsOneWidget,
-      );
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      final waiting = find.byKey(
-        const ValueKey('super-activity-row-mention:mention-2'),
-      );
-      expect(waiting, findsOneWidget);
-      expect(
-        find.descendant(
-          of: waiting,
-          matching: find.text('Wren mentioned you in # web-project'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        findsNothing,
-      );
-    });
+    testWidgets(
+      'the entry counts the unread tag; the Mentions tab lists only what is '
+      'unread',
+      (tester) async {
+        final server = ConversationServer()
+          ..append('Earlier ask')
+          ..append('Ship it?')
+          ..tag('message-1', text: 'Earlier ask', createdAt: minutesAgo(90))
+          ..tag('message-2', text: 'Ship it?', createdAt: minutesAgo(3));
+        server.mentions[0]
+          ..['resolvedAt'] = minutesAgo(80)
+          ..['resolvedBy'] = 'reply';
+        server.state['mentionsWaiting'] = 1;
+        await showView(tester, server);
+        // The Activity row counts the unread tag, as the Mentions tab does
+        // (#2887); the one answered before this server said where is read.
+        expect(
+          find.descendant(of: notificationsEntry(), matching: find.text('1')),
+          findsOneWidget,
+        );
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-tab-mentions')),
+        );
+        await tester.pumpAndSettle();
+        final waiting = find.byKey(
+          const ValueKey('super-activity-row-mention:mention-2'),
+        );
+        expect(waiting, findsOneWidget);
+        expect(
+          find.descendant(of: waiting, matching: find.text('Wren')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: waiting, matching: find.text('Ship it?')),
+          findsOneWidget,
+        );
+        // The answered one is read (this server does not say where it is):
+        // it is not listed, nor folded behind the one that waits (#2887).
+        expect(find.textContaining('more from Wren'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+          findsNothing,
+        );
+      },
+    );
 
-    testWidgets('Mark done, offered where the time is on hover, clears the tag '
-        'and the count', (tester) async {
+    testWidgets('Mark read, offered where the time is on hover, clears the '
+        'tag', (tester) async {
       final server = ConversationServer()
         ..append('Ship it?')
         ..tag('message-1', text: 'Ship it?', createdAt: minutesAgo(3));
       await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text('Mark done'), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Mark read'), findsNothing);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       addTearDown(mouse.removePointer);
       await mouse.moveTo(
@@ -629,12 +645,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Mark done'));
+      await tester.tap(find.text('Mark read'));
       await tester.pumpAndSettle();
+      // Mentions lists only unread tags (#2887): the read row leaves it.
       expect(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
         findsNothing,
       );
+      expect(find.text('No unread mentions'), findsOneWidget);
       expect(
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
         findsNothing,
@@ -737,6 +755,10 @@ void main() {
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
       await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
       );
       await tester.pumpAndSettle();
@@ -771,6 +793,10 @@ void main() {
       }
       server.tag('message-120', conversationId: 'group', text: 'Note 120');
       await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
@@ -808,6 +834,10 @@ void main() {
       }
       server.tag('message-650', conversationId: 'group', text: 'Note 650');
       await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
@@ -849,6 +879,10 @@ void main() {
         expect(c.hasNewer('group'), isTrue);
         server.tag('message-650', conversationId: 'group', text: 'Note 650');
         await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-tab-mentions')),
+        );
         await tester.pumpAndSettle();
         // A background poll is reading the rows held when the tag opens.
         final held = server.holdReads = Completer<void>();

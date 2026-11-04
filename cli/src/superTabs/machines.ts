@@ -23,6 +23,7 @@ import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
+import { cleanupClosed } from './cleanupCloses.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -182,7 +183,9 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 /** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
  *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
  *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy']
+// windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
+// Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
@@ -234,6 +237,9 @@ export class ContributedMachines {
   private readonly heldSince = new Map<string, number>()
   /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
   private readonly unconfirmed = new Map<string, Unconfirmed>()
+  /** Starts dispatched here whose creation has no agent yet, by start id ([failedEarly]). In memory only: after a restart the
+   *  ledger's launch deadline frees them (reservations.ts LAUNCH_DEADLINE_MS). */
+  private readonly agentless = new Map<string, Agentless>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -256,6 +262,7 @@ export class ContributedMachines {
   private progressRefusedUntil = 0
   private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
+  private closedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
   /** Whether git is reading session folders beside the pass now. */
@@ -493,6 +500,7 @@ export class ContributedMachines {
     for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
+    for (const [id, launch] of this.agentless) if (!pendingIds.has(id) && !launch.checking) void this.failedEarly(id, launch, where)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
@@ -508,6 +516,8 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
+      // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
+      const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
         try {
         if (this.stopped || !identifier(row.tabId)) return
@@ -529,6 +539,7 @@ export class ContributedMachines {
           if (!ids.includes(id) && this.core.agents.byAgent(id) && !await this.core.agents.stopped?.(id)) reopened.push(id)
         }
         const running = [...ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), ...reopened]
+        const closed = stopped.filter(id => cleaned.has(id))
         const pending = startsOf(row)
         looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
@@ -540,7 +551,7 @@ export class ContributedMachines {
           const wanted = object(object(start.request).requirements).tools
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
-        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
+        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), [...closed].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
           privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
@@ -629,6 +640,7 @@ export class ContributedMachines {
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
           quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(closed.length ? { closedHarnessIds: closed } : {}),
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         due.push({ tab: String(row.tabId), observation, localModels, signature })
@@ -699,7 +711,11 @@ export class ContributedMachines {
                   continue
                 }
               }
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+              // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
+              // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
+              const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}) },
+                scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
@@ -711,6 +727,10 @@ export class ContributedMachines {
               if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
               } else this.forget(String(start.id))
+              // Dispatched here with a creation and no agent yet: should the Swarm fail it, [failedEarly] frees its memory at once.
+              if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
+                this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })
+              } else this.agentless.delete(String(start.id))
               const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
               if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
               else {
@@ -848,7 +868,8 @@ export class ContributedMachines {
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { refusedStarts: _refusedStarts, ...unrefused } = observation
+    const { closedHarnessIds: _closed, ...unclosed } = observation
+    const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
     const { harnessTokens: _tokens, ...untokened } = unreasoned
@@ -861,13 +882,14 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('refusedStarts' in observation ? [observation] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
       ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
     const refuse = (attempt: Record<string, unknown>) => {
-      if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
+      if ('closedHarnessIds' in attempt) this.closedRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('profiles' in attempt) this.profilesRefusedUntil = began + FIELD_REFUSED_MS
       else if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
@@ -952,6 +974,30 @@ export class ContributedMachines {
     } catch (error) {
       if (++launch.tries >= ABANDONED_TRIES) this.forget(startId)
       this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
+  }
+
+  /**
+   * A start dispatched here with no agent that the backend no longer lists as pending: when the backend says it failed (its
+   * machine did not start it within 3 minutes, say) and no agent joined, this machine's ledger ends its reservation at once
+   * rather than at its launch deadline (River on task #2890, issue #2989). A status the backend cannot give now is asked
+   * again on later passes, a few times; a daemon that cannot end it keeps the row until that deadline.
+   */
+  private async failedEarly(startId: string, launch: Agentless, where: Parameters<MachineDeps['open']>[0]): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.agentless.delete(startId); return }
+      this.agentless.delete(startId)
+      const local = await this.deps.open(where)
+      try {
+        const ended = object(await local.request('super_tabs', { action: 'endCapacity', creationId: launch.creationId }, 10_000))
+        if (ended.ok === true) this.log(`Freed the memory of start ${startId}, which the Swarm failed: ${String(status.error)}`)
+        else this.log(`Could not free the memory of failed start ${startId}: ${String(ended.error ?? 'no answer')}; its launch deadline frees it.`)
+      } finally { local.close() }
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.agentless.delete(startId)
+      this.log(`Could not free the memory of failed start ${startId}: ${error instanceof Error ? error.message : String(error)}`)
     } finally { launch.checking = false }
   }
 
@@ -1303,6 +1349,8 @@ const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
 
 /** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
 interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** A start dispatched here whose creation has no agent yet (ContributedMachines `failedEarly`). */
+interface Agentless { path: string; creationId: string; tries: number; checking: boolean }
 /** How many passes ask about an abandoned start before it is let go. */
 const ABANDONED_TRIES = 5
 

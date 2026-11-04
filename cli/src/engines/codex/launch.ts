@@ -2,16 +2,13 @@ import type { EngineLaunch } from '../facets/launch.js'
 
 const permissionModes = {
   auto: ['--approve-for-me'],
-  // A Buddy's (superTabs/start.ts): it reads in the sandbox, and an approval to go outside it goes to the person at its
-  // terminal, never to Codex's own reviewer, whatever their config.toml says. Their rules files still apply: a command an
-  // `allow` rule names runs outside the sandbox unasked, which is why the backend refuses Codex Buddies for now (security
-  // review 1 of #2087). Ahead of readOnly, whose flags it contains: a process's argv is read back as the first mode it
-  // matches (lib/processTable.ts), so a relaunched Buddy keeps this mode. A Codex without its flag is never relaunched
-  // without it (lib/engineLaunch.ts KEPT_PERMISSION_MODES).
-  readOnlyAsk: ['--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"'],
   readOnly: ['--sandbox', 'read-only'],
   ask: [],
   full: ['--dangerously-bypass-approvals-and-sandbox'],
+  // An older Codex Buddy's saved mode, from when it read in a read-only sandbox. A Buddy is its owner's right hand now (Ken,
+  // 11-04, task #2832): relaunched with full access, as their own session. After `full`, so argv reads back as `full`.
+  // Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
+  readOnlyAsk: ['--dangerously-bypass-approvals-and-sandbox'],
   // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2). Codex has no flag for it: a
   // worktree takes its main repository's trust, and `-c projects...` does not turn it off (0.165.0, tried). The start gives
   // this mode an engine home of its own, which trusts no project (superTabs/start.ts).

@@ -45,6 +45,9 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
   String get _how => switch (widget.route.via) {
     'jev' => 'Jev ${((widget.route.p ?? 0) * 100).round()}%',
     'only' => 'Only available candidate',
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the coordinator
+    // chose by the project's Routing instructions, and its start says which.
+    'instructions' => 'Chosen by the project\'s Routing instructions',
     // An older backend's policy order too: it ranks, never refuses.
     _ => 'Ranked by strength, price and quota',
   };

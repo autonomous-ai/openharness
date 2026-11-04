@@ -74,6 +74,11 @@ export const DELTA_MAX_PARTS = 500
  *  forgotten entry made every delta of its Swarm read an hour of changes (final review, Important 2). Twice the age at which
  *  a read refreshes an entry, so one read every minute keeps it patched. */
 export const DELTA_MAX_GAP_MS = 120_000
+/** Another entry joins an entry's delta only when it was refreshed at most this long before it: entries read at the same
+ *  stamps share one delta, and Desktop's background cadence (15 s) still joins. An entry nobody read since (a first load's
+ *  dormant selections, one window's conversation) is refreshed by its own delta when it is read: joined, it moved every delta
+ *  of its Swarm back to its time, so each machine reading read ~190 whole conversations again on the bench (#2783). */
+export const DELTA_JOIN_MS = 15_000
 
 /** One delta read: the stamps it was read at, the kinds it holds, from when, and when it started. */
 interface Delta { stamp: string; kinds: ReadonlySet<PartKind>; since: number; at: number; read: Promise<SwarmDelta> }
@@ -113,8 +118,11 @@ export class SwarmCache {
   /** Each Swarm's entry names, so a bump touches only that Swarm's entries, not every Swarm's. */
   private readonly bySwarm = new Map<string, Set<string>>()
   private readonly loading = new Map<string, Promise<unknown>>()
-  /** Each Swarm's latest delta read: every entry of the Swarm patched at its stamps shares it, while and after it runs. */
+  /** Each Swarm's latest delta read: every entry of the Swarm patched at its stamps shares it, while and after it runs. An
+   *  entry whose rule reads alone keeps its own, by Swarm and kinds (deltaFor). */
   private readonly deltas = new Map<string, Delta>()
+  /** The names in `deltas` of each Swarm's alone entries' deltas, so a bump forgets them with the Swarm's. */
+  private readonly deltaNames = new Map<string, Set<string>>()
   private bytes = 0
   private readonly maxBytes: number
   private readonly maxAgeMs: number
@@ -163,7 +171,7 @@ export class SwarmCache {
    *  any other is forgotten. The Swarm's latest delta predates the change, so no entry refreshes from it; a bump owed by this
    *  process leaves the stamps as they were, where an entry older than that delta would otherwise reuse it. */
   drop(tabId: string, scopes: readonly StampScope[] = ['main']): void {
-    this.deltas.delete(tabId)
+    this.dropDeltas(tabId)
     const main = scopes.includes('main')
     for (const name of [...this.bySwarm.get(tabId) ?? []]) {
       const entry = this.entries.get(name)!
@@ -246,7 +254,8 @@ export class SwarmCache {
    * This Swarm's changes at these stamps, read once for every entry patched from them (the spec's one delta per Swarm and
    * stamp: one read per kind was up to five reads of the same window per bump, final review Important 3): over the kinds
    * of every entry of the Swarm due for a refresh, from the earliest of their reads, less OVERLAP_MS. An entry refreshed
-   * too long ago (DELTA_MAX_GAP_MS) is left out: it loads in full when read.
+   * too long ago (DELTA_MAX_GAP_MS) is left out: it loads in full when read. So is one refreshed more than DELTA_JOIN_MS
+   * before this entry: it reads its own delta when it is read.
    *
    * The stamps can stand still while the Swarm changes (a bump lost, or owed by this process), so a delta is shared only with
    * an entry read before it started: an older one could miss a change the entry's refresh exists to find, or bring back a
@@ -254,22 +263,35 @@ export class SwarmCache {
    */
   private deltaFor(tabId: string, stamp: Stamp, kinds: readonly PartKind[], entry: Entry): Delta {
     const stamped = `${stamp.main}\u0000${stamp.machine}`
-    const latest = this.deltas.get(tabId)
+    // An entry whose rule reads alone shares a delta only with entries of its own kinds, kept under their own name.
+    const alone = !!entry.patch?.alone
+    const name = alone ? `${tabId}\u0000${[...kinds].sort().join(',')}` : tabId
+    const latest = this.deltas.get(name)
     if (latest && latest.stamp === stamped && kinds.every(kind => latest.kinds.has(kind)) && latest.at > entry.at && entry.at - OVERLAP_MS >= latest.since) return latest
     const now = this.now(), union = new Set(kinds)
     let earliest = entry.at
-    for (const name of this.bySwarm.get(tabId) ?? []) {
-      const other = this.entries.get(name)!
-      if (other === entry || !other.patch || now - other.at > DELTA_MAX_GAP_MS || now - other.fullAt >= this.deltaMaxAgeMs || !this.due(other, stamp, now)) continue
+    for (const held of this.bySwarm.get(tabId) ?? []) {
+      const other = this.entries.get(held)!
+      if (other === entry || !other.patch || !!other.patch.alone !== alone || (alone && other.patch.kinds.join() !== entry.patch!.kinds.join())
+        || now - other.at > DELTA_MAX_GAP_MS || now - other.fullAt >= this.deltaMaxAgeMs || !this.due(other, stamp, now)
+        || other.at < entry.at - DELTA_JOIN_MS) continue
       for (const kind of other.patch.kinds) union.add(kind)
       earliest = Math.min(earliest, other.at)
     }
     const since = earliest - OVERLAP_MS
     const started: Delta = { stamp: stamped, kinds: union, since, at: now, read: this.delta!(tabId, since, [...union]) }
-    this.deltas.set(tabId, started)
+    this.deltas.set(name, started)
+    this.deltaNames.set(tabId, (this.deltaNames.get(tabId) ?? new Set<string>()).add(name))
     // A failed read is not kept for the next entry to reuse.
-    started.read.catch(() => { if (this.deltas.get(tabId) === started) this.deltas.delete(tabId) })
+    started.read.catch(() => { if (this.deltas.get(name) === started) this.deltas.delete(name) })
     return started
+  }
+
+  /** Forgets every delta read of this Swarm, its alone entries' too. */
+  private dropDeltas(tabId: string): void {
+    this.deltas.delete(tabId)
+    for (const name of this.deltaNames.get(tabId) ?? []) this.deltas.delete(name)
+    this.deltaNames.delete(tabId)
   }
 
   /**
@@ -333,7 +355,7 @@ export class SwarmCache {
     names.delete(name)
     if (!names.size) {
       this.bySwarm.delete(entry.tabId)
-      this.deltas.delete(entry.tabId)
+      this.dropDeltas(entry.tabId)
     }
   }
 }

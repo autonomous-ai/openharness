@@ -21,7 +21,18 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(at).toBeGreaterThan(0)
     const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Shared machines and secrets'))
     for (const part of ['Team account', 'nobody types in it', 'none of the owner\'s tools', 'in their own session', 'handoff',
-      '## GitHub', 'GitHub App', 'pull requests', 'cannot comment on or label issues', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
+      '## GitHub', 'GitHub App', 'pull requests', 'where the repository\'s installation of the App granted it', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
+  })
+  // Task #2924 (Dee, 2026-11-04): the agent doing the work posts in its project chat itself, joining nobody there (#2207).
+  it('says an agent with work in the project posts in its chat without joining it', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; `--to` there adds no agent, so name only the coordinator.')
+  })
+  // Task #2901 (Ken, 2026-11-04): PMs took the route's top line against the project's Routing instructions.
+  it('says the route ranks nothing and names no pick, and that a start gives the Routing rule that chose it', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
+    expect(SWARM_TOOLS_SKILL).toContain('choose by your project\'s Routing instructions')
+    expect(SWARM_TOOLS_SKILL).toContain('`routeDecisionId` and `overrideReason`: the Routing rule that chose it')
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on|ranks who could/)
   })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)
@@ -54,6 +65,11 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('- \`mine\`:')
     expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
     expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
+  })
+  // River, 11-04 (task #2926): proposals answered before threads, or built without the task's link, closed by hand.
+  it('says how to close a proposal with a reason, posting nothing', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('`{"type":"proposal.close","projectId":"PROJECT","messageId":"PROPOSAL","reason":"built in #N, declined or duplicate"}`')
+    expect(SWARM_TOOLS_SKILL).toContain('posts nothing in the chat')
   })
   // Task steps design: a step's name is the instructions', so the skill shows how to add one and lists no kinds of step.
   it('says how to add a step, naming no kinds of step', () => {

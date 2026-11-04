@@ -286,12 +286,6 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
 /// machine was being prepared.
 const kBuddyAccessLost = 'Your access changed, so no Buddy was added.';
 
-/// Harness cannot yet tell a Buddy's window from another agent's on Windows
-/// (security review of #2093): the server says the same (backend machines.ts).
-const kBuddyWindows =
-    'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or '
-    'Linux machines.';
-
 /// What a Buddy's start sends, once the person has clicked Start: the picked
 /// machine and, for one of theirs outside the Swarm, its setup, prepared there
 /// as Add machine prepares one. Nothing is added to the Swarm. Keeps the setup
@@ -316,15 +310,6 @@ class BuddyMachineAdder {
     }
     _setupId ??= superTabOperationId();
     try {
-      // The server checks again once the machine reports; asked here first so
-      // nothing is prepared there for nothing. An unreadable answer refuses
-      // nothing.
-      final os = await app
-          .readMachineResources(machine.id)
-          .then((r) => r?.os, onError: (_) => null);
-      if (os != null && os.toLowerCase().contains('windows')) {
-        return (id: null, setup: null, error: kBuddyWindows);
-      }
       final setup = await prepareBuddyMachine(
         controller,
         app,

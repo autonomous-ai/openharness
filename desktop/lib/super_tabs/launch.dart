@@ -13,6 +13,7 @@ import '../state/harness_launch_integration.dart';
 import '../state/lead_placement.dart';
 import '../state/swarm.dart';
 import 'attachment_upload.dart';
+import 'actions.dart';
 import 'controller.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
@@ -972,7 +973,7 @@ class SuperTabLaunch {
       'conversationId': saved['conversationId'],
       'machineId': machine,
       'harnessId': harnessId,
-      'name': saved['lead'] == true ? 'Lead' : native.displayName,
+      'name': saved['lead'] == true ? 'Lead' : superTabAddName(native),
       'lead': saved['lead'],
       // A journal from an older Desktop keeps the id it chose.
       if (saved['roleId'] case final String roleId) 'roleId': roleId,

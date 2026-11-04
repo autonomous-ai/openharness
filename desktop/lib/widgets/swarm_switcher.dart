@@ -28,6 +28,7 @@ import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/session_content_search.dart';
 import '../state/session_activity.dart';
+import '../super_tabs/visible_tick.dart';
 import '../state/swarm_search.dart';
 import '../models/api_connections_controller.dart' show contextWindowLabel;
 import '../models/model_search_catalog.dart';
@@ -603,7 +604,8 @@ class SwarmSearchResults extends StatefulWidget {
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
 }
 
-class _SwarmSearchResultsState extends State<SwarmSearchResults> {
+class _SwarmSearchResultsState extends State<SwarmSearchResults>
+    with WidgetsBindingObserver, VisibleTick<SwarmSearchResults> {
   // Keep a small set of recently built rows, not the whole search catalog.
   // A new highlight only changes two rows; their neighbors keep their widgets.
   // Query highlights listen within the text, leaving these controls intact.
@@ -782,6 +784,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     if (oldWidget.search != search) {
       _activity.dispose();
       _activity = SessionActivityController(search.app)
+        ..seen = onScreen
         ..addListener(_activityChanged);
       _watchActivity();
       oldWidget.search.removeListener(_changed);
@@ -847,6 +850,16 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       });
     }
   }
+
+  // The rows' activity is read only while the results can be seen.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _activity.seen = onScreen;
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _activity.seen = onScreen;
 
   void _activityChanged() {
     if (mounted) setState(() {});

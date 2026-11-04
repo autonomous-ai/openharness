@@ -244,12 +244,14 @@ void main() {
       stopReads(host);
     });
 
-    /// Refresh, from Sort and filter (a pull on Home until 2026-11-03, which
-    /// opens Search now), up to the read it starts.
+    /// Refresh, from Sort and filter in the Swarm switcher (a pull on Home
+    /// until 2026-11-03, which opens Search now), up to the read it starts.
     Future<void> refresh(WidgetTester tester) async {
-      await tester.tap(key('swarm-home-view'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      for (final k in ['swarm-title-button', 'swarm-switch-view']) {
+        await tester.tap(key(k));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+      }
       await tester.tap(key('swarm-home-refresh'));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));

@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -21,7 +20,6 @@ import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
-import 'task_groups.dart';
 import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
@@ -48,7 +46,6 @@ class ProjectSidebar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onSelect,
-    required this.needsHuman,
     this.app,
     this.onNewProject,
     this.onNewSwarm,
@@ -67,7 +64,6 @@ class ProjectSidebar extends StatelessWidget {
   /// A phone's layout: its rows keep the app's sizes, not Slack desktop's ([SwarmType]).
   final bool compact;
   final ValueChanged<String> onSelect;
-  final int Function(SuperTabConversation group) needsHuman;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
 
@@ -235,25 +231,19 @@ class ProjectSidebar extends StatelessWidget {
     final selected = !_paneCovered && controller.selectedId == group.id;
     // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
     // person's message or a tag of the reader there, never agents' progress
-    // alone (#2427). A task's unread is on its card and in Activity, and its
-    // tags count in the row's number.
+    // alone (#2427). A task's unread is on its card and in Activity.
     final unread = reading == null
         ? controller.unreadShown(group)
         : reading.unread.contains(group.id);
-    // Tags in its chat, which opening it clears (Dee, Slack's way), and the
-    // tasks that need the reader, so someone in another project still sees
-    // them (task #2569). Tags in tasks count here and are in Activity.
-    final mentions = attention?.mentionsIn(group.id) ?? 0;
-    final needsYou = reading?.needsYou ?? 0;
-    final badge = mentions + needsYou;
-    final badgeTooltip = needsYou == 0
-        ? attention?.badgeTooltipIn(group.id)
-        : [
-            if (mentions > 0)
-              attention?.badgeTooltipIn(group.id) ??
-                  (mentions == 1 ? '1 mention' : '$mentions mentions'),
-            needsYou == 1 ? '1 task needs you' : '$needsYou tasks need you',
-          ].join(' · ');
+    // Only the reader's tags in its chat, which opening it clears (Dee,
+    // Slack's channel badge, task #2927). Tags in its tasks and threads,
+    // decisions and tasks that need the reader are in Activity.
+    final badge = attention?.chatTagsIn(group.id) ?? 0;
+    final badgeTooltip = badge == 0
+        ? null
+        : badge == 1
+        ? '1 tag'
+        : '$badge tags';
     return _drawRow(
       group,
       project: project,
@@ -631,7 +621,7 @@ class ProjectSidebar extends StatelessWidget {
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
-    final reading = _SidebarReading(controller, needsHuman, attention);
+    final reading = _SidebarReading(controller, attention);
     return Material(
       // The page's color: the rule at its edge is what separates them.
       color: grid.AppPalette.swarmWelcome,
@@ -672,8 +662,10 @@ class ProjectSidebar extends StatelessWidget {
                     unread: activity?.unread ?? false,
                     badge:
                         activity?.count ??
-                        (snapshot?.mentionsWaiting ?? 0) +
-                            (snapshot?.decisionsWaiting ?? 0),
+                        (snapshot == null
+                            ? 0
+                            : snapshot.decisionsWaiting +
+                                  snapshot.mentionsWaiting),
                   ),
                 // One Buddy for the whole Swarm, under Activity (Quiet Swarm, screen 1).
                 if (controller.oneBuddy) ?_swarmBuddyRow(),
@@ -811,9 +803,8 @@ Offset _besideTheRow(TooltipPositionContext context) {
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
 class _SidebarReading {
-  _SidebarReading(this.controller, this.needsHuman, this.attention);
+  _SidebarReading(this.controller, this.attention);
   final SuperTabController controller;
-  final int Function(SuperTabConversation group) needsHuman;
   final SuperTabAttention? attention;
   final _projects = <String, _ProjectReading>{};
 
@@ -849,20 +840,9 @@ class _ProjectReading {
           !g.isBuddyChat &&
           g.audience == null &&
           (sidebar.controller.unreadForPeople(g) ||
-              (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0))
+              (sidebar.attention?.chatTagsIn(g.id) ?? 0) > 0))
         g.id,
   };
-
-  /// How many of its tasks need the reader: what its row's badge adds.
-  late final int needsYou = superTabTasksNeedingYouIn(
-    superTabProjectBoard(
-      sidebar.controller,
-      project,
-      now: clock.now(),
-      needsHuman: sidebar.needsHuman,
-      attention: sidebar.attention,
-    ),
-  );
 
   /// Tags of the reader in the project's chat and its open workgroups: why the
   /// unread filter keeps a collapsed project. Never its number ([_row]).

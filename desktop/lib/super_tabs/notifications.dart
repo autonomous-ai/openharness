@@ -10,9 +10,11 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
+import 'message_link.dart';
 import 'model.dart';
 import 'private_project_lock.dart';
 import 'reminders.dart';
+import 'reply_notices.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -91,6 +93,28 @@ superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
         chat: (tabId: tabId, conversationId: group.id),
       );
 
+/// What tells the person about a new reply in a thread they are in
+/// ([SuperTabReplyNotices]): the operating system, on Desktop only, as tags
+/// are. A click opens the reply as its message link does: in its thread, in
+/// its Swarm [tabId].
+void Function(String tabId, SuperTabReplyRow reply)? superTabReplyNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (tabId, reply) => system.postNotice(
+        id: 'harness-reply:$tabId:${reply.id}',
+        title: '${reply.actorName} replied in a thread',
+        body:
+            '${reply.projectName} · ${reply.conversationTitle}: '
+            '${reply.text}',
+        messageLink: SwarmMessageLink(
+          tabId: tabId,
+          conversationId: reply.conversationId,
+          messageId: reply.messageId,
+        ).url,
+      );
+
 /// What tells the person a reminder they set is due: the operating system, on
 /// Desktop only, as tags are. A click opens its chat in its Swarm [tabId];
 /// Activity holds it until it is opened.
@@ -133,6 +157,9 @@ class SuperTabMentions extends ChangeNotifier {
   int? _epoch;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
+
+  /// Whether the tags have been read once, so an empty list means none.
+  bool get loaded => _seen != null;
   Future<void>? _loading;
   // Something changed while a read was under way: read once more after it.
   bool _dirty = false;
@@ -289,6 +316,36 @@ class SuperTabMentions extends ChangeNotifier {
   /// The reader is finished with [mention]. Any reader of the Swarm may, read
   /// only included, so this does not wait behind the composer's pending send.
   Future<bool> done(SuperTabMention mention) async {
+    if (!await _markDone(mention)) {
+      error = 'Could not mark it read. Try again.';
+      notifyListeners();
+      return false;
+    }
+    await load();
+    unawaited(controller.refresh());
+    return true;
+  }
+
+  /// Marks every unresolved one of [mentions] read, two at a time and read
+  /// back once; how many the backend took. One that failed does not stop the
+  /// rest.
+  Future<int> doneAll(List<SuperTabMention> mentions) async {
+    final sent = await superTabTwoAtATime([
+      for (final m in mentions)
+        if (m.resolvedBy == null) m,
+    ], _markDone);
+    final marked = sent.where((ok) => ok).length;
+    await load();
+    unawaited(controller.refresh());
+    // After the read, which clears the error of an earlier one.
+    if (marked < sent.length) {
+      error = 'Could not mark some as read. Try again.';
+      notifyListeners();
+    }
+    return marked;
+  }
+
+  Future<bool> _markDone(SuperTabMention mention) async {
     try {
       await controller.request(
         'POST',
@@ -298,14 +355,10 @@ class SuperTabMentions extends ChangeNotifier {
           'command': {'type': 'mention.done', 'mentionId': mention.id},
         },
       );
+      return true;
     } catch (_) {
-      error = 'Could not mark it done. Try again.';
-      notifyListeners();
       return false;
     }
-    await load();
-    unawaited(controller.refresh());
-    return true;
   }
 }
 

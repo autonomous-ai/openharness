@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/backlog.dart';
 import 'package:harness/super_tabs/backlog_view.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -311,6 +312,40 @@ void main() {
     ]);
   });
 
+  // Task #2774 (Scholes's mockup): tasks carry no priority field; the badge
+  // reads the title's own marker, which the row then drops.
+  test('a title\'s URGENT or "(Name, high)" marker is its priority badge', () {
+    for (final (title, priority, shown) in [
+      (
+        'URGENT: agents\' GitHub tokens also carry workflows',
+        SuperTabTaskPriority.urgent,
+        'Agents\' GitHub tokens also carry workflows',
+      ),
+      (
+        'URGENT bug in #2608: the date pill crashes',
+        SuperTabTaskPriority.urgent,
+        'Bug in #2608: the date pill crashes',
+      ),
+      (
+        'Manage Backlog tab redesigned (Scholes, high)',
+        SuperTabTaskPriority.high,
+        'Manage Backlog tab redesigned',
+      ),
+      (
+        'Round dial fix (Huy, urgent)',
+        SuperTabTaskPriority.urgent,
+        'Round dial fix',
+      ),
+      ('Thread tags (Dee, 2026-11-04)', null, 'Thread tags (Dee, 2026-11-04)'),
+      ('Urgently needed docs', null, 'Urgently needed docs'),
+      ('A high bar for review', null, 'A high bar for review'),
+    ]) {
+      final read = superTabTitlePriority(title);
+      expect(read.priority, priority, reason: title);
+      expect(read.title, shown, reason: title);
+    }
+  });
+
   test('lists every task across projects, newest first, and no project chat, '
       'Buddy chat, step or private chat', () async {
     final server = ConversationServer();
@@ -498,7 +533,7 @@ void main() {
         await c.refresh();
       }
       beforeBuild?.call();
-      await tester.binding.setSurfaceSize(const Size(1100, 900));
+      await tester.binding.setSurfaceSize(const Size(1100, 2000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         MaterialApp(
@@ -544,6 +579,40 @@ void main() {
           'super-backlog-row-'.length,
         ),
     ];
+    ({int working, int review, int shipped}) summary(WidgetTester tester) {
+      int count(String name) => int.parse(
+        tester
+            .widget<Text>(
+              find.byKey(ValueKey('super-backlog-summary-$name-count')),
+            )
+            .data!,
+      );
+      return (
+        working: count('working'),
+        review: count('inReview'),
+        shipped: count('shipped'),
+      );
+    }
+
+    Future<void> search(WidgetTester tester, String text) async {
+      await tester.enterText(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-backlog-search')),
+          matching: find.byType(EditableText),
+        ),
+        text,
+      );
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> chooseProject(WidgetTester tester, String name) async {
+      await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
+      await tester.pumpAndSettle();
+      // The menu's row, not a project chip in the list.
+      await tester.tap(find.widgetWithText(AppMenuItem, name).last);
+      await tester.pumpAndSettle();
+    }
+
     String rowText(WidgetTester tester, String id) => [
       for (final t in tester.widgetList<Text>(
         find.descendant(of: row(id), matching: find.byType(Text)),
@@ -566,8 +635,13 @@ void main() {
         expect(
           find.descendant(
             of: header(group),
-            matching: find.text('${group.label} · $count'),
+            matching: find.text(group.label.toUpperCase()),
           ),
+          findsOneWidget,
+          reason: group.label,
+        );
+        expect(
+          find.descendant(of: header(group), matching: find.text('$count')),
           findsOneWidget,
           reason: group.label,
         );
@@ -586,18 +660,20 @@ void main() {
         'done',
         'shipped',
       ]);
-      expect(find.text('6 tasks'), findsOneWidget);
-      // Line one: number and title, project and who asked; line two: agent,
-      // machine, pull request, what it waits on; then how long ago.
+      expect(summary(tester), (working: 1, review: 1, shipped: 1));
+      // Scholes's mockup (#2774): number and title; then agent, machine and
+      // state with a project chip; the pull request's chip and how long ago
+      // at the right.
       final working = rowText(tester, 'working');
-      expect(working, contains('#11 Sidebar task groups'));
-      expect(working, contains('web-project · owner'));
-      expect(working, contains('Kestrel · Mac Studio · PR #2733'));
+      expect(working, contains('#11 | Sidebar task groups'));
+      expect(working, contains('Kestrel · Mac Studio · Working'));
+      expect(working, contains('web-project'));
+      expect(working, contains('PR 2733'));
       expect(working, contains('5m'));
-      expect(rowText(tester, 'asking'), contains('api · pilot'));
+      expect(rowText(tester, 'asking'), contains('api'));
       expect(rowText(tester, 'asking'), contains('Waiting on pilot'));
       expect(rowText(tester, 'queued'), contains('No agent yet'));
-      expect(rowText(tester, 'shipped'), contains('PR #2713'));
+      expect(rowText(tester, 'shipped'), contains('PR 2713 · merged'));
     });
 
     testWidgets('who asked and who it waits on read by the name they set '
@@ -607,7 +683,6 @@ void main() {
         (p) => p['id'] == 'pilot',
       )['name'] = 'Pilot Pham';
       await show(tester, server);
-      expect(rowText(tester, 'asking'), contains('api · Pilot Pham'));
       expect(rowText(tester, 'asking'), contains('Waiting on Pilot Pham'));
       expect(rowText(tester, 'asking'), isNot(contains('pilot')));
     });
@@ -640,30 +715,174 @@ void main() {
       await tester.pumpAndSettle();
       expect(listed(tester), isNot(contains('asking')));
       expect(listed(tester), hasLength(5));
-      expect(find.text('5 tasks'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-backlog-everyone')));
+      await tester.pumpAndSettle();
+      expect(listed(tester), hasLength(6));
     });
 
-    testWidgets('the project and state filters narrow the list and the count', (
+    testWidgets('under Mine, each card counts its group\'s rows (task #2885)', (
       tester,
     ) async {
       await show(tester, swarm());
-      await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
+      await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('api').last);
-      await tester.pumpAndSettle();
-      expect(listed(tester), ['asking']);
-      expect(find.text('1 task'), findsOneWidget);
+      int headed(SuperTabBacklogGroup g) {
+        if (header(g).evaluate().isEmpty) return 0;
+        return int.parse(
+          tester
+              .widgetList<Text>(
+                find.descendant(of: header(g), matching: find.byType(Text)),
+              )
+              .map((t) => int.tryParse(t.data ?? ''))
+              .nonNulls
+              .single
+              .toString(),
+        );
+      }
 
-      await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('All projects').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-backlog-state')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('In review').last);
-      await tester.pumpAndSettle();
+      final cards = summary(tester);
+      expect(cards.working, headed(SuperTabBacklogGroup.working));
+      expect(cards.review, headed(SuperTabBacklogGroup.inReview));
+      expect(cards.shipped, headed(SuperTabBacklogGroup.shipped));
+      expect(cards.working + cards.review, greaterThan(0));
+    });
+
+    testWidgets('the summary counts what the filters show', (tester) async {
+      await show(tester, swarm());
+      expect(summary(tester), (working: 1, review: 1, shipped: 1));
+      await chooseProject(tester, 'api');
+      expect(listed(tester), ['asking']);
+      expect(summary(tester), (working: 0, review: 0, shipped: 0));
+      await chooseProject(tester, 'All projects');
+      await search(tester, 'thread');
+      expect(summary(tester), (working: 0, review: 1, shipped: 0));
+    });
+
+    testWidgets('search reads title, number or agent, with Mine and the '
+        'project menu together', (tester) async {
+      await show(tester, swarm());
+      await search(tester, 'Thread reply');
       expect(listed(tester), ['review']);
-      expect(header(SuperTabBacklogGroup.working), findsNothing);
+      await search(tester, '#14');
+      expect(listed(tester), ['done']);
+      await search(tester, '15');
+      expect(listed(tester), ['shipped']);
+      // Every task Kestrel holds, and none without an agent.
+      await search(tester, 'kestrel');
+      expect(listed(tester), [
+        'working',
+        'asking',
+        'review',
+        'done',
+        'shipped',
+      ]);
+      await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+      await tester.pumpAndSettle();
+      expect(listed(tester), ['working', 'review', 'done', 'shipped']);
+      await tester.tap(find.byKey(const ValueKey('super-backlog-everyone')));
+      await tester.pumpAndSettle();
+      await chooseProject(tester, 'api');
+      expect(listed(tester), ['asking']);
+      await search(tester, 'nothing like this');
+      expect(listed(tester), isEmpty);
+      expect(find.text('No tasks match “nothing like this”'), findsOneWidget);
+    });
+
+    testWidgets('each group says what it means, and folds to its heading', (
+      tester,
+    ) async {
+      await show(tester, swarm());
+      for (final line in [
+        'An agent is on it right now',
+        'Pull request open, waiting on a human',
+        'Merged in the last 7 days',
+      ]) {
+        expect(find.text(line), findsOneWidget, reason: line);
+      }
+      await tester.tap(header(SuperTabBacklogGroup.working));
+      await tester.pumpAndSettle();
+      expect(row('working'), findsNothing);
+      expect(
+        find.descendant(
+          of: header(SuperTabBacklogGroup.working),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
+      expect(summary(tester), (working: 1, review: 1, shipped: 1));
+      await tester.tap(header(SuperTabBacklogGroup.working));
+      await tester.pumpAndSettle();
+      expect(row('working'), findsOneWidget);
+    });
+
+    testWidgets('Shipped shows its newest 7, then Show N more shipped', (
+      tester,
+    ) async {
+      final server = swarm();
+      final conversations = server.state['conversations'] as List;
+      for (var i = 0; i < 9; i++) {
+        final pr = 'https://github.com/acme/app/pull/${3000 + i}';
+        conversations.add(<String, dynamic>{
+          ...conversationFixture('ship-$i', 'Shipped $i'),
+          'projectId': 'lead',
+          'number': 40 + i,
+          'requesterId': 'owner',
+          'assignment': {'id': 'a-s$i', 'agentId': 'kestrel', 'status': 'done'},
+          // Newest is ship-0, an hour apart; the number order is the other way.
+          'shippedAt': now - (i + 1) * 3600000,
+          'pullRequestUrls': [pr],
+          'cards': {
+            'pullRequests': [
+              {'url': pr, 'messageId': 'card-s$i', 'mergedAt': now},
+            ],
+          },
+        });
+      }
+      await show(tester, server);
+      expect(summary(tester).shipped, 10);
+      final shipped = [
+        for (final id in listed(tester))
+          if (id == 'shipped' || id.startsWith('ship-')) id,
+      ];
+      expect(shipped, [
+        'shipped',
+        'ship-0',
+        'ship-1',
+        'ship-2',
+        'ship-3',
+        'ship-4',
+        'ship-5',
+      ]);
+      final more = find.byKey(const ValueKey('super-backlog-shipped-more'));
+      expect(
+        find.descendant(of: more, matching: find.text('Show 3 more shipped')),
+        findsOneWidget,
+      );
+      await tester.tap(more);
+      await tester.pumpAndSettle();
+      expect(row('ship-8'), findsOneWidget);
+      expect(more, findsNothing);
+    });
+
+    testWidgets('a row shows the title\'s priority as a badge', (tester) async {
+      final server = swarm();
+      final conversations = (server.state['conversations'] as List).cast<Map>();
+      conversations.firstWhere((g) => g['id'] == 'working')['title'] =
+          'URGENT: sidebar task groups';
+      conversations.firstWhere((g) => g['id'] == 'review')['title'] =
+          'Thread reply bar (Scholes, high)';
+      await show(tester, server);
+      expect(
+        rowText(tester, 'working'),
+        contains('URGENT | Sidebar task groups'),
+      );
+      expect(rowText(tester, 'review'), contains('HIGH | Thread reply bar'));
+      expect(rowText(tester, 'review'), isNot(contains('Scholes')));
+    });
+
+    testWidgets('says when the Swarm was last read', (tester) async {
+      await show(tester, swarm(), today: DateTime.now());
+      expect(find.text('Synced just now'), findsOneWidget);
     });
 
     // Review of #2776: GitHub's answer lands after the first frame, in a quiet
@@ -690,7 +909,35 @@ void main() {
       });
       await tester.pump();
       await tester.pump();
-      expect(rowText(tester, 'working'), contains('PR #2733 12 checks passed'));
+      expect(
+        rowText(tester, 'working'),
+        contains('PR 2733 · 12 checks passed'),
+      );
+    });
+
+    // Task #2953: a hidden window asks GitHub nothing for the backlog's rows, as live cards do
+    // (VisibleTick); back on screen it watches them again.
+    testWidgets('a hidden window lets the rows\' pull requests go, and watches '
+        'them again on return', (tester) async {
+      var reads = 0;
+      final facts = SuperTabPullRequestFacts((_) async {
+        reads++;
+        return const {'account': 'ada', 'rows': []};
+      });
+      addTearDown(facts.dispose);
+      await show(tester, swarm(), facts: facts);
+      expect(facts.watching, isNotEmpty);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      expect(facts.watching, isEmpty, reason: 'nothing watched while hidden');
+      final before = reads;
+      await tester.pump(SuperTabPullRequestFacts.every * 3);
+      expect(reads, before, reason: 'no read while hidden');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(facts.watching, isNotEmpty);
     });
 
     testWidgets('clicking a row opens its chat', (tester) async {
@@ -714,7 +961,8 @@ void main() {
       await tester.pumpAndSettle();
       final review = tester.getTopLeft(header(SuperTabBacklogGroup.inReview));
       expect(tester.getTopLeft(row('working')).dy, greaterThan(review.dy));
-      expect(find.text('5 tasks'), findsOneWidget);
+      expect(listed(tester), hasLength(5));
+      expect(summary(tester), (working: 0, review: 2, shipped: 1));
     });
 
     testWidgets('no tasks, and none asked for by the reader, each say so', (
@@ -735,7 +983,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
       await tester.pumpAndSettle();
       expect(find.text('No open tasks of yours'), findsOneWidget);
-      expect(find.text('0 tasks'), findsOneWidget);
+      expect(summary(tester), (working: 0, review: 0, shipped: 0));
     });
 
     group('closed tasks the app does not hold', () {
@@ -800,7 +1048,7 @@ void main() {
             tester.getTopLeft(header(SuperTabBacklogGroup.shipped)).dy,
           ),
         );
-        expect(find.text('Shipped · 3'), findsOneWidget);
+        expect(summary(tester).shipped, 3);
         // The snapshot is built again on every change: these never join it.
         expect(c.snapshot!.conversation('recent'), isNull);
       });
@@ -1046,53 +1294,77 @@ void main() {
         expect(c.snapshot!.conversation('recent'), isNotNull);
       });
 
-      testWidgets(
-        'an empty Mine says so and links to what the reader shipped',
-        (tester) async {
+      /// [count] tasks the reader asked for, shipped and archived an hour
+      /// apart, the newest first: Scholes's 72 (task #2885).
+      List<Map<String, dynamic>> shippedOfMine(int count) => [
+        for (var i = 0; i < count; i++)
+          archived('mine-$i', 100 + i, daysAgo: (i + 1) / 24),
+      ];
+
+      for (final mine in [true, false]) {
+        testWidgets('with nothing open, Shipped still lists the newest 7 of '
+            '72 with Show 65 more shipped (${mine ? 'Mine' : 'Everyone'}, '
+            'task #2885)', (tester) async {
           final server = nothingOpen();
           server.parts.clock = now;
-          add(server, [
-            archived('mine-a', 30),
-            archived('mine-b', 31),
-            archived('theirs', 32, requester: 'pilot'),
-          ]);
+          add(server, shippedOfMine(72));
+          if (!mine) {
+            // Everyone has nothing open either: only the project chats stay.
+            (server.state['conversations'] as List).removeWhere(
+              (g) =>
+                  (g as Map)['number'] != null &&
+                  !(g['id'] as String).startsWith('mine-'),
+            );
+          }
           await show(tester, server, today: at);
-          await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
-          await tester.pumpAndSettle();
-          expect(find.text('No open tasks of yours'), findsOneWidget);
-          expect(row('mine-a'), findsNothing);
-          final link = find.byKey(const ValueKey('super-backlog-mine-shipped'));
+          if (mine) {
+            await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+            await tester.pumpAndSettle();
+          }
+          expect(summary(tester), (working: 0, review: 0, shipped: 72));
+          expect(find.text('No open tasks of yours'), findsNothing);
+          expect(find.text('No tasks'), findsNothing);
+          expect(header(SuperTabBacklogGroup.shipped), findsOneWidget);
+          expect(listed(tester), [for (var i = 0; i < 7; i++) 'mine-$i']);
+          final more = find.byKey(const ValueKey('super-backlog-shipped-more'));
           expect(
             find.descendant(
-              of: link,
-              matching: find.text(
-                'Your shipped tasks from the last 7 days · 2',
-              ),
+              of: more,
+              matching: find.text('Show 65 more shipped'),
             ),
             findsOneWidget,
           );
-          await tester.tap(link);
+          await tester.tap(more);
           await tester.pumpAndSettle();
-          expect(find.text('No open tasks of yours'), findsNothing);
-          expect(row('mine-a'), findsOneWidget);
-          expect(row('mine-b'), findsOneWidget);
-          expect(row('theirs'), findsNothing);
-          expect(find.text('Shipped · 2'), findsOneWidget);
-          expect(find.text('2 tasks'), findsOneWidget);
-        },
-      );
+          // The list builds what fits; the eighth is there, and no foot.
+          expect(row('mine-7'), findsOneWidget);
+          expect(more, findsNothing);
+        });
+      }
 
-      testWidgets('an empty Mine with nothing shipped has no link', (
-        tester,
-      ) async {
+      testWidgets('the empty message shows only when nothing is open and '
+          'nothing shipped (task #2885)', (tester) async {
+        final server = nothingOpen();
+        server.parts.clock = now;
+        add(server, [
+          archived('mine-a', 30),
+          archived('theirs', 32, requester: 'pilot'),
+        ]);
+        await show(tester, server, today: at);
+        await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+        await tester.pumpAndSettle();
+        // One shipped task of the reader's: it lists, and nothing says empty.
+        expect(find.text('No open tasks of yours'), findsNothing);
+        expect(listed(tester), ['mine-a']);
+        expect(summary(tester), (working: 0, review: 0, shipped: 1));
+        await tester.pumpWidget(const SizedBox());
+        // Nothing open and nothing shipped: the message, and no rows.
         await show(tester, nothingOpen(), today: at);
         await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
         await tester.pumpAndSettle();
         expect(find.text('No open tasks of yours'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('super-backlog-mine-shipped')),
-          findsNothing,
-        );
+        expect(listed(tester), isEmpty);
+        expect(summary(tester), (working: 0, review: 0, shipped: 0));
       });
 
       testWidgets('Mine goes by who asked, not who worked on it', (
@@ -1111,10 +1383,7 @@ void main() {
         await show(tester, server, today: at);
         await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
         await tester.pumpAndSettle();
-        expect(
-          find.text('Your shipped tasks from the last 7 days · 1'),
-          findsOneWidget,
-        );
+        expect(listed(tester), ['asked']);
       });
 
       testWidgets('a failed read says so, and trying again reads it', (

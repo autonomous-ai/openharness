@@ -19,6 +19,9 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
+import { metrics, metricsAddress, startMetricsServer } from './lib/metrics.js'
+import { startLastHour } from './lib/lastHour.js'
+import { WORKER_INDEX } from './lib/instance.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
@@ -30,11 +33,13 @@ import { startMemoryStats } from './lib/memoryStats.js'
 import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
+import { startMessageReachStats } from './superTabs/messageReachStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
 import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { registerReplyJsonTiming, startCpuStats } from './lib/cpuStats.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
@@ -148,9 +153,16 @@ async function start(): Promise<void> {
   // Every request is named by its route pattern before any hook reads the database, so its queries count for it.
   registerWorkContext(app)
   // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
-  selfProfileFromEnv(app)
+  selfProfileFromEnv(app, process.env, { onWindow: busy => metrics.busyWindow(busy) })
+  // Always on, every minute: process CPU by thread (main, Prisma engine, libuv pool, V8 workers), GC pauses and reply JSON.
+  // Before any route is added, so every route's object replies are timed (lib/cpuStats.ts).
+  const cpuStats = startCpuStats()
+  registerReplyJsonTiming(app, cpuStats)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
-  const stopQueryStats = startQueryStats()
+  const stopQueryStats = startQueryStats({ onWindow: routes => metrics.dbWindow(routes) })
+  // Always on, every minute: `last hour`, the sums of the last 60 minutes the production scan reads from a log tail
+  // (lib/lastHour.ts, task #2957).
+  const stopLastHour = startLastHour(metrics.hour)
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
   const stopRetryStats = startRetryStats()
   // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
@@ -159,9 +171,12 @@ async function start(): Promise<void> {
   const stopCacheStats = startCacheStats()
   // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
   const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
-  const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
+  // The same hook feeds the Prometheus histogram and the last hour (lib/metrics.ts); WS upgrades never reach Fastify.
+  const stopRouteLatency = startRouteLatency(registerRouteLatency(app, { observe: metrics.request }))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
+  // Every minute: how long messages took to reach their readers, p50/p95 per reader kind (superTabs/messageReachStats.ts).
+  const stopMessageReachStats = startMessageReachStats()
   // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
   const stopRelayStats = startRelayStats()
   // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
@@ -217,6 +232,8 @@ async function start(): Promise<void> {
   const appProxyServer = startSubdomainProxy()
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
+  // Prometheus scrape on an internal port of its own (loopback unless METRICS_HOST says otherwise).
+  const metricsServer = startMetricsServer(metrics.registry, metricsAddress({ portBase: env.METRICS_PORT_BASE, host: env.METRICS_HOST }, WORKER_INDEX))
 
   // Connect counts are kept in memory and written once a minute; shutdown writes what is left (lib/productUsageRelay.ts).
   const stopRelayUsage = startRelayUsageFlush()
@@ -231,6 +248,7 @@ async function start(): Promise<void> {
       await drainBeforeClosing(processDrain, exitCode === 0 ? env.DRAIN_DELAY_MS : 0)
       appProxyServer.close()
       meshServer?.close()
+      metricsServer.close()
       // Start Fastify's close (it tells the http server to stop accepting new connections) but DON'T await
       // it yet: http.Server#close only resolves once every connection has ended, and an upgraded WebSocket
       // is a connection that never ends on its own — so awaiting here would hang until clients happened to
@@ -248,13 +266,16 @@ async function start(): Promise<void> {
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
       // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
+      stopLastHour()
       stopRetryStats()
       stopDeliveryCalls()
       stopCacheStats()
       stopMemoryStats()
+      cpuStats.stop()
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()
+      stopMessageReachStats()
       stopRelayStats()
       stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).

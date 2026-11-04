@@ -279,3 +279,48 @@ describe('the Harness Team account, set up on its own', () => {
     }
   })
 })
+
+describe('a half-finished setup is repaired, not taken for done (#2765, Darren-MacBook)', () => {
+  it('with the account but no daemon, Set up runs setup again; the automatic moments ask for nothing', async () => {
+    const missing = vi.fn(async () => ['daemon'] as const)
+    const f = fake({ accountExists: vi.fn(async () => true), missing } as Partial<AutoSetupDeps>)
+    for (const reason of ['startup', 'join', 'contribute'] as const) {
+      expect(await f.auto.offer(reason, async () => true), reason).toEqual({ state: 'incomplete' })
+    }
+    expect(f.deps.setup).not.toHaveBeenCalled()
+    // Desktop's explanation first, then the person's Set up: the repair runs.
+    expect(await f.auto.offer('manual', async () => true, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledTimes(1)
+  })
+
+  it('a remembered cancel or failure does not stop Set up from repairing', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon'] } as Partial<AutoSetupDeps>)
+    f.setDecision({ state: 'failed', at: 1_000_000 - 1 })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+  })
+
+  it('status names what is missing, for the machine row', async () => {
+    const daemon = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon'] } as Partial<AutoSetupDeps>)
+    expect(await daemon.auto.status()).toEqual({ state: 'incomplete', missing: ['daemon'], detail: 'the team daemon is not running' })
+    const privacy = fake({ accountExists: vi.fn(async () => true), missing: async () => ['privacy'] } as Partial<AutoSetupDeps>)
+    expect(await privacy.auto.status()).toEqual({ state: 'incomplete', missing: ['privacy'], detail: 'its privacy check has not passed' })
+    const both = fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon', 'privacy'] } as Partial<AutoSetupDeps>)
+    expect((await both.auto.status()).detail).toBe('the team daemon is not running, and its privacy check has not passed')
+  })
+
+  it('with every part in place it is done: exists, and nothing runs', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
+    expect(await f.auto.offer('manual')).toEqual({ state: 'exists' })
+    expect(await f.auto.status()).toEqual({ state: 'exists' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+  })
+
+  it('a part it cannot read counts as missing, so Set up can still repair it', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => { throw new Error('launchctl timed out') } } as Partial<AutoSetupDeps>)
+    expect(await f.auto.status()).toMatchObject({ state: 'incomplete', missing: ['daemon'] })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+  })
+})
+

@@ -26,6 +26,7 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_threads_page.dart' show openSwarmThreads;
 import 'swarm_you_page.dart' show SwarmYouButton;
 
 /// Activity asked, from elsewhere in the tabs, to show [filter]: a tile on
@@ -288,7 +289,23 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
                 ),
               )
             else
-              const SwarmTabHeader('Activity', trailing: SwarmYouButton()),
+              // Threads, the ones the person follows, before You: where
+              // Home's Threads tile was (anh Dee, 2026-11-04).
+              SwarmTabHeader(
+                'Activity',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwarmIconButton(
+                      key: const ValueKey('swarm-activity-threads'),
+                      icon: LucideIcons.messagesSquare300,
+                      label: 'Threads',
+                      onPressed: () => openSwarmThreads(context),
+                    ),
+                    const SwarmYouButton(),
+                  ],
+                ),
+              ),
             if (session != null)
               Expanded(
                 child: ListenWhileInSight(

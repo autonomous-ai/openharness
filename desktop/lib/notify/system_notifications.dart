@@ -544,7 +544,8 @@ class LinuxSystemNotifier implements SystemNotifier {
   }) async {
     final opens =
         (machineId == SystemNotifications.mentionNoticeMachine ||
-            machineId == SystemNotifications.chatNoticeMachine) &&
+            machineId == SystemNotifications.chatNoticeMachine ||
+            machineId == SystemNotifications.messageNoticeMachine) &&
         agentId.isNotEmpty;
     if (opens && _canAct) {
       if (_waits.length >= _maxWaiting) _waits.removeAt(0).kill();
@@ -755,10 +756,14 @@ class SystemNotifications {
   /// `<swarm tab id>/<conversation id>` ([chat]), which the click opens (swarm_screen.dart).
   static const chatNoticeMachine = '@chat';
 
+  /// What a reply's notice puts in the `machineId` slot; the `agentId` slot holds the reply's message
+  /// link (`harness://swarm/…`, [messageLink]), which the click opens as a message link (swarm_screen.dart).
+  static const messageNoticeMachine = '@message';
+
   /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged, a chat
-  /// has new messages. The same switch and the same rules as [post]; a click on it opens that device
-  /// ([devicePub]), that tag in its Swarm ([mention]) or that chat in its Swarm ([chat]) when given,
-  /// else nothing.
+  /// has new messages, a thread has a reply. The same switch and the same rules as [post]; a click on
+  /// it opens that device ([devicePub]), that tag in its Swarm ([mention]), that chat in its Swarm
+  /// ([chat]) or that message ([messageLink]) when given, else nothing.
   void postNotice({
     required String id,
     required String title,
@@ -766,6 +771,7 @@ class SystemNotifications {
     String? devicePub,
     ({String tabId, String mentionId})? mention,
     ({String tabId, String conversationId})? chat,
+    String? messageLink,
   }) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
@@ -780,6 +786,8 @@ class SystemNotifications {
                 ? mentionNoticeMachine
                 : chat != null
                 ? chatNoticeMachine
+                : messageLink != null
+                ? messageNoticeMachine
                 : devicePub == null
                 ? ''
                 : deviceNoticeMachine,
@@ -787,7 +795,7 @@ class SystemNotifications {
                 ? '${mention.tabId}/${mention.mentionId}'
                 : chat != null
                 ? '${chat.tabId}/${chat.conversationId}'
-                : devicePub ?? '',
+                : messageLink ?? devicePub ?? '',
           )
           .then((answer) {
             if (answer != NotificationPermission.unknown) {
