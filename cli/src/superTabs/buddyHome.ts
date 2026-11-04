@@ -3,12 +3,12 @@
  * project its person reads, so its folder is no project's checkout: it holds `projects/<name>`, one detached worktree per
  * project whose checkout is already on this machine, each made from that project's own checkout, so no two projects' files
  * ever mix. Nothing is cloned for it. Each copy follows its project's default branch (refreshBuddyHome): a worktree made once
- * and kept read days-old code, and the Buddy kept telling its person so (Scholes, 11-02). Its guard confines its reads to this
- * folder, and the lock its launch applies makes every file in it read-only (lib/swarmSkills.ts lockBuddyFolder). A project its
- * person no longer reads leaves the folder before the Buddy's next turn (pruneBuddyHome).
+ * and kept read days-old code, and the Buddy kept telling its person so (Scholes, 11-02). A Buddy works in it as its owner
+ * would, with full access on their own machine (task #2832): a copy it changed is left where it is. A project its person no
+ * longer reads leaves the folder before the Buddy's next turn (pruneBuddyHome).
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
@@ -198,39 +198,9 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
     await git(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--quiet', '--no-tags', '--no-prune', '--no-recurse-submodules', remote.remote, remote.refspec],
       { timeout: Math.min(left, FETCH_TIMEOUT_MS), signal })
     const [from, to] = [await git(['rev-parse', 'HEAD']), await git(['rev-parse', `refs/remotes/${remote.remote}/${remote.branch}^{commit}`])]
-    if (from !== to && !signal.aborted) {
-      // Read first, so whatever the move does the files it wrote are locked again. Only those: a walk of the whole tree every
-      // hour would cost a large project's every file, and git rewrites no others.
-      // As bytes, untrimmed: a name may start with a space or not be UTF-8, and one read otherwise was never found to lock
-      // (security review 2 of #2524).
-      const changed = fileNames((await run('git', words(['diff', '--name-only', '--no-renames', '-z', from, to]),
-        { timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env: gitEnv(process.env), encoding: 'buffer' })).stdout)
-      try { await git(['checkout', '--quiet', '--detach', '--no-recurse-submodules', to], { timeout: 120_000 }) }
-      finally { lockFiles(path, changed) }
-    }
+    if (from !== to && !signal.aborted) await git(['checkout', '--quiet', '--detach', '--no-recurse-submodules', to], { timeout: 120_000 })
     return state(await git(['rev-parse', 'HEAD']) === to ? 'latest' : 'failed', await here())
   } catch { return state('failed', at) }
-}
-
-/** The names in git's NUL-separated list, each its exact bytes. */
-function fileNames(list: Buffer): Buffer[] {
-  const names: Buffer[] = []
-  for (let from = 0, end; (end = list.indexOf(0, from)) >= 0; from = end + 1) if (end > from) names.push(list.subarray(from, end))
-  return names
-}
-
-/** The lock a launch applies (lib/swarmSkills.ts lockBuddyFolder) for the files a move wrote: git makes them writable. */
-function lockFiles(path: string, names: readonly Buffer[]): void {
-  const real = Buffer.from(realpathSync(path))
-  for (const name of names) {
-    const slash = name.lastIndexOf(0x2f)
-    const folder = slash < 0 ? real : Buffer.concat([real, Buffer.from('/'), name.subarray(0, slash)])
-    const file = Buffer.concat([real, Buffer.from('/'), name])
-    const entry = lstatSync(file, { throwIfNoEntry: false })
-    // Never through a link, the file's own or a folder's on its way: a commit replacing folder a with a link still lists a/b.txt,
-    // and a chmod there changed a file outside (review of #2524).
-    if (entry?.isFile() && realpathSync(folder, { encoding: 'buffer' }).equals(folder)) chmodSync(file, entry.mode & 0o555)
-  }
 }
 
 function writeCopies(home: string, states: readonly CopyState[]): void {
@@ -275,13 +245,13 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
  * Answers Claude Code's question about [home], in the file it reads, as its launch would otherwise wait on it. That question
  * is asked in a terminal no Swarm view shows, so the Buddy sat at it until its start timed out (MacBookPro2021, 2026-11-02).
  * This is an exception to "never a folder with content" (engines/kit/folderTrust.ts): the folder is Harness's, made for the
- * start its person pressed, and what the question guards against cannot happen in it. A Buddy launches with
- * `--setting-sources local --strict-mcp-config`, so no project's files configure it, and the folder goes with the Buddy.
- * A Buddy on another engine has none of this to rely on, so it still asks. A failure here only leaves the question.
+ * start its person pressed, and what the question guards against cannot happen in it: its own root holds no project's settings,
+ * hooks or MCP servers (each project's copy is a folder below it), and the folder goes with the Buddy. Claude Code and Codex
+ * alike, as both run a Buddy (task #2832). A failure here only leaves the question.
  */
 export async function trustBuddyHome(home: string, engine: unknown): Promise<void> {
-  if (engine !== 'claude') return
-  try { folderTrust('claude', undefined, await launchEnvironment() ?? undefined)?.record(home) }
+  if (engine !== 'claude' && engine !== 'codex') return
+  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for a Buddy: ${(error as Error).message}`) }
 }
 

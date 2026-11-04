@@ -50,7 +50,7 @@ import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, proposalTitle, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
-import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
+import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
@@ -1185,9 +1185,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       const main = mainBuddyOf(state, chat)
       if (!main || downSince(state, main, context.now)) fail('BUDDY_SESSION_NO_BUDDY', 'Start your Buddy first: a session runs beside it.')
-      // Only Claude Code runs a Buddy's guard hook. A Codex Buddy added before Codex was refused (buddy.create) must not
-      // start Codex sessions without it (security review 1 of #2345).
-      if (main.configuration.engine !== 'claude') fail('BUDDY_SESSION_ENGINE', 'Sessions need a Buddy running Claude Code.', 403)
       const pool = machineContribution(state, main.machineId)
       if (!pool?.observation?.capabilities?.includes(BUDDY_SESSION_CAPABILITY)) {
         fail('BUDDY_SESSION_UNSUPPORTED', `Update Harness on ${pool?.name ?? 'your Buddy\'s computer'} to start sessions.`)
@@ -1279,7 +1276,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const pool = machineContribution(state, main.machineId), machine = pool?.name ?? 'my machine'
     if (state.paused) return 'the Swarm is paused'
     if (downSince(state, main, context.now)) return `${machine} is offline`
-    if (main.configuration.engine !== 'claude') return 'I run on Codex, which answers only in # buddy'
     if (!pool) return 'my machine is no longer in the Swarm'
     if (!pool.observation?.capabilities?.includes(SWARM_BUDDY_CAPABILITY)) return `${machine} needs a newer Harness to run me here`
     const project = groupProject(state, chat)
@@ -2494,11 +2490,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
-      // Codex runs a command its rules files allow outside its sandbox without asking, and those are the person's own and
-      // Harness's, shared by all their Codex sessions: a Buddy could run harness new or send, or anything they once told
-      // Codex to always allow. Refused here, so every machine refuses whatever its CLI, until a Buddy has a Codex home of
-      // its own (security review 1 of #2087). Desktop names this reason beside a disabled Codex.
-      if (command.engine === 'codex') fail('BUDDY_ENGINE', CODEX_BUDDY_REFUSAL, 403)
       // One Buddy per person per Swarm (Dee, 10-31). An older app's Start names a project it reads: it adds that same one Buddy.
       if (command.projectId) readProject(state, actor, command.projectId)
       const me = person(state, actor.userId)
