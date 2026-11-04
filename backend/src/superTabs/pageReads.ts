@@ -176,6 +176,17 @@ export async function messagesById(tx: Transaction, tabId: string, conversationI
   })
 }
 
+/**
+ * The stored rows with these ids, whichever Swarm or conversation holds them: what a machine report's or a Lead poll's time
+ * check compares its notices with before it writes them (store.ts writeMessages keepStored). A plain `_id` match through the id
+ * index; Prisma's `id: { in }` sent it as `$expr` (8% of the slow message reads in Ken's log of 11-04, ~1 s for 101 rows).
+ */
+export async function storedMessages(tx: Transaction, ids: string[]): Promise<Array<{ id: string; tabId: string; conversationId: string; source: unknown }>> {
+  if (!ids.length) return []
+  const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids } } }, { $project: { tabId: 1, conversationId: 1, source: 1 } }])
+  return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string, source: row.source ?? null }))
+}
+
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
 const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
 
