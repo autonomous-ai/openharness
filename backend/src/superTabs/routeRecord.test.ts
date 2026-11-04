@@ -4,6 +4,7 @@ import { finalMatches, readRecord, routeRecordSchema, storedRecord, type RouteRe
 
 const candidate = (i: number) => ({ id: `c${i}`, kind: 'new', machineId: `m${i}`, engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
   title: `New agent · Claude opus high · m${i}`, label: `New agent · Claude opus high · m${i}` })
+/** An older CLI's record, still taken as before: its pick, first by strength (before task #2901). */
 const record = (count: number) => ({ assessment: { difficulty: 'medium', risk: 'low', why: 'Endpoint.' },
   candidates: Array.from({ length: count }, (_, i) => candidate(i)), excluded: [], floor: 1, notes: false, pick: 'c0', via: 'order', p: null,
   belowFloor: false, why: 'First by strength, then price and quota fit.' })
