@@ -26,13 +26,13 @@ void main() {
       recorder: () => mic,
       post: (take) async {
         posted.add(take);
-        return refusal;
+        return (sent: refusal == null, notice: refusal);
       },
     );
   }
 
-  void lifecycle(AppLifecycleState state) => TestWidgetsFlutterBinding.instance
-      .handleAppLifecycleStateChanged(state);
+  void lifecycle(AppLifecycleState state) =>
+      TestWidgetsFlutterBinding.instance.handleAppLifecycleStateChanged(state);
 
   tearDown(() => lifecycle(AppLifecycleState.resumed));
 
@@ -124,6 +124,20 @@ void main() {
       expect(v.off, isTrue);
       expect(v.notice, VoiceNotice.unavailable);
       expect(mic.starts, 0);
+    });
+  });
+
+  test('a sent take can still have something to say', () {
+    fakeAsync((async) {
+      final v = SwarmVoice(
+        recorder: FakeVoiceRecorder.new,
+        post: (_) async => (sent: true, notice: 'Sent without words'),
+      )..tap();
+      async.flushMicrotasks();
+      v.send();
+      async.flushMicrotasks();
+      expect(v.state, SwarmVoiceState.off);
+      expect(v.notice, 'Sent without words');
     });
   });
 
