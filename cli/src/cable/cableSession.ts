@@ -2251,9 +2251,11 @@ export class CableSession {
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
     const current = () => generation === this.voiceGeneration
-    const reply = (message: Message) => current()
-      ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) })
-      : Promise.resolve(false)
+    const reply = (message: Message) => {
+      // Every way a turn ends in an error is logged, with the words the dial shows: several ended silently (Diego, 2026-11-04).
+      if (message.t === 'voice.error' && current()) this.log(`cable: voice → error "${String(message.message)}"`)
+      return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
+    }
     this.voice = null
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
@@ -2476,7 +2478,10 @@ export class CableSession {
     // refused post for a read-only Chat with PM was typed into the PM's terminal.
     if (turn.agentId && !carried && !selection?.ok && this.host.swarmSay) {
       const face = turn.swarmFace
-      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face, turn.onFace)).catch((): SaidOnCard => ({ said: false }))
+      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face, turn.onFace)).catch((err: Error): SaidOnCard => {
+        this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)} failed (${err?.message ?? err})`)
+        return { said: false }
+      })
       if (!current()) return
       if (said.said) {
         this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)

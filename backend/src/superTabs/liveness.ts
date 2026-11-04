@@ -522,6 +522,9 @@ function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
   const stalled = new Map<string, Array<{ group: Conversation; next: TaskLiveness }>>()
   const steps = stepIndex(state)
   for (const group of state.conversations) {
+    // A step lost earlier in this pass, after loseTasks passed its task, ends its Engineer's wait before the task is judged,
+    // as a command's write does (recordTaskState): else the Engineer reads as stalled and loses its task the next sweep.
+    stepsEnded(state, group, now, steps)
     const before = group.liveness
     const next = nextState(state, group, now, steps)
     if (sameState(before, next)) continue

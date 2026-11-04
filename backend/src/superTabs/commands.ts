@@ -3509,6 +3509,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
       if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
+      // form for a post to carry, and its step waits for the new revision instead of moving after 30 quiet minutes (Ken,
+      // 2026-11-04: ~18 of 51 steps moved in two days were waiting on the Engineer's fix).
+      if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
+        const build = state.conversations.find(c => c.id === group.reviewOf)
+        if (build) changesRequested(state, build, actor.agentId, context.now)
+      }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break
     }

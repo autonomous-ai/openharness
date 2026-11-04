@@ -278,24 +278,24 @@ export function resetActivityMarksForTests(): void { marked.clear(); markedDay =
 let activityWarnedAt = 0
 
 /** Fire-and-forget from the relay touch points; never awaited by a socket, never throws. */
-export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean },
+export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean; hosting?: boolean },
   key: string = env.PRODUCT_USAGE_SUBJECT_KEY): Promise<void> {
-  if (!key || (!mark.surface && !mark.worked)) return
+  if (!key || (!mark.surface && !mark.worked && !mark.hosting)) return
   try {
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
     const day = dayUtc.toISOString().slice(0, 10)
     if (day !== markedDay) { marked.clear(); markedDay = day }
     const subject = activitySubject(userId, key)
-    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}`
+    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}|${mark.hosting ? 'h' : ''}`
     if (marked.has(seen)) return
     if (!(await productUsageChoice(userId)).enabled) return
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true, email: true } })
     if (!user) return
     const where = { subject_dayUtc: { subject, dayUtc } }
-    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}) }
+    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}), ...(mark.hosting ? { hosting: true } : {}) }
     try {
       await prisma.productUsageActivity.upsert({ where, update, create: {
-        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true,
+        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true, ...(mark.hosting ? { hosting: true } : {}),
         signupDay: new Date(Math.floor(user.createdAt.getTime() / DAY) * DAY),
         staff: user.email.toLowerCase().endsWith(STAFF_EMAIL),
         expiresAt: new Date(dayUtc.getTime() + ACTIVITY_DAYS * DAY),

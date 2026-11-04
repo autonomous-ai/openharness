@@ -56,6 +56,15 @@ describe('the built-in template', () => {
   })
   // Ken, 2026-11-03: in two days agents sent openharness's PM 850 direct messages, 73% of them answers to the PM's own
   // 1,437 (review asks, status asks, thanks), and Reviewers sent their verdicts to the PM instead of the Engineer.
+  // Ken, 2026-11-04: of 51 steps moved after 30 quiet minutes in two days, ~18 were Reviewers or Testers waiting on the
+  // Engineer's fix (their verdict reached the PM, or read "Changes needed", so liveness.ts toldEngineer never saw it) and ~7
+  // were Reviewers waiting for CI before giving a verdict that was ready.
+  it('has a changes verdict go to the Engineer in the form the Swarm reads, and Reviewers not wait for CI', () => {
+    const flat = (text: string) => text.replace(/\s+/g, ' ')
+    const reviewer = flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### Reviewer'), INSTRUCTIONS_TEMPLATE.indexOf('### Tester')))
+    expect(reviewer).toContain('It gives its verdict once it has read the code and never waits for CI to finish: the PM checks CI before it merges (Workflow 5).')
+    expect(flat(TEMPLATE_WORKFLOW)).toContain('A verdict asking for changes, a Tester\'s too, is a message to the Engineer with the line "Ready to merge: No" or "Ready to merge: With fixes"')
+  })
   it('keeps messages to and from the PM to work, answers and people, with verdicts on the step', () => {
     const flat = (text: string) => text.replace(/\s+/g, ' ')
     const role = (name: string, next: string) => flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf(`### ${name}`), INSTRUCTIONS_TEMPLATE.indexOf(`### ${next}`)))
