@@ -406,19 +406,36 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
     _portal.hide();
   }
 
-  KeyEventResult _escape(FocusNode _, KeyEvent event) {
-    if (event is! KeyDownEvent ||
-        event.logicalKey != LogicalKeyboardKey.escape ||
-        !_portal.isShowing) {
+  /// Escape closes the card. While it is open, Tab on the name goes into
+  /// the card (its own reading order would take the row's buttons beside the
+  /// name first) and Shift-Tab in the card goes back to the name.
+  KeyEventResult _onKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent || !_portal.isShowing) {
       return KeyEventResult.ignored;
     }
     final inCard = _cardFocus.hasFocus;
-    _dismissed = true;
-    _hideNow();
-    // Back to the name the card belongs to.
-    if (inCard) _anchorFocus.descendants.firstOrNull?.requestFocus();
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _dismissed = true;
+      _hideNow();
+      // Back to the name the card belongs to.
+      if (inCard) _nameFocus?.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.tab) {
+      return KeyEventResult.ignored;
+    }
+    final back = HardwareKeyboard.instance.isShiftPressed;
+    final target = switch ((inCard, back)) {
+      (false, false) => _cardFocus.traversalDescendants.firstOrNull,
+      (true, true) => _nameFocus,
+      _ => null,
+    };
+    if (target == null) return KeyEventResult.ignored;
+    target.requestFocus();
     return KeyEventResult.handled;
   }
+
+  FocusNode? get _nameFocus => _anchorFocus.traversalDescendants.firstOrNull;
 
   @override
   Widget build(BuildContext context) => OverlayPortal(
@@ -436,7 +453,7 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
         alignment: _above ? Alignment.bottomLeft : Alignment.topLeft,
         child: Focus(
           focusNode: _cardFocus,
-          onKeyEvent: _escape,
+          onKeyEvent: _onKey,
           child: FocusTraversalGroup(
             child: MouseRegion(
               onEnter: (_) {
@@ -460,7 +477,7 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
       link: _link,
       child: Focus(
         focusNode: _anchorFocus,
-        onKeyEvent: _escape,
+        onKeyEvent: _onKey,
         child: MouseRegion(
           onEnter: (_) => _enterAnchor(),
           onExit: (_) {
