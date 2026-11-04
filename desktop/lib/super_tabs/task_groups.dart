@@ -1,82 +1,10 @@
 import 'package:collection/collection.dart';
 
+import 'attention.dart';
+import 'backlog.dart';
+import 'controller.dart';
+import 'identity.dart';
 import 'model.dart';
-
-/// The groups a project's open tasks are listed in under it in the sidebar, in
-/// this order (Huy, #2309): a busy project's list read as one long run of
-/// unread rows.
-enum SuperTabTaskGroup {
-  needsYou('Needs you'),
-  working('Working'),
-  waitingOnOthers('Waiting on others'),
-  rest('The rest');
-
-  const SuperTabTaskGroup(this.label);
-  final String label;
-
-  /// Only The rest starts folded: the first screen is what needs the reader
-  /// and what is moving.
-  bool get foldedByDefault => this == rest;
-}
-
-/// Which group [group] is listed in, for the reader [readerId]: tagged, or
-/// waited on (by name, or by no one named), or asked in its agent's terminal
-/// ([needsHuman]) is theirs; a wait on someone or something else, or a stuck
-/// task the PM hands on, is others'; an agent moving or starting is working.
-/// The task line says the same states (task_status.dart).
-SuperTabTaskGroup superTabTaskGroupOf(
-  SuperTabConversation group, {
-  required String readerId,
-  int mentions = 0,
-  int needsHuman = 0,
-}) {
-  if (mentions > 0) return SuperTabTaskGroup.needsYou;
-  final liveness = group.liveness;
-  if (liveness == null) {
-    if (needsHuman > 0) return SuperTabTaskGroup.needsYou;
-    return const {'working', 'planned'}.contains(group.assignment?['status'])
-        ? SuperTabTaskGroup.working
-        : SuperTabTaskGroup.rest;
-  }
-  return switch ((liveness['state'], liveness['why'])) {
-    ('waiting', 'person') => switch (liveness['personId']) {
-      final String person when person != readerId =>
-        SuperTabTaskGroup.waitingOnOthers,
-      _ => SuperTabTaskGroup.needsYou,
-    },
-    // An agent at a question makes no progress, so its task goes quiet
-    // after 30 minutes: the question still waits on the reader.
-    ('quiet', _) when needsHuman > 0 => SuperTabTaskGroup.needsYou,
-    ('waiting', 'review' || 'revision' || 'blocked' || 'queued') ||
-    ('quiet' || 'orphaned', _) => SuperTabTaskGroup.waitingOnOthers,
-    ('waiting', 'starting') => SuperTabTaskGroup.working,
-    _ => SuperTabTaskGroup.rest,
-  };
-}
-
-/// [tasks] in their groups, in the groups' order and each in the order given:
-/// how the sidebar lists them and how next unread walks them.
-Map<SuperTabTaskGroup, List<SuperTabConversation>> superTabGroupTasks(
-  Iterable<SuperTabConversation> tasks, {
-  required String readerId,
-  int Function(SuperTabConversation task)? mentions,
-  int Function(SuperTabConversation task)? needsHuman,
-}) {
-  final grouped = {
-    for (final group in SuperTabTaskGroup.values)
-      group: <SuperTabConversation>[],
-  };
-  for (final task in tasks) {
-    grouped[superTabTaskGroupOf(
-          task,
-          readerId: readerId,
-          mentions: mentions?.call(task) ?? 0,
-          needsHuman: needsHuman?.call(task) ?? 0,
-        )]!
-        .add(task);
-  }
-  return grouped;
-}
 
 /// The columns of a project's Tasks view, in this order (Dee, task #2569):
 /// where each ask is on its way from proposal to shipped.
@@ -284,3 +212,37 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
 int superTabTasksNeedingYouIn(
   Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board,
 ) => board.values.expand((entries) => entries).where((e) => e.needsYou).length;
+
+/// [project]'s Tasks view for the reader of [c] at [now]: its open tasks, the
+/// shipped ones it read for the window ([SuperTabController.closedShipped]),
+/// and its open proposals. [needsHuman] says which tasks' agents asked the
+/// reader in their terminal.
+Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
+  SuperTabController c,
+  SuperTabProject project, {
+  required DateTime now,
+  int Function(SuperTabConversation task)? needsHuman,
+  SuperTabAttention? attention,
+}) {
+  final tags = attention ?? SuperTabAttention.of(c);
+  final people = {
+    for (final person in c.snapshot?.people ?? const <SuperTabPerson>[])
+      person.id: superTabPersonName(person.email),
+  };
+  return superTabTaskBoard(
+    superTabProjectTasks(
+      c,
+      project,
+      closed: [
+        for (final g in c.closedShipped)
+          if (g.projectId == project.id) g,
+      ],
+    ),
+    proposals: project.openProposals,
+    readerId: c.accountId,
+    now: now,
+    mentions: (task) => tags.mentionsIn(task.id),
+    needsHuman: needsHuman,
+    personName: (id) => people[id],
+  );
+}
