@@ -4616,13 +4616,20 @@ describe('closing the sessions the backend ends', () => {
   it('keeps a person\'s own session when a saved scrub names its id, and still removes the worktree\'s transcripts', async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
     const slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
-    const folder = join(worktrees, 'openharness', 'buddy-session'), mine = join(home, 'code', 'mine')
+    // One worktree each, the second named `-2` as a start's is when its name is taken (start.ts): two agents never share a
+    // folder, and two scrubs of one folder race each other's removal (a transcript read after the other scrub removed it fails
+    // the scrub, which waits out its retry).
+    const folders = { history: join(worktrees, 'openharness', 'buddy-session'), transcript: join(worktrees, 'openharness', 'buddy-session-2') }
+    const mine = join(home, 'code', 'mine')
     // Theirs by a history line; theirs by a transcript in their own folder's transcript folder, with no history line.
     const byHistory = '11111111-1111-4111-8111-111111111111', byTranscript = '22222222-2222-4222-8222-222222222222'
     try {
-      mkdirSync(folder, { recursive: true })
-      for (const sub of ['paste-cache', 'todos', 'debug', `projects/${slug(folder)}`, `projects/${slug(mine)}`]) mkdirSync(join(claude, sub), { recursive: true })
-      writeFileSync(join(claude, 'projects', slug(folder), 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      for (const folder of Object.values(folders)) {
+        mkdirSync(folder, { recursive: true })
+        mkdirSync(join(claude, 'projects', slug(folder)), { recursive: true })
+        writeFileSync(join(claude, 'projects', slug(folder), 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      }
+      for (const sub of ['paste-cache', 'todos', 'debug', `projects/${slug(mine)}`]) mkdirSync(join(claude, sub), { recursive: true })
       writeFileSync(join(claude, 'projects', slug(mine), `${byTranscript}.jsonl`), JSON.stringify({ cwd: mine }))
       writeFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ sessionId: byHistory, project: mine, pastedContents: { 1: { contentHash: 'theirpaste' } } })}\n`)
       writeFileSync(join(claude, 'paste-cache', 'theirpaste.txt'), 'secret')
@@ -4634,14 +4641,14 @@ describe('closing the sessions the backend ends', () => {
       const rows = ['history', 'transcript'].map(id => ended({ agent: { id, harnessId: `h-${id}`, machineId: 'machine-1' } }))
       const t = lifeFixture(rows, { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
       t.host.stop()
-      const scrubs = { history: { agentId: 'history', sessionId: byHistory, cwd: folder, engine: 'claude', codexHome: null },
-        transcript: { agentId: 'transcript', sessionId: byTranscript, cwd: folder, engine: 'claude', codexHome: null } }
+      const scrubs = { history: { agentId: 'history', sessionId: byHistory, cwd: folders.history, engine: 'claude', codexHome: null },
+        transcript: { agentId: 'transcript', sessionId: byTranscript, cwd: folders.transcript, engine: 'claude', codexHome: null } }
       writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs }))
       t.core.agents.byAgent = vi.fn(() => undefined as never)
       const again = t.open({ claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
       await again.tick()
       await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
-      expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false)
+      for (const folder of Object.values(folders)) expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false)
       expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toContain(byHistory)
       expect(existsSync(join(claude, 'paste-cache', 'theirpaste.txt'))).toBe(true)
       expect(existsSync(join(claude, 'projects', slug(mine), `${byTranscript}.jsonl`))).toBe(true)
