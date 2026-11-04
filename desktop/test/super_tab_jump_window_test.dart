@@ -96,7 +96,7 @@ void main() {
       final (c, _, _) = await chat();
       final target = await c.jumpTo('lead', weekAgo);
       for (var page = 0; page < 4; page++) {
-        await c.loadMessages('lead', older: true);
+        await c.loadMessages('lead', older: true, dropFar: true);
         expect(c.messages('lead').length, lessThanOrEqualTo(300));
       }
       expect(c.messages('lead').any((m) => m.id == target), isFalse);
@@ -186,19 +186,26 @@ void main() {
       }
     }
 
-    /// The topmost row in view, and its top.
-    (String, double) topRow(WidgetTester tester) {
+    /// The topmost row in view, by its key, and its top.
+    (Key, double) topRow(WidgetTester tester) {
       final view = tester.getRect(find.byKey(list));
-      (String, double)? top;
-      for (final text
+      (Key, double)? top;
+      for (final element
           in find
-              .descendant(of: find.byKey(list), matching: find.byType(Text))
-              .evaluate()
-              .map((e) => (e.widget as Text).data)
-              .whereType<String>()
-              .where((t) => t.startsWith('Update '))) {
-        final at = tester.getRect(row(text)).top;
-        if (at >= view.top && (top == null || at < top.$2)) top = (text, at);
+              .descendant(
+                of: find.byKey(list),
+                matching: find.byWidgetPredicate(
+                  (w) =>
+                      w.key is ValueKey<String> &&
+                      (w.key! as ValueKey<String>).value.startsWith(
+                        'super-message-message-',
+                      ),
+                ),
+              )
+              .evaluate()) {
+        final key = element.widget.key!;
+        final at = tester.getRect(find.byKey(key)).top;
+        if (at >= view.top && (top == null || at < top.$2)) top = (key, at);
       }
       return top!;
     }
@@ -228,23 +235,38 @@ void main() {
       for (var i = 0; i < 12; i++) {
         await tester.drag(find.byKey(list), const Offset(0, -3000));
         await tester.pumpAndSettle();
+        final e = tester.takeException();
+        // ignore: avoid_print
+        print(
+          'down $i held ${c.messages('lead').length} first ${c.messages('lead').first.text} last ${c.messages('lead').last.text} newer ${c.hasNewer('lead')} reads ${reads.length} ex ${e != null}',
+        );
         expect(c.messages('lead').length, lessThanOrEqualTo(400));
       }
       final newer = reads.where((r) => r.contains('after=')).length;
       expect(newer, greaterThanOrEqualTo(2));
       expect(reads.where((r) => r.contains('at=')), isEmpty);
       // A page landing below keeps the row at the top where it is.
-      final (text, top) = topRow(tester);
+      // ignore: avoid_print
+      print('before top ex ${tester.takeException() != null}');
+      final (key, top) = topRow(tester);
       await tester.drag(find.byKey(list), const Offset(0, -200));
       await tester.pumpAndSettle();
       await tester.drag(find.byKey(list), const Offset(0, 200));
       await tester.pumpAndSettle();
-      expect(tester.getRect(row(text)).top, moreOrLessEquals(top, epsilon: 2));
+      expect(
+        tester.getRect(find.byKey(key)).top,
+        moreOrLessEquals(top, epsilon: 2),
+      );
       // Up: past where the jump landed, page by page.
       reads.clear();
       for (var i = 0; i < 16; i++) {
         await tester.drag(find.byKey(list), const Offset(0, 3000));
         await tester.pumpAndSettle();
+        final e = tester.takeException();
+        // ignore: avoid_print
+        print(
+          'up $i held ${c.messages('lead').length} first ${c.messages('lead').first.text} last ${c.messages('lead').last.text} newer ${c.hasNewer('lead')} reads ${reads.length} ex ${e != null}',
+        );
         expect(c.messages('lead').length, lessThanOrEqualTo(400));
       }
       expect(

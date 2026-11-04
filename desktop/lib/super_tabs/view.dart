@@ -216,6 +216,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
+  // Conversations whose window the view itself is moving (a jump, the page
+  // below read by scrolling down): what lands is not news arriving.
+  final _movingWindow = <String>{};
   // Conversations whose last read of earlier messages failed: they offer the
   // button instead of reading again by themselves.
   final _olderFailed = <String>{};
@@ -477,7 +480,10 @@ class _SuperTabViewState extends State<SuperTabView>
         : (_following[id] ?? true);
     final previous = _latest[id] ?? 0;
     final latest = c.messages(id).lastOrNull?.sequence ?? 0;
-    final grew = latest > previous && !_loadingOlder.contains(id);
+    final grew =
+        latest > previous &&
+        !_loadingOlder.contains(id) &&
+        !_movingWindow.contains(id);
     _latest[id] = latest;
     if (grew && !atEnd) _newAfter.putIfAbsent(id, () => previous);
     if (atEnd && _selected == id && scroll.hasClients && !_jumpingToEnd) {
@@ -1527,6 +1533,42 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  /// A scroll ending near the bottom of a window short of the live end (a
+  /// jump, or rows dropped while reading back) reads the page below.
+  void _readNewerNearBottom(String id, ScrollMetrics metrics) {
+    if (metrics.extentAfter > 400 ||
+        _finding != null ||
+        _movingWindow.contains(id) ||
+        !c.hasNewer(id)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && c.selectedId == id) unawaited(_loadNewer(id));
+    });
+  }
+
+  /// Reads the page after those loaded. Rows join below, so nothing on
+  /// screen moves; the dividing row moves down to the view first, so the
+  /// controller may drop the rows far above.
+  Future<void> _loadNewer(String id) async {
+    final scroll = _scroll[id];
+    if (!_movingWindow.add(id)) return;
+    if (scroll != null && scroll.hasClients) _moveSplitToView(id, scroll);
+    try {
+      await c.loadNewer(id);
+    } catch (_) {
+      if (mounted && c.selectedId == id) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Couldn’t load newer messages.')),
+        );
+      }
+    } finally {
+      _movingWindow.remove(id);
+    }
+    if (!mounted) return;
+    setState(() => _latest[id] = c.messages(id).lastOrNull?.sequence ?? 0);
+  }
+
   /// Reads the page before those loaded, keeping what is on screen in place:
   /// the row of [keep] when it is built, else the topmost row. Rows can
   /// regroup as earlier ones arrive, so the one the reader looks at is kept.
@@ -1539,11 +1581,16 @@ class _SuperTabViewState extends State<SuperTabView>
       return;
     }
     final request = _scrollRequest;
-    final loaded = c.messages(id).length;
+    final oldest = c.messages(id).firstOrNull?.id;
+    // The reader scrolling up, not a search reading back (one keeping [keep]):
+    // the page may drop the rows far below, the controller keeping those just
+    // under the dividing row, which moves up to the view first.
+    final dropFar = keep == null;
+    if (dropFar) _moveSplitUpToView(id, scroll);
     final started = _anchorRow(keep);
     setState(() {});
     try {
-      await c.loadMessages(id, older: true);
+      await c.loadMessages(id, older: true, dropFar: dropFar);
     } finally {
       _loadingOlder.remove(id);
     }
@@ -1554,7 +1601,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final anchor = c.selectedId == id ? _anchorRow(keep) : started;
     setState(() {
       // A read that brought nothing while more remain failed.
-      if (c.hasOlder(id) && c.messages(id).length == loaded) {
+      if (c.hasOlder(id) && c.messages(id).firstOrNull?.id == oldest) {
         _olderFailed.add(id);
       } else {
         _olderFailed.remove(id);
@@ -1982,6 +2029,55 @@ class _SuperTabViewState extends State<SuperTabView>
     return message;
   }
 
+  /// The date pill's choice (day_jump.dart): [id]'s first message on or
+  /// after [from], lit, as a link opens one. The very beginning (null) is its
+  /// first message, and a time after everything said its newest. One read
+  /// brings the rows around it (task #2911); the list is that window, read on
+  /// both ways as the reader scrolls.
+  Future<void> _jumpToTime(String id, DateTime? from) async {
+    final request = ++_jumpRequest;
+    bool current() =>
+        mounted &&
+        request == _jumpRequest &&
+        c.selectedId == id &&
+        !c.accessRevoked;
+    String? target;
+    _movingWindow.add(id);
+    try {
+      target = await c.jumpTo(id, from);
+    } catch (_) {
+      if (!mounted || !current()) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Messages could not be read.')),
+      );
+      return;
+    } finally {
+      _movingWindow.remove(id);
+    }
+    if (!current() || target == null) return;
+    final row = _rowShowing(id, target) ?? target;
+    setState(() {
+      // The window is a new list: it divides at its first row.
+      _split.remove(id);
+      _latest[id] = c.messages(id).lastOrNull?.sequence ?? 0;
+      _newAfter.remove(id);
+      _target = row;
+      // Stop following the end: that day's message is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (at) {
+        unawaited(Scrollable.ensureVisible(at, alignment: .3));
+        _light(row);
+      },
+    );
+    _focus.requestFocus();
+  }
+
   /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
   void _takeMessageRequest() {
     final request = c.messageRequest;
@@ -2221,7 +2317,10 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (c.selectedId != id || _target == null) return _landed(landing!);
-      if (_targetKey.currentContext case final target?) {
+      // Built is not laid out: a row kept alive off screen, or one a list
+      // just replaced has not placed yet, has no place to scroll to, and
+      // revealing it threw (task #2911, the jump after reading back).
+      if (_targetKey.currentContext case final target? when _laidOut(target)) {
         if (arrived != null) {
           arrived(target);
         } else {
@@ -4042,6 +4141,68 @@ class _SuperTabViewState extends State<SuperTabView>
     c.keepFrom(id, first);
   }
 
+  /// Whether [row] has its place in its list: laid out, not only kept alive.
+  static bool _laidOut(BuildContext row) {
+    if (!row.mounted) return false;
+    RenderObject? child = row.findRenderObject();
+    while (child != null && child.parent is! RenderSliverMultiBoxAdaptor) {
+      child = child.parent;
+    }
+    final data = child?.parentData;
+    return data is SliverMultiBoxAdaptorParentData &&
+        !data.keptAlive &&
+        data.layoutOffset != null;
+  }
+
+  /// Rows above the dividing row before a reader there has it moved up to
+  /// the rows on screen ([_moveSplitUpToView]).
+  static const _rowsAboveSplit = 100;
+
+  /// For a reader far above [id]'s dividing row: moves it up to the first row
+  /// of the group at the top edge of the view, its place unchanged, so an
+  /// older page may drop the rows far below (the controller keeps the rows
+  /// just under it). Its row moves from the older rows' list, growing up, to
+  /// the top of the newer rows' list, which starts where the view's content
+  /// is measured from: the view moves down by the row's distance above it.
+  void _moveSplitUpToView(String id, SuperTabChatScroll scroll) {
+    final split = _split[id];
+    if (split == null) return;
+    final messages = _ownShown(id);
+    final at = messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
+    final top = _rowAtTop();
+    var index = top == null ? -1 : messages.indexWhere((m) => m.id == top);
+    if (at < 0 || index < 0 || at - index <= _rowsAboveSplit) return;
+    final joined = _joined(messages, split);
+    while (index > 0 && joined.contains(messages[index].id)) {
+      index--;
+    }
+    final first = messages[index];
+    final above = _extentAbove(_built[first.id]);
+    if (above == null) return;
+    scroll.moveContent(above, across: true);
+    _split[id] = first;
+    c.keepFrom(id, first);
+  }
+
+  /// How far above the dividing row [row]'s top is laid out, in the older
+  /// rows' list; null when it is not laid out there.
+  static double? _extentAbove(BuildContext? row) {
+    if (row == null || !row.mounted) return null;
+    RenderObject? child = row.findRenderObject();
+    while (child != null && child.parent is! RenderSliverMultiBoxAdaptor) {
+      child = child.parent;
+    }
+    final list = child?.parent, data = child?.parentData;
+    if (list is! RenderSliverMultiBoxAdaptor ||
+        child is! RenderBox ||
+        list.constraints.growthDirection != GrowthDirection.reverse ||
+        data is! SliverMultiBoxAdaptorParentData ||
+        data.layoutOffset == null) {
+      return null;
+    }
+    return data.layoutOffset! + child.size.height;
+  }
+
   /// The built row at the top edge of the view: the one it cuts through,
   /// else the highest one below it.
   String? _rowAtTop() {
@@ -4497,6 +4658,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           SuperTabStickyDay(
                             pillKey: const ValueKey('super-day-pill'),
                             hidden: finding != null,
+                            onJump: (from) =>
+                                unawaited(_jumpToTime(c.selectedId, from)),
                             child: NotificationListener<ScrollNotification>(
                               onNotification: (event) {
                                 if (event.depth != 0) return false;
@@ -4508,11 +4671,14 @@ class _SuperTabViewState extends State<SuperTabView>
                                 if (_jumpingToEnd) return false;
                                 final id = c.selectedId;
                                 final atEnd = event.metrics.extentAfter < 40;
-                                _follow(id, atEnd);
+                                // The bottom of a window short of the live end
+                                // is not the end to follow (task #2911).
+                                _follow(id, atEnd && !c.hasNewer(id));
                                 // Once the scroll ends, so keeping the place never
                                 // cuts a drag short.
                                 if (event is ScrollEndNotification) {
                                   _readEarlierNearTop(id, event.metrics);
+                                  _readNewerNearBottom(id, event.metrics);
                                 }
                                 if (atEnd) {
                                   // A row still sending has no place in the transcript.

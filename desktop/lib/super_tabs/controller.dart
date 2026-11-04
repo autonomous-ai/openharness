@@ -4797,10 +4797,16 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Joins a read of [id] in the same direction already under way, so a
-  /// caller can wait for it.
-  Future<void> loadMessages(String id, {bool older = false}) {
+  /// caller can wait for it. [dropFar]: an older page drops the newest rows
+  /// past [_windowRows] (a reader scrolling up); a search reading back keeps
+  /// every row it found.
+  Future<void> loadMessages(
+    String id, {
+    bool older = false,
+    bool dropFar = false,
+  }) {
     if (older) _acted();
-    return _readMessages(id, older: older);
+    return _readMessages(id, older: older, dropFar: dropFar);
   }
 
   /// [light] asks only for new messages, and nothing under a reader holding
@@ -4810,6 +4816,7 @@ class SuperTabController extends ChangeNotifier {
     String id, {
     bool older = false,
     bool light = false,
+    bool dropFar = false,
     _EarlyRead? early,
   }) {
     final read = _reading[(id, older)] ??=
@@ -4817,6 +4824,7 @@ class SuperTabController extends ChangeNotifier {
           id,
           older: older,
           light: light,
+          dropFar: dropFar,
           early: early,
         ).whenComplete(() {
           // A block: whenComplete would wait on the removed future, itself.
@@ -4847,6 +4855,7 @@ class SuperTabController extends ChangeNotifier {
     String id, {
     required bool older,
     bool light = false,
+    bool dropFar = false,
     _EarlyRead? early,
   }) async {
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
@@ -4953,7 +4962,7 @@ class SuperTabController extends ChangeNotifier {
       if (older &&
           (_before[id]?.sequence != from?.sequence ||
               _before[id]?.id != from?.id)) {
-        return await _loadMessages(id, older: true);
+        return await _loadMessages(id, older: true, dropFar: dropFar);
       }
       final incoming = (answer['messages'] as List)
           .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
@@ -5056,7 +5065,7 @@ class SuperTabController extends ChangeNotifier {
                 below < 0 ? sorted.length : below,
               ),
             );
-      final next = older
+      final next = older && dropFar
           ? _dropNewest(id, sorted)
           : cut > 0
           ? sorted.sublist(cut)

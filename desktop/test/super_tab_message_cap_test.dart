@@ -55,12 +55,9 @@ void main() {
       reads.single,
       endsWith('messages?before=1501&beforeId=message-1501'),
     );
-    // Read back, at most 300 are held (task #2911): the newest wait below,
-    // read again by scrolling down or Jump to latest.
     final held = c.messages('lead').map((m) => m.sequence).toList();
-    expect(held, List.generate(300, (i) => i + 1401));
+    expect(held, List.generate(600, (i) => i + 1401));
     expect(c.hasOlder('lead'), isTrue);
-    expect(c.hasNewer('lead'), isTrue);
   });
 
   test('a reader scrolled up keeps every row through the polls, and back at '
