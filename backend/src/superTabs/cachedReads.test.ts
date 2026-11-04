@@ -178,6 +178,23 @@ describe('the delta a refresh reads', () => {
     expect(db.$transaction).toHaveBeenCalledTimes(1)
     expect(aggregateRaw).toHaveBeenCalledTimes(2)
   })
+
+  it('reads whole, per Swarm, only the rows its last delta of that Swarm did not read (#2783)', async () => {
+    const row = { _id: 't:g1', tabId: 't', key: 'g1', version: 1, changedAt: { $date: new Date(10).toISOString() }, ordinal: 1, data: { id: 'g1' } }
+    const whole: string[] = []
+    const aggregateRaw = vi.fn(async ({ pipeline }: { pipeline: Array<Record<string, Record<string, unknown>>> }) => {
+      const match = pipeline[0]!.$match!
+      if (match._id) whole.push(match.tabId as string)
+      return [{ ...row, tabId: match._id ? match.tabId : (match.tabId as { $in: string[] }).$in[0] }]
+    })
+    const tx = { swarmGroup: { aggregateRaw } }
+    const db = { $transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body(tx)) }
+    const delta = readDelta(db as never)
+    const first = await delta('t', 5, ['group'])
+    expect(await delta('t', 5, ['group'])).toEqual(first)
+    await delta('u', 5, ['group'])
+    expect(whole).toEqual(['t', 'u'])
+  })
 })
 
 describe('light and host state derived from held entries (spec 2026-11-02 poll cost, Part 1.2)', () => {
