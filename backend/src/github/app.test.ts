@@ -231,11 +231,20 @@ describe('default branch protection', () => {
     expect(github.calls.at(-1)).toMatchObject({ method: 'GET', path: '/repos/acme/app/pulls/3', auth: `Bearer ${token}` })
   })
 
+  // #2602: another repository's number read here is no pull request of this one, and must not hold its task open forever.
+  it('answers missing for a pull request GitHub does not know in that repository', async () => {
+    const { app } = setup()
+    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    expect(await app.pullRequestState(repo, 9, token)).toBe('missing')
+  })
+
   it('answers null, never a guess, when GitHub cannot say', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
-    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
     github.pulls.set('acme/app#9', { state: 'open', merged_at: null })
+    github.control.pullsStatus = 502
+    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
+    github.control.pullsStatus = 200
     expect(await app.pullRequestState(repo, 9, 'ghs_not_issued')).toBeNull()
     github.control.down = true
     expect(await app.pullRequestState(repo, 9, token)).toBeNull()

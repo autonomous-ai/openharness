@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { PART_KINDS, type GroupData, type MachineData, type Part, type PartKind, type SwarmParts } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
 import { startFinished } from './parts/write.js'
+import { projectLightGroup } from './parts/lightSelect.js'
 import { stableId, type AgentStart } from './model.js'
 
 export interface PatchRule<T> {
@@ -135,6 +136,14 @@ export const dormantRule: PatchRule<Part<GroupData>[]> = {
 /** A `dormant:agent:{id}` entry: the live dormant groups that list this agent. A group it leaves, or that wakes, goes. */
 export function dormantAgentRule(agentId: string): PatchRule<Part<GroupData>[]> {
   return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts, 'group', p => asleep(p) && (p.data as GroupData).agentIds.includes(agentId)) }
+}
+
+/** A `light-dormant:agent:{id}` entry (cachedReads.ts deriveLight, B4): the same selection as `dormantAgentRule`'s, each
+ *  conversation light (parts/lightSelect.ts projectLightGroup), as `loadLightGroups` loads it. */
+export function lightDormantAgentRule(agentId: string): PatchRule<Part<GroupData>[]> {
+  const keep = (p: Part) => asleep(p) && (p.data as GroupData).agentIds.includes(agentId)
+  return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts.map(p => p.kind === 'group' && keep(p) ? projectLightGroup(p as Part<GroupData>) : p),
+    'group', keep) }
 }
 
 /** A `dormant:project:{id}` entry: the project's live dormant groups; a group stored with no project is the default one's

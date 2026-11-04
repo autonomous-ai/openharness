@@ -12,9 +12,10 @@
  * (chats they read now); the thread's root and replies are checked below as for any candidate. One is listed when they follow it, or started it, replied in it or were tagged in it (root or reply), and it
  * has a reply. Rows are those a page shows a person (inbox.ts readable): never an agent-only notice or a delivered copy.
  *
- * Cost: the inbox's reads (without the chats' latest messages); the candidates' roots by id in one read; each candidate thread's
- * newest THREAD_SCAN rows by the thread index, CHATS_PER_READ threads per read (inbox.ts perRange). `replies` counts what that
- * scan read, so a longer thread says THREAD_SCAN at most. The route allows a person THREADS_READS per THREADS_WINDOW_MS in each
+ * Cost: the inbox's reads (without the chats' latest messages); the candidates' roots by id in one read; the candidates' thread
+ * summaries by root id in one read (pageReads.ts threadsAcross), one small row per thread whatever its length, so `replies` is
+ * the whole count a chat page shows. A Swarm Buddy chat's candidates read their newest THREAD_SCAN rows by the thread index
+ * instead, CHATS_PER_READ threads per read (inbox.ts perRange), and say THREAD_SCAN at most. The route allows a person THREADS_READS per THREADS_WINDOW_MS in each
  * Swarm, counted by every pod together, as the inbox's.
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
@@ -22,6 +23,8 @@ import { createRateLimiter } from '../../lib/rateLimit.js'
 import type { Author } from '../model.js'
 import type { ThreadReply } from '../pageReads.js'
 import { threadSummaries } from '../threads.js'
+import { threadsAcross } from '../pageReads.js'
+import { isSwarmBuddyChat } from '../buddies.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { taggedThreads } from '../mentions.js'
@@ -78,20 +81,30 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)), state)).map(m => [threadKey(m.conversationId, m.id), m]))
   const withRoot = candidates.filter(c => roots.has(threadKey(c.conversationId, c.threadId)))
   if (!withRoot.length) return { unread, read: [], more }
-  // Each thread's newest rows, the root among them in a short thread, by its thread index range.
-  const scanned = await perRange(db, withRoot.map(c => [{ $match: { tabId, conversationId: c.conversationId, thread: c.threadId } },
-    { $sort: { sequence: -1 } }, { $limit: THREAD_SCAN }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))
-  const byThread = new Map<string, Row[]>()
+  // Each thread's rows a person reads, newest first: from its summary (pageReads.ts threadsAcross), one small row per thread, which
+  // stands for every row of it. A Swarm Buddy chat's are its newest rows by the thread index range instead: its summary cannot
+  // tell a row of a project its person lost (buddySessions.ts lostProjectRow), which they no longer read.
+  const scannedIn = withRoot.filter(c => isSwarmBuddyChat(groups.get(c.conversationId)!))
+  const summedIn = withRoot.filter(c => !isSwarmBuddyChat(groups.get(c.conversationId)!))
+  const byThread = new Map<string, ThreadReply[]>()
+  const add = (key: string, m: ThreadReply) => byThread.set(key, [...byThread.get(key) ?? [], m])
+  const chatOf = new Map(summedIn.map(c => [c.threadId, c.conversationId]))
+  for (const m of (await threadsAcross(db, tabId, summedIn.map(c => ({ conversationId: c.conversationId, root: c.threadId })))).toReversed()) {
+    if (!m.agentOnly && m.id !== m.thread) add(threadKey(chatOf.get(m.thread)!, m.thread), m)
+  }
+  const scanned = scannedIn.length ? await perRange(db, scannedIn.map(c => [{ $match: { tabId, conversationId: c.conversationId, thread: c.threadId } },
+    { $sort: { sequence: -1 } }, { $limit: THREAD_SCAN }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }])) : []
   for (const m of await readable(db, tabId, scanned.filter(isReply), state)) {
-    const key = threadKey(m.conversationId, m.thread!)
-    byThread.set(key, [...byThread.get(key) ?? [], m])
+    add(threadKey(m.conversationId, m.thread!), { thread: m.thread!, id: m.id, author: m.author, mentions: m.mentions, sequence: m.sequence,
+      createdAt: m.createdAt, agentOnly: false, routing: false })
   }
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
-  const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
+  const inIt = (m: Pick<Row, 'author' | 'mentions'>) => own(m.author) || m.mentions.includes(personId)
   const read: Array<FollowedThread & { at: number }> = []
   for (const c of withRoot) {
     const key = threadKey(c.conversationId, c.threadId), root = roots.get(key)!
-    // Newest first, as the scan reads them.
+    // Newest first. A summary row stands for `count` rows of one author and kind, its newest and oldest among them: the newest
+    // reply, each author's newest and every person's first tag are always there, which is all this reads.
     const replies = byThread.get(key) ?? []
     const newest = replies[0]
     if (!newest || !(c.follow === true || inIt(root) || replies.some(inIt))) continue
@@ -101,8 +114,8 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
     const seen = Math.max(c.sequence > 0 ? c.sequence : mark, replies.find(m => own(m.author))?.sequence ?? 0)
     if (mark > 0 && !own(newest.author) && replies.some(m => !own(m.author) && m.sequence > seen)) { more = true; continue }
     // Named as a page's thread summary names them: only authors who can still read the chat (threads.ts).
-    const rows: ThreadReply[] = [root, ...replies.toReversed()].map(m => ({ thread: c.threadId, id: m.id, author: m.author, mentions: m.mentions,
-      sequence: m.sequence, createdAt: m.createdAt, agentOnly: false, routing: false }))
+    const rows: ThreadReply[] = [{ thread: c.threadId, id: root.id, author: root.author, mentions: root.mentions, sequence: root.sequence,
+      createdAt: root.createdAt, agentOnly: false, routing: false }, ...replies.toReversed()]
     const [summary] = threadSummaries(state, groups.get(c.conversationId)!, rows)
     if (!summary) continue
     read.push({ conversationId: c.conversationId, rootId: root.id, root: preview(root), replies: summary.replies, lastReplyAt: summary.lastAt.toISOString(),
