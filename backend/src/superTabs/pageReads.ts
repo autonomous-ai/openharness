@@ -160,6 +160,35 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
 }
 
 /**
+ * Where a jump to `at` (ms) starts in one conversation: the first sequence whose row was written at or after it, or one
+ * past the newest row when none was (task #2911). Rows are numbered as they are written, so time follows the sequence and a
+ * binary search of point reads finds it on the sequence index, each read one key and one row: about log2 of the
+ * conversation's span of sequences, plus the two that read its ends. Nothing here reaches the reader: it reads only
+ * sequences and times, and the page around it applies the read check (store.ts messages). No index on time is needed.
+ */
+export async function sequenceAt(tx: Transaction, tabId: string, conversationId: string, at: number): Promise<{ sequence: number; reads: number }> {
+  let reads = 0
+  const edge = async (sequence: Record<string, number> | undefined, dir: 1 | -1) => {
+    reads++
+    const [row] = await readBy(tx, 'SuperTabMessage', 'sequence', [{ $match: { tabId, conversationId, ...sequence ? { sequence } : {} } },
+      { $sort: { sequence: dir, _id: dir } }, { $limit: 1 }, { $project: { _id: 0, sequence: 1, createdAt: 1 } }])
+    return row ? { sequence: Number(row.sequence), at: ms(row.createdAt) } : undefined
+  }
+  const [first, last] = [await edge(undefined, 1), await edge(undefined, -1)]
+  if (!first || !last || at <= first.at) return { sequence: first?.sequence ?? 0, reads }
+  if (at > last.at) return { sequence: last.sequence + 1, reads }
+  // The answer is in (first.sequence, last.sequence]: the first row at or past `low` is before `at` until `low` passes it.
+  let low = first.sequence + 1, high = last.sequence
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    const row = (await edge({ $gte: middle }, 1))!
+    if (row.at >= at) high = middle
+    else low = row.sequence + 1
+  }
+  return { sequence: low, reads }
+}
+
+/**
  * The messages of one conversation with these ids, by the id index: what a page's rows name as their thread or reply-to but
  * the page does not hold (store.ts messages), so what this reader may see of them can be checked. Named, not Prisma's `id in`,
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).

@@ -22,7 +22,7 @@ import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, may
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, type PageDelivery } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, messagesById, messagesPast, sequenceAt, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, type PageDelivery } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -2915,10 +2915,10 @@ export class SuperTabStore {
    *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
    *  a sequence, which is enough to poll for new messages. */
   async messages(user: AuthUser, tabId: string, conversationId: string,
-    cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string; thread?: string }, asAgentId?: string) {
+    cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string; thread?: string; at?: number }, asAgentId?: string) {
     const tx = this.db
-    const read: MessageReadKey['cursor'] = cursor.messageId ? 'messageId' : cursor.thread ? 'thread' : cursor.after !== undefined ? 'after'
-      : cursor.before === undefined ? 'latest' : cursor.beforeId === undefined ? 'before' : 'beforeId'
+    const read: MessageReadKey['cursor'] = cursor.at !== undefined ? 'at' : cursor.messageId ? 'messageId' : cursor.thread ? 'thread'
+      : cursor.after !== undefined ? 'after' : cursor.before === undefined ? 'latest' : cursor.beforeId === undefined ? 'before' : 'beforeId'
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
@@ -2952,29 +2952,48 @@ export class SuperTabStore {
     const forward = cursor.after !== undefined
     // One thread: its root (its own thread) and its replies.
     const at = { tabId, conversationId, messageId: cursor.messageId, thread: cursor.thread }
-    const start: MessageEdge | undefined = forward ? { sequence: cursor.after!, id: cursor.afterId }
-      : cursor.before !== undefined ? { sequence: cursor.before, id: cursor.beforeId } : undefined
     // Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
     // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again, and
     // only about what is still missing (nextBatch): one hidden row once cost a whole second batch of 101.
-    const rows: SuperTabMessage[] = []
     let batches = 0, decoded = 0
-    for (let edge = start, size = PAGE_BATCH; rows.length < PAGE_BATCH;) {
-      const batch = await messagesPast(tx, at, edge, forward, size)
-      batches++
-      decoded += batch.length
-      // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
-      const copies = await deliveredCopies(tx, tabId, batch)
-      rows.push(...batch.filter(m => !copies.has(m.id) && readable(m)))
-      if (batch.length < size) break
-      edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
-      size = nextBatch(decoded, rows.length)
+    const pageFrom = async (start: MessageEdge | undefined, ahead: boolean) => {
+      const rows: SuperTabMessage[] = []
+      for (let edge = start, size = PAGE_BATCH; rows.length < PAGE_BATCH;) {
+        const batch = await messagesPast(tx, at, edge, ahead, size)
+        batches++
+        decoded += batch.length
+        // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
+        const copies = await deliveredCopies(tx, tabId, batch)
+        rows.push(...batch.filter(m => !copies.has(m.id) && readable(m)))
+        if (batch.length < size) break
+        edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
+        size = nextBatch(decoded, rows.length)
+      }
+      const page = rows.slice(0, 100)
+      return { page, more: rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null }
     }
-    const page = rows.slice(0, 100)
+    const edgeOf = (m: SuperTabMessage) => ({ sequence: m.sequence, id: m.id })
+    type Cursor = { sequence: number; id: string }
+    let page: SuperTabMessage[], next: Cursor | null, newer: Cursor | null | undefined
+    if (cursor.at !== undefined) {
+      // A jump (task #2911): the page before that time and the page from it, in one request, so the reader lands there
+      // instead of reading back a page at a time. `next` goes on back from its oldest row; `newer` on from its newest.
+      const found = await sequenceAt(tx, tabId, conversationId, cursor.at)
+      batches += found.reads
+      const before = await pageFrom({ sequence: found.sequence }, false)
+      const from = await pageFrom({ sequence: found.sequence - 1 }, true)
+      page = [...before.page.reverse(), ...from.page]
+      next = before.more && edgeOf(page[0]!)
+      newer = from.more && edgeOf(page.at(-1)!)
+    } else {
+      const read = await pageFrom(forward ? { sequence: cursor.after!, id: cursor.afterId }
+        : cursor.before !== undefined ? { sequence: cursor.before, id: cursor.beforeId } : undefined, forward)
+      page = read.page
+      next = read.more
+      if (!forward) page.reverse()
+    }
     recordMessageRead({ reader: readerKind(actor, buddy), cursor: read, session: sessionKind(user) }, batches, decoded, page.length)
-    const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
-    if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
     // What the page's rows point at that this reader may not see (an agent-only note to someone else; for a Buddy, a routing
@@ -3001,7 +3020,7 @@ export class SuperTabStore {
     const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
     // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
     // A project session of a person's one Buddy chat reads no excerpt: the main chat may hold any project's material (spec: Guard).
-    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
+    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId && cursor.at === undefined ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
     // Only the rows this reader is shown get file links, each signed afresh for this read (fileLinks.ts).
     const linked = await this.linked(tabId, shown)
     // A person's read of new messages is where a message reaches them (task #2840): every app reads `after` once a push or its
@@ -3016,7 +3035,8 @@ export class SuperTabStore {
     }
     const byMessage = deliveriesByMessage(deliveries)
     return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
+      deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, ...(newer !== undefined ? { newer } : {}),
+      threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }

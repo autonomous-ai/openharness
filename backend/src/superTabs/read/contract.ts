@@ -202,7 +202,7 @@ export interface SwarmList {
   next: string | null
 }
 
-/** GET /api/super-tabs/:tabId/conversations/:conversationId/messages[?after=&afterId= | ?before=&beforeId= | ?messageId=]
+/** GET /api/super-tabs/:tabId/conversations/:conversationId/messages[?after=&afterId= | ?before=&beforeId= | ?messageId= | ?at=]
  *  (design 4.6). Rows are ordered by (sequence, id); `revision` is gone. With no cursor the page is the newest 100, and
  *  `next` names its oldest row: send it back as `before`/`beforeId` for the page before. Forward pages (`after`) name their
  *  newest row the same way. `next` is null at the end. `after` alone (no `afterId`) means strictly after that sequence,
@@ -211,6 +211,9 @@ export interface MessagePageCursor { sequence: number; id: string }
 export interface MessagePage<M = Record<string, unknown>> {
   messages: M[]
   next: MessagePageCursor | null
+  /** Only for `?at=` (a jump to that time, in ms; task #2911): the 100 rows before it and the 100 from it. `next` names the
+   *  oldest row as ever; `newer` names the newest when more follow it (send it back as `after`/`afterId`), else null. */
+  newer?: MessagePageCursor | null
   /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
    *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
   reactionSeq: number

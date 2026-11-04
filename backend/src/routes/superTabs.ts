@@ -120,8 +120,11 @@ const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().saf
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
   // One thread's root and replies, paged like the conversation.
-  thread: id.optional() })
-  .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
+  thread: id.optional(),
+  // A jump (task #2911): the page before this time (ms) and the page from it, in one read.
+  at: z.coerce.number().int().nonnegative().safe().optional() })
+  .refine(q => [q.after, q.before, q.messageId, q.at].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
+  .refine(q => q.at === undefined || q.thread === undefined, 'A jump reads the conversation, not one thread.')
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })
 const roleParams = tabParams.extend({ projectId: id, roleId: id })

@@ -8,8 +8,8 @@ import { logger } from '../utils/logger.js'
 
 export interface MessageReadKey {
   reader: 'person' | 'agent' | 'buddy'
-  /** `before` alone is Desktop's re-read of the page it shows; `beforeId` is scrolling back. */
-  cursor: 'latest' | 'after' | 'before' | 'beforeId' | 'thread' | 'messageId' | 'catchUp'
+  /** `before` alone is Desktop's re-read of the page it shows; `beforeId` is scrolling back; `at` a jump to a time. */
+  cursor: 'latest' | 'after' | 'before' | 'beforeId' | 'thread' | 'messageId' | 'catchUp' | 'at'
   /** The Harness session the request signed in with (AuthUser.harnessSessionKind), `sso` for an Autonomous token. */
   session: 'viewer' | 'computer' | 'team' | 'sso'
 }

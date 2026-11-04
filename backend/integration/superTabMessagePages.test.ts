@@ -229,6 +229,8 @@ describe('a jump reads the window around a time in one request (task #2911)', ()
 
   /** `count` messages in the Lead chat over `days` days from START, evenly; `hidden(i)` ones are agent-only notes to another agent. */
   async function timed(tab: string, count: number, days: number, hidden: (i: number) => boolean = () => false) {
+    // The fixture's own rows (the Lead joining) were written now, after these: a real chat's times follow its sequence.
+    await db.superTabMessage.deleteMany({ where: { tabId: tab, conversationId: 'lead' } })
     const step = Math.floor(days * DAY / count)
     const rows: Prisma.SuperTabMessageCreateManyInput[] = Array.from({ length: count }, (_, i) => {
       const id = `${tab}-t${String(i).padStart(5, '0')}`
@@ -283,8 +285,11 @@ describe('a jump reads the window around a time in one request (task #2911)', ()
     const { tab } = await fixture()
     await timed(tab, 2000, 14)
     const entries = await profiled(db, () => store.messages(owner, tab, 'lead', { at: START + 7 * DAY }))
-    const rows = reads(entries, 'SuperTabMessage', ['conversationId', 'sequence'])
-    expect(rows.length, JSON.stringify(plan(rows))).toBeLessThanOrEqual(20)
+    // The page's thread summaries are their own read (pageThreads), as on every page.
+    const rows = reads(entries, 'SuperTabMessage', ['conversationId'], ['thread'])
+    // Its two ends, about log2(2,000) = 11 probes, and the two pages.
+    expect(rows.length, JSON.stringify(plan(rows))).toBeGreaterThanOrEqual(13)
+    expect(rows.length, JSON.stringify(plan(rows))).toBeLessThanOrEqual(17)
     for (const row of rows) {
       expect(row.planSummary, JSON.stringify(plan(rows))).toContain('IXSCAN')
       expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned!)
