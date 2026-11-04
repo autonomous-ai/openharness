@@ -888,11 +888,31 @@ describe('Super Tab native delivery handoff', () => {
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
     expect(prompt).toContain('Message message from sam@example.com:\nHow is it going?')
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message'")
+    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message'")
     expect(prompt).toContain('Ask questions and post results in this conversation.')
     expect(prompt).toContain('Answer each message once')
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
+  })
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): a top-level message is answered below it, a
+  // thread reply in its thread, and a Buddy session's thread stays its own.
+  it('tells the agent to answer a top-level message right below it, and a thread reply in its thread', async () => {
+    const line = async (message: Record<string, unknown>) => {
+      const t = setup(message)
+      await t.open().tick()
+      return (vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string).split('\n').find(l => l.startsWith('Reply there: '))!
+    }
+    const person = { kind: 'person', id: 'p1', name: 'sam@example.com' }
+    expect(await line({ author: person, text: 'How is it going?', thread: 'message' })).toMatch(/ --answers 'message'$/)
+    expect(await line({ author: person, text: 'And the tests?', thread: 'root', replyTo: 'root' })).toMatch(/ --reply-to 'message'$/)
+    expect(await line({ author: person, text: 'In my session.', thread: 'message', buddySession: true })).toMatch(/ --reply-to 'message'$/)
+    // A scheduled request is a top-level message to its coordinator alone.
+    expect(await line({ author: { kind: 'agent', id: 'a0000000000000000000000l', name: 'Lead' }, text: 'Built-in schedule.', thread: 'message',
+      source: { kind: 'schedule-request', projectId: 'project', slot: 1 } })).toMatch(/ --answers 'message' --to 'a0000000000000000000000l'$/)
+    const t = setup({ author: person, text: 'Hi' })
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string).toContain('A message in the main chat is answered right below it (--answers); '
+      + 'one in a thread, inside its thread (--reply-to). Open a thread only for a back-and-forth on one topic, or to answer something far up the chat.')
   })
   it('only the machine\'s own person\'s message may close its question', async () => {
     const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
@@ -921,7 +941,7 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ author: { kind: 'agent', id: 'a0000000000000000000000r', name: 'Reviewer 1' }, text: 'Two findings.' })
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message' --to 'a0000000000000000000000r'\n")
+    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message' --to 'a0000000000000000000000r'\n")
     const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
     await person.open().tick()
     expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
