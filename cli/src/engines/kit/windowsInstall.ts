@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { ENGINE_WINDOWS_INSTALL, npmEnginePrefix, type EngineInstallRecipe, type WindowsInstall } from '../../lib/engineInstall.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { encodedCommandArgs, powershellPath } from '../../lib/windows/powershell.js'
+import { powershellPath } from '../../lib/windows/powershell.js'
 import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
 import type { AgentEngine } from '../types.js'
 import type { NativeInstallation } from './nativeInstall.js'
@@ -21,7 +21,25 @@ export const WINDOWS_INSTALL_LIMIT_MS = 20 * 60_000
 const RECORD_SETTLES_MS = WINDOWS_INSTALL_LIMIT_MS + 60_000
 
 interface InstallPlaces { npm: string; prefix: string; comspec: string; powershell: string }
+interface SpawnPlaces extends InstallPlaces { node: string; nodeDir: string }
 export interface InstallCommand { file: string; args: string[]; verbatim: boolean }
+
+const INSTALL_COMMAND_VARIABLE = 'HARNESS_INSTALL_COMMAND'
+/**
+ * What the daemon starts, which starts the installer and says how it ended. An installer needs two things Node gives only one of
+ * at a time. To outlive the daemon it must be detached, since Node kills its other children with it (libuv's job object). But
+ * detached takes the console away, and PowerShell without one exits 0 at once having run nothing: no PowerShell installer ever
+ * ran (Hermes on DESKTOP-0TFH0OJ, 2026-11-04). So this small process is the detached one, and its child has a console no one sees.
+ * Through `cmd` instead, the hidden console takes the output, and the person is told nothing of why an install failed.
+ */
+export const INSTALL_RUNNER = [
+  "const { spawn } = require('node:child_process')",
+  `const { file, args, verbatim } = JSON.parse(process.env.${INSTALL_COMMAND_VARIABLE})`,
+  `delete process.env.${INSTALL_COMMAND_VARIABLE}`,
+  "const child = spawn(file, args, { windowsHide: true, windowsVerbatimArguments: verbatim, stdio: ['ignore', 1, 2] })",
+  "child.once('error', (error) => { console.error(error.message); process.exit(1) })",
+  "child.once('exit', (code) => process.exit(code ?? 1))",
+].join('\n')
 
 /**
  * The vendor's installer, as `irm <url> | iex` runs it, with its flags. As bytes when the server calls it a download, which
@@ -31,16 +49,19 @@ export function powershellInstallScript(url: string, args: readonly string[] = [
   return [
     "$ProgressPreference = 'SilentlyContinue'",
     '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12',
-    `$reply = Invoke-WebRequest -UseBasicParsing -Uri '${url.replace(/'/g, "''")}'`,
+    // A failure is said here and in words: past a failed download, an empty script would run and exit 0, an install that "finished".
+    `try { $reply = Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri '${url.replace(/'/g, "''")}' } catch { [Console]::Error.WriteLine('its installer could not be downloaded: ' + $_.Exception.Message); exit 1 }`,
     '$text = if ($reply.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($reply.Content) } else { [string]$reply.Content }',
-    `& ([scriptblock]::Create($text.TrimStart([char]0xFEFF))) ${args.join(' ')}`.trimEnd(),
+    `try { ${`& ([scriptblock]::Create($text.TrimStart([char]0xFEFF))) ${args.join(' ')}`.trimEnd()} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`,
     'if ($LASTEXITCODE) { exit $LASTEXITCODE }',
   ].join('\n')
 }
 
 export function windowsInstallCommand(install: WindowsInstall, places: InstallPlaces, arch: string = process.arch): InstallCommand {
   if ('powershell' in install) {
-    return { file: places.powershell, args: encodedCommandArgs(powershellInstallScript(install.powershell, install.args)), verbatim: false }
+    // -Command and not -EncodedCommand: encoded, PowerShell writes its errors as CLIXML, and the person would be shown XML as the
+    // reason. The script holds no double quote for Node to escape (a URL's quote is doubled, in single quotes).
+    return { file: places.powershell, args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', powershellInstallScript(install.powershell, install.args)], verbatim: false }
   }
   const words = [`"${places.npm}" install --global --prefix "${places.prefix}" --no-fund --no-audit --loglevel=error`,
     ...install.args ?? [], ...(arch === 'arm64' ? install.armArgs ?? [] : []), install.npm]
@@ -73,11 +94,12 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   alive?: (pid: number) => boolean
   now?: () => number
   endTree?: (pid: number) => Promise<unknown>
-  where?: () => InstallPlaces & { nodeDir: string }
+  where?: () => SpawnPlaces
 }) {
   const places = where ?? (() => {
-    const nodeDir = dirname(managedNodePath())
-    return { nodeDir, npm: join(nodeDir, 'npm.cmd'), prefix: npmEnginePrefix(), comspec: process.env.ComSpec ?? 'cmd.exe', powershell: powershellPath() }
+    const node = managedNodePath()
+    const nodeDir = dirname(node)
+    return { node, nodeDir, npm: join(nodeDir, 'npm.cmd'), prefix: npmEnginePrefix(), comspec: process.env.ComSpec ?? 'cmd.exe', powershell: powershellPath() }
   })
   const recordFile = (engine: AgentEngine) => join(directory, `${engine}.json`)
   const read = (engine: AgentEngine): InstallRecord | null => {
@@ -112,8 +134,8 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
       const output = openSync(log, 'w')
       let child
       try {
-        // Detached, so a daemon restarting does not end it, and hidden, so no console opens in front of the person.
-        child = spawn(command.file, command.args, { env, cwd: directory, detached: true, windowsHide: true, windowsVerbatimArguments: command.verbatim, stdio: ['ignore', output, output] })
+        // Detached, so a daemon restarting does not end it, and hidden. See INSTALL_RUNNER for why it does not run the installer itself.
+        child = spawn(at.node, ['-e', INSTALL_RUNNER], { env: { ...env, [INSTALL_COMMAND_VARIABLE]: JSON.stringify(command) }, cwd: directory, detached: true, windowsHide: true, stdio: ['ignore', output, output] })
       } finally { closeSync(output) }
       child.unref?.()
       const pid = child.pid ?? 0

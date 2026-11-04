@@ -3611,7 +3611,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       box.error ?? box.status!,
       key: const ValueKey('new-harness-status'),
       style: _ink(
-        box.error != null
+        // A request the machine is holding is going fine: "Installing Hermes.
+        // The harness starts once it is installed." read as a failure in red.
+        box.error != null && !box.canFollowPending
             ? widget.desktop
                   ? Theme.of(context).colorScheme.error
                   : _theme.red

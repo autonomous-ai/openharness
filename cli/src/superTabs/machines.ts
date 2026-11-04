@@ -726,7 +726,9 @@ export class ContributedMachines {
               // this close runs a Team account's confidential purge, and tries again until it has (security review 1 of #2668).
               if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
-              } else this.forget(String(start.id))
+              // A start the Swarm failed is listed for one more pass, which reads the failure with no agent named. Kept for [abandoned]:
+              // forgotten here, the agent ran on as nobody's (three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04).
+              } else if (result.error !== 'START_FAILED') this.forget(String(start.id))
               // Dispatched here with a creation and no agent yet: should the Swarm fail it, [failedEarly] frees its memory at once.
               if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
                 this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })

@@ -1,21 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
-import { isWsl, writeWindowsClipboard } from './osClipboard.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isWsl, writeImageToOsClipboard } from './osClipboard.js'
 
-describe('writeWindowsClipboard', () => {
-  it('names the file as an input, never in the script, and is written when PowerShell succeeds', async () => {
-    const run = vi.fn(async () => ({ status: 0, stdout: '', stderr: '' }))
-    expect(await writeWindowsClipboard('C:\\Users\\a b\\p\'aste.png', run)).toEqual({ state: 'written' })
-    const [script, inputs] = run.mock.calls[0] as unknown as [string, Record<string, string>]
-    expect(inputs).toEqual({ HARNESS_PASTE_IMAGE: 'C:\\Users\\a b\\p\'aste.png' })
-    expect(script).not.toContain('aste.png')
-    expect(script).toContain('SetDataObject')
-  })
+describe('writeImageToOsClipboard on Windows', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
 
-  it('says why when the clipboard could not be written', async () => {
-    expect(await writeWindowsClipboard('C:\\p.png', async () => ({ status: 1, stdout: '', stderr: 'requested clipboard operation did not succeed' })))
-      .toEqual({ state: 'failed', reason: 'requested clipboard operation did not succeed' })
-    expect(await writeWindowsClipboard('C:\\p.png', async () => ({ status: null, stdout: '', stderr: '' })))
-      .toEqual({ state: 'failed', reason: 'PowerShell could not write the clipboard' })
+  // Claude Code takes an image on Alt+V there, so a replayed Ctrl+V attached nothing: the pasted path is what works.
+  it('leaves the clipboard alone, so the saved file\'s path is pasted', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }))
+    expect(await writeImageToOsClipboard('C:\\p.png', new Uint8Array([1]))).toMatchObject({ state: 'unavailable' })
   })
 })
 

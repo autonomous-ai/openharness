@@ -530,8 +530,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     // New native frames have their creation time before the engine binds. Wait for its original session identity.
     // The agent it launched goes with it: should the Swarm fail this start meanwhile, its host stops that agent
     // (superTabs/machines.ts `abandoned`).
-    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
-      detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    if (typeof frame.createdAt === 'string' && !startedSession) {
+      // An engine can stop at a question of its own before it has a session, in a pane nobody has open: Codex's "Hooks need review"
+      // for another program's hook failed two starts as "did not start within 3 minutes", and suspended Codex on that computer
+      // (DESKTOP-0TFH0OJ, 2026-11-04). Only the person can answer it, so the Lead is told to ask, not to try again.
+      const screen = await target.request('agent_close', { agentId: nativeId, sessionId: '', createdAt: frame.createdAt, mode: 'inspect' }, 10_000).catch(() => null)
+      if (object(screen).activity === 'needs_input') return { error: 'START_PENDING', startId, creationId, harnessId: nativeId, needsPerson: true,
+        detail: `${String(request.name ?? 'The agent')} is waiting on its screen for a person to answer. Ask them to open it in Harness on that computer (search their harnesses for its name) and answer it. Then resume this same start request; do not make another start request.` }
+      return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
+        detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    }
     // An agent left on its engine's own model (Codex) names it at its first turn: it joins with it, so the work assigned to
     // it records it. Bounded: an engine or grid model that never reports one joins without it, and its first report fills
     // its attempts later (backend leaderboard/record.ts). A routed model is switched in after the join and read then.

@@ -1,10 +1,11 @@
+import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINE_INSTALL, ENGINE_WINDOWS_INSTALL } from '../../lib/engineInstall.js'
-import { createWindowsInstallations, powershellInstallScript, windowsInstallCommand, WINDOWS_INSTALL_LIMIT_MS } from './windowsInstall.js'
+import { createWindowsInstallations, INSTALL_RUNNER, powershellInstallScript, windowsInstallCommand, WINDOWS_INSTALL_LIMIT_MS } from './windowsInstall.js'
 
 const fakeChild = (pid = 4242) => Object.assign(new EventEmitter(), { pid, unref: vi.fn() })
 
@@ -28,16 +29,44 @@ describe('how an engine is installed on Windows', () => {
     const run = windowsInstallCommand(ENGINE_WINDOWS_INSTALL.amp, where, 'x64')
     expect(run.file).toBe(where.powershell)
     expect(run.args).toContain('-NonInteractive')
-    expect(run.args).toContain('-EncodedCommand')
-    const script = Buffer.from(run.args.at(-1)!, 'base64').toString('utf16le')
-    expect(script).toContain(powershellInstallScript('https://ampcode.com/install.ps1'))
+    // Encoded, its errors would come out as CLIXML, and the person would be shown XML as the reason.
+    expect(run.args).not.toContain('-EncodedCommand')
+    expect(run.args.at(-2)).toBe('-Command')
+    expect(run.args.at(-1)).toBe(powershellInstallScript('https://ampcode.com/install.ps1'))
+    expect(run.args.at(-1)).not.toContain('"')
   })
 
   it('reads a script served as bytes, and passes on the vendor\'s own flags', () => {
     const script = powershellInstallScript('https://hermes-agent.nousresearch.com/install.ps1', ['-NonInteractive'])
     expect(script).toContain('[byte[]]')
-    expect(script).toContain('-NonInteractive')
-    expect(script).toContain('[scriptblock]::Create')
+    expect(script).toContain('[scriptblock]::Create($text.TrimStart([char]0xFEFF))) -NonInteractive }')
+    expect(powershellInstallScript('https://ampcode.com/install.ps1')).toContain('[char]0xFEFF))) }')
+  })
+
+  // A failed download went on to run an empty script and exit 0: an install that "finished" and left nothing.
+  it('stops at a download that failed, and says so', () => {
+    const script = powershellInstallScript('https://ampcode.com/install.ps1')
+    expect(script).toContain('-ErrorAction Stop')
+    expect(script).toContain('could not be downloaded')
+    expect(script).toContain('exit 1')
+  })
+})
+
+describe('what runs an installer', () => {
+  it('passes on its output and how it ended, and keeps its own variable to itself', () => {
+    const script = "console.log('said ' + process.env.HARNESS_INSTALL_COMMAND); console.error('wrong'); process.exit(3)"
+    const run = spawnSync(process.execPath, ['-e', INSTALL_RUNNER], { encoding: 'utf8', env: { ...process.env,
+      HARNESS_INSTALL_COMMAND: JSON.stringify({ file: process.execPath, args: ['-e', script], verbatim: false }) } })
+    expect(run.status).toBe(3)
+    expect(run.stdout).toBe('said undefined\n')
+    expect(run.stderr).toBe('wrong\n')
+  })
+
+  it('says why, when the installer cannot start', () => {
+    const run = spawnSync(process.execPath, ['-e', INSTALL_RUNNER], { encoding: 'utf8', env: { ...process.env,
+      HARNESS_INSTALL_COMMAND: JSON.stringify({ file: join(tmpdir(), 'no-such-installer'), args: [], verbatim: false }) } })
+    expect(run.status).toBe(1)
+    expect(run.stderr).toContain('ENOENT')
   })
 })
 
@@ -51,7 +80,7 @@ describe('the Windows installations', () => {
   const recipe = ENGINE_INSTALL.kilo
   const current = () => true
   const make = () => createWindowsInstallations({ directory, spawn: spawn as never, alive: alive as never, now: () => now, endTree: end as never,
-    where: () => ({ npm: 'C:\\n\\npm.cmd', prefix: 'C:\\h\\.local', comspec: 'C:\\cmd.exe', powershell: 'C:\\ps.exe', nodeDir: 'C:\\n' }) })
+    where: () => ({ node: 'C:\\n\\node.exe', npm: 'C:\\n\\npm.cmd', prefix: 'C:\\h\\.local', comspec: 'C:\\cmd.exe', powershell: 'C:\\ps.exe', nodeDir: 'C:\\n' }) })
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'windows-install-'))
@@ -69,7 +98,11 @@ describe('the Windows installations', () => {
     expect(await install.ensure('kilo', recipe, {}, 'r2', current)).toMatchObject({ complete: false, running: true })
     expect(spawn).toHaveBeenCalledTimes(1)
     const options = spawn.mock.calls[0]![2]
-    expect(options).toMatchObject({ windowsHide: true, detached: true, windowsVerbatimArguments: true })
+    // Detached to outlive the daemon, and so only the runner: without a console PowerShell exits 0 having run nothing.
+    expect(spawn.mock.calls[0]![0]).toBe('C:\\n\\node.exe')
+    expect(spawn.mock.calls[0]![1]).toEqual(['-e', INSTALL_RUNNER])
+    expect(options).toMatchObject({ windowsHide: true, detached: true })
+    expect(JSON.parse(options.env.HARNESS_INSTALL_COMMAND)).toMatchObject({ file: 'C:\\cmd.exe', verbatim: true })
     expect(options.stdio[0]).toBe('ignore')
     expect(options.env.PATH.startsWith('C:\\n;')).toBe(true)
   })

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parse as parseYaml } from 'yaml'
 import { AGY_HOOK_SETTINGS } from '../agy/contract.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
@@ -186,15 +187,22 @@ describe('an engine with no hooks on Windows', () => {
     expect(existsSync(join(dir, 'x'))).toBe(false)
   })
 
-  it('logs one line for hermes, no error', async () => {
+  // Hermes starts the program itself, from `shlex.split(posix=False)` of the line: double quotes hold a word, backslashes stay.
+  it('writes Hermes a line it splits into the program and its arguments', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(await installHermesHooks(19473, join(dir, 'hermes'), {}, 'win32')).toBe(true)
-    expect(log.mock.calls).toEqual([['[hooks] hermes hooks are not installed on Windows yet']])
-    expect(error).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled()
-    expect(existsSync(join(dir, 'hermes'))).toBe(false)
+    const home = join(dir, 'hermes')
+    mkdirSync(home)
+    writeFileSync(join(home, 'config.yaml'), 'model: x\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHermesHooks(19473, home, {}, 'win32')).toBe(true)
+    const written = parseYaml(readFileSync(join(home, 'config.yaml'), 'utf8')) as { hooks: { on_session_start: Array<{ command: string }> } }
+    const line = written.hooks.on_session_start[0]!.command
+    expect(line).toContain(`"${managedNodePath()}"`)
+    expect(line).toContain('--engine hermes')
+    expect(line).not.toContain("'")
+    // Approved by the exact line, or Hermes skips the hook.
+    const approvals = JSON.parse(readFileSync(join(home, 'shell-hooks-allowlist.json'), 'utf8')) as { approvals: Array<{ command: string }> }
+    expect(approvals.approvals.map((approval) => approval.command)).toContain(line)
   })
 })
 
