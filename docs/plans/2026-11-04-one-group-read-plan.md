@@ -23,9 +23,12 @@ removed minutes later), so coalescing identical requests alone would not have he
 - A cache entry `access` (`cachedReads.ts readAccess`) holds the Swarm's head, members and agents: what an actor and a
   group's read check need. Its patch rule reads its own kinds alone (`PatchRule.alone`): its delta is never widened to the
   group, machine and progress feeds of other entries, and theirs never include it.
-- `readGroup` reads the group by its key, fresh (one indexed row). For an agent reader it also reads, light, the project
-  lead conversations (`ledProject`) and the agent's active conversations (`agentProjectId` for an agent stored with no
-  project: 28 of 143 on prod), and the agent's machine part (`onTeamAccount`).
+- `oneGroup` reads the group by its key in one indexed read, its data only when its version moved since this process last
+  read it (`parts/load.ts loadGroupUnless`, rows kept within 8 MB). For an agent reader it also reads its machine's
+  account fields (`onTeamAccount`: host Mac and session kind) and, for an agent stored with no project (28 of 143 on
+  prod), its active conversations, light (`agentProjectId`). No Lead conversation: `canReadGroup` never reaches
+  `ledProject` here, since a group with an audience is a closed Chat with PM or a Buddy chat an agent reads only as its
+  Buddy.
 - From those parts it reassembles a state and runs the same checks the whole read runs: `author`, `canReadGroup`, the
   active path's known-kind and not-Leads filter, `groupForBuddy`, `groupView`, and for a person the served newest main row
   (`servedTops`). A task naming required machines (23 groups on prod) is answered by the whole read, as now: which machines
@@ -55,8 +58,9 @@ tests, vitest.
 
 - growth: N/A because nothing new is stored; the cache entry is one per Swarm, under the cache's byte budget.
 - concurrency: N/A because it is a read; the cache's per-stamp single flight and the new in-flight sharing are per pod.
-- read cost: one group by key, the access entry (no read when current; a head/member/agent delta when stale), and for an
-  agent a few light rows by index and one machine by id. No change feed of groups, machines or progress.
+- read cost: one group by key (its data only when changed), the access entry (no read when current; a head/member/agent
+  delta per stamp per process when stale), and for an agent one machine's account fields by id. No change feed of groups,
+  machines or progress.
 - scale: 10x calls is 10x single-row reads by index; 10x agents grows the access entry (~87 KB of agents on the busiest
   Swarm now). The first warning is `access` delta bytes in `swarm cache` stats.
 - compatibility: N/A because the answer and the route are unchanged.
@@ -70,10 +74,10 @@ tests, vitest.
 
 **Files:** `backend/integration/superTabOneGroup.test.ts`, `backend/integration/bench/profile.ts`
 
-- [ ] After a write moves the stamp of a warm Swarm, profile one read of a dormant group as an agent and as a person:
+- [x] After a write moves the stamp of a warm Swarm, profile one read of a dormant group as an agent and as a person:
       assert no `SwarmGroup`/`SwarmProgress` read by `changedAt` and no `SwarmMachine` read by `readAt`; record bytes
       (`responseLength`) and time. Watch it fail on main.
-- [ ] A burst: 1,000 reads of 100 groups by 10 agents, concurrent, with a write between every 100: total changed-since
+- [x] A burst: 1,000 reads of 100 groups by 10 agents, concurrent, with a write between every 100: total changed-since
       reads and bytes, before and after. Watch it fail on main.
 
 ## Task 2: Narrow cache entries (`PatchRule.alone`)
@@ -82,22 +86,22 @@ tests, vitest.
 
 **Interfaces:** `PatchRule.alone?: true`; `accessRule` (kinds head, member, agent).
 
-- [ ] Failing unit test: a stale alone entry's delta asks for its kinds only, while a stale base entry is due; the base's
+- [x] Failing unit test: a stale alone entry's delta asks for its kinds only, while a stale base entry is due; the base's
       delta does not take the alone entry's time.
-- [ ] Implement in `deltaFor` and `drop`.
+- [x] Implement in `deltaFor` and `drop`.
 
 ## Task 3: The one-group read from its own rows
 
 **Files:** `backend/src/superTabs/read/service.ts`, `backend/src/superTabs/cachedReads.ts`,
 `backend/src/superTabs/parts/load.ts`, `backend/integration/superTabOneGroup.test.ts`
 
-- [ ] Equivalence test: for every reader and group of the full fixture, the answer equals the whole read's (first load's
+- [x] Equivalence test: for every reader and group of the full fixture, the answer equals the whole read's (first load's
       group, the dormant list's, or the same refusal).
-- [ ] Implement `readAccess`, `loadAccess` and the new `readGroup`; Task 1's tests pass.
+- [x] Implement `readAccess`, `loadAccess` and the new `readGroup`; Task 1's tests pass.
 
 ## Task 4: Share identical reads in flight
 
 **Files:** `backend/src/superTabs/read/service.ts`, `backend/integration/superTabOneGroup.test.ts`
 
-- [ ] Failing test: 50 identical concurrent reads make one group read.
-- [ ] Implement.
+- [x] Failing test: 50 identical concurrent reads make one group read.
+- [x] Implement.
