@@ -201,4 +201,51 @@ void main() {
       await settle(tester);
     });
   });
+
+  group("a thread's row in the chat", () {
+    testWidgets('says how many of its replies are new, until read', (
+      tester,
+    ) async {
+      final server = threads(1);
+      server.append('Second reply, @owner');
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-2'
+        ..['author'] = peer;
+      tagIn(server, 'message-3', 'message-1');
+      server.followedThreads = {
+        'unread': [
+          {
+            'conversationId': 'lead',
+            'rootId': 'message-1',
+            'root': {
+              'id': 'message-1',
+              'sequence': 1,
+              'author': {'kind': 'person', 'id': 'owner', 'name': 'owner'},
+              'text': 'Topic 1',
+              'createdAt': '2026-11-04T08:00:00Z',
+            },
+            'lastReplyAt': '2026-11-04T08:10:00Z',
+            'lastReplySequence': 3,
+            'lastReplier': peer,
+            'unreadReplies': 2,
+            'replies': 2,
+            'follow': null,
+          },
+        ],
+        'read': <Object>[],
+        'more': false,
+      };
+      final c = await show(tester, server);
+      final fresh = find.descendant(
+        of: line('message-1'),
+        matching: find.text('2 new'),
+      );
+      expect(fresh, findsOneWidget);
+      c.markThreadRead('lead', 'message-1', 3);
+      await tester.pumpAndSettle();
+      expect(fresh, findsNothing);
+      await settle(tester);
+    });
+  });
 }
