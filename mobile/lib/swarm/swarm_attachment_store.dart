@@ -381,7 +381,8 @@ class SwarmAttachmentKeeper {
 
 /// The cache's fetch of a chat file: `HttpFileService`'s, with a redirect
 /// refused, so a picture comes only from the host its message names and
-/// nothing from another host is kept or drawn.
+/// nothing from another host is kept or drawn. Kept under the extension
+/// [swarmKeptExtension] gives it.
 class SwarmFileFetch extends FileService {
   SwarmFileFetch({http.Client? client}) : _client = client ?? http.Client();
 
@@ -395,6 +396,93 @@ class SwarmFileFetch extends FileService {
     final request = http.Request('GET', Uri.parse(url))
       ..followRedirects = false;
     if (headers != null) request.headers.addAll(headers);
-    return HttpGetResponse(await _client.send(request));
+    final response = await _client.send(request);
+    return _Named(
+      HttpGetResponse(response),
+      response.headers['content-disposition'],
+      request.url,
+    );
   }
+}
+
+/// The extension, with its dot, a fetched file is kept under: its type's
+/// ([typed], the cache's reading of `Content-Type`), but for one served as
+/// bare bytes (`.bin`, as the backend serves every file but a picture:
+/// superTabs/attachments.ts `served`) its own name's, the one the answer
+/// gives ([disposition], `Content-Disposition`), else the last part of
+/// [url]. An iPhone's player goes by the extension: a voice message kept as
+/// .bin does not play there, where Android's reads what is in the file.
+@visibleForTesting
+String swarmKeptExtension(
+  String typed, {
+  String? disposition,
+  required Uri url,
+}) {
+  if (typed.isNotEmpty && typed != '.bin') return typed;
+  return _extensionOf(_dispositionName(disposition)) ??
+      _extensionOf(url.pathSegments.lastOrNull) ??
+      typed;
+}
+
+/// The file name a `Content-Disposition` gives: its `filename*` (RFC 6266),
+/// else its `filename`; null when it gives none that can be read.
+String? _dispositionName(String? disposition) {
+  if (disposition == null) return null;
+  final encoded = RegExp(
+    r"""filename\*\s*=\s*[^']*'[^']*'([^;\s]+)""",
+    caseSensitive: false,
+  ).firstMatch(disposition);
+  if (encoded != null) {
+    try {
+      return Uri.decodeComponent(encoded.group(1)!);
+    } on Object {
+      // Badly encoded (a stray %, or bytes that are not UTF-8): the plain
+      // name, if there is one.
+    }
+  }
+  return RegExp(
+    r'''filename\s*=\s*"?([^";]+)"?''',
+    caseSensitive: false,
+  ).firstMatch(disposition)?.group(1);
+}
+
+/// [name]'s extension, lower case with its dot, when it is a plain one:
+/// letters and digits, at most 10 of them. Null for any other.
+String? _extensionOf(String? name) {
+  if (name == null) return null;
+  final dot = name.lastIndexOf('.');
+  if (dot <= 0) return null;
+  final extension = name.substring(dot).toLowerCase();
+  return RegExp(r'^\.[a-z0-9]{1,10}$').hasMatch(extension) ? extension : null;
+}
+
+/// [HttpGetResponse], kept under [swarmKeptExtension]'s extension.
+class _Named implements FileServiceResponse {
+  _Named(this._response, this._disposition, this._url);
+
+  final HttpGetResponse _response;
+  final String? _disposition;
+  final Uri _url;
+
+  @override
+  Stream<List<int>> get content => _response.content;
+
+  @override
+  int? get contentLength => _response.contentLength;
+
+  @override
+  int get statusCode => _response.statusCode;
+
+  @override
+  DateTime get validTill => _response.validTill;
+
+  @override
+  String? get eTag => _response.eTag;
+
+  @override
+  String get fileExtension => swarmKeptExtension(
+    _response.fileExtension,
+    disposition: _disposition,
+    url: _url,
+  );
 }

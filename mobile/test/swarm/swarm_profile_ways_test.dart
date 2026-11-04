@@ -11,8 +11,8 @@ import 'swarm_fixture.dart';
 
 const other = 'person-tony';
 
-/// The ways to a profile: the "You" row at the top of the menu opens one's
-/// own, and a person's face in a chat opens theirs — one's own with Edit.
+/// The ways to a profile: who one is at the top of You opens one's own, and a
+/// person's face in a chat opens theirs — one's own with Edit.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
 
@@ -93,22 +93,18 @@ void main() {
   Finder inside(String value, Finder finder) =>
       find.descendant(of: key(value), matching: finder);
 
-  testWidgets('You starts with you, and its profile row opens your profile', (
-    tester,
-  ) async {
+  testWidgets('You starts with you, and a tap on you opens your profile, '
+      'status and all', (tester) async {
     await pump(tester, const SwarmYouPage());
     expect(inside('swarm-you-me', find.text('🦊')), findsOneWidget);
     expect(
-      inside('swarm-you-status', find.text('🎯 Focusing')),
-      findsOneWidget,
-    );
-    expect(
-      tester.getSize(key('swarm-you-profile')).height,
+      tester.getSize(key('swarm-you-me')).height,
       greaterThanOrEqualTo(44),
     );
-    await tester.tap(key('swarm-you-profile'));
+    await tester.tap(key('swarm-you-me'));
     await frames(tester);
     expect(find.text('Your profile'), findsOneWidget);
+    expect(find.text('🎯 Focusing'), findsWidgets, reason: 'set in there');
   });
 
   testWidgets("a person's face in a chat opens who they are", (tester) async {

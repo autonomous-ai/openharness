@@ -227,7 +227,8 @@ class SuperTabAgent {
 
   /// A Product Manager's switch to another engine or account that is asked for
   /// and not yet done (backend `switchRequest`), as the desktop's model reads
-  /// it; null otherwise. Not drawn on the phone yet.
+  /// it; null otherwise. While set, the PM reads "Switching…" and Switch PM…
+  /// is not offered (swarm_switch_pm.dart).
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
@@ -242,7 +243,7 @@ class SuperTabAgent {
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account. As the
-  /// desktop's model reads it; not drawn on the phone yet.
+  /// desktop's model reads it; Switch PM marks it Current.
   final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
