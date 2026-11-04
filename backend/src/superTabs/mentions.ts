@@ -87,6 +87,22 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
   return [...new Set(ids)]
 }
 
+/** The agents of [group] that [text] names by `@Name` (task #2963): its display name or name in any case, matched only when
+ *  exactly one agent there goes by it and no person's username is the same, so a person's tag stays a tag. [names] is the
+ *  Swarm's usernames by person (usernames.ts swarmUsernames). A Buddy chat names no one this way: its sessions hear their own
+ *  threads alone (buddySessions.ts). */
+export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
+  if (isBuddyChat(group)) return []
+  const people = new Set([...names.values()].map(name => name.toLowerCase()))
+  const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
+  if (!tokens.length) return []
+  const members = state.agents.filter(a => group.agentIds.includes(a.id))
+  return [...new Set(tokens.flatMap(token => {
+    const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
+    return matches.length === 1 ? [matches[0]!.id] : []
+  }))]
+}
+
 /** Whether [text] says `@` and exactly [name] outside code and links, in any case: a stored name that ends in a dot, chosen
  *  before such names were refused, reads as a shorter tag in [namedIn] but is still said. */
 export function saysName(text: string, name: string): boolean {

@@ -113,6 +113,35 @@ void main() {
   int reads(FakeSwarm swarm) =>
       swarm.paths.where((path) => path.startsWith(exact)).length;
 
+  group('swarmMachineOffline', () {
+    final now = DateTime.utc(2026, 11, 4, 9);
+
+    test('a machine the Swarm does not list is no answer, so not offline', () {
+      expect(swarmMachineOffline(null, now), isFalse);
+    });
+
+    test('a listed machine that never reported is offline', () {
+      expect(swarmMachineOffline(machine('mac-1'), now), isTrue);
+      expect(
+        swarmMachineOffline({
+          'machineId': 'mac-1',
+          'observation': {'receivedAt': 'soon'},
+        }, now),
+        isTrue,
+        reason: 'a reading with no time is none',
+      );
+    });
+
+    test('a reading goes offline at 35 seconds, as the desktop calls it', () {
+      bool readAgo(Duration age) =>
+          swarmMachineOffline(machine('mac-1', readAt: now.subtract(age)), now);
+      expect(readAgo(Duration.zero), isFalse);
+      expect(readAgo(const Duration(seconds: 34)), isFalse);
+      expect(readAgo(const Duration(seconds: 35)), isTrue);
+      expect(readAgo(const Duration(hours: 4)), isTrue);
+    });
+  });
+
   group('reading the newest own message again', () {
     late DateTime now;
     late Clock moved;

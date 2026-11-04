@@ -34,7 +34,7 @@ describe('install.ps1, as written', () => {
 
   it('installs harness.exe, a program, as the harness command: no batch file re-parses the arguments', () => {
     expect(source).not.toMatch(/@echo off|%\*/i)
-    expect(source).toContain("$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe')")
+    expect(source).toContain("$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe')")
     expect(source).toContain("$command = Join-Path $bin 'harness.exe'")
     // An earlier install's harness.cmd is removed, not left beside it.
     expect(source).toContain("$old = Join-Path $bin 'harness.cmd'")
@@ -67,8 +67,9 @@ describe('install.ps1, as written', () => {
     expect(done).toContain('This computer is signed in and Harness is running: nothing more to set up.')
   })
 
-  it('never installs hn or tmux on Windows', () => {
-    expect(source).not.toMatch(/harness-tui|tmux/i)
+  it('installs hn from the payload, as the same program by that name, and never a tmux', () => {
+    expect(source).toContain("(Join-Path $PtyFolder 'harness.exe') -Destination (Join-Path $bin 'hn.exe')")
+    expect(source).not.toMatch(/tmux/i)
   })
 
   it('moves a running daemon to the new build when it is run again over an install', () => {
@@ -295,9 +296,9 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     writeFileSync(join(dir, 'src', archiveRoot, 'node.exe'), readFileSync(process.execPath))
     spawnSync(tar, ['-a', '-cf', join(dir, 'node.zip'), '-C', join(dir, 'src'), archiveRoot])
     mkdirSync(join(dir, 'payload'))
-    for (const name of ['harness-pty.exe', 'harness-launch.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) writeFileSync(join(dir, 'payload', name), name)
+    for (const name of ['harness-pty.exe', 'harness-launch.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']) writeFileSync(join(dir, 'payload', name), name)
     writeFileSync(join(dir, 'payload', 'harness.exe'), Buffer.concat([harnessExe(), Buffer.from(overrides.exeSuffix ?? '')]))
-    spawnSync(tar, ['-a', '-cf', join(dir, 'pty.zip'), '-C', join(dir, 'payload'), 'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe'])
+    spawnSync(tar, ['-a', '-cf', join(dir, 'pty.zip'), '-C', join(dir, 'payload'), 'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe'])
     writeFileSync(join(dir, 'cli.js'), [
       "import { existsSync } from 'node:fs'",
       'const a = process.argv.slice(2)',
@@ -628,7 +629,7 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const ptyRoot = join(root, 'runtime', 'pty')
     for (const version of ['1.0.0', '2.0.0']) {
       mkdirSync(join(ptyRoot, version), { recursive: true })
-      for (const name of ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) writeFileSync(join(ptyRoot, version, name), name)
+      for (const name of ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']) writeFileSync(join(ptyRoot, version, name), name)
     }
     const marker = join(ptyRoot, 'pty-pending.json')
     writeFileSync(join(ptyRoot, 'current-pty'), '1.0.0\r\n')

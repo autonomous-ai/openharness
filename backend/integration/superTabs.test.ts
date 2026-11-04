@@ -872,8 +872,8 @@ describe('private swarm projects on the real control API', () => {
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207), and the task's message with its brief in its thread (#2294).
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'task-line', 'system', 'update-request'])
+    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
     expect((await updates()).map(d => d.id)).toEqual([...ids])
@@ -1257,8 +1257,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'Change this implementation', truncated: false, interrupted: false }
     const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    // Besides the rows naming who added each agent (#2207), only the task's own message (#2294).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Implementation'])
+    // Besides the rows naming who added each agent (#2207), nothing: a task no message asked for posts no row (#2925).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual([])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => !memberRow(m))).toHaveLength(1)
     expect(await store.deliveries(host, tab, worker)).toEqual([])
     // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.
@@ -2017,6 +2017,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
   })
 
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  it('closes an agent\'s delivery when it answers right below the message, which opens no thread', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'What is the status?', replyTo: null, recipientIds: [lead] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
+    const answered = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'It is done.', replyTo: null, answers: messageId,
+      recipientIds: [] } as Command, host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    const page = await store.messages(peer, tab, 'lead', {})
+    const answer = page.messages.find(m => m.id === answered.result.messageId)!
+    expect(answer).toMatchObject({ replyTo: null })
+    expect(answer.thread ?? answer.id).toBe(answer.id)
+    // The question shows as an ordinary message: no thread under it.
+    expect(page.threads.find(t => t.id === messageId)?.replies ?? 0).toBe(0)
+    // A message of another conversation is not one to answer here.
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
+      .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
+  })
+
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
@@ -2437,7 +2459,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const data = read.json().data
     // An older Desktop shows the read's warnings atop its routing dialog, and reads no save's `note`: they say where routing went.
     expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [IGNORED_NOTE], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
-    expect(data.catalog.models).toHaveLength(7)
+    // Six rows since task #2972: Codex has Sol and Astra by name, and no `default default` row.
+    expect(data.catalog.models).toHaveLength(6)
+    expect(data.catalog.models.filter((m: { model: string; effort: string }) => m.model === 'default' || m.effort === 'default')).toEqual([])
     expect(data.catalog.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
     expect(data.catalog.prices.map((p: { model: string }) => p.model)).toContain('claude-opus-5-5')
     expect(data.catalog.priors.models.length).toBeGreaterThan(0)
@@ -5258,7 +5282,7 @@ describe('Swarm parts under concurrent writes', () => {
     const { tab, lead } = await fixture()
     const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
     for (const { group, worker } of groups) {
-      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [] }, host, worker)
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [lead] }, host, worker)
     }
     const waiting = await store.deliveries(host, tab, lead)
     expect(waiting.length).toBeGreaterThanOrEqual(6)
@@ -5303,7 +5327,7 @@ describe('Swarm parts under concurrent writes', () => {
   it('serializes a claim against revoking an agent sender', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Revoked')
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [] }, host, worker)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [lead] }, host, worker)
     const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
     await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
       reason: 'Withdrawing the worker' })

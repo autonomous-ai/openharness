@@ -17,6 +17,10 @@ const envSchema = z.object({
   // Same MongoDB (and database) as the agent-manager — backend owns `users` +
   // `machines`; reads `managers`/`machine_nodes` via raw queries when needed.
   DATABASE_URL: z.string().default('mongodb://localhost:27017/harness?replicaSet=rs0'),
+  // The reads that tolerate a few seconds of lag (older history pages, costs, search, usage totals) go to the secondaries
+  // through a second client on DATABASE_URL (lib/prisma.ts prismaSecondary, task #2970). 'off' sends them back to the
+  // primary at the next start, with no code change.
+  DATABASE_SECONDARY_READS: z.enum(['on', 'off']).default('on'),
 
   // Redis for the cross-instance data bus. Behind a load balancer an agent's web socket and its
   // manager socket may land on different backend instances; Redis pub/sub bridges them
@@ -77,6 +81,12 @@ const envSchema = z.object({
   // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
   // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
   DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+
+  // Prometheus /metrics on an internal listener of its own (lib/metrics.ts), never the public PORT. Always
+  // on; each pm2 worker binds METRICS_PORT_BASE + NODE_APP_INSTANCE. Loopback by default: a pod whose
+  // scraper reads the pod IP sets METRICS_HOST=0.0.0.0 and does NOT list the port on its Service.
+  METRICS_PORT_BASE: z.coerce.number().int().min(1).max(65535).default(9464),
+  METRICS_HOST: z.string().default('127.0.0.1'),
 
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.

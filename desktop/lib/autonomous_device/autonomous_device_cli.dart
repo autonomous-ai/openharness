@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../core/harness_cli_runner.dart';
 import '../core/test_run.dart';
 
@@ -21,7 +23,10 @@ class AutonomousDeviceCliException implements Exception {
     'CODE_MISMATCH' => 'That code did not match. Generate a new code on your Autonomous robot, then try again.',
     'RATE_LIMITED' => 'Too many pairing attempts. Wait five minutes, then generate a new code on your Autonomous robot and try again.',
     'EXPIRED' => 'The pairing code expired. Generate a new code on your Autonomous robot, then try again.',
-    'LOCAL_NETWORK_BLOCKED' => 'Harness can’t see your local network, so it can’t find Autonomous robots. Allow Harness in System Settings › Privacy & Security › Local Network, then refresh.',
+    'LOCAL_NETWORK_BLOCKED' =>
+      defaultTargetPlatform == TargetPlatform.windows
+          ? 'Harness can’t see your local network, so it can’t find Autonomous robots. Allow Harness through Windows Firewall, then refresh.'
+          : 'Harness can’t see your local network, so it can’t find Autonomous robots. Allow Harness in System Settings › Privacy & Security › Local Network, then refresh.',
     _ => message,
   };
 

@@ -104,7 +104,6 @@ void main() {
                   child: ProjectSidebar(
                     controller: c,
                     onSelect: c.select,
-                    needsHuman: (g) => g.id == 't2394' ? 1 : 0,
                   ),
                 ),
                 const Expanded(child: SizedBox()),

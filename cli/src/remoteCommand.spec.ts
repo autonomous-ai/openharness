@@ -232,6 +232,16 @@ describe('remoteCommand', () => {
     expect(daemon.sent).toEqual([])
   })
 
+  it('works in a Windows tile, named by its pty host pane', async () => {
+    const daemon = workingDaemon()
+    const d = deps({ connect: daemon.connect, tmuxPane: 'p2:%7' })
+    const run = remoteCommand(d)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    d.io.press('enter')
+    expect(await run).toBe(0)
+    expect(daemon.sent.at(-1)).toMatchObject({ type: 'remote_terminal_handoff', payload: { tmuxPane: 'p2:%7' } })
+  })
+
   it('picks, opens the terminal there, hands the tile over, and says so', async () => {
     const daemon = workingDaemon()
     const d = deps({ connect: daemon.connect })

@@ -54,7 +54,7 @@ Read from the code on 2026-11-04.
 | 12 | OpenCode on Windows on Arm | Refused: its Arm build crashes | `lib/windows/launch.ts:74` | W5 |
 | 13 | `hn` | Refused: 200 compile errors in 19 files | `tui/index.ts:104` | W6 |
 | 14 | Sharing this computer with guests | Refused: "needs macOS or Linux" | `lib/guestHelperInstall.ts:130` | W7 |
-| 15 | Buddy reading beyond its folder | Stays in its own folder | `lib/buddyGuard.ts:166` | Not doing |
+| 15 | Buddy reading beyond its folder | No longer a gap: every Buddy runs with its owner's full rights (#2832) | | W8, dropped |
 
 Checked and fine: dial and cable wake (`core/devicesWake.ts:139` has its own Windows path).
 `harness team sign-in` refuses, but signing in from the Harness app works, so it stays.
@@ -108,7 +108,8 @@ Before: a missing engine stops the launch. After: Harness installs it, then star
 - **Which engines.** npm today: Claude Code, Codex, Pi, Command Code, Kilo, Copilot. The others use
   `curl | bash` (Cursor, OpenCode, oh-my-pi, Hermes, Devin, Muse, Amp, Grok, Antigravity). For each, check the
   vendor's documented Windows install and run it on the PC. An engine with no official Windows install stays
-  refused, by name. Hermes gets a hook runner only if it gets an install.
+  refused, by name. Hermes has one (`install.ps1`), so it has a hook runner too: its home on Windows is
+  `%LOCALAPPDATA%\hermes`, and it splits a hook's line itself (`shlex.split(posix=False)`), as `cmd` quotes it.
 - **Runner.** New `engines/kit/windowsInstall.ts`, with the same result shape as `createNativeInstallations`,
   whose evidence walks POSIX paths and cannot be reused. It takes:
   - one claim per engine, an exclusive-create file holding the pid and its `w:<FILETIME>` start marker, so a dead
@@ -191,11 +192,38 @@ own daemon, as the Team account has, and the design changes.
 *Proof: a second person's account joins, runs an agent there, the agent cannot read the owner's home, and
 removing the guest removes the account and its files.*
 
-### Not doing: a Windows Buddy reading beyond its folder
+### W8: Dropped. A Windows Buddy reads as widely as a Mac's, in a real sandbox
 
-On a Mac, Claude Code's OS sandbox enforces that wide mode: no writes, a host list, closed folders. Windows has
-no such sandbox, so only the guard hook would stand in the way, and a shell command can walk past a hook. A
-Buddy on Windows still works; it reads its own folder. **This is the only table row that stays different.**
+**Dropped 2026-11-04.** Ken's decision of 11-04 (task #2832, docs/plans/2026-11-04-buddy-full-access-plan.md) gave every Buddy its owner's full rights on their own machine: no guard, no read-only folder, no sandbox, on a Mac too. Windows gets the same with nothing more to build. The rest of this section is what was designed before that, and is not in the code.
+
+On a Mac, Claude Code's OS sandbox holds a wide Buddy's shell: no writes, a host list, closed folders. Claude Code has none on native Windows, so Harness runs that shell in one itself.
+
+**Research, 2026-11-04.** Anthropic's `@anthropic-ai/sandbox-runtime` (Apache-2.0, the runtime behind Claude Code's sandbox) has a Windows build, marked alpha. Codex's preferred Windows sandbox has the same shape: dedicated low-privilege accounts, filesystem permissions and firewall rules.
+
+| Needed, as on a Mac | How |
+|---|---|
+| Nothing can be written | A dedicated `srt-sandbox` account under a write-restricted token |
+| Reads the person's files | A read and execute grant on the profile, for the sandbox group only |
+| Passwords and sign-ins stay closed | The runtime's credential-store exclusions, plus Harness's own closed list through `profileExclude` |
+| Only GitHub and the person's hosts | WFP filters on that account's SID block direct connections; a local proxy enforces `allowedDomains` |
+| Harness's own commands still work | A wrapper set as `CLAUDE_CODE_SHELL_PREFIX` runs them outside, as `excludedCommands` does on a Mac |
+
+**Chosen over:** AppContainer, whose network access is on or off with no host list; a low-integrity token, which cannot close folders without relabelling the person's files; Windows Sandbox, a separate VM with none of the person's files, tools or sign-ins (Codex rejected it for this reason too).
+
+**Decisions:**
+- The helper `srt-win.exe` has no Authenticode signature in the npm package, and Smart App Control would block it. Harness takes it from the package the lockfile pins by hash, and ships and signs it in the pty payload through the existing pipeline. The exact binary the runtime is tested with, and no Rust toolchain or second source to pin.
+- The person sees one question in the Buddy bar, on the one Buddy on their own computer, in plain words, and can decline: the Buddy then stays in its folder, as now. On yes, Windows asks once, the person's home is opened for reading (the first time can take minutes, shown as it goes), and the Buddy starts again in the same chat.
+- `harness uninstall` removes it, so nothing stays behind.
+- Claude Code's own lines stay outside. Only the command runs inside: the rest of its line names the person's temporary folder, which stays closed. A hook line runs outside by its exact words, known at launch. A `harness` command runs outside only on its guard's one-use approval of its exact words (Claude Code quotes every apostrophe in a command, so another command cannot forge that line, measured on 2.1.318 on Windows and a Mac). Anything else runs inside.
+
+**Must hold:**
+- A Harness Team account is never in `sandbox-runtime-users`, and its privacy check proves it. The grant is on that group alone, so the privacy check's reads prove it too.
+- The session's guard still judges every command first. It allows no program but its fixed reads, so the runtime's documented gaps that need code of its own (a token it derives, an anonymous thread) are behind the guard here, as on a Mac.
+- `initialize()` runs for each command. A sandbox that cannot start refuses that command in one line and never runs it outside.
+
+**Known limits, to design around:** the runtime is alpha. Tools using Windows' own TLS stack (Schannel) do not work inside: `System32\curl.exe`, `winget`, git's Schannel backend; Git for Windows is set to OpenSSL there. System DNS and SMB are not fenced. New top-level profile items need a refresh, which Harness runs at each Buddy launch.
+
+**Proof:** from a real wide Buddy on the PC, it reads a file in the profile, cannot write one, cannot read `.ssh` or a browser's profile, reaches github.com and not another host, and `harness tell` still works.
 
 ## Order
 

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,9 +18,10 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// The person's Buddy chat with its Buddy running, in both phone themes, for
-/// the pull request, written to the folder `SWARM_BUDDY_CHAT_SHOTS` names
-/// (run this file alone, on a Mac). Scripted data only.
+/// The person's Buddy chat with its Buddy running, and with it down while its
+/// computer is offline or online, in both phone themes, for the pull request,
+/// written to the folder `SWARM_BUDDY_CHAT_SHOTS` names (run this file alone,
+/// on a Mac). Scripted data only.
 final shots = Platform.environment['SWARM_BUDDY_CHAT_SHOTS'];
 
 void main() {
@@ -177,6 +179,167 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       host.dispose();
       account.dispose();
+    }
+    AppTheme.palette.value = HarnessPalette.graphite;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
+
+  // Tony, 11-04: with its computer offline, the line under the message sent
+  // says so and the bar under the header says nothing; with it online, the
+  // bar keeps Start again.
+  testWidgets('the Buddy chat with its Buddy down, its computer offline or '
+      'online, both themes', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const chat = 'buddy-me';
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      for (final computer in ['offline', 'online']) {
+        final now = clock.now();
+        DateTime ago(Duration age) => now.subtract(age);
+        final page = [
+          {
+            'id': 'm1',
+            'conversationId': chat,
+            'text':
+                'Tony, the phone tests wait for the Mac to sign in again. '
+                'Nothing else is needed tonight.',
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+            'attachments': <Object>[],
+            'reactions': <Object>[],
+            'createdAt': ago(const Duration(minutes: 40))
+                .toUtc()
+                .toIso8601String(),
+          },
+          {
+            'id': 'm2',
+            'conversationId': chat,
+            'text': 'Hi',
+            'sequence': 2,
+            'author': {'kind': 'person', 'id': me, 'name': 'tony'},
+            'attachments': <Object>[],
+            'reactions': <Object>[],
+            'deliveries': [
+              {'id': 'd1', 'agentId': 'agent-wren', 'status': 'queued'},
+            ],
+            'createdAt': ago(const Duration(minutes: 3))
+                .toUtc()
+                .toIso8601String(),
+          },
+        ];
+        final fake = FakeSwarm();
+        fake.routes['/api/super-tabs/list'] = (_) => {
+          'tabs': [
+            {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          ],
+          'next': null,
+        };
+        fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+          ...firstLoad(
+            groups: [
+              buddyChatData(
+                chat,
+                agentIds: ['agent-wren'],
+                lastMessageSequence: page.length,
+              ),
+            ],
+            agents: [
+              agent('agent-lead', name: 'Lead', displayName: 'River'),
+              {
+                ...buddyData('agent-wren', displayName: 'Wren'),
+                'downSince': ago(const Duration(hours: 4))
+                    .toUtc()
+                    .toIso8601String(),
+              },
+            ],
+            machines: [
+              {
+                'machineId': 'mac-1',
+                'name': 'Studio-Mac.local',
+                'contributorId': me,
+                'engines': ['claude', 'codex'],
+                'observation': {
+                  'receivedAt':
+                      (computer == 'offline'
+                              ? ago(const Duration(hours: 4))
+                              : now)
+                          .millisecondsSinceEpoch,
+                },
+              },
+            ],
+          ),
+          'members': [part(me, 1, person(me))],
+        };
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+            changes(cursor: 'c2');
+        fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+          'decisions': <Object>[],
+        };
+        fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+          'mentions': <Object>[],
+        };
+        fake.routes['/api/super-tabs/$tab/conversations/$chat/messages'] = (
+          _,
+        ) => {'messages': page.reversed.toList(), 'next': null};
+        final features = ExperimentalFeaturesStore(
+          storage: MemoryKeyValueStore(),
+        )..value = {PhoneExperiment.swarm};
+        final account = ValueNotifier<String?>(me);
+        final host = SwarmHost(
+          accountId: () => me,
+          account: account,
+          request: fake.request,
+          upload: refuseSwarmUpload,
+          notices: SilentSystemNotices(),
+          features: features,
+        )..foreground = false;
+        final boundary = GlobalKey();
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: boundary,
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: buildAppTheme(brightness: brightness),
+              builder: (_, child) => SwarmScope(notifier: host, child: child!),
+              home: const SwarmConversationPage(
+                swarmId: tab,
+                conversationId: chat,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        // A read with the message on screen, as the line under it needs.
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('swarm-buddy-bar')),
+          computer == 'offline' ? findsNothing : findsOneWidget,
+        );
+        expect(
+          find.text("Wren's computer is offline"),
+          computer == 'offline' ? findsOneWidget : findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.runAsync(() async {
+          final image =
+              await (boundary.currentContext!.findRenderObject()!
+                      as RenderRepaintBoundary)
+                  .toImage(pixelRatio: 3);
+          final png = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File(
+            '$shots/buddy-chat-down-computer-$computer-${brightness.name}.png',
+          ).writeAsBytes(png!.buffer.asUint8List());
+          image.dispose();
+        });
+        await tester.pumpWidget(const SizedBox());
+        host.dispose();
+        account.dispose();
+        await tester.pump(const Duration(minutes: 1));
+      }
     }
     AppTheme.palette.value = HarnessPalette.graphite;
     AppTheme.brightness.value = Brightness.dark;

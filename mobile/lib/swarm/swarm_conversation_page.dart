@@ -42,6 +42,8 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_lead_start.dart';
+import 'swarm_lead_start_card.dart';
 import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
 import 'swarm_link_previews.dart';
@@ -2075,6 +2077,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         return const SwarmChatSkeleton();
       }
       if (view.decisions.isEmpty) {
+        // A Personal project with no Lead offers to start one, as Desktop's
+        // empty chat does (task #2941).
+        if (SwarmScope.computersOf(context)
+            case final SwarmLeadComputers computers
+            when swarmWantsLeadStart(c.reader, c.id)) {
+          return Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpace.screenInset),
+              child: SwarmLeadStartCard(
+                reader: c.reader,
+                computers: computers,
+                chatId: c.id,
+              ),
+            ),
+          );
+        }
         return _said(
           'No messages yet.',
           key: const ValueKey('swarm-chat-empty'),

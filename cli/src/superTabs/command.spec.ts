@@ -195,6 +195,15 @@ it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
     expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
   }
 })
+// Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+it('posts an answer right below one message with --answers, never with --reply-to too', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--answers', 'msg-1', '--to', 'a1'], where).payload.command)
+    .toEqual({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, answers: 'msg-1', recipientIds: ['a1'] })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload.command).not.toHaveProperty('answers')
+  for (const tail of [['--answers'], ['--answers', '../x'], ['--answers', 'a', '--answers', 'b'], ['--answers', 'a', '--reply-to', 'b'], ['--reply-to', 'b', '--answers', 'a']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
 it('parses repeated --attach, allows empty text with a file, and refuses empty text alone', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '', 'op-1', '--attach', 'a.png', '--reply-to', 'm1', '--attach', 'b.log'], where).payload)
     .toMatchObject({ attach: [resolve('a.png'), resolve('b.log')], command: { text: '', replyTo: 'm1' } })
@@ -560,7 +569,7 @@ it('refuses to set a machine\'s agents for an agent: a Swarm agent\'s pane, an o
   }
   expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
 })
-// Project instructions, phase 1: an agent names the agents a post reaches; with none it reaches the PM.
+// Project instructions, phase 1: an agent names the agents a post reaches (task #2963: with none, the server reaches no PM).
 it('passes each --to as a recipient, at most 16, and keeps a post without one unnamed', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1', '--to', 'a1', '--to', 'a2', '--to', 'a1'], where).payload.command)
     .toMatchObject({ type: 'message.send', conversationId: 'g1', recipientIds: ['a1', 'a2'] })
@@ -863,7 +872,7 @@ describe("a Buddy's usage line and JSON hints", () => {
 
   it('has no stdin form for a Buddy: its post line takes TEXT, and its JSON goes in single quotes', async () => {
     const { run } = buddyDeps(true)
-    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to')
+    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to')
     expect(await run(['propose', 'op-1', '{"goal":'])).toMatch(/^The propose JSON is not valid \(.*\)\. Pass it as one argument, with the JSON in single quotes: propose OPERATION_ID '\{\.\.\.\}' \(an apostrophe inside it as \\u0027\)\.$/)
     expect(await run(['propose'])).toContain("A line break without \\ before it ends the command; send it again with the JSON in single quotes: propose OPERATION_ID '{...}'")
     expect(await run(['propose', 'op-1'])).toBe("propose needs its JSON after OPERATION_ID: propose op-1 JSON, with the JSON in single quotes: propose OPERATION_ID '{...}' (an apostrophe inside it as \\u0027).")

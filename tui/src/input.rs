@@ -990,6 +990,10 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
 }
 
 /// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(windows)]
+fn local_offset_hours() -> u64 { (24 + crate::sys::utc_offset() / 3600).rem_euclid(24) as u64 }
+/// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(unix)]
 fn local_offset_hours() -> u64 {
     let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     let sign = if out.starts_with('-') { -1 } else { 1 };
@@ -1377,7 +1381,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
 /// machine in a window of its own, the most urgent first — made, or gone to and given the ones it
 /// lacks.
 pub fn project_session(app: &mut App, machine: &str, root: &str) {
-    let name = crate::app::session_check_name(root.rsplit('/').next().unwrap_or(root)).unwrap_or_else(|| "project".into());
+    let name = crate::app::session_check_name(crate::sys::path_name(root)).unwrap_or_else(|| "project".into());
     let keys: Vec<(String, String)> = app.fleet.ranked().into_iter().filter(|a| a.machine_id == machine && a.project_root == root && a.status != "stopped").map(|a| a.key()).collect();
     if keys.is_empty() { return app.say(format!("{name} has no harnesses running"), theme::WARN) }
     match app.find_session(&format!("={name}")) {
@@ -1438,7 +1442,7 @@ pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serd
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
         let shell = app.options.session.get("default-shell").or_else(|| app.options.global_session.get("default-shell")).cloned()
-            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(crate::sys::sh);
         payload["shell"] = json!(shell);
         payload["term"] = json!(app.options.get("default-terminal", "", None).unwrap_or_else(|| "tmux-256color".into()));
         let mut env: serde_json::Map<String, serde_json::Value> = app.global_env.iter().map(|(k,v)| (k.clone(), if v.hidden { serde_json::Value::Null } else { json!(v.value) })).collect();
@@ -1488,7 +1492,7 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     // flashed there first, as if the shortcut had opened that instead.
     if let Some(command) = &command {
         if let Some(window) = app.tabs.iter_mut().find(|t| t.id == tab && t.root.is_none() && !t.home) {
-            let program = command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+            let program = crate::sys::shell_label(command.split_whitespace().next().unwrap_or("")).to_string();
             window.opening = Some(if window.name.is_empty() || window.name == "New Tab" { program } else { window.name.clone() });
         }
     }
@@ -2655,7 +2659,7 @@ pub fn mode_key(app: &mut App, pane: u64, chord: &keys::Chord) -> bool {
 /// A copied text to a shell command's stdin (copy-pipe, copy-command), not waited for.
 pub fn pipe_to(cmd: &str, text: &str) {
     use std::io::Write;
-    let mut c = std::process::Command::new("/bin/sh");
+    let mut c = std::process::Command::new(crate::sys::sh());
     c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     c.envs(crate::ipc::job_env());
     if let Ok(mut child) = c.spawn() {

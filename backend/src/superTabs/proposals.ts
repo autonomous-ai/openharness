@@ -48,6 +48,8 @@ export interface ProposalReads {
   threads(rootIds: string[]): Promise<ThreadReply[]>
   /** Takes [ids] out of the open set. */
   forget(ids: string[]): Promise<void>
+  /** Those of [ids] closed by hand (closeProposal). */
+  closed(ids: string[]): Promise<Set<string>>
 }
 
 /** The project chat [projectId] names, for a reader who may read it, as the messages read checks it; else NOT_FOUND. */
@@ -59,7 +61,10 @@ export function proposalChat(state: SuperTabState, actor: Actor, projectId: stri
 export async function openProposals(state: SuperTabState, chat: Conversation, reads: ProposalReads, now = Date.now()): Promise<OpenProposal[]> {
   const seededAt = await reads.seededAt()
   if (seededAt === null || now - seededAt < SEED_SETTLE_MS) {
-    const open = await scanned(state, chat, reads)
+    // A proposal closed by hand stays closed, whatever its thread says (task #2926).
+    const found = await scanned(state, chat, reads)
+    const closed = found.length ? await reads.closed(found.map(root => root.id)) : new Set<string>()
+    const open = found.filter(root => !closed.has(root.id))
     await reads.seed(open.map(root => ({ id: root.id, sequence: root.sequence })))
     return open.map(shown).reverse()
   }
@@ -116,6 +121,18 @@ const rootOf = (row: Record<string, unknown>): ProposalRoot => ({ id: row._id as
 /** Its own thread's root (none before threads), posted by buddy.propose. */
 const isRoot = (row: Record<string, unknown>) => (row.source as { kind?: unknown } | null)?.kind === 'buddy-proposal' && (row.thread ?? row._id) === row._id
 
+/** The sequence of a root closed by hand in the open set: below the open roots' (`listed` reads 0 and up) and the seed mark's. */
+export const CLOSED_SEQUENCE = -2
+
+/** Closes a proposal by hand with its reason (commands.ts proposal.close, River 11-04, task #2926): many were answered before
+ *  threads, or built without the task's link, and read as open for ever. Its row stays in the open set, out of every read,
+ *  so a seed's scan, which only inserts, never opens it again. */
+export async function closeProposal(tx: Transaction, tabId: string, close: { messageId: string; conversationId: string; reason: string }, by: string, at: Date): Promise<void> {
+  await tx.$runCommandRaw({ update: OPEN, updates: [{ q: { _id: close.messageId }, upsert: true,
+    u: { $set: { tabId, conversationId: close.conversationId, sequence: CLOSED_SEQUENCE, closed: { reason: close.reason, by, at: { $date: at.toISOString() } } },
+      $setOnInsert: { createdAt: { $date: at.toISOString() } } } }] as unknown as Prisma.InputJsonArray })
+}
+
 /** The id of [chatId]'s seed mark in the open set. */
 export const seedMarkId = (tabId: string, chatId: string) => `seeded:${tabId}:${chatId}`
 
@@ -156,7 +173,11 @@ export function databaseProposalReads(tx: Transaction, tabId: string, chatId: st
       { $sort: { sequence: -1, _id: -1 } }, { $limit: take }, ROOT_FIELDS])).map(rootOf),
     threads: rootIds => pageThreads(tx, tabId, chatId, rootIds),
     forget: async ids => {
-      if (ids.length) await tx.$runCommandRaw({ delete: OPEN, deletes: [{ q: { _id: { $in: ids }, tabId }, limit: 0 }] as unknown as Prisma.InputJsonArray })
+      // Never a root closed since it was listed: its reason stays.
+      if (ids.length) await tx.$runCommandRaw({ delete: OPEN, deletes: [{ q: { _id: { $in: ids }, tabId, sequence: { $gte: 0 } }, limit: 0 }] as unknown as Prisma.InputJsonArray })
     },
+    // By `_id`, as rootsById is: only a seed's scan asks, once per chat.
+    closed: async ids => new Set((await readBy(tx, OPEN, 'id', [{ $match: { _id: { $in: ids } } }, { $project: { tabId: 1, sequence: 1 } }]))
+      .filter(row => row.tabId === tabId && row.sequence === CLOSED_SEQUENCE).map(row => row._id as string)),
   }
 }

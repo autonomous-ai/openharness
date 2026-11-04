@@ -272,6 +272,24 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.start(team, f.tab, f.startId)).rejects.toMatchObject(LIMITED)
   })
 
+  // Task #2912 (security review 2 of #3015): an agent's name is its person's to give, so its machine's Team account, which is
+  // that person signed in with no person to be, renames nothing: not as the person, and not as the agent it hosts.
+  it('renames no agent, as the person or as its own machine\'s agent', async () => {
+    const f = await fixture()
+    const rename = (agentId: string): Command => ({ type: 'agent.rename', agentId, name: 'Renamed' })
+    const names = async () => (await storedState(f.tab)).agents.map(a => [a.id, a.name, a.displayName])
+    const before = await names()
+    await expect(run(f.tab, rename(f.builder), team)).rejects.toMatchObject(LIMITED)
+    await expect(run(f.tab, rename(f.personal), team)).rejects.toMatchObject(LIMITED)
+    await expect(run(f.tab, rename(f.builder), team, f.builder)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    // The person's agent on another machine is not even one it can read.
+    await expect(run(f.tab, rename(f.personal), team, f.builder)).rejects.toThrow('unavailable')
+    expect(await names()).toEqual(before)
+    // The person's own sign-in, the Team machine's owner, still renames the agent there.
+    await run(f.tab, rename(f.builder), person)
+    expect((await storedState(f.tab)).agents.find(a => a.id === f.builder)!.displayName).toBe('Renamed')
+  })
+
   it('cannot contribute, pause or remove a machine, or start, add or drive anything on the person\'s other machines', async () => {
     const f = await fixture()
     const commands: Command[] = [

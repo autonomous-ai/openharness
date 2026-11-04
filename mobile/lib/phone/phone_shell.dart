@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
 import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
@@ -588,6 +589,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             swarm: (_) => SwarmTabsPage(
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier, swarm: true),
+              // You's Notifications, not in the sample, as Settings leaves
+              // it out there: its notices go nowhere.
+              notices: SampleMode.ofNotifier(widget.notifier) == null
+                  ? widget.notifier.agentNotices.system
+                  : null,
             ),
           ),
         ),

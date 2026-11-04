@@ -25,7 +25,10 @@ export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy
 export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
-export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; note?: string }
+export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; engineDefault?: true; note?: string }
+/** Why a Codex row at `default` model or effort is never offered. A backend from before task #2972 still serves one: it ran whatever
+ *  the account's CLI defaulted to (gpt-6-luna on one owner's Mac), 67 of 71 Codex picks in a day, and no one rated that. */
+export const CODEX_DEFAULT_NOT_OFFERED = 'Codex at its default model or effort is not offered: it runs whatever the account\'s CLI chooses. Start the catalog\'s named models.'
 /** The catalog's models and how strong the models served on the Swarm's grid count: the first named row whose every word is
  * in a model's name, else `strength`. */
 export interface Catalog { models: CatalogModel[]; grid: { strength: number; models: Array<{ model: string; strength: number }> } }
@@ -212,8 +215,11 @@ export function catalogFrom(effective: Json): Catalog {
   const models = rows.map(object).flatMap((m): CatalogModel[] => {
     const strength = served ? m.strength : m.quality, offered = served ? m.offered : m.enabled
     if (!ENGINES.includes(String(m.engine)) || typeof m.model !== 'string' || typeof m.effort !== 'string' || !finite(strength) || !finite(m.cost)) return []
-    return [{ engine: m.engine as CatalogModel['engine'], model: m.model, effort: m.effort, strength, cost: m.cost, offered: offered === true,
-      ...(served && typeof m.note === 'string' && m.note ? { note: m.note } : {}) }]
+    // A Codex row at `default` model or effort stays for rating a member launched on the engine's own model, but is never offered.
+    const unnamed = m.engine === 'codex' && (m.model === 'default' || m.effort === 'default')
+    return [{ engine: m.engine as CatalogModel['engine'], model: m.model, effort: m.effort, strength, cost: m.cost, offered: offered === true && !unnamed,
+      ...(served && m.engineDefault === true ? { engineDefault: true as const } : {}),
+      ...(unnamed ? { note: CODEX_DEFAULT_NOT_OFFERED } : served && typeof m.note === 'string' && m.note ? { note: m.note } : {}) }]
   })
   const grid = served ? object(catalog.grid) : object(policy.localModels)
   const gridRows = (Array.isArray(grid.models) ? grid.models : []) as unknown[]
@@ -303,13 +309,15 @@ export function repositoryKey(url: string): string | null {
 }
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
- * Codex's slug (`gpt-5.5`). The catalog names Claude families and a Codex `default`, so the id is reduced to its family
- * first. Its row: the exact one, else the model's at another effort, else the engine's `default` row when the agent was
+ * Codex's slug (`gpt-5.5`). The catalog names Claude families and Codex's default model, so the id is reduced to its family
+ * first. Its row: the exact one, else the model's at another effort, else the engine's named default when the agent was
  * launched on the engine's own model ([engineDefault]) and is no small variant; otherwise none, so a small Codex variant is
  * never taken for a strong one (review of #2137). */
 export function catalogRow(c: Catalog, engine: string, model: string | null, effort: string | null, engineDefault = false): CatalogModel | null {
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
-  const rowOf = (named: string) => c.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
+  // The engine's own model is the catalog's named default (`engineDefault`), else a `default` row of an older backend.
+  const rowOf = (named: string) => named === 'default' ? c.models.find(m => m.engine === engine && m.engineDefault) ?? c.models.find(m => m.engine === engine && m.model === 'default')
+    : c.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
     ?? c.models.find(m => m.engine === engine && m.model === named)
   // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
   return rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined) ?? null

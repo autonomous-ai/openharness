@@ -146,6 +146,18 @@ describe('five-part task commands', () => {
       expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
     })
   }
+  // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which still settles it.
+  it('sends an answer as a reply to a backend that refuses answers, once, with the same operation', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { answers?: unknown } }).command.answers
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "answers"' } } } as never
+      : original(...args))
+    const post = { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: null, answers: 'm1', recipientIds: [] }
+    expect(await send(t, post)).toMatchObject({ ok: true })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
+    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
+      command: { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: 'm1', recipientIds: [] } })
+  })
   it('renders a task\'s review plan into its brief as the backend does', async () => {
     const t = setup()
     const review = { focus: ' Check revoked access first. ', reviews: 2 }
@@ -334,6 +346,11 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   const t = setup()
   const help = (await t.ask({ action: 'help', tabId: 'tab', agentId: t.agentId }, owner) as { help: Record<string, unknown> }).help
   expect(String(help.post)).toContain('--mention')
+  // Task #2924: an agent with work in the project posts in its project chat itself, joining nobody there (#2207).
+  expect(String(help.post)).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.')
+  // Task #2963: an unnamed post no longer reaches the PM.
+  expect(String(help.post)).toContain('With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements.')
+  expect(String(help.post)).not.toContain('your post reaches the PM')
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask', 'person.tell']))
   expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
@@ -790,6 +807,20 @@ describe('which messages still need an answer', () => {
     expect(value.messages.map(m => m.answered)).toEqual([true, false, undefined, undefined, false])
     // A person's email is passed as the backend sent it.
     expect((value.messages[0]!.author as { name: string }).name).toBe('sam@example.com')
+  })
+  // An answer right below a message settles the agent's delivery and has no replyTo (task #2929): its delivery says it was answered.
+  it('marks a message answered when the caller\'s delivery of it was answered, as by an answer right below it', async () => {
+    const t = setup()
+    const delivery = (status: string) => [{ id: 'd1', agentId: t.agentId, status }, { id: 'd2', agentId: 'someone-else', status: 'answered' }]
+    const feed = [
+      { id: 'q1', sequence: 1, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('answered') },
+      { id: 'q2', sequence: 2, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('delivered') },
+      { id: 'a1', sequence: 3, author: { kind: 'agent', id: t.agentId, name: 'Lead' }, recipientIds: [], replyTo: null },
+    ]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/messages') ? { messages: feed, next: null } : swarmData(t.agent, path) } }))
+    const value = (await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner) as { value: { messages: Record<string, unknown>[] } }).value
+    expect(value.messages.map(m => m.answered)).toEqual([true, false, undefined])
   })
   it('names the thread root on each thread reply only, so an agent reading one feed sees which thread a reply is in', async () => {
     const t = setup()
@@ -1287,7 +1318,8 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
 // Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
 // and every agent's help offers it (project instructions, phase 4).
 describe('mentions on a post', () => {
-  const people = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner' }, { id: 'person-dee', email: 'dee@example.com', role: 'collaborator' }]
+  const people: Array<Record<string, unknown>> = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner', username: '0xken15', name: 'Ken' },
+    { id: 'person-dee', email: 'dee@example.com', role: 'collaborator', username: 'dee' }]
   const swarm = (t: ReturnType<typeof setup>, leadId: string | null) => {
     const state = { agents: [t.agent], people, projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }],
       conversations: [{ id: 'pilot', leadId, agentIds: [t.agentId] }, { id: 'work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }] }
@@ -1305,11 +1337,33 @@ describe('mentions on a post', () => {
       command: { type: 'message.send', conversationId: 'pilot', text: 'Please confirm', replyTo: null, recipientIds: [], mentions: ['person-ken', 'person-dee'] } }]])
   })
 
+  // Task #2954 (Ken, 11-04): a PM typed --mention with Ken's email and a machine's privacy hook stopped its session. A post
+  // names people by username or display name; an email still works for older callers.
+  it('sends the person ids of people named by username or display name, in any case and with or without @', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    expect(await post(t, ['@0xKen15', 'Dee', ' ken '])).toMatchObject({ ok: true })
+    expect(posted(t).map(([, , body]) => (body as { command: { mentions: string[] } }).command.mentions)).toEqual([['person-ken', 'person-dee']])
+  })
+
+  it('refuses a display name two people go by, naming their usernames, and takes either by username', async () => {
+    const t = setup()
+    people.push({ id: 'person-ken2', email: 'ken@other.example', role: 'collaborator', username: 'kenb', name: 'ken' })
+    try {
+      swarm(t, t.agentId)
+      expect(await post(t, ['Ken'])).toEqual({ error: 'MENTION_AMBIGUOUS',
+        detail: 'Ken is the name of more than one person here (0xken15, kenb). Tag them by username or id.', status: 400 })
+      expect(posted(t)).toEqual([])
+      expect(await post(t, ['kenb', '0xken15'])).toMatchObject({ ok: true })
+      expect(posted(t).map(([, , body]) => (body as { command: { mentions: string[] } }).command.mentions)).toEqual([['person-ken2', 'person-ken']])
+    } finally { people.pop() }
+  })
+
   it('refuses a person who is not in the Swarm before anything is sent', async () => {
     const t = setup()
     swarm(t, t.agentId)
     expect(await post(t, ['dee@example.com', 'someone@example.com'])).toEqual({ error: 'MENTION_UNKNOWN',
-      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the id or email shown in status.', status: 400 })
+      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the username or id shown in status.', status: 400 })
     expect(await post(t, [42])).toMatchObject({ error: 'MENTION_UNKNOWN' })
     expect(posted(t)).toEqual([])
   })
@@ -1330,12 +1384,15 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain('--answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread.')
     // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
     expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
-    expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
+    // By username, display name or id, never email (task #2954).
+    expect(lead.post).toContain('--mention tags a person, by the username, display name or id shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
     // The server reads tags from the text too (backend mentions.ts).
-    expect(lead.post).toContain('An @username or @email in TEXT tags that person as well, outside code and links.')
+    expect(lead.post).toContain('An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email.')
+    expect(lead.post).not.toMatch(/email shown|@email/)
     expect(String(lead.plan)).toContain('plan [JSON]: the best plan for all your open groups')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // An agent that coordinates nothing reads the same, and so does help outside a tab or with a caller that cannot be read.
@@ -1371,7 +1428,7 @@ describe('a Buddy\'s help', () => {
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>, asker: Parameters<ReturnType<typeof setup>['ask']>[1] = owner) =>
     object(object(await t.ask({ action: 'help', ...payload }, asker)).help)
   const expectBuddy = (each: Record<string, unknown>) => {
-    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
+    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--answers MESSAGE_ID \| --reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
     expect(String(each.post)).toContain(QUOTED)
     expect(String(each.post)).not.toContain('TEXT|-')
     expect(String(each.post)).not.toContain(STDIN_HINT)

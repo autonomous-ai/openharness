@@ -108,7 +108,11 @@ async function writeLinuxClipboard(pngBytes: Uint8Array): Promise<OsClipboardIma
   return { state: 'unavailable', reason: 'no X11 or Wayland display on this machine' }
 }
 
-/** Writes `pngBytes` (already saved at `pngPath`) into this machine's native OS clipboard. */
+/**
+ * Writes `pngBytes` (already saved at `pngPath`) into this machine's native OS clipboard. Never on Windows, where the keystroke
+ * replayed after it does nothing: Claude Code takes an image on Alt+V there, not Ctrl+V, and a paste said it worked and attached
+ * nothing (Claude Code 2.1.318, DESKTOP-0TFH0OJ, 2026-11-04). The saved file's path, pasted as text, is an image to every engine.
+ */
 export async function writeImageToOsClipboard(pngPath: string, pngBytes: Uint8Array): Promise<OsClipboardImageResult> {
   if (process.platform === 'darwin') return writeMacClipboard(pngPath)
   if (process.platform === 'linux') return writeLinuxClipboard(pngBytes)

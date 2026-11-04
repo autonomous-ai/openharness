@@ -137,6 +137,31 @@ class UsageController extends ChangeNotifier {
     _timer = Timer.periodic(interval, (_) => unawaited(refresh()));
   }
 
+  /// The app went into a pocket: nothing is asked until [resume]. A cycle under way still lands.
+  ///
+  /// Android keeps a backgrounded app running, and the poll with it — a relay round trip to every
+  /// machine each minute for a page nobody can see.
+  void pause() {
+    if (_disposed || _paused) return;
+    _paused = true;
+    _pollingWhenPaused = _timer != null;
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  /// Back in front after [pause]: one cycle now, then the poll again if it was running. Without a
+  /// [pause] first — a moment on the app switcher — nothing.
+  void resume() {
+    if (_disposed || !_paused) return;
+    _paused = false;
+    unawaited(refresh());
+    if (_pollingWhenPaused) {
+      _timer = Timer.periodic(interval, (_) => unawaited(refresh()));
+    }
+  }
+
+  bool _paused = false, _pollingWhenPaused = false;
+
   /// This device's accounts and every remote machine's, asked at once — and
   /// landing apart. A remote machine is a relay round trip away and may never
   /// answer at all (see `AppNotifier.readRemoteUsage`), so it must not hold up

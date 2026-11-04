@@ -227,7 +227,8 @@ class SuperTabAgent {
 
   /// A Product Manager's switch to another engine or account that is asked for
   /// and not yet done (backend `switchRequest`), as the desktop's model reads
-  /// it; null otherwise. Not drawn on the phone yet.
+  /// it; null otherwise. While set, the PM reads "Switching…" and Switch PM…
+  /// is not offered (swarm_switch_pm.dart).
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
@@ -242,7 +243,7 @@ class SuperTabAgent {
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account. As the
-  /// desktop's model reads it; not drawn on the phone yet.
+  /// desktop's model reads it; Switch PM marks it Current.
   final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
@@ -1346,14 +1347,11 @@ class SuperTabThread {
   /// Where the ask at its root stands (backend threads.ts).
   final String? ask;
 
-  /// What its root's row says after the time; null for a message that is no
-  /// ask, and for a state this app does not know.
-  String? get askTag => switch (ask) {
-    'proposal' => '✋ Proposal',
-    'on-it' => '● On it',
-    'shipped' => '✓ Shipped',
-    _ => null,
-  };
+  /// What its root's row says after the time: a Buddy's proposal nobody has
+  /// answered yet; null for any other message. A task's state is no tag: its
+  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
+  /// so an older server's On it and Shipped draw nothing.
+  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
   final int replies, lastSequence;
   final DateTime? lastAt;
 

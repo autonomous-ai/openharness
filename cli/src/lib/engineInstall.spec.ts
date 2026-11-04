@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { PROCESS_ENGINES } from '../engines/types.js'
-import { ENGINE_INSTALL } from './engineInstall.js'
+import { ENGINE_INSTALL, ENGINE_WINDOWS_INSTALL, engineInstallLine, engineInstallPaths } from './engineInstall.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 
@@ -56,5 +56,37 @@ describe('ENGINE_INSTALL', () => {
       expect(script).toContain('harness_find_engine')
       expect(() => execFileSync('/bin/sh', ['-n', '-c', script])).not.toThrow()
     }
+  })
+})
+
+describe('ENGINE_WINDOWS_INSTALL', () => {
+  const home = 'C:\\Users\\a b', local = 'C:\\Users\\a b\\AppData\\Local'
+
+  it('has an install for every engine, each with somewhere to find it', () => {
+    for (const engine of PROCESS_ENGINES) {
+      expect(ENGINE_WINDOWS_INSTALL[engine], engine).toBeDefined()
+      expect(engineInstallPaths(ENGINE_INSTALL[engine], home, 'win32', local).length, engine).toBeGreaterThan(0)
+    }
+  })
+
+  it('finds an npm engine where npm leaves it, and never `cmd`, the command processor', () => {
+    expect(engineInstallPaths(ENGINE_INSTALL.commandcode, home, 'win32', local)[0]).toBe('C:\\Users\\a b\\.local\\command-code')
+    expect(engineInstallPaths(ENGINE_INSTALL.commandcode, home, 'win32', local).some((path) => path.endsWith('\\.local\\cmd'))).toBe(false)
+  })
+
+  it('finds a vendor\'s engine under %LOCALAPPDATA% or the profile', () => {
+    expect(engineInstallPaths(ENGINE_INSTALL.agy, home, 'win32', local)[0]).toBe('C:\\Users\\a b\\AppData\\Local\\agy\\bin\\agy')
+    expect(engineInstallPaths(ENGINE_INSTALL.amp, home, 'win32', local)[0]).toBe('C:\\Users\\a b\\.amp\\bin\\amp')
+  })
+
+  it('shows a person the line that really runs there', () => {
+    expect(engineInstallLine(ENGINE_INSTALL.kilo, 'win32', 'x64')).toBe('npm install -g @kilocode/cli')
+    expect(engineInstallLine(ENGINE_INSTALL.omp, 'win32', 'x64')).toBe('irm https://omp.sh/install.ps1 | iex')
+    expect(engineInstallLine(ENGINE_INSTALL.opencode, 'win32', 'arm64')).toBe('npm install -g --cpu=x64 opencode-ai')
+    expect(engineInstallLine(ENGINE_INSTALL.omp, 'darwin', 'arm64')).toBe(ENGINE_INSTALL.omp.command)
+  })
+
+  it('leaves a Mac\'s and a Linux computer\'s paths as they were', () => {
+    expect(engineInstallPaths(ENGINE_INSTALL.kilo, '/h', 'darwin')).toEqual(['/h/.kilo/bin/kilo', '/h/.local/bin/kilo', '/h/.local/bin/kilocode'])
   })
 })

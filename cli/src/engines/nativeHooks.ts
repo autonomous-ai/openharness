@@ -13,7 +13,7 @@ import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
 import { opencodeMajorVersion, type OpencodeLaunchSnapshot } from './launchControl.js'
 import { installNativePlugin, prepareNativePlugin, prepareNativePluginRemoval } from './kit/nativePlugin.js'
 import { installNativeYamlHooks } from './kit/nativeHookYaml.js'
-import { command, hooksNotOnWindows } from './kit/notifyHooks.js'
+import { command } from './kit/notifyHooks.js'
 import { hostPlatform } from './kit/windowsFiles.js'
 import { GROK_HOOK_SETTINGS } from './grok/contract.js'
 import { AGY_HOOK_SETTINGS } from './agy/contract.js'
@@ -39,9 +39,10 @@ const pluginValues = (port: number) => ({
 export const installKiloPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...KILO_PLUGIN, file: join(nativeHookLocations(options.environment).KILO_PLUGIN_DIR, 'launcher-register.js') } : KILO_PLUGIN, pluginValues(port), options)
 export const installPiExtension = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...PI_EXTENSION, file: join(nativeHookLocations(options.environment).PI_AGENT_DIR, 'extensions', 'launcher-register.ts') } : PI_EXTENSION, pluginValues(port), options)
 export const installAmpPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...AMP_PLUGIN, file: join(nativeHookLocations(options.environment).AMP_PLUGIN_DIR, 'launcher-register.ts') } : AMP_PLUGIN, pluginValues(port), options)
-// Windows: Hermes installs only through `curl … | bash`, and what runs its shell hooks there is unverified: none.
+// Windows: Hermes splits the line itself and starts the program with no shell (agent/shell_hooks.py `_spawn`, Hermes 0.22.7). It
+// keeps double quotes as one word and backslashes as they are, which is the line `cmd` takes (`shlex.split(posix=False)`).
 export const installHermesHooks = (port: number, selectedHome?: string, options?: NativeHookOptions, platform: NodeJS.Platform = hostPlatform()): Promise<boolean> =>
-  platform === 'win32' ? Promise.resolve(hooksNotOnWindows('hermes')) : installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment), selectedHome,
+  installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
     { ...options, createMissing: !!selectedHome && !!options?.environment })
 
 /** Install both discovery surfaces for v1; v2 must not load our incompatible v1 export. */

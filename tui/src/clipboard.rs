@@ -4,6 +4,7 @@
 //! clipboard" is on, and it is off by default — a copy said "Copied" and left nothing to paste [run].
 
 use std::io::Write;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 
 pub fn store(text: &str) { store_as("c", text) }
@@ -29,6 +30,7 @@ fn at_this_computer(set: impl Fn(&str) -> bool) -> bool { !["SSH_CONNECTION", "S
 
 /// The tools that set this computer's clipboard, in the order tried: macOS's own, else Wayland's or X's
 /// for the session there is ([set]: whether an environment variable is set).
+#[cfg(any(unix, test))]
 fn clipboard_tools(set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static [&'static str])> {
     if cfg!(target_os = "macos") { return vec![("pbcopy", &[])] }
     let mut tools = Vec::new();
@@ -37,7 +39,34 @@ fn clipboard_tools(set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static [&
     tools
 }
 
+/// [text] on Windows' clipboard, by Windows' own call: `clip.exe` reads its input in the console's code page, which turns anything
+/// but ASCII into question marks.
+#[cfg(windows)]
+fn system_store(text: &str) -> bool {
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+    const CF_UNICODETEXT: u32 = 13;
+    let units: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: the block is as long as the copy into it, and the clipboard owns it only once SetClipboardData took it.
+    unsafe {
+        let block = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
+        if block.is_null() { return false }
+        let to = GlobalLock(block).cast::<u16>();
+        if to.is_null() { GlobalFree(block); return false }
+        std::ptr::copy_nonoverlapping(units.as_ptr(), to, units.len());
+        GlobalUnlock(block);
+        if OpenClipboard(std::ptr::null_mut()) == 0 { GlobalFree(block); return false }
+        EmptyClipboard();
+        let taken = !SetClipboardData(CF_UNICODETEXT, block as _).is_null();
+        if !taken { GlobalFree(block); }
+        CloseClipboard();
+        taken
+    }
+}
+
 /// [text] on this computer's clipboard through the first tool there is; true when one took it.
+#[cfg(unix)]
 fn system_store(text: &str) -> bool {
     for (tool, args) in clipboard_tools(|k| std::env::var_os(k).is_some()) {
         let Ok(mut child) = Command::new(tool).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { continue };

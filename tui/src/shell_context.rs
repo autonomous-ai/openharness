@@ -109,7 +109,6 @@ impl State {
     }
     pub fn save(&mut self) {
         if cfg!(test) { return }
-        use std::os::unix::fs::OpenOptionsExt;
         use std::io::Write;
         let file = path();
         let Some(parent) = file.parent() else { return };
@@ -118,7 +117,7 @@ impl State {
         let mut merged: HashMap<String, Context> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         for token in &self.dirty { if let Some(context) = self.contexts.get(token) { merged.insert(token.clone(), context.clone()); } }
         let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
-        if let Ok(mut out) = std::fs::OpenOptions::new().create(true).truncate(true).write(true).mode(0o600).open(&tmp) {
+        if let Ok(mut out) = crate::sys::private_file(std::fs::OpenOptions::new().create(true).truncate(true).write(true)).open(&tmp) {
             if serde_json::to_writer(&mut out, &merged).is_ok() && out.flush().is_ok() { if std::fs::rename(&tmp, &file).is_ok() { self.dirty.clear(); } }
             else { let _ = std::fs::remove_file(&tmp); }
         }
@@ -235,7 +234,6 @@ fn init_script(token: &str, picker: &str, cli: &str, look: Option<&str>) -> Stri
 }
 
 pub fn initialize(args: &[String]) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
     let Some(token) = args.first().filter(|v| uuid::Uuid::parse_str(v).is_ok()) else {
         return Err(std::io::Error::other("Invalid shell context."))
     };
@@ -247,10 +245,20 @@ pub fn initialize(args: &[String]) -> std::io::Result<()> {
     let picker = std::env::current_exe()?;
     let script = init_script(token, &picker.to_string_lossy(), args.get(1).map(String::as_str).unwrap_or("harness"), look.as_deref());
     let folder = start_folder(cwd.as_deref());
-    let mut command = std::process::Command::new("/bin/sh");
-    command.args(["-c", &script]).current_dir(&folder).env("PWD", &folder);
-    if pick_agent { command.env("_HN_START_PICKER", "1"); }
-    Err(command.exec())
+    // Windows: the person's shell as it is. The integration is written for sh, bash and zsh; there the pane is still a shell.
+    #[cfg(windows)]
+    {
+        let _ = (script, pick_agent);
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| crate::sys::sh());
+        Err(crate::sys::exec(std::process::Command::new(&shell).args(crate::sys::shell_args(&shell, None)).current_dir(&folder)))
+    }
+    #[cfg(unix)]
+    {
+        let mut command = std::process::Command::new(crate::sys::sh());
+        command.args(["-c", &script]).current_dir(&folder).env("PWD", &folder);
+        if pick_agent { command.env("_HN_START_PICKER", "1"); }
+        Err(crate::sys::exec(&mut command))
+    }
 }
 
 /// A split copies only the semantic route, never a conversation or parked shells.
@@ -487,6 +495,9 @@ fn send_reply(app: &App, request: &Request, code: u8, text: &str, data: Option<&
 
 /// Local fallback implements the same FIFO contract as the daemon. Open only an
 /// existing private FIFO; a stale request cannot create files or block the server.
+#[cfg(windows)]
+pub fn local_reply(_: &serde_json::Value) -> bool { false }
+#[cfg(unix)]
 pub fn local_reply(value: &serde_json::Value) -> bool {
     use std::os::unix::fs::{OpenOptionsExt, MetadataExt, FileTypeExt};
     use std::io::Write;

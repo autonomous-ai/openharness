@@ -226,15 +226,21 @@ int main(void) {
     // The Buddy's word: chat "buddy" reaches the UI as HT_CHAT_BUDDY; the UI says it is quiet.
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"buddy\",\"chatId\":\"b1\",\"id\":\"m11\",\"text\":\"Cache it.\",\"at\":6}");
     assert(notice_calls==3 && got_chat==HT_CHAT_BUDDY && !strcmp(got_chat_id,"b1") && !strcmp(got_text,"Cache it.") && beeps==beeps_before+1);
+    // A tag in a task chat (#2965): chat "group" reaches the UI as HT_CHAT_GROUP, with its thread; the UI decides the beep.
+    beep_next=true;
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"group\",\"chatId\":\"g1\",\"id\":\"tag1\",\"text\":\"Sam: @diego look\",\"at\":8,\"thread\":\"r1\"}");
+    beep_next=false;
+    assert(notice_calls==4 && got_chat==HT_CHAT_GROUP && !strcmp(got_chat_id,"g1") && !strcmp(got_thread,"r1") && beeps==beeps_before+2);
+    beeps=beeps_before+1;
     notice_calls=2;
     feed(handle_supertab_notice_read,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chatId\":\"pm1\"}");
     assert(read_calls==1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && !strcmp(got_chat_id,"pm1"));
-    // a notice with a non-id chatId or no lead is ignored, and so is one of a group, with no id, or no text.
+    // a notice with a non-id chatId or no lead is ignored, and so is one of a kind it does not know, with no id, or no text.
     char longer_id[ID_MAX+8];memset(longer_id,'c',ID_MAX);longer_id[ID_MAX]=0;
     char bad[256];snprintf(bad,sizeof bad,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"%s\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}",longer_id);
     feed(handle_supertab_notice,bad);
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
-    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"group\",\"chatId\":\"g1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"tag\",\"chatId\":\"g1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"text\":\"x\",\"at\":1}");
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"at\":1}");
     feed(handle_supertab_notice,"{\"tab\":\"\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");

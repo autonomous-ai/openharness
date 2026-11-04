@@ -39,9 +39,9 @@ const rows = (of: ProposalRoot, ...replies: Array<{ author: Author; ask?: Thread
 const NOW = 10_000_000
 /** The chat as the database reads it: roots newest first before a sequence, and the threads of the roots named; and its open set
  *  (SuperTabOpenProposal): the roots in it, and its seed mark's time. `calls` are the chat scan's; `counts`, every read's. */
-function chatReads(roots: ProposalRoot[], threads: ThreadReply[], options: { seededAt?: number; open?: ProposalRoot[] } = {}) {
+function chatReads(roots: ProposalRoot[], threads: ThreadReply[], options: { seededAt?: number; open?: ProposalRoot[]; closed?: string[] } = {}) {
   const calls: Array<{ before: number | undefined; take: number }> = []
-  const counts = { scan: 0, seededAt: 0, listed: 0, rootsById: 0, threads: 0, seed: 0, forget: 0 }
+  const counts = { scan: 0, seededAt: 0, listed: 0, rootsById: 0, threads: 0, seed: 0, forget: 0, closed: 0 }
   const set = new Map((options.open ?? []).map(r => [r.id, r.sequence]))
   const forgotten: string[] = []
   let mark = options.seededAt ?? null
@@ -58,6 +58,7 @@ function chatReads(roots: ProposalRoot[], threads: ThreadReply[], options: { see
     },
     threads: async ids => { counts.threads++; return threads.filter(row => ids.includes(row.thread)) },
     forget: async ids => { counts.forget++; for (const id of ids) { set.delete(id); forgotten.push(id) } },
+    closed: async ids => { counts.closed++; return new Set(ids.filter(id => options.closed?.includes(id))) },
   }
   return { reads, calls, counts, set, forgotten }
 }
@@ -81,6 +82,18 @@ describe('a project\'s open proposals', () => {
       { messageId: 'old', title: 'Old proposal', personId: 'peer', at: 5 },
       { messageId: 'open', title: 'Sync edits', personId: 'peer', at: 10 },
       { messageId: 'personal', title: 'Offline drafts', personId: 'peer', at: 50 },
+    ])
+  })
+
+  it('reads a proposal as its owner\'s words in full, and one from before task #2926 without its "Let\'s build: "', async () => {
+    const s = swarm()
+    const words = 'Jumping a chat back a week (Jump to, Last week) freezes the app and then lags for a minute on Huy\'s Mac, every time'
+    // Posted since #2926: the owner's words alone, with no reply under it.
+    const owned: ProposalRoot = { ...root('owned', 20), text: words }
+    const { reads } = chatReads([root('old', 10, 'Offline drafts'), owned], [...rows(root('old', 10, 'Offline drafts'), { author: agent('buddy') })])
+    expect(await openProposals(s.state, s.chat(), reads, NOW)).toEqual([
+      { messageId: 'old', title: 'Offline drafts', personId: 'peer', at: 10 },
+      { messageId: 'owned', title: words, personId: 'peer', at: 20 },
     ])
   })
 
@@ -150,6 +163,15 @@ describe('a project\'s open proposals', () => {
     const chat = chatReads(roots, roots.flatMap(r => rows(r, { author: agent('buddy') })), { seededAt: 0, open: roots })
     expect((await openProposals(s.state, s.chat(), chat.reads, NOW)).map(p => p.messageId)).toEqual(roots.slice(-MAX_PROPOSALS).map(r => r.id))
     expect(chat.counts).toMatchObject({ scan: 0, listed: 1, rootsById: 1, threads: 1 })
+  })
+
+  // River, 11-04 (task #2926): 43 of 47 listed were long built or answered, before threads or without the task's link.
+  it('leaves out a proposal closed with a reason, in the seed\'s scan of the chat too, whatever its thread says', async () => {
+    const s = swarm()
+    const [open, closed] = [root('open', 10, 'Sync edits'), root('closed', 20, 'Built long ago')]
+    const chat = chatReads([open, closed], [...rows(open, { author: agent('buddy') }), ...rows(closed, { author: agent('buddy') })], { closed: ['closed'] })
+    expect((await openProposals(s.state, s.chat(), chat.reads, NOW)).map(p => p.messageId)).toEqual(['open'])
+    expect([...chat.set.keys()]).toEqual(['open'])
   })
 
   it('is read only by those who read the project chat', () => {

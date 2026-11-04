@@ -397,7 +397,7 @@ pub fn external_rows(app: &App) -> Vec<Row> {
     app.said.iter().chain(app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some())).filter_map(|s| s.external.as_ref())
         .filter(|x| !app.fleet.agents.values().any(|a| a.machine_id == x.machine && a.session_id == x.session_id)).map(|x| {
         let (mark, _) = engine_mark(&x.engine);
-        let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+        let folder = crate::sys::path_name(&x.cwd).to_string();
         let title = if x.title.is_empty() { folder.clone() } else { x.title.clone() };
         let note = if x.open { "open elsewhere" } else if x.cwd.is_empty() { "folder unavailable" } else { "saved" };
         let right = [note.to_string(), if many { app.fleet.machine_name(&x.machine) } else { String::new() }, ago(x.last_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
@@ -483,7 +483,7 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
     match kind {
         PickerKind::Open { .. } if app.shell_context.sessions_machine.is_some() => ("Sessions on this computer".into(), "Search sessions".into()),
         PickerKind::Open { machine: Some(m), project: None, .. } => (format!("harnesses · @{}", app.fleet.machine_name(m)), "Search this machine's harnesses — esc back".into()),
-        PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", p.rsplit('/').next().unwrap_or(p)), "Search this project's harnesses — esc back".into()),
+        PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", crate::sys::path_name(p)),"Search this project's harnesses — esc back".into()),
         PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands   @ machines   # projects   : models   * store   ? help".into()),
         PickerKind::Palette => ("commands".into(), "Run anything by name".into()),
         PickerKind::Machines => ("machines".into(), "Choose a machine, then one of its harnesses".into()),
@@ -520,7 +520,7 @@ pub fn project_rows(app: &App) -> Vec<Row> {
     }
     let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
     let mut rows: Vec<(u64, Row)> = groups.into_iter().map(|((machine, root), (all, live, recent))| {
-        let name = root.rsplit('/').next().unwrap_or(&root).to_string();
+        let name = crate::sys::path_name(&root).to_string();
         let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
         let short = if !home.is_empty() && root.starts_with(&home) { format!("~{}", &root[home.len()..]) } else { root.clone() };
         // Its harnesses in counts (who needs you there), then how many.

@@ -22,7 +22,7 @@ const noPause = async () => {}
  *  account signed in there both its owner's. */
 const OWN_HOST = { hostDispatch: true, signedIn: 'peer' } as const
 const ownMachine = (f: { start: Record<string, unknown> }) => Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
-function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string }; screen?: string } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -60,6 +60,7 @@ function fixture(options: { state?: Record<string, unknown> | Error; refused?: s
       nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } }
     }
     if (type === 'agent_close') {
+      if (payload.mode === 'inspect') return { activity: options.screen ?? 'unknown' }
       if (options.loseClose) throw new Error('Close interrupted')
       return { closed: true, agentId: payload.agentId }
     }
@@ -1304,6 +1305,28 @@ it('waits for the initial engine binding before recording a timed launch identit
   expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open))
     .toMatchObject({ error: 'START_PENDING', creationId: expect.any(String), harnessId: expect.any(String) })
   expect(f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).some(c => c?.type === 'agent.started')).toBe(false)
+})
+
+// Codex's "Hooks need review" in a pane nobody had open: the start failed twice as "did not start within 3 minutes", and
+// Codex was suspended on that computer (a Swarm start on DESKTOP-0TFH0OJ, 2026-11-04).
+it('says so when the launched engine waits on its screen for a person', async () => {
+  const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' }, screen: 'needs_input' })
+  const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'asking-start', request: f.start.request }, f.scoped, where, f.open)
+  expect(result).toMatchObject({ error: 'START_PENDING', harnessId: 'native', needsPerson: true })
+  expect(result.detail).toContain('Builder is waiting on its screen for a person to answer')
+  expect(result.detail).toContain('do not make another start request')
+  expect(f.request).toHaveBeenCalledWith('agent_close', expect.objectContaining({ agentId: 'native', mode: 'inspect' }), expect.any(Number))
+  // Only an inspect: nothing here may close the agent the person has to answer.
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_close' && (c[1] as { mode?: string }).mode !== 'inspect')).toEqual([])
+})
+
+it('waits as before when the screen cannot be read, or asks nothing', async () => {
+  for (const screen of ['working', 'unknown']) {
+    const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' }, screen })
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: `calm-${screen}`, request: f.start.request }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ error: 'START_PENDING', detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' })
+    expect(result).not.toHaveProperty('needsPerson')
+  }
 })
 
 describe('Swarm starts for another person\'s project', () => {
