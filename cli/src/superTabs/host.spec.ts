@@ -3237,7 +3237,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     expect(t.log).toHaveBeenCalledWith('Could not add this machine to its Swarm: Refused: STARTS_PENDING')
   })
 
-  it.each(['MACHINES_FULL', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
+  it.each(['MACHINES_FULL', 'MACHINE_LIMIT_PER_PERSON', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
     const t = joining()
     t.refusals.push(code)
     await t.pass(0)
@@ -3248,6 +3248,16 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     t.rows[0]!.joinSwarm = true
     await t.pass(24 * 60 * 60_000 + 2)
     expect(t.prepare).toHaveBeenCalledTimes(2)
+  })
+  // A CLI older than MACHINE_LIMIT_PER_PERSON retries it like any refusal: the backend stops asking where it would refuse
+  // (backend read/hostRows.ts, #2637), and the host then asks no more.
+  it('stops asking once the roster does, after a refusal it does not know', async () => {
+    const t = joining()
+    t.refusals.push('A_CODE_THIS_CLI_DOES_NOT_KNOW')
+    await t.pass(0)
+    t.rows[0]!.joinSwarm = false
+    for (const at of [60_000, 30 * 60_000, 24 * 60 * 60_000]) await t.pass(at)
+    expect(t.prepare).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -3293,6 +3303,19 @@ describe('adding this Mac\'s Harness Team account where this Mac was added', () 
     t.rows.splice(0, 1)
     await t.pass(120_000)
     expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['MACHINES_FULL', 'MACHINE_LIMIT_PER_PERSON', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
+    const t = joining()
+    t.refusals.push(code)
+    await t.pass(0)
+    await t.pass(24 * 60 * 60_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+    const row = t.rows.splice(0, 1)
+    await t.pass(24 * 60 * 60_000 + 1)
+    t.rows.unshift(...row)
+    await t.pass(24 * 60 * 60_000 + 2)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
   })
 
   it('backs off while the team account cannot prepare (offline, signed out), and says why', async () => {

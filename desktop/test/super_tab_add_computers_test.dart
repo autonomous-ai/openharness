@@ -302,8 +302,8 @@ void main() {
     final (:f, :c) = await swarm((_) {});
     await openBox(tester, c, f.app);
     const full =
-        'This Swarm is at its limit of 32 machines. One has to be rem'
-        'oved before another can be added.';
+        'You have 20 machines in this Swarm, the most one person can add.'
+        ' Remove one before adding another.';
     f.connection.server.refuseContributions['m'] = full;
     await tester.tap(find.text('Add 1'));
     await settle(tester);
