@@ -25,7 +25,7 @@ import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCE
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { databaseProposalReads, openProposals, proposalChat, type OpenProposal } from './proposals.js'
+import { databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
@@ -2686,6 +2686,9 @@ export class SuperTabStore {
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    // A proposal's root joins its chat's open proposals with it, which the Tasks view reads by id (proposals.ts).
+    const proposals = openProposalRows(tabId, rows)
+    if (proposals.length) await tx.superTabOpenProposal.createMany({ data: proposals })
     // A reply's thread summary, in this transaction (pageReads.ts refreshThreads).
     await refreshReplies(tx, tabId, rows)
     for (const message of messages) {

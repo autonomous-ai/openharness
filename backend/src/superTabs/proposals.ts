@@ -134,7 +134,10 @@ export function databaseProposalReads(tx: Transaction, tabId: string, chatId: st
   const upsert = (id: string, sequence: number) => ({ q: { _id: id },
     u: { $setOnInsert: { tabId, conversationId: chatId, sequence, createdAt: { $date: new Date().toISOString() } } }, upsert: true })
   return {
-    seededAt: async () => (await tx.superTabOpenProposal.findUnique({ where: { id: mark }, select: { createdAt: true } }))?.createdAt.getTime() ?? null,
+    seededAt: async () => {
+      const found = (await readBy(tx, OPEN, 'id', [{ $match: { _id: mark } }, { $project: { createdAt: 1 } }]))[0]
+      return found ? date(found.createdAt).getTime() : null
+    },
     // The roots first and the mark last: a seed that stops between them is run again.
     seed: async roots => {
       await tx.$runCommandRaw({ update: OPEN, updates: [...roots.map(r => upsert(r.id, r.sequence)), upsert(mark, -1)] as unknown as Prisma.InputJsonArray })
