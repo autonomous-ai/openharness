@@ -35,17 +35,25 @@ class SharedTabNotice extends StatefulWidget {
   }
 
   /// A daemon notice in words: what happened, and what to do.
-  static String noticeText(model.SharedTabNotice notice, model.SharedTabsSnapshot snapshot) {
-    final tab = snapshot.tabs.where((t) => t.sharedTabId == notice.sharedTabId).firstOrNull;
+  static String noticeText(
+    model.SharedTabNotice notice,
+    model.SharedTabsSnapshot snapshot,
+  ) {
+    final tab = snapshot.tabs
+        .where((t) => t.sharedTabId == notice.sharedTabId)
+        .firstOrNull;
     final owner = shortSharedText(notice.ownerEmail ?? tab?.ownerEmail ?? '');
     return switch (notice.kind) {
       'removed' =>
         'You were removed from ${owner.isEmpty ? 'a' : '$owner\'s'} tab',
       'full' => sharedTabErrorText(const SharedTabsFailure('TAB_FULL', '')),
-      'relay_taken' => sharedTabErrorText(const SharedTabsFailure('RELAY_TAKEN', '')),
-      'unsent' || 'refused' => notice.error == null
-          ? 'A message to a shared tab was not sent. Try again in a moment.'
-          : sharedTabErrorText(SharedTabsFailure(notice.error!, '')),
+      'relay_taken' => sharedTabErrorText(
+        const SharedTabsFailure('RELAY_TAKEN', ''),
+      ),
+      'unsent' || 'refused' =>
+        notice.error == null
+            ? 'A message to a shared tab was not sent. Try again in a moment.'
+            : sharedTabErrorText(SharedTabsFailure(notice.error!, '')),
       _ => 'Something changed in a shared tab.',
     };
   }
@@ -95,7 +103,9 @@ class _SharedTabNoticeState extends State<SharedTabNotice> {
     _loading = account;
     var seen = <String>{};
     try {
-      final raw = await widget.notifier.deviceLibraryStorage?.read(_key(account));
+      final raw = await widget.notifier.deviceLibraryStorage?.read(
+        _key(account),
+      );
       final json = raw == null ? null : jsonDecode(raw);
       if (json is List) seen = {...json.whereType<String>()};
     } catch (_) {}
@@ -115,7 +125,10 @@ class _SharedTabNoticeState extends State<SharedTabNotice> {
     unawaited(
       Future(() async {
         try {
-          await widget.notifier.deviceLibraryStorage?.write(_key(account), jsonEncode(kept));
+          await widget.notifier.deviceLibraryStorage?.write(
+            _key(account),
+            jsonEncode(kept),
+          );
         } catch (_) {}
       }),
     );
@@ -135,12 +148,16 @@ class _SharedTabNoticeState extends State<SharedTabNotice> {
       return const SizedBox.shrink();
     }
     model.SharedTabInvite? invite;
-    final live = snapshot.invites.where((i) => _inviteKey(i) == _current).firstOrNull;
+    final live = snapshot.invites
+        .where((i) => _inviteKey(i) == _current)
+        .firstOrNull;
     if (live != null) {
       invite = live;
     } else {
       _current = null;
-      invite = snapshot.invites.where((i) => !_seen!.contains(_inviteKey(i))).lastOrNull;
+      invite = snapshot.invites
+          .where((i) => !_seen!.contains(_inviteKey(i)))
+          .lastOrNull;
       if (invite != null) {
         final id = _current = _inviteKey(invite);
         // Recorded after the frame: build has no side effects of its own.
@@ -165,7 +182,9 @@ class _SharedTabNoticeState extends State<SharedTabNotice> {
           decoration: BoxDecoration(
             color: tint,
             border: Border(
-              bottom: BorderSide(color: grid.AppPalette.warn.withValues(alpha: 0.28)),
+              bottom: BorderSide(
+                color: grid.AppPalette.warn.withValues(alpha: 0.28),
+              ),
             ),
           ),
           child: Padding(
@@ -180,7 +199,9 @@ class _SharedTabNoticeState extends State<SharedTabNotice> {
                     key: const Key('shared-tab-notice'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.body(color: grid.AppPalette.textPrimary),
+                    style: grid.AppType.body(
+                      color: grid.AppPalette.textPrimary,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),

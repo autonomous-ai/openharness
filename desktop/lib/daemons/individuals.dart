@@ -160,10 +160,8 @@ int oneIn(DaemonRoster roster, String id, DaemonTraits traits) {
 }
 
 /// `1 in 2,130` (card.mjs `oneInText`).
-String oneInText(int n) => '1 in ${n.toString().replaceAllMapped(
-  RegExp(r'\B(?=(\d{3})+(?!\d))'),
-  (_) => ',',
-)}';
+String oneInText(int n) =>
+    '1 in ${n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}';
 
 /// An individual's flags as card lines, [width] at most (card.mjs
 /// `flagLines`): wrapped at spaces as a long command is, every line but the

@@ -11391,6 +11391,7 @@ class AppNotifier extends ChangeNotifier {
           prev.lastActivityAt != agent.lastActivityAt ||
           prev.createdAt != agent.createdAt ||
           prev.closeSupported != agent.closeSupported ||
+          prev.nameChosen != agent.nameChosen ||
           prev.closePlanState != agent.closePlanState ||
           prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||

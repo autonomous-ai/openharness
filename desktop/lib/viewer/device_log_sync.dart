@@ -10,7 +10,12 @@ import 'group_sync.dart';
 import 'viewer_key_store.dart';
 
 export 'device_history.dart'
-    show DeviceDepartedCopy, DeviceLogDeparted, DeviceRemovalCopy, DeviceRemovalNotice, historySentence;
+    show
+        DeviceDepartedCopy,
+        DeviceLogDeparted,
+        DeviceRemovalCopy,
+        DeviceRemovalNotice,
+        historySentence;
 
 /// The account's device key log, on a device with no harness CLI — the viewer's half of
 /// cli/src/lib/e2ee/deviceLogSyncer.ts.
@@ -25,13 +30,19 @@ export 'device_history.dart'
 /// once, on any of their devices.
 
 /// What `GET /api/device-keys?since=` answered; null from the fetcher when there is no log to read.
-typedef DeviceLogFetched = ({String acct, DevLogHead head, List<Object?> entries});
+typedef DeviceLogFetched = ({
+  String acct,
+  DevLogHead head,
+  List<Object?> entries,
+});
 
 /// `POST /api/device-keys`: the new head, or a refusal (with the current head on `STALE_HEAD`).
 typedef DeviceLogAppendAnswer = ({DevLogHead? head, String? error});
 
 typedef DeviceLogFetch = Future<DeviceLogFetched?> Function(int since);
-typedef DeviceLogAppend = Future<DeviceLogAppendAnswer?> Function(DevLogEntry entry);
+typedef DeviceLogAppend = Future<DeviceLogAppendAnswer?> Function(
+  DevLogEntry entry,
+);
 
 /// `GET /api/device-keys/acks?since=`: the acknowledgements of keys added after entry `since`, unchecked
 /// (every one is judged here); null when there are none to read (a backend from before them: 404).
@@ -43,7 +54,11 @@ typedef DeviceLogPostAck = Future<bool> Function(DevAck ack);
 /// Another of the person's trusted devices said "It's mine" for a key that was new here, so it is not New
 /// here any more: which device ([by]), what it was called then, and when this app read it. Trusts nothing.
 class DeviceLogConfirmed {
-  const DeviceLogConfirmed({required this.by, required this.label, required this.at});
+  const DeviceLogConfirmed({
+    required this.by,
+    required this.label,
+    required this.at,
+  });
 
   final String by;
   final String label;
@@ -67,11 +82,17 @@ class DeviceLogFreeze {
   final int at;
   final DevLogHead lastGoodHead;
 
-  Map<String, Object?> toJson() => {'reason': reason, 'at': at, 'lastGoodHead': lastGoodHead.toJson()};
+  Map<String, Object?> toJson() => {
+    'reason': reason,
+    'at': at,
+    'lastGoodHead': lastGoodHead.toJson(),
+  };
 
   static DeviceLogFreeze? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final reason = raw['reason'], at = raw['at'], head = DevLogHead.fromJson(raw['lastGoodHead']);
+    final reason = raw['reason'],
+        at = raw['at'],
+        head = DevLogHead.fromJson(raw['lastGoodHead']);
     if (reason is! String || at is! int || head == null) return null;
     return DeviceLogFreeze(reason, at, head);
   }
@@ -145,7 +166,10 @@ class _File {
 
   Map<String, Object?> toJson() => {
     'state': state?.toJson(),
-    'recent': [for (final e in recent.skip(max(0, recent.length - _recentKept))) e.toJson()],
+    'recent': [
+      for (final e in recent.skip(max(0, recent.length - _recentKept)))
+        e.toJson(),
+    ],
     'frozen': frozen?.toJson(),
     'notifiedUpTo': notifiedUpTo,
     if (joinedSeq != null) ...{
@@ -160,19 +184,34 @@ class _File {
     if (owner != null) 'owner': owner,
     if (joining) 'joining': true,
     if (looseRemoved.isNotEmpty)
-      'looseRemoved': [for (final e in looseRemoved.skip(max(0, looseRemoved.length - _recentKept))) e.toJson()],
+      'looseRemoved': [
+        for (final e in looseRemoved.skip(
+          max(0, looseRemoved.length - _recentKept),
+        ))
+          e.toJson(),
+      ],
     if (departed.isNotEmpty)
-      'departed': [for (final d in departed.skip(max(0, departed.length - _departedKept))) d.toJson()],
-    if (confirmed.isNotEmpty) 'confirmed': {for (final e in confirmed.entries) e.key: e.value.toJson()},
+      'departed': [
+        for (final d in departed.skip(max(0, departed.length - _departedKept)))
+          d.toJson(),
+      ],
+    if (confirmed.isNotEmpty)
+      'confirmed': {for (final e in confirmed.entries) e.key: e.value.toJson()},
   };
 
   static Map<String, DeviceLogConfirmed> _confirmed(Object? raw) => {
     if (raw is Map)
       for (final e in raw.entries)
-        if (e.key is String) e.key as String: ?DeviceLogConfirmed.fromJson(e.value),
+        if (e.key is String)
+          e.key as String: ?DeviceLogConfirmed.fromJson(e.value),
   };
 
-  static List<String> _strings(Object? raw) => raw is List ? [for (final v in raw) if (v is String) v] : <String>[];
+  static List<String> _strings(Object? raw) => raw is List
+      ? [
+          for (final v in raw)
+            if (v is String) v,
+        ]
+      : <String>[];
 
   static _File parse(Object? raw) {
     if (raw is! Map) return _File(null, [], null, 0);
@@ -180,18 +219,30 @@ class _File {
     final loose = raw['looseRemoved'];
     return _File(
       DevLogState.fromJson(raw['state']),
-      recent is List ? recent.map(DevLogEntry.parse).whereType<DevLogEntry>().toList() : [],
+      recent is List
+          ? recent.map(DevLogEntry.parse).whereType<DevLogEntry>().toList()
+          : [],
       DeviceLogFreeze.fromJson(raw['frozen']),
       raw['notifiedUpTo'] is int ? raw['notifiedUpTo'] as int : 0,
-      joinedSeq: raw['joinedSeq'] is int && (raw['joinedSeq'] as int) >= 0 ? raw['joinedSeq'] as int : null,
+      joinedSeq: raw['joinedSeq'] is int && (raw['joinedSeq'] as int) >= 0
+          ? raw['joinedSeq'] as int
+          : null,
       preLog: _strings(raw['preLog']),
       pending: _strings(raw['pending']),
       announced: _strings(raw['announced']),
       suspended: _strings(raw['suspended']),
-      baselineSeen: raw['baselineSeen'] is bool ? raw['baselineSeen'] as bool : true,
-      looseRemoved: loose is List ? loose.map(DevLogEntry.parse).whereType<DevLogEntry>().toList() : [],
-      reviewedSeq: raw['reviewedSeq'] is int && (raw['reviewedSeq'] as int) >= 0 ? raw['reviewedSeq'] as int : null,
-      owner: raw['owner'] is String && (raw['owner'] as String).isNotEmpty ? raw['owner'] as String : null,
+      baselineSeen: raw['baselineSeen'] is bool
+          ? raw['baselineSeen'] as bool
+          : true,
+      looseRemoved: loose is List
+          ? loose.map(DevLogEntry.parse).whereType<DevLogEntry>().toList()
+          : [],
+      reviewedSeq: raw['reviewedSeq'] is int && (raw['reviewedSeq'] as int) >= 0
+          ? raw['reviewedSeq'] as int
+          : null,
+      owner: raw['owner'] is String && (raw['owner'] as String).isNotEmpty
+          ? raw['owner'] as String
+          : null,
       joining: raw['joining'] == true,
       departed: DeviceLogDeparted.listFromJson(raw['departed']),
       confirmed: _confirmed(raw['confirmed']),
@@ -260,7 +311,11 @@ class DeviceLogListing {
     this.registerError,
   });
 
-  static const empty = DeviceLogListing(members: [], frozen: null, frozenPeers: []);
+  static const empty = DeviceLogListing(
+    members: [],
+    frozen: null,
+    frozenPeers: [],
+  );
 
   final List<DeviceLogRow> members;
   final DeviceLogFreeze? frozen;
@@ -302,20 +357,23 @@ const _gossipHashes = 64;
 int? devLogDivergence(DevLogState state, Object? theirs) {
   if (theirs is! Map) return null;
   final hashes = theirs['hashes'];
-  if (hashes is! List || hashes.isEmpty || hashes.length > 4 * _gossipHashes) return null;
+  if (hashes is! List || hashes.isEmpty || hashes.length > 4 * _gossipHashes)
+    return null;
   final window = <int, String>{};
   var prev = 0;
   for (final h in hashes) {
     if (h is! Map) return null;
     final seq = h['seq'], hash = h['hash'];
-    if (seq is! int || seq < 1 || hash is! String || hash.length > 128) return null;
+    if (seq is! int || seq < 1 || hash is! String || hash.length > 128)
+      return null;
     if (prev != 0 && seq != prev + 1) return null;
     prev = seq;
     window[seq] = hash;
   }
   // The window must end where the peer's head is, or it describes some other log.
   final head = DevLogHead.fromJson(theirs['head']);
-  if (head == null || head.seq != prev || head.hash != window[prev]) return null;
+  if (head == null || head.seq != prev || head.hash != window[prev])
+    return null;
   final first = window.keys.reduce(min);
   for (final e in window.entries) {
     if (e.key > state.head.seq || state.hashes[e.key - 1] == e.value) continue;
@@ -325,7 +383,6 @@ int? devLogDivergence(DevLogState state, Object? theirs) {
   }
   return null;
 }
-
 
 /// What a step under the file lock found to tell the app — said once the lock is let go, since a
 /// listener may well read the log again (and signing out waits on the app).
@@ -337,7 +394,9 @@ class _Effects {
 }
 
 class DeviceLogRebaseline {
-  const DeviceLogRebaseline(this.head, this.added, this.removed) : logChanged = false, otherAccount = false;
+  const DeviceLogRebaseline(this.head, this.added, this.removed)
+    : logChanged = false,
+      otherAccount = false;
 
   /// The backend's list is no longer the one that was previewed: nothing was done. Branch on
   /// [logChanged]; [head], [added] and [removed] are empty placeholders then.
@@ -515,9 +574,19 @@ class ViewerDeviceLog {
         }
         final mine = state.active[pub];
         if (mine != null) _registerError = null;
-        if (mine != null && (mine.label == name || mine.kind != 'viewer')) return;
+        if (mine != null && (mine.label == name || mine.kind != 'viewer'))
+          return;
         final entry = await signDevLogEntry(
-          nextDevLogEntry(state, op: 'add', pub: pub, kind: 'viewer', machineId: '', label: name, signer: pub, at: _now()),
+          nextDevLogEntry(
+            state,
+            op: 'add',
+            pub: pub,
+            kind: 'viewer',
+            machineId: '',
+            label: name,
+            signer: pub,
+            at: _now(),
+          ),
           identity,
         );
         final answer = await append(entry);
@@ -532,7 +601,9 @@ class ViewerDeviceLog {
           return;
         }
         await refresh();
-        await _sleep(Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)));
+        await _sleep(
+          Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)),
+        );
       }
     } catch (_) {
       // [ensureRegistered] tries again: a machine refusing this app, a socket back, the app in front.
@@ -568,7 +639,8 @@ class ViewerDeviceLog {
   /// Where this app's key stands in the file: null when it is not there and nothing keeps it out.
   Future<DeviceLogRegistration?> _registration() async {
     final file = await _read();
-    if (file.state?.active.containsKey(await _selfPub()) ?? false) return DeviceLogRegistration.active;
+    if (file.state?.active.containsKey(await _selfPub()) ?? false)
+      return DeviceLogRegistration.active;
     return file.frozen != null ? DeviceLogRegistration.frozen : null;
   }
 
@@ -590,13 +662,15 @@ class ViewerDeviceLog {
     final minted = _mintEpoch();
     _epoch = minted;
     _awaitingAcct = minted;
-    _epochSaving = keys.writeSignInEpoch(minted).then(
-      (_) {},
-      onError: (Object _) {
-        // Not kept, not used: after a restart the file would be another sign-in's than the store's.
-        if (_epoch == minted) _epoch = previous;
-      },
-    );
+    _epochSaving = keys
+        .writeSignInEpoch(minted)
+        .then(
+          (_) {},
+          onError: (Object _) {
+            // Not kept, not used: after a restart the file would be another sign-in's than the store's.
+            if (_epoch == minted) _epoch = previous;
+          },
+        );
   }
 
   /// Who the person just signed in as, by hand: the profile's user id (`/api/auth/me`), which is what
@@ -617,7 +691,9 @@ class ViewerDeviceLog {
   }
 
   /// Read and verify whatever the log gained. Concurrent calls share one read. Never throws.
-  Future<void> refresh() => _refreshing ??= _doRefresh().catchError((Object _) {}).whenComplete(() => _refreshing = null);
+  Future<void> refresh() => _refreshing ??= _doRefresh()
+      .catchError((Object _) {})
+      .whenComplete(() => _refreshing = null);
 
   /// The tail of the queue every read-modify-write of the file waits in. A refresh, a peer's tail, a
   /// dismissal and a review each read the file, change it and write it back; two of them interleaved
@@ -725,7 +801,11 @@ class ViewerDeviceLog {
   /// this app trusted under it ([trust]: [ViewerKeyStore.trustSnapshot]). [keep]: the account about
   /// to be restored, never the one dropped to make room — it was, when it was the oldest kept, and
   /// coming back to it then started its list over. Under the lock.
-  Future<void> _archiveIn(_File file, {Map<String, Object?>? trust, String? keep}) async {
+  Future<void> _archiveIn(
+    _File file, {
+    Map<String, Object?>? trust,
+    String? keep,
+  }) async {
     final acct = file.state?.acct;
     if (acct == null) return;
     final all = await _archived()
@@ -741,7 +821,11 @@ class ViewerDeviceLog {
   /// the archive — a crash in between leaves it in both, never in neither. Null when there is none.
   /// With [swapTrust] (another account's log was live), what this app trusted under [acct] is trusted
   /// again — and nothing of the account left. Under the lock.
-  Future<_File?> _restoreIn(String acct, String? owner, {required bool swapTrust}) async {
+  Future<_File?> _restoreIn(
+    String acct,
+    String? owner, {
+    required bool swapTrust,
+  }) async {
     final raw = (await _archived())[acct];
     final kept = _File.parse(raw);
     if (kept.state?.acct != acct) return null;
@@ -752,7 +836,8 @@ class ViewerDeviceLog {
       final trust = _trustOf(raw);
       await keys.writeTrust(trust ?? const {});
       // Kept by a build that did not keep trust with it: what the log names is trusted again.
-      if (trust == null && kept.frozen == null) await _trust(kept.state!.active.values.toList());
+      if (trust == null && kept.frozen == null)
+        await _trust(kept.state!.active.values.toList());
     }
     final all = await _archived()
       ..remove(acct);
@@ -770,7 +855,10 @@ class ViewerDeviceLog {
     final selfPub = await _selfPub();
     final carried = [
       for (final k in await _archivedSuspended())
-        if (state.active.containsKey(k) && k != selfPub && !file.suspended.contains(k)) k,
+        if (state.active.containsKey(k) &&
+            k != selfPub &&
+            !file.suspended.contains(k))
+          k,
     ];
     if (carried.isEmpty) return;
     file
@@ -780,7 +868,9 @@ class ViewerDeviceLog {
 
   /// What this app trusted under a kept log ([_archiveIn]); null in one kept before that existed.
   static Map<Object?, Object?>? _trustOf(Object? kept) =>
-      kept is Map && kept['trust'] is Map ? kept['trust'] as Map<Object?, Object?> : null;
+      kept is Map && kept['trust'] is Map
+      ? kept['trust'] as Map<Object?, Object?>
+      : null;
 
   /// A suspension lifted here holds for every kept account too: none of them keeps [pubs] out. Under
   /// the lock.
@@ -791,7 +881,10 @@ class ViewerDeviceLog {
     for (final e in all.entries.toList()) {
       final f = _File.parse(e.value);
       if (!f.suspended.any(lift.contains)) continue;
-      f.suspended = [for (final k in f.suspended) if (!lift.contains(k)) k];
+      f.suspended = [
+        for (final k in f.suspended)
+          if (!lift.contains(k)) k,
+      ];
       all[e.key] = {...f.toJson(), 'trust': ?_trustOf(e.value)};
       changed = true;
     }
@@ -799,7 +892,11 @@ class ViewerDeviceLog {
   }
 
   /// [gone], just taken out by [e], kept flagged: it was new here and nobody had looked at it yet.
-  DeviceLogDeparted _departedOf(DevLogMember gone, DevLogEntry e, String signerLabel) => DeviceLogDeparted(
+  DeviceLogDeparted _departedOf(
+    DevLogMember gone,
+    DevLogEntry e,
+    String signerLabel,
+  ) => DeviceLogDeparted(
     pub: gone.pub,
     label: gone.label,
     kind: gone.kind,
@@ -813,10 +910,17 @@ class ViewerDeviceLog {
   );
 
   /// [prev] plus [more] (a key once, at its newest), the oldest dropped past [_departedKept].
-  List<DeviceLogDeparted> _withDeparted(List<DeviceLogDeparted> prev, List<DeviceLogDeparted> more) {
+  List<DeviceLogDeparted> _withDeparted(
+    List<DeviceLogDeparted> prev,
+    List<DeviceLogDeparted> more,
+  ) {
     if (more.isEmpty) return prev;
     final pubs = {for (final d in more) d.pub};
-    final all = [for (final d in prev) if (!pubs.contains(d.pub)) d, ...more];
+    final all = [
+      for (final d in prev)
+        if (!pubs.contains(d.pub)) d,
+      ...more,
+    ];
     return all.skip(max(0, all.length - _departedKept)).toList();
   }
 
@@ -854,19 +958,32 @@ class ViewerDeviceLog {
       known.remove(e.pub);
       if (e.pub == selfPub || next.active[e.pub] != null) continue;
       // Added at an entry this app never verified, and gone again before it could see it.
-      final unseen = was == null &&
+      final unseen =
+          was == null &&
           add != null &&
-          (add.seq > verified.hashes.length || verified.hashes[add.seq - 1] != devLogHash(add)) &&
+          (add.seq > verified.hashes.length ||
+              verified.hashes[add.seq - 1] != devLogHash(add)) &&
           !pre.contains(e.pub);
       if ((was != null && base.pending.contains(e.pub)) || unseen) {
-        final member = was ??
-            DevLogMember(pub: e.pub, kind: add!.kind, machineId: add.machineId, label: label ?? add.label, addedAt: add.at, seq: add.seq);
+        final member =
+            was ??
+            DevLogMember(
+              pub: e.pub,
+              kind: add!.kind,
+              machineId: add.machineId,
+              label: label ?? add.label,
+              addedAt: add.at,
+              seq: add.seq,
+            );
         out[e.pub] = _departedOf(member, e, known[e.signer]?.label ?? '');
       }
     }
     // Pending here, and not on the reviewed list at all (a branch the backend no longer serves).
     for (final m in removed) {
-      if (out.containsKey(m.pub) || m.pub == selfPub || !base.pending.contains(m.pub)) continue;
+      if (out.containsKey(m.pub) ||
+          m.pub == selfPub ||
+          !base.pending.contains(m.pub))
+        continue;
       out[m.pub] = DeviceLogDeparted(
         pub: m.pub,
         label: m.label,
@@ -917,7 +1034,8 @@ class ViewerDeviceLog {
       // first read of a log is over: what is verified from here on is news. Held open, a backend that
       // stalls the second page would have every key it adds later taken for one there at joining.
       await _endJoin();
-      if (expecting && !_registering && round == _signInRound) _signingInAgain = false;
+      if (expecting && !_registering && round == _signInRound)
+        _signingInAgain = false;
     }
     // After the entries, so a key added and confirmed while this app was closed is first announced, as
     // every new key is — the one-time "New device: X" never waits on, or is skipped for, anyone's word —
@@ -926,7 +1044,10 @@ class ViewerDeviceLog {
   }
 
   /// [marks] cut to the keys still active, as a file's [_File.confirmed].
-  Map<String, DeviceLogConfirmed> _keptConfirmed(Map<String, DeviceLogConfirmed> marks, DevLogState state) => {
+  Map<String, DeviceLogConfirmed> _keptConfirmed(
+    Map<String, DeviceLogConfirmed> marks,
+    DevLogState state,
+  ) => {
     for (final e in marks.entries)
       if (state.active.containsKey(e.key)) e.key: e.value,
   };
@@ -935,12 +1056,15 @@ class ViewerDeviceLog {
   /// suspended, not this app — and none at all from a log that is frozen or not this sign-in's.
   Future<List<DevLogMember>> _ackable(_File file) async {
     final state = file.state;
-    if (state == null || file.frozen != null || !await _ownsFile(file)) return const [];
+    if (state == null || file.frozen != null || !await _ownsFile(file))
+      return const [];
     final selfPub = await _selfPub();
     final suspended = await suspendedPubs();
     return [
       for (final k in file.pending.toSet())
-        if (state.active[k] case final m? when m.pub != selfPub && !suspended.contains(k)) m,
+        if (state.active[k] case final m?
+            when m.pub != selfPub && !suspended.contains(k))
+          m,
     ];
   }
 
@@ -976,21 +1100,34 @@ class ViewerDeviceLog {
         final suspended = await suspendedPubs();
         final roster = GroupRoster.parse(await keys.groupRoster());
         final inRoster = {for (final m in roster.members) m.pub};
-        final tombstoned = {for (final t in roster.removed) if (!inRoster.contains(t.pub)) t.pub};
+        final tombstoned = {
+          for (final t in roster.removed)
+            if (!inRoster.contains(t.pub)) t.pub,
+        };
         for (final r in raw) {
           final ack = (await checkDevAck(state, r)).ack;
-          if (ack == null || !open.contains(ack.pub) || out.containsKey(ack.pub)) continue;
+          if (ack == null ||
+              !open.contains(ack.pub) ||
+              out.containsKey(ack.pub))
+            continue;
           if (ack.signer == selfPub ||
               pending.contains(ack.signer) ||
               suspended.contains(ack.signer) ||
               tombstoned.contains(ack.signer)) {
             continue;
           }
-          out[ack.pub] = DeviceLogConfirmed(by: ack.signer, label: state.active[ack.signer]!.label, at: _now());
+          out[ack.pub] = DeviceLogConfirmed(
+            by: ack.signer,
+            label: state.active[ack.signer]!.label,
+            at: _now(),
+          );
         }
         if (out.isEmpty) return out;
         file
-          ..pending = [for (final k in file.pending) if (!out.containsKey(k)) k]
+          ..pending = [
+            for (final k in file.pending)
+              if (!out.containsKey(k)) k,
+          ]
           ..confirmed = _keptConfirmed({...file.confirmed, ...out}, state);
         await _write(file);
         return out;
@@ -1005,7 +1142,11 @@ class ViewerDeviceLog {
     await _marks();
     var bootstrap = ((await _read()).state?.head.seq ?? 0) == 0;
     // The file's own `joining` decides, each page: the first page of a fresh log is what sets it.
-    for (var page = 0; page < ((await _read()).joining ? _joinPages : _pages); page++) {
+    for (
+      var page = 0;
+      page < ((await _read()).joining ? _joinPages : _pages);
+      page++
+    ) {
       final seen = (await _read()).state;
       final since = seen?.head.seq ?? 0;
       final got = await fetch(since);
@@ -1024,7 +1165,9 @@ class ViewerDeviceLog {
             // Another account only after a sign-in by hand here. Otherwise it is the backend saying so
             // — and starting over would clear every mark a fork put on the list, the real log then
             // adopted whole.
-            if (local == null || !signedInAgain || !await _mayStartOver(local, got.acct)) {
+            if (local == null ||
+                !signedInAgain ||
+                !await _mayStartOver(local, got.acct)) {
               await _freezeIn(file, 'invalid', effects);
               return false;
             }
@@ -1041,7 +1184,11 @@ class ViewerDeviceLog {
           // are links made before the log existed.
           final leaving = file.state != null;
           if (leaving) {
-            await _archiveIn(file, trust: await keys.trustSnapshot(), keep: got.acct);
+            await _archiveIn(
+              file,
+              trust: await keys.trustSnapshot(),
+              keep: got.acct,
+            );
             _frozenPeers.clear();
           }
           // Back to an account this app was signed in to before: its log as verified then, and every
@@ -1072,7 +1219,9 @@ class ViewerDeviceLog {
           bootstrap = true;
           if (got.head.seq == 0) return false;
           if (since != 0) return true;
-        } else if (seen == null || seen.acct != file.state!.acct || seen.head != file.state!.head) {
+        } else if (seen == null ||
+            seen.acct != file.state!.acct ||
+            seen.head != file.state!.head) {
           // The log moved here while this page was on its way (a peer handed over its tail): the page
           // answers a question nobody is asking any more — judged against the newer head it would read
           // as a rollback, or as entries out of order. Ask again from where the log is now.
@@ -1088,14 +1237,16 @@ class ViewerDeviceLog {
           return false;
         }
         if (got.head.seq == state.head.seq) {
-          if (got.head.hash != state.head.hash) await _freezeIn(file, 'fork', effects);
+          if (got.head.hash != state.head.hash)
+            await _freezeIn(file, 'fork', effects);
           return false;
         }
         if (got.entries.isEmpty) {
           await _freezeIn(file, 'invalid', effects);
           return false;
         }
-        if (!await _acceptIn(file, got.entries, bootstrap, effects)) return false;
+        if (!await _acceptIn(file, got.entries, bootstrap, effects))
+          return false;
         return file.state!.head.seq < got.head.seq;
       });
       await _fire(effects);
@@ -1125,7 +1276,11 @@ class ViewerDeviceLog {
     List<String> pending,
     Map<String, ({String label, String kind})> known,
   ) {
-    if (e.op != 'remove' || e.seq <= joinedSeq || e.pub == selfPub || e.signer == selfPub) return null;
+    if (e.op != 'remove' ||
+        e.seq <= joinedSeq ||
+        e.pub == selfPub ||
+        e.signer == selfPub)
+      return null;
     final was = known[e.pub];
     return DeviceRemovalNotice(
       pub: e.pub,
@@ -1161,7 +1316,12 @@ class ViewerDeviceLog {
   }
 
   /// Apply [entries] to [file] and write it; under the lock. What the app is told goes in [effects].
-  Future<bool> _acceptIn(_File file, List<Object?> entries, bool bootstrap, _Effects effects) async {
+  Future<bool> _acceptIn(
+    _File file,
+    List<Object?> entries,
+    bool bootstrap,
+    _Effects effects,
+  ) async {
     // While the first read of this log is open (a peer's tail can arrive between its pages too):
     // whatever is verified before it reaches the head is what was there at joining.
     final joining = file.joining;
@@ -1169,7 +1329,13 @@ class ViewerDeviceLog {
     try {
       applied = await applyDevLogEntries(file.state!, entries);
     } on DevLogError catch (err) {
-      await _freezeIn(file, err.code == 'BROKEN_CHAIN' || err.code == 'OUT_OF_ORDER' ? 'fork' : 'invalid', effects);
+      await _freezeIn(
+        file,
+        err.code == 'BROKEN_CHAIN' || err.code == 'OUT_OF_ORDER'
+            ? 'fork'
+            : 'invalid',
+        effects,
+      );
       return false;
     }
     final selfPub = await _selfPub();
@@ -1177,7 +1343,10 @@ class ViewerDeviceLog {
     // to the verified head (never past it), and none of it is news.
     final joinedSeq = joining ? applied.state.head.seq : file.joinedSeq ?? 0;
     final pre = file.preLog.toSet();
-    final parsed = entries.map(DevLogEntry.parse).whereType<DevLogEntry>().toList();
+    final parsed = entries
+        .map(DevLogEntry.parse)
+        .whereType<DevLogEntry>()
+        .toList();
     // News is decided from the log alone: an `add` past the point this app joined, for a key it did not
     // already trust then. What the roster or the pins hold now says nothing — a key can reach them
     // (over `group_sync`) before this app reads the entry that adds it.
@@ -1210,7 +1379,8 @@ class ViewerDeviceLog {
         if (!file.announced.contains(m.pub)) m,
     ];
     // A key taken into the "already on your account" list after that list was acknowledged: show it.
-    if (joining && applied.added.any((m) => m.pub != selfPub)) file.baselineSeen = false;
+    if (joining && applied.added.any((m) => m.pub != selfPub))
+      file.baselineSeen = false;
     file
       ..state = applied.state
       ..joinedSeq = joinedSeq
@@ -1218,19 +1388,27 @@ class ViewerDeviceLog {
       ..frozen = null
       ..notifiedUpTo = applied.state.head.seq
       ..pending = _prune(pendingNow, applied.state)
-      ..announced = _prune([...file.announced, for (final m in toAnnounce) m.pub], applied.state)
+      ..announced = _prune([
+        ...file.announced,
+        for (final m in toAnnounce) m.pub,
+      ], applied.state)
       ..suspended = _prune(file.suspended, applied.state)
       ..departed = _withDeparted(file.departed, departed)
       ..confirmed = _keptConfirmed(file.confirmed, applied.state);
     await _carrySuspensionsIn(file);
     await _write(file);
-    await _trust(bootstrap ? applied.state.active.values.toList() : [...applied.added, ...applied.relabeled]);
+    await _trust(
+      bootstrap
+          ? applied.state.active.values.toList()
+          : [...applied.added, ...applied.relabeled],
+    );
     for (final m in applied.removed) {
       await _drop(m);
     }
     effects.announce.addAll(toAnnounce);
     effects.removed.addAll(notices);
-    if (applied.state.removed.contains(selfPub) && !_signingInAgain) effects.signOut = true;
+    if (applied.state.removed.contains(selfPub) && !_signingInAgain)
+      effects.signOut = true;
     effects.changed = true;
     return true;
   }
@@ -1251,12 +1429,18 @@ class ViewerDeviceLog {
     final selfPub = await _selfPub();
     final stored = GroupRoster.parse(await keys.groupRoster());
     final inRoster = {for (final m in stored.members) m.pub};
-    final tombstoned = {for (final t in stored.removed) if (!inRoster.contains(t.pub)) t.pub};
+    final tombstoned = {
+      for (final t in stored.removed)
+        if (!inRoster.contains(t.pub)) t.pub,
+    };
     final suspended = await suspendedPubs();
     final now = _now();
     final adopt = [
       for (final m in members)
-        if (m.pub != selfPub && !tombstoned.contains(m.pub) && !suspended.contains(m.pub)) m,
+        if (m.pub != selfPub &&
+            !tombstoned.contains(m.pub) &&
+            !suspended.contains(m.pub))
+          m,
     ];
     final incoming = [
       for (final m in adopt)
@@ -1269,7 +1453,11 @@ class ViewerDeviceLog {
         }),
     ];
     if (incoming.isNotEmpty) {
-      final merged = mergeGroupRoster(stored, GroupRoster(incoming, const []), selfPub);
+      final merged = mergeGroupRoster(
+        stored,
+        GroupRoster(incoming, const []),
+        selfPub,
+      );
       await keys.writeGroupRoster(merged.roster.toJson());
     }
     for (final m in adopt) {
@@ -1284,7 +1472,8 @@ class ViewerDeviceLog {
     final state = (await _read()).state;
     if (state != null && state.active[selfPub] != null) {
       for (final pub in tombstoned) {
-        if (state.active[pub] != null && !_removing.contains(pub)) unawaited(remove(pub));
+        if (state.active[pub] != null && !_removing.contains(pub))
+          unawaited(remove(pub));
       }
     }
   }
@@ -1292,18 +1481,27 @@ class ViewerDeviceLog {
   Future<void> _drop(DevLogMember m) async {
     final selfPub = await _selfPub();
     final stored = GroupRoster.parse(await keys.groupRoster());
-    final merged = mergeGroupRoster(stored, GroupRoster(const [], [GroupTombstone(m.pub, _now())]), selfPub);
+    final merged = mergeGroupRoster(
+      stored,
+      GroupRoster(const [], [GroupTombstone(m.pub, _now())]),
+      selfPub,
+    );
     await keys.writeGroupRoster(merged.roster.toJson());
     if (m.kind == 'machine') {
       final current = await keys.peer(m.machineId);
-      if (current != null && b64e(current.pub) == m.pub) await keys.unlink(m.machineId);
+      if (current != null && b64e(current.pub) == m.pub)
+        await keys.unlink(m.machineId);
     }
   }
 
   /// While frozen, a removal still counts — if a key this app trusts signed it. A key a fork suspended
   /// is not trusted here, so what it signs does not count either.
   /// Under the lock.
-  Future<void> _looseRemovalsIn(_File file, List<Object?> entries, _Effects effects) async {
+  Future<void> _looseRemovalsIn(
+    _File file,
+    List<Object?> entries,
+    _Effects effects,
+  ) async {
     final state = file.state;
     if (state == null) return;
     final selfPub = await _selfPub();
@@ -1315,12 +1513,18 @@ class ViewerDeviceLog {
     final departed = <DeviceLogDeparted>[];
     for (final raw in entries) {
       final e = DevLogEntry.parse(raw);
-      if (e == null || e.op != 'remove' || state.active[e.signer] == null || suspended.contains(e.signer)) continue;
+      if (e == null ||
+          e.op != 'remove' ||
+          state.active[e.signer] == null ||
+          suspended.contains(e.signer))
+        continue;
       final target = state.active[e.pub];
       if (target == null) continue;
-      if (!await verifySignature(b64d(e.signer), devLogMessage(e), b64d(e.sig))) continue;
+      if (!await verifySignature(b64d(e.signer), devLogMessage(e), b64d(e.sig)))
+        continue;
       final notice = _removalNotice(e, joinedSeq, selfPub, file.pending, known);
-      if (file.pending.contains(e.pub) && e.pub != selfPub) departed.add(_departedOf(target, e, known[e.signer]?.label ?? ''));
+      if (file.pending.contains(e.pub) && e.pub != selfPub)
+        departed.add(_departedOf(target, e, known[e.signer]?.label ?? ''));
       state.active.remove(e.pub);
       state.removed.add(e.pub);
       await _drop(target);
@@ -1377,8 +1581,16 @@ class ViewerDeviceLog {
       if (state.active[selfPub] == null) return 'NOT_ACTIVE';
       await _drop(target);
       final entry = await signDevLogEntry(
-        nextDevLogEntry(state, op: 'remove', pub: pub, kind: target.kind, machineId: target.machineId,
-            label: target.label, signer: selfPub, at: _now()),
+        nextDevLogEntry(
+          state,
+          op: 'remove',
+          pub: pub,
+          kind: target.kind,
+          machineId: target.machineId,
+          label: target.label,
+          signer: selfPub,
+          at: _now(),
+        ),
         identity,
       );
       final answer = await append(entry);
@@ -1389,7 +1601,9 @@ class ViewerDeviceLog {
       }
       if (answer.error != 'STALE_HEAD') return answer.error;
       await refresh();
-      await _sleep(Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)));
+      await _sleep(
+        Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)),
+      );
     }
     return 'UNAVAILABLE';
   }
@@ -1407,7 +1621,10 @@ class ViewerDeviceLog {
   /// reviewed. Another account's list under the sign-in the live log belongs to is refused, preview and
   /// confirm alike ([DeviceLogRebaseline.otherAccount]). Null: the backend's list could not be read or
   /// did not verify.
-  Future<DeviceLogRebaseline?> rebaseline({required bool confirm, DevLogHead? expectedHead}) async {
+  Future<DeviceLogRebaseline?> rebaseline({
+    required bool confirm,
+    DevLogHead? expectedHead,
+  }) async {
     final entries = <Object?>[];
     var acct = '';
     DevLogHead? head;
@@ -1438,24 +1655,43 @@ class ViewerDeviceLog {
       // the sign-in the list is stamped with is not.
       if (file.state != null && !same) {
         final local = await _localOwner();
-        if (local == null || local.startsWith(_adoptedSignIn) || file.owner == local) {
+        if (local == null ||
+            local.startsWith(_adoptedSignIn) ||
+            file.owner == local) {
           return const DeviceLogRebaseline.otherAccount();
         }
       }
-      if (confirm && expectedHead != null && next.head != expectedHead) return const DeviceLogRebaseline.changed();
+      if (confirm && expectedHead != null && next.head != expectedHead)
+        return const DeviceLogRebaseline.changed();
       // The list under review is judged against this account's own log as this app verified it: the
       // live file, or — for another account — the one kept when this app left it (its marks go on), or
       // else nothing (every key on it is new here). Never against the account being left.
       final kept = same ? null : await _archivedFileIn(next.acct);
       // Moving from another account's live log: what this app trusted under each goes with it.
       final switching = file.state != null && !same;
-      final keptTrust = kept == null ? null : _trustOf((await _archived())[next.acct]);
+      final keptTrust = kept == null
+          ? null
+          : _trustOf((await _archived())[next.acct]);
       final base = same
           ? file
-          : kept ?? _File(null, [], null, 0, joinedSeq: 0, preLog: switching ? [] : [...file.preLog]);
+          : kept ??
+                _File(
+                  null,
+                  [],
+                  null,
+                  0,
+                  joinedSeq: 0,
+                  preLog: switching ? [] : [...file.preLog],
+                );
       final before = base.state?.active ?? const <String, DevLogMember>{};
-      final added = [for (final m in next.active.values) if (before[m.pub] == null) m];
-      final removed = [for (final m in before.values) if (next.active[m.pub] == null) m];
+      final added = [
+        for (final m in next.active.values)
+          if (before[m.pub] == null) m,
+      ];
+      final removed = [
+        for (final m in before.values)
+          if (next.active[m.pub] == null) m,
+      ];
       if (confirm) {
         final selfPub = await _selfPub();
         final pre = base.preLog.toSet();
@@ -1469,8 +1705,18 @@ class ViewerDeviceLog {
           for (final m in news)
             if (!base.announced.contains(m.pub)) m,
         ];
-        final parsed = entries.map(DevLogEntry.parse).whereType<DevLogEntry>().toList();
-        final departed = _reviewDeparted(base, next, parsed, removed, selfPub, pre);
+        final parsed = entries
+            .map(DevLogEntry.parse)
+            .whereType<DevLogEntry>()
+            .toList();
+        final departed = _reviewDeparted(
+          base,
+          next,
+          parsed,
+          removed,
+          selfPub,
+          pre,
+        );
         // The reviewed list is another account's: the one this app leaves is kept, as on a sign-in (and
         // what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
         // goes on from where it was.
@@ -1486,8 +1732,14 @@ class ViewerDeviceLog {
           // The joined point never moves up past the reviewed head: a shorter list (rolled back, or
           // another account's) must leave every key added to it from here on news.
           ..joinedSeq = min(base.joinedSeq ?? base.notifiedUpTo, next.head.seq)
-          ..pending = _prune([...base.pending, for (final m in news) m.pub], next)
-          ..announced = _prune([...base.announced, for (final m in toAnnounce) m.pub], next)
+          ..pending = _prune([
+            ...base.pending,
+            for (final m in news) m.pub,
+          ], next)
+          ..announced = _prune([
+            ...base.announced,
+            for (final m in toAnnounce) m.pub,
+          ], next)
           // A review lifts what a fork suspended in this list; a kept list's suspensions were never in
           // the preview, so they stay.
           ..suspended = same ? [] : _prune(base.suspended, next)
@@ -1502,7 +1754,8 @@ class ViewerDeviceLog {
         if (switching) await keys.writeTrust(keptTrust ?? const {});
         if (kept != null) {
           final all = await _archived();
-          if (all.remove(next.acct) != null) await keys.writeDeviceLogArchive(all);
+          if (all.remove(next.acct) != null)
+            await keys.writeDeviceLogArchive(all);
         }
         await _trust(next.active.values.toList());
         for (final m in removed) {
@@ -1530,7 +1783,8 @@ class ViewerDeviceLog {
       'head': state.head.toJson(),
       'frozen': file.frozen != null,
       'hashes': [
-        for (var i = from; i < state.hashes.length; i++) {'seq': i + 1, 'hash': state.hashes[i]},
+        for (var i = from; i < state.hashes.length; i++)
+          {'seq': i + 1, 'hash': state.hashes[i]},
       ],
     };
   }
@@ -1558,11 +1812,15 @@ class ViewerDeviceLog {
     if (relation == 'behind') {
       final tail = raw['tail'];
       final missing = tail is List
-          ? [for (final e in tail) if ((DevLogEntry.parse(e)?.seq ?? 0) > state.head.seq) e]
+          ? [
+              for (final e in tail)
+                if ((DevLogEntry.parse(e)?.seq ?? 0) > state.head.seq) e,
+            ]
           : const <Object?>[];
       // A tail that does not continue this log is a fork; and a log already frozen on one can still
       // learn from this machine's hashes where it split.
-      if (file.frozen != null || (missing.isNotEmpty && !await _acceptFromPeer(missing))) {
+      if (file.frozen != null ||
+          (missing.isNotEmpty && !await _acceptFromPeer(missing))) {
         await _suspendAfterFork(raw);
       }
       unawaited(refresh());
@@ -1598,7 +1856,8 @@ class ViewerDeviceLog {
       for (final m in fresh) {
         if (m.kind != 'machine') continue;
         final current = await keys.peer(m.machineId);
-        if (current != null && b64e(current.pub) == m.pub) await keys.unlink(m.machineId);
+        if (current != null && b64e(current.pub) == m.pub)
+          await keys.unlink(m.machineId);
       }
       return true;
     });
@@ -1607,7 +1866,10 @@ class ViewerDeviceLog {
 
   /// Keys not trusted here after a fork, until [rebaseline] — and every key a fork suspended in another
   /// account's kept log, which no other account's log can bring back in.
-  Future<Set<String>> suspendedPubs() async => {...(await _read()).suspended, ...await _archivedSuspended()};
+  Future<Set<String>> suspendedPubs() async => {
+    ...(await _read()).suspended,
+    ...await _archivedSuspended(),
+  };
 
   /// Mark new devices as seen: the ones in [pubs] (what a window displayed), one ([pub]), or every one
   /// (neither). The "already on your account" list is [seeBaseline]. Persisted, so it holds across
@@ -1621,7 +1883,11 @@ class ViewerDeviceLog {
   /// it as New too. Never for a list that was only looked at, or every device at once: only an explicit
   /// "It's mine" vouches. Marking it seen here is done first; the result says whether the other devices
   /// were told (false: the backend did not take it, or there was nothing to tell).
-  Future<bool> dismiss({String? pub, List<String>? pubs, bool confirm = false}) async {
+  Future<bool> dismiss({
+    String? pub,
+    List<String>? pubs,
+    bool confirm = false,
+  }) async {
     final one = pub ?? (pubs != null && pubs.length == 1 ? pubs.first : null);
     var share = false;
     final lifted = <DevLogMember>[];
@@ -1633,7 +1899,9 @@ class ViewerDeviceLog {
       final gone = {...?pubs, ?pub};
       file.pending = [
         for (final k in file.pending)
-          if ((named ? !gone.contains(k) : false) || (file.suspended.contains(k) && k != pub)) k,
+          if ((named ? !gone.contains(k) : false) ||
+              (file.suspended.contains(k) && k != pub))
+            k,
       ];
       file.departed = [
         for (final d in file.departed)
@@ -1641,7 +1909,10 @@ class ViewerDeviceLog {
       ];
       final lifting = pub != null && file.suspended.contains(pub) ? pub : null;
       if (lifting != null) {
-        file.suspended = [for (final k in file.suspended) if (k != lifting) k];
+        file.suspended = [
+          for (final k in file.suspended)
+            if (k != lifting) k,
+        ];
         final m = file.state!.active[lifting];
         if (m != null) lifted.add(m);
       }
@@ -1668,12 +1939,20 @@ class ViewerDeviceLog {
       final state = file.state;
       final identity = await keys.identity();
       final selfPub = b64e(identity.pub);
-      if (state == null || file.frozen != null || !await _ownsFile(file)) return false;
+      if (state == null || file.frozen != null || !await _ownsFile(file))
+        return false;
       if (pub == selfPub || state.active[selfPub] == null) return false;
       final member = state.active[pub];
       if (member == null) return false;
       final ack = await signDevAck(
-        DevAck(v: devAckVersion, acct: state.acct, pub: pub, addSeq: member.seq, signer: selfPub, at: _now()),
+        DevAck(
+          v: devAckVersion,
+          acct: state.acct,
+          pub: pub,
+          addSeq: member.seq,
+          signer: selfPub,
+          at: _now(),
+        ),
         identity,
       );
       return await post(ack);
@@ -1705,7 +1984,8 @@ class ViewerDeviceLog {
   /// Every add and remove in the log, newest first, as this app verified it: the entries come from the
   /// backend but each must hash to what this app already verified, or the log freezes. Offline, what
   /// is kept locally (`complete: false`).
-  Future<DeviceLogHistory> history() => _historying ??= _historyOnce().whenComplete(() => _historying = null);
+  Future<DeviceLogHistory> history() =>
+      _historying ??= _historyOnce().whenComplete(() => _historying = null);
 
   /// One walk at a time: two interleaved on the same cache would each read the other's entries as a
   /// gap in the log and freeze it.
@@ -1721,10 +2001,16 @@ class ViewerDeviceLog {
       _histCache = [];
     }
     final last = _histCache.isEmpty ? null : _histCache.last;
-    if (last != null && (last.seq > state.head.seq || devLogHash(last) != state.hashes[last.seq - 1])) {
+    if (last != null &&
+        (last.seq > state.head.seq ||
+            devLogHash(last) != state.hashes[last.seq - 1])) {
       _histCache = [];
     }
-    for (var page = 0; page < _pages && _histCache.length < state.head.seq; page++) {
+    for (
+      var page = 0;
+      page < _pages && _histCache.length < state.head.seq;
+      page++
+    ) {
       final since = _histCache.length;
       final got = await fetch(since);
       if (got == null || got.acct != state.acct) break;
@@ -1736,7 +2022,9 @@ class ViewerDeviceLog {
         if (seq <= _histCache.length || seq > state.head.seq) continue;
         // At a position this app verified, anything unreadable or off-hash means the backend is lying
         // about the past: freeze, and show only what was already checked.
-        if (e == null || e.seq != _histCache.length + 1 || devLogHash(e) != state.hashes[e.seq - 1]) {
+        if (e == null ||
+            e.seq != _histCache.length + 1 ||
+            devLogHash(e) != state.hashes[e.seq - 1]) {
           // Only against the log this walk started from: if the file was rebaselined (or moved to
           // another account) while the pages were on their way, the mismatch is with a log that is
           // gone, and says nothing about the backend.
@@ -1757,13 +2045,22 @@ class ViewerDeviceLog {
     return _historyOf(_histCache, _histCache.length >= state.head.seq);
   }
 
-  Future<DeviceLogHistory> _historyOf(List<DevLogEntry> fetched, bool complete) async {
+  Future<DeviceLogHistory> _historyOf(
+    List<DevLogEntry> fetched,
+    bool complete,
+  ) async {
     final file = await _read();
     final state = file.state;
     if (state == null) return const DeviceLogHistory(rows: [], complete: false);
     // Offline, the newest entries kept locally fill in what could not be fetched.
     final from = fetched.isEmpty ? 0 : fetched.last.seq;
-    final entries = complete ? fetched : [...fetched, for (final e in file.recent) if (e.seq > from) e];
+    final entries = complete
+        ? fetched
+        : [
+            ...fetched,
+            for (final e in file.recent)
+              if (e.seq > from) e,
+          ];
     return DeviceLogHistory(
       rows: devLogHistory(
         entries,
@@ -1782,7 +2079,8 @@ class ViewerDeviceLog {
   Future<DeviceLogListing> list() async {
     final file = await _marks();
     final selfPub = await _selfPub();
-    final members = (file.state?.active.values.toList() ?? [])..sort((a, b) => a.seq.compareTo(b.seq));
+    final members = (file.state?.active.values.toList() ?? [])
+      ..sort((a, b) => a.seq.compareTo(b.seq));
     final labels = {for (final m in members) m.pub: m.label};
     final joinedSeq = file.joinedSeq ?? 0;
     final pre = file.preLog.toSet();
@@ -1808,7 +2106,8 @@ class ViewerDeviceLog {
       joinedSeq: joinedSeq,
       baseline: [
         for (final m in members)
-          if (m.pub != selfPub && (m.seq <= joinedSeq || pre.contains(m.pub))) m.pub,
+          if (m.pub != selfPub && (m.seq <= joinedSeq || pre.contains(m.pub)))
+            m.pub,
       ],
       baselineSeen: file.baselineSeen,
       departed: file.departed,
@@ -1822,5 +2121,7 @@ bool _isPosition(int seq) => seq >= 0 && seq <= 9007199254740991;
 
 String _clip(String label) {
   final clean = label.replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ').trim();
-  return clean.length > devLogLabelMax ? clean.substring(0, devLogLabelMax) : clean;
+  return clean.length > devLogLabelMax
+      ? clean.substring(0, devLogLabelMax)
+      : clean;
 }

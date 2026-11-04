@@ -54,8 +54,7 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
   Widget build(BuildContext context) {
     return SectionScaffold(
       title: 'Connectors',
-      subtitle:
-          'Connect your agents to tools outside this computer: a tracker, a design tool, a web service.',
+      subtitle: 'Connect your agents to tools outside this computer: a tracker, a design tool, a web service.',
       child: ListenableBuilder(
         listenable: Listenable.merge([_controller, _search]),
         builder: (context, _) => _body(context),
@@ -69,8 +68,12 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     bool matches(ConnectorCard card) =>
         query.isEmpty ||
         '${card.name} ${card.description}'.toLowerCase().contains(query);
-    final on = _controller.cards.where((c) => c.connected && matches(c)).toList();
-    final off = _controller.cards.where((c) => !c.connected && matches(c)).toList();
+    final on = _controller.cards
+        .where((c) => c.connected && matches(c))
+        .toList();
+    final off = _controller.cards
+        .where((c) => !c.connected && matches(c))
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -123,7 +126,9 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
           const SizedBox(height: 12),
           Text(
             'GitHub, Slack, Google and a few more sign in through your Harness account. Run harness login, then refresh to connect them.',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
         if (_controller.error != null || _controller.notice.isNotEmpty) ...[
@@ -132,7 +137,9 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
             _controller.error ?? _controller.notice,
             key: const ValueKey('connectors-notice'),
             style: theme.textTheme.bodySmall?.copyWith(
-              color: _controller.error != null ? theme.colorScheme.error : theme.colorScheme.primary,
+              color: _controller.error != null
+                  ? theme.colorScheme.error
+                  : theme.colorScheme.primary,
             ),
           ),
         ],
@@ -178,9 +185,16 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
               ? const Center(child: Text('Loading connectors…'))
               : LaidOutListView(
                   children: [
-                    _group(context, 'Connected', on,
-                        query.isEmpty ? 'Nothing connected yet. Choose a service below.' : 'No connected service matches.'),
-                    if (!_connectedOnly) _group(context, 'Available', off, 'No service matches.'),
+                    _group(
+                      context,
+                      'Connected',
+                      on,
+                      query.isEmpty
+                          ? 'Nothing connected yet. Choose a service below.'
+                          : 'No connected service matches.',
+                    ),
+                    if (!_connectedOnly)
+                      _group(context, 'Available', off, 'No service matches.'),
                   ],
                 ),
         ),
@@ -188,7 +202,12 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     );
   }
 
-  Widget _group(BuildContext context, String title, List<ConnectorCard> cards, String empty) {
+  Widget _group(
+    BuildContext context,
+    String title,
+    List<ConnectorCard> cards,
+    String empty,
+  ) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 16),
@@ -205,7 +224,12 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
           ),
           const SizedBox(height: 10),
           if (cards.isEmpty)
-            Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant))
+            Text(
+              empty,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
           else
             LayoutBuilder(
               builder: (context, box) {
@@ -216,12 +240,15 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
                   runSpacing: 12,
                   children: [
                     for (final card in cards)
-                      SizedBox(width: width, child: _ConnectorTile(
-                        card: card,
-                        waiting: _controller.pending.contains(card.code),
-                        onConnect: () => _controller.connect(card),
-                        onDisconnect: () => _confirmDisconnect(context, card),
-                      )),
+                      SizedBox(
+                        width: width,
+                        child: _ConnectorTile(
+                          card: card,
+                          waiting: _controller.pending.contains(card.code),
+                          onConnect: () => _controller.connect(card),
+                          onDisconnect: () => _confirmDisconnect(context, card),
+                        ),
+                      ),
                   ],
                 );
               },
@@ -231,7 +258,10 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     );
   }
 
-  Future<void> _confirmDisconnect(BuildContext context, ConnectorCard card) async {
+  Future<void> _confirmDisconnect(
+    BuildContext context,
+    ConnectorCard card,
+  ) async {
     final yes = await showAppDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -240,8 +270,14 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
           'Agents on this computer stop using this account. To revoke it everywhere, use the service\'s settings.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Disconnect')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
@@ -276,8 +312,15 @@ class _ConnectorTile extends StatelessWidget {
     final connected = card.state == 'connected';
     Widget badge(String text, Color color) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
-      child: Text(text, overflow: TextOverflow.ellipsis, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.labelSmall?.copyWith(color: color),
+      ),
     );
     final about = connected && !card.tools
         ? '${card.description} Agents use it with harness connections call.'
@@ -303,12 +346,22 @@ class _ConnectorTile extends StatelessWidget {
                 child: Row(
                   children: [
                     Flexible(
-                      child: Text(card.name, overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                      child: Text(
+                        card.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                     if (connected) ...[
                       const SizedBox(width: 8),
-                      Flexible(child: badge(card.account.isEmpty ? 'Signed in' : card.account, theme.colorScheme.primary)),
+                      Flexible(
+                        child: badge(
+                          card.account.isEmpty ? 'Signed in' : card.account,
+                          theme.colorScheme.primary,
+                        ),
+                      ),
                     ],
                     if (card.state == 'reconnect') ...[
                       const SizedBox(width: 8),
@@ -319,23 +372,50 @@ class _ConnectorTile extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               if (waiting)
-                Text('Waiting for sign-in…', style: theme.textTheme.labelSmall?.copyWith(color: muted))
+                Text(
+                  'Waiting for sign-in…',
+                  style: theme.textTheme.labelSmall?.copyWith(color: muted),
+                )
               else if (card.connected) ...[
                 if (card.state == 'reconnect' && !card.custom)
-                  TextButton(onPressed: onConnect, child: const Text('Reconnect')),
-                AppIconButton(icon: AppIcons.unplug, tooltip: 'Disconnect ${card.name}', onPressed: onDisconnect),
+                  TextButton(
+                    onPressed: onConnect,
+                    child: const Text('Reconnect'),
+                  ),
+                AppIconButton(
+                  icon: AppIcons.unplug,
+                  tooltip: 'Disconnect ${card.name}',
+                  onPressed: onDisconnect,
+                ),
               ] else if (card.reason.isNotEmpty) ...[
-                Flexible(child: Text(card.reason, textAlign: TextAlign.right,
-                    style: theme.textTheme.labelSmall?.copyWith(color: muted))),
+                Flexible(
+                  child: Text(
+                    card.reason,
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.labelSmall?.copyWith(color: muted),
+                  ),
+                ),
                 const SizedBox(width: 6),
-                AppIconButton(icon: AppIcons.plus, tooltip: card.reason, onPressed: null),
+                AppIconButton(
+                  icon: AppIcons.plus,
+                  tooltip: card.reason,
+                  onPressed: null,
+                ),
               ] else
-                AppIconButton(icon: AppIcons.plus, tooltip: 'Connect ${card.name}', onPressed: onConnect),
+                AppIconButton(
+                  icon: AppIcons.plus,
+                  tooltip: 'Connect ${card.name}',
+                  onPressed: onConnect,
+                ),
             ],
           ),
           const SizedBox(height: 10),
-          Text(about, maxLines: 2, overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+          Text(
+            about,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(color: muted),
+          ),
         ],
       ),
     );
@@ -345,7 +425,12 @@ class _ConnectorTile extends StatelessWidget {
 /// A service's icon, bundled with the app (assets/connector-icons), or its
 /// initial when it has none (a custom server).
 class ConnectorMark extends StatelessWidget {
-  const ConnectorMark({super.key, required this.code, required this.name, this.size = 26});
+  const ConnectorMark({
+    super.key,
+    required this.code,
+    required this.name,
+    this.size = 26,
+  });
 
   final String code;
   final String name;
@@ -357,8 +442,14 @@ class ConnectorMark extends StatelessWidget {
     final Widget mark;
     if (path == null) {
       mark = Center(
-        child: Text(name.isEmpty ? '?' : name.characters.first.toUpperCase(),
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: size * 0.5, color: Colors.white)),
+        child: Text(
+          name.isEmpty ? '?' : name.characters.first.toUpperCase(),
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: size * 0.5,
+            color: Colors.white,
+          ),
+        ),
       );
     } else if (path.endsWith('.svg')) {
       mark = SvgPicture.asset(path, fit: BoxFit.contain);
@@ -403,7 +494,11 @@ class _AddCustomDialogState extends State<_AddCustomDialog> {
 
   Map<String, String>? _parsedHeaders() {
     final result = <String, String>{};
-    for (final line in _headers.text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty)) {
+    for (final line
+        in _headers.text
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)) {
       final at = line.indexOf(':');
       if (at < 1) return null;
       result[line.substring(0, at).trim()] = line.substring(at + 1).trim();
@@ -417,13 +512,23 @@ class _AddCustomDialogState extends State<_AddCustomDialog> {
       setState(() => _error = 'Write each header as Name: value.');
       return;
     }
-    setState(() { _saving = true; _error = null; });
-    final error = await widget.controller.addCustom(_name.text.trim(), _url.text.trim(), headers);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final error = await widget.controller.addCustom(
+      _name.text.trim(),
+      _url.text.trim(),
+      headers,
+    );
     if (!mounted) return;
     if (error == null) {
       Navigator.of(context).pop();
     } else {
-      setState(() { _saving = false; _error = error; });
+      setState(() {
+        _saving = false;
+        _error = error;
+      });
     }
   }
 
@@ -438,15 +543,26 @@ class _AddCustomDialogState extends State<_AddCustomDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('A remote MCP server. If it asks you to sign in, Harness opens its sign-in page.',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              'A remote MCP server. If it asks you to sign in, Harness opens its sign-in page.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 16),
-            TextField(key: const ValueKey('custom-name'), controller: _name, decoration: const InputDecoration(labelText: 'Name')),
+            TextField(
+              key: const ValueKey('custom-name'),
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Name'),
+            ),
             const SizedBox(height: 12),
             TextField(
               key: const ValueKey('custom-url'),
               controller: _url,
-              decoration: const InputDecoration(labelText: 'Remote MCP server URL', hintText: 'https://example.com/mcp'),
+              decoration: const InputDecoration(
+                labelText: 'Remote MCP server URL',
+                hintText: 'https://example.com/mcp',
+              ),
             ),
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
@@ -463,13 +579,25 @@ class _AddCustomDialogState extends State<_AddCustomDialog> {
                 ),
               ],
             ),
-            if (_error != null) Text(_error!, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+            if (_error != null)
+              Text(
+                _error!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: _saving ? null : () => Navigator.of(context).pop(), child: const Text('Cancel')),
-        FilledButton(onPressed: _saving ? null : _save, child: const Text('Continue')),
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: const Text('Continue'),
+        ),
       ],
     );
   }

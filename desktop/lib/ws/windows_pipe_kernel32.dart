@@ -47,7 +47,9 @@ final _bridge = _PipeBridge(_loadBridge());
 DynamicLibrary _loadBridge() {
   final override = Platform.environment['HARNESS_DESKTOP_PIPE_IO_DLL'];
   if (override != null &&
-      (override.isEmpty || !p.isAbsolute(override) || p.isRootRelative(override))) {
+      (override.isEmpty ||
+          !p.isAbsolute(override) ||
+          p.isRootRelative(override))) {
     throw ArgumentError('HARNESS_DESKTOP_PIPE_IO_DLL must be an absolute path');
   }
   return DynamicLibrary.open(

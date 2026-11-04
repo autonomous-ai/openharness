@@ -6,7 +6,6 @@
 /// daemon's (`grid.note`), in the words of `resting_model_words.dart`.
 library;
 
-
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 

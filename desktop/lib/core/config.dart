@@ -1,7 +1,10 @@
 /// The port of the daemon this app talks to: the default below for the installed app; the test flavor
 /// (`tool/test_flavor.py`) builds with `--dart-define=HARNESS_DAEMON_PORT=<port>` for a daemon of its own.
 /// A build-time define, never the environment: a `PORT` in a person's shell must not move the installed app.
-const int localDaemonPort = int.fromEnvironment('HARNESS_DAEMON_PORT', defaultValue: 18473);
+const int localDaemonPort = int.fromEnvironment(
+  'HARNESS_DAEMON_PORT',
+  defaultValue: 18473,
+);
 
 /// Runtime configuration for the desktop app.
 class AppConfig {

@@ -414,6 +414,44 @@ class SuperTabClient {
     return errors;
   }
 
+  /// Names already sent by [syncChosenNames]: Swarm, agent and name, so each is
+  /// sent once per run, a refused one included.
+  final _chosenNamesSent = <String>{};
+
+  /// Sends the names people chose for their agents to the Swarms that show
+  /// something else (task #2920): an agent renamed before the rename reached
+  /// the Swarm shows its new name with no second rename. [native] reads the
+  /// harness an agent runs as on this person's own machines, null for one this
+  /// app cannot see or may not rename.
+  ///
+  /// Only a name the daemon says a person chose, never the creation name or an
+  /// engine's session title; a daemon that does not say sends nothing. Only for
+  /// an agent this person may rename (its contributor or its machine's owner,
+  /// as the Swarm decides). Returns how many were sent.
+  Future<int> syncChosenNames(
+    Agent? Function(String machineId, String harnessId) native,
+  ) async {
+    var sent = 0;
+    for (final MapEntry(key: tabId, value: controller)
+        in _loaded.entries.toList()) {
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents.toList()) {
+        final person = controller.accountId;
+        if (agent.contributorId != person && agent.machineOwnerId != person) {
+          continue;
+        }
+        final local = native(agent.machineId, agent.harnessId);
+        if (local == null || local.nameChosen != true) continue;
+        final name = local.name.trim();
+        if (name.isEmpty || name == snapshot.agentName(agent.id)) continue;
+        if (!_chosenNamesSent.add('$tabId|${agent.id}|$name')) continue;
+        if (await controller.renameAgent(agent.id, name) == null) sent++;
+      }
+    }
+    return sent;
+  }
+
   /// The coordinator's name in the project the machine's harness coordinates.
   String? leadCoordinatorForHarness(String machineId, String harnessId) =>
       _leadOfHarness(machineId, harnessId)?.coordinator;
