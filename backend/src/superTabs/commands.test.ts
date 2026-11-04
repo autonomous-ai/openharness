@@ -2386,11 +2386,11 @@ describe('cancelling work', () => {
     const assignment = f.state.conversations.find(c => c.id === group)!.assignment!
     expect(assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
     expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(false)
-    // Beside it, only the task's ordinary thread reply in the project chat (taskLine.ts).
+    // Nothing beside it: no message asked for this task, so it says nothing in the project chat (taskLine.ts).
     const inTask = effects.messages.filter(m => m.conversationId === group)
     expect(inTask).toHaveLength(1)
     expect(inTask[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
-    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([expect.objectContaining({ text: 'Not building this: Duplicate of another task.', recipients: [] })])
+    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([])
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
     expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
     f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)
