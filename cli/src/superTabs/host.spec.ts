@@ -577,6 +577,53 @@ describe('Super Tab native delivery handoff', () => {
     host.stop(); release()
     await Promise.resolve()
   })
+  // Ken's prod scan (11-04): 615 agent.configuration refusals in 32 minutes, AGENT_UNAVAILABLE, about 19 a minute: a host
+  // re-posts every 5 s an observation the Swarm will never take (an agent that must be shared again, or is gone).
+  describe('a configuration report the Swarm refuses (#2675)', () => {
+    const refusing = (t: ReturnType<typeof setup>, status: number, code: string) => {
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@high')
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const sent: string[] = []
+      vi.mocked(t.call).mockImplementation(async (...args) => {
+        const body = args[2] as { operationId?: string; command?: { type?: string } } | undefined
+        if (args[1].endsWith('/commands') && body?.command?.type === 'agent.configuration') {
+          sent.push(body.operationId!)
+          return { status, body: { success: false, error: { code, message: 'Refused.' } } }
+        }
+        return original(...args)
+      })
+      return sent
+    }
+    const passes = async (host: SuperTabHost, t: ReturnType<typeof setup>, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await host.tick()
+        await new Promise(resolve => setImmediate(resolve))
+        t.wait(5_000)
+      }
+    }
+
+    it('is not sent again after a permanent refusal, and a new reading is reported once', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 400, 'AGENT_UNAVAILABLE')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(1)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@high')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(2)
+      expect(new Set(sent).size).toBe(2)
+    })
+
+    it('backs off after a passing failure instead of sending every 5 seconds', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 503, 'BACKEND_UNAVAILABLE')
+      // Two minutes of passes: 24 at the old pace.
+      await passes(host, t, 24)
+      expect(sent.length).toBeGreaterThanOrEqual(2)
+      expect(sent.length).toBeLessThanOrEqual(6)
+    })
+  })
+
   it('retires a human-resolved journal entry without resubmitting its native input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()
