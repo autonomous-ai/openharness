@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
@@ -119,6 +120,8 @@ const digests = async (tabId: string) => (await db.superTabMessage.findMany({ wh
 
 const schedules = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
   .filter(m => m.text.includes('Built-in schedule,'))
+/** The head part's version and time: what every reader compares to know whether anything changed. */
+const headOf = async (tabId: string) => db.swarmHead.findUniqueOrThrow({ where: { id: `${tabId}:head` }, select: { version: true, changedAt: true } })
 const projectOf = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(host, f.tab, undefined, f.lead)).state.projects![0]!
 /** A task with no agent: what the sweep is for. */
 const unassigned = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'conversation.create', title: 'Nobody has this', brief: 'Do it', checks: [] })
@@ -152,12 +155,34 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect(await page(host, f.worker)).toEqual([])
   })
 
-  it('records the slot and sends nothing when every task has an agent working on it', async () => {
+  it('writes nothing to the Swarm\'s head and sends nothing when every task has an agent working on it', async () => {
     const f = await swarm()
     wantSchedule()
     await f.poll()
+    f.clock.now += SCHEDULE_SLOT_MS
+    // Every reader rereads a head that moved: a slot with nothing due must leave it as it was (#2946 review, 1).
+    const before = await headOf(f.tab)
+    await f.poll()
     expect(await schedules(f.tab)).toEqual([])
+    expect(await headOf(f.tab)).toEqual(before)
+    expect((await projectOf(f)).schedule).toBeUndefined()
+    // Something to sweep later in the same slot wakes it once.
+    await unassigned(f)
+    await f.poll()
+    expect(await schedules(f.tab)).toHaveLength(1)
+  })
+
+  it('keeps the slot out of the head readers get', async () => {
+    const f = await swarm()
+    wantSchedule()
+    await unassigned(f)
+    await f.poll()
     expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
+    const reads = new SwarmReads(f.timed)
+    for (const [user, asAgentId] of [[owner], [host], [host, f.lead]] as const) {
+      const { head } = await reads.firstLoad(user, f.tab, asAgentId)
+      expect(head.data.projects!.map(p => 'schedule' in p)).toEqual([false])
+    }
   })
 
   it('sends no second wake while the first is unread, and still moves the slot', async () => {

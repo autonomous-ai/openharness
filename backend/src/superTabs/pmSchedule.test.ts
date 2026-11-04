@@ -39,8 +39,12 @@ describe('the built-in PM schedule', () => {
     expect(wake(state, T + SCHEDULE_SLOT_MS)).toMatchObject({ slot: SLOT + 1 })
   })
 
-  it('records the slot with no message when there is nothing to sweep', () => {
-    expect(wake(swarm(task(1, work('working'))))).toEqual({ slot: SLOT, draft: null })
+  it('records nothing and sends nothing when there is nothing to sweep, so the slot stays due', () => {
+    const state = swarm(task(1, work('working')))
+    expect(wake(state)).toBeNull()
+    // Something to sweep later in the same slot still wakes the coordinator once.
+    state.conversations.push(task(2, null))
+    expect(wake(state)).toMatchObject({ slot: SLOT, draft: { id: scheduleMessageId('tab', 'p1', SLOT) } })
   })
 
   it.each([
@@ -50,7 +54,7 @@ describe('the built-in PM schedule', () => {
     ['a stuck task', task(1, work('blocked'))],
     ['a finished task with no pull request, quiet long enough', task(1, work('done'), { lastActivityAt: new Date(T - ARCHIVE_QUIET_MS).toISOString() })],
   ])('wakes the coordinator for %s', (_name, group) => {
-    expect(wake(swarm(group))!.draft).not.toBeNull()
+    expect(wake(swarm(group))!.draft).toMatchObject({ source: { kind: 'schedule-request' } })
   })
 
   it.each([
@@ -60,16 +64,16 @@ describe('the built-in PM schedule', () => {
     ['a step with no agent', task(2, null, { reviewOf: 'g9', step: 'Review' })],
     ['an archived task', task(1, null, { archived: true })],
   ])('does not wake it for %s', (_name, group) => {
-    expect(wake(swarm(group))).toEqual({ slot: SLOT, draft: null })
+    expect(wake(swarm(group))).toBeNull()
   })
 
   it('does not wake it for a finished group the Swarm would not archive either: tidying off, or a step whose task is still open', () => {
     const quiet = { lastActivityAt: new Date(T - ARCHIVE_QUIET_MS).toISOString() }
     const off = swarm(task(1, work('done'), quiet))
     off.tidy = false
-    expect(wake(off)).toEqual({ slot: SLOT, draft: null })
+    expect(wake(off)).toBeNull()
     const step = swarm(task(1, work('working')), task(2, work('done'), { ...quiet, reviewOf: 'g1', step: 'Plan' }))
-    expect(wake(step)).toEqual({ slot: SLOT, draft: null })
+    expect(wake(step)).toBeNull()
   })
 
   it('sends nothing and records nothing in a paused Swarm, or for an agent that leads nothing', () => {
