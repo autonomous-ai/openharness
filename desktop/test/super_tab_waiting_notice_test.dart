@@ -147,6 +147,33 @@ void main() {
     await done(tester, f, c);
   });
 
+  // Review of #2973 (Avocet): an agent no Swarm holds, clicked from a Swarm
+  // tab, was added there and closed by the Swarm view, as Huy's was.
+  testWidgets('from a Swarm tab, the toast for a harness no Swarm holds opens '
+      'it in a new tab, focused', (tester) async {
+    final f = SuperTabLaunchFixture();
+    final c = await waitingSwarm(f);
+    final swarm = f.app.activeSwarmId;
+    f.app.stateOf('m')!.agents = [
+      ...f.app.stateOf('m')!.agents,
+      Agent.fromJson({
+        'id': 'native-solo',
+        'name': 'solo',
+        'engine': 'codex',
+        'status': 'stopped',
+        'sessionId': 'saved-solo',
+        'terminal': {'available': false},
+      }),
+    ];
+    await show(tester, f);
+    await clickToast(tester, f, 'solo');
+    expect(f.app.activeSwarmId, isNot(swarm));
+    expect(f.app.activeSwarm.isSuperTab, isFalse);
+    expect(f.app.focusedPane?.agentId, 'native-solo');
+    expect(c.selectedId, 'lead');
+    await done(tester, f, c);
+  });
+
   testWidgets('Activity\'s "is waiting on you" opens the task with the '
       'agent\'s terminal focused', (tester) async {
     final f = SuperTabLaunchFixture();
