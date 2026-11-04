@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { PERSONAL_SWARM_OPERATION } from './deletion.js'
-import { createSuperTab, stableId, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { createSuperTab, stableId, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
 
 // A Personal Swarm's project chat with no Lead (task #2633, Huy 11-04): the person's message waits for the project's Lead,
@@ -108,6 +108,21 @@ describe('a Personal Swarm project chat with no Lead', () => {
     f.send('hello')
     expect(f.project().leadWaiting).toBeUndefined()
     expect(refusal(() => f.claim('mac'))).toBe('LEAD_EXISTS')
+  })
+})
+
+describe('who reads the claim', () => {
+  it('names its machine to the project\'s readers, never to a Buddy', () => {
+    const f = fixture()
+    f.send('hello')
+    f.claim('mac')
+    const owner = f.state.people[0]!
+    f.state.agents.push({ id: 'buddy', machineId: 'mac', harnessId: 'b1', machineOwnerId: 'owner', contributorId: 'owner',
+      membershipGeneration: owner.generation, hostGrant: null, name: 'Buddy', configuration: config, configurationVersion: 'v',
+      buddyOf: { personId: 'owner', generation: owner.generation }, buddyScope: 'swarm' } as never)
+    const read = (actor: Actor) => visibleState(f.state, actor, NOW).projects!.find(p => p.id === f.projectId)!
+    expect(read({ kind: 'person', userId: 'owner', email: 'owner@example.com' }).leadClaim).toMatchObject({ machineId: 'mac' })
+    expect(read({ kind: 'agent', agentId: 'buddy', machineOwnerId: 'owner' } as Actor).leadClaim).toBeUndefined()
   })
 })
 
