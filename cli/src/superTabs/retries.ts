@@ -32,6 +32,10 @@ export class CommandRetries {
   /** Forgets every key not in [keys]: a command no longer owed (its agent gone, its reading changed) holds nothing. */
   keep(keys: Iterable<string>): void {
     const kept = new Set(keys)
-    for (const key of this.held.keys()) if (!kept.has(key)) this.held.delete(key)
+    this.keepIf(key => kept.has(key))
+  }
+
+  keepIf(test: (key: string) => boolean): void {
+    for (const key of this.held.keys()) if (!test(key)) this.held.delete(key)
   }
 }
