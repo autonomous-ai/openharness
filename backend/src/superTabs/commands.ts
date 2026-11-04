@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
@@ -61,6 +61,8 @@ import { placeAfter, queueSiblings } from './taskQueue.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
+/** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
+const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** What an older client's policy, skill-set, role or rule-removal save answers: accepted, kept nowhere (project instructions,
  *  phase 4, decision 3). The old rules, policy rows and role texts stay in place, unread. */
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
@@ -154,6 +156,8 @@ const MAX_REMOVED_MACHINES = 64
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
+    // Its Agents setting (machines.ts agentLimit): an older client leaves it out.
+    agents: z.enum(['memory', 'atMost']).optional(),
     ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
     // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
     unlessRemoved: z.literal(true).optional() }).strict(),
@@ -1112,7 +1116,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return decision
   }
   /** The candidate a start or assignment should match, and whether it does. Following another needs no reason (project
-   *  instructions, phase 4: the route is advice); it is still recorded as an override, with the reason when one is given. */
+   *  instructions, phase 4: the route is advice); it is still recorded as an override, with the reason when one is given.
+   *  A route that names no pick (task #2901, Ken 2026-11-04) leaves the choice to the coordinator, by the project's Routing
+   *  instructions: until a person or an earlier start chose, the start or assignment gives the rule that chose it, and the
+   *  candidate it matches, any of them, is recorded and said in the route row the released apps draw. */
   const linkDecision = (conversationId: string, matches: (c: KeptCandidate, d: RouteDecision) => boolean,
     finalOf: (d: RouteDecision) => RouteFinal, reasonText: string | undefined, assignmentId?: string) => {
     const decision = openDecision()
@@ -1121,13 +1128,31 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (decision.assignmentId && state.conversations.some(c => c.assignment?.id === decision.assignmentId && activeWork(c))) {
       fail('ROUTE_LINKED', 'This routing decision already has running work. Stop it before handing the task over.')
     }
-    const expected = decision.record.candidates.find(c => c.id === (decision.override?.candidateId ?? decision.record.pick))!
+    const final = (patch: Pick<RouteFinal, 'candidateId'>, override?: RouteOverride) => effects.routeDecisions.push({ op: 'final', id: decision.id,
+      final: { ...finalOf(decision), ...patch }, ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
+    const chosenId = decision.override?.candidateId ?? decision.final?.candidateId ?? decision.record.pick
+    if (chosenId === undefined) {
+      const chosen = decision.record.candidates.find(c => matches(c, decision))
+      // The only candidate that can run needs no rule to choose it; a start of anything else still says why (review of #3010).
+      const only = decision.record.via === 'only' && chosen ? ONLY_CANDIDATE : undefined
+      const reason = reasonText ?? only ?? fail('ROUTE_REASON_REQUIRED',
+        'This route names no pick: send, as overrideReason, the project\'s Routing rule that chose this candidate.')
+      const override: RouteOverride | undefined = chosen ? undefined : { by: 'lead', actorKey: actorKey(actor), reason }
+      final(chosen ? { candidateId: chosen.id } : {}, override)
+      const instead = (done: string) => `${who} ${done}, which is none of the route's candidates. Reason: ${reason}`
+      const routed = chosen && { text: `Routed to ${chosen.title} — ${only && !reasonText ? 'only candidate' : 'by the project\'s Routing instructions'} · "${reason}"`, source: { kind: 'route',
+        decisionId: decision.id, via: only && !reasonText ? 'only' : 'instructions', p: null, belowFloor: false, why: reason, pick: { id: chosen.id, title: chosen.title },
+        alternatives: decision.record.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })) } }
+      return { decision, override, instead, routed }
+    }
+    const expected = decision.record.candidates.find(c => c.id === chosenId)!
     const matched = matches(expected, decision)
     const override: RouteOverride | undefined = matched ? undefined : { by: 'lead', actorKey: actorKey(actor), reason: reasonText ?? NO_REASON }
-    effects.routeDecisions.push({ op: 'final', id: decision.id, final: finalOf(decision), ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
+    // A record with a pick keeps it as the choice; one without keeps the candidate chosen in the final, for the route history.
+    final(matched && decision.record.pick === undefined ? { candidateId: chosenId } : {}, override)
     // The chat line: who chose what instead of the route's pick, and why when they said.
     const instead = (done: string) => `${who} ${done} instead of ${expected.title}.${reasonText ? ` Reason: ${reasonText}` : ''}`
-    return { decision, expected, override, instead }
+    return { decision, override, instead, routed: undefined }
   }
   /** Why a route candidate cannot take a teammate's work in [conversationId], or null (machines.ts teamWorkCheck). A
    *  member runs under its own contributor's grant; a new agent under the contribution's, or off the Machines list under
@@ -1191,9 +1216,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
       // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
-      if (!pool.buddyOnly && machineSlots(state, pool) >= pool.maxAgents) {
-        fail('MACHINE_FULL', `${pool.name} is already running as many agents as it allows. End a session there, or try again when one finishes.`)
-      }
+      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes)
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
@@ -1291,7 +1314,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
       if (!(error instanceof SuperTabError && error.status < 500)) throw error
       return error.code === 'MACHINE_PAUSED' ? `${machine} is paused` : error.code === 'MACHINE_OFFLINE' ? `${machine} is offline`
-        : error.code === 'MACHINE_FULL' ? `${machine} already runs as many agents as it takes`
+        : error.code === 'MACHINE_FULL' ? (error.details?.reason === 'memory' ? `${machine} is out of free memory` : `${machine} already runs as many agents as it takes`)
         : error.code === 'MACHINE_REMOVED' ? `${machine} is being removed from the Swarm` : `${machine} cannot take me right now`
     }
     if (!admitted) return 'my machine is no longer in the Swarm'
@@ -1873,19 +1896,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // So is their choice of their own account for teammates' work (machine.ownAccountWork), Desktop's join re-save
       // included; not over a removal, so a Mac removed and added again starts Team-account-only.
       const ownAccountChoice = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.ownAccountChoice
+      // Its Agents setting: a client that does not send one (older than #2860) keeps the stored one while the count is the same.
+      const previous = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)
+      const agents = command.agents ?? (previous?.agents && previous.maxAgents === command.maxAgents ? previous.agents : undefined)
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
-        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
+        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(mac ? (mac.agents ? { agents: mac.agents } : {}) : agents ? { agents } : {}),
+        ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
         ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
         ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
-      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
+      for (const team of teamPoolsOf(state, added)) if (!team.removal) {
+        Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
+        if (added.agents) team.agents = added.agents
+        else delete team.agents
+      }
       break
     }
     case 'machine.pause': {
@@ -2364,13 +2395,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // The pick names the machine the Lead named: the Mac, when the start then went to its team account.
         const r = command.request
         const model = r.model ?? 'default', effort = r.effort ?? 'default'
-        const { decision, override, instead } = linkDecision(r.conversationId,
+        const { decision, override, instead, routed } = linkDecision(r.conversationId,
           c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort
             && (c.gridModel ?? null) === (r.gridModel ?? null) && (c.gridName ?? null) === (r.gridName ?? null),
           () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort,
             ...(r.gridModel && r.gridName ? { gridModel: r.gridModel, gridName: r.gridName } : {}) }), command.overrideReason)
         if (override) message(r.conversationId, instead(`started ${r.name}`), [], null,
           bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
+        if (routed) message(r.conversationId, routed.text, [], null, bookkeeping(r.conversationId, routed.source))
       }
       break
     }
@@ -3262,14 +3294,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const refusal = candidateRefusal(c, command.conversationId, starter)
         return refusal ? [[c.id, refusal] as const] : []
       }))
-      const pickRefusal = refusals.get(command.decision.pick)
+      const pickRefusal = command.decision.pick === undefined ? undefined : refusals.get(command.decision.pick)
       if (pickRefusal) failTeamWork(pickRefusal, ' Route again.')
+      // A route that names no pick (task #2901) is refused only once it has no candidate left to choose.
+      const [firstRefusal] = refusals.values()
+      if (firstRefusal && refusals.size === command.decision.candidates.length) failTeamWork(firstRefusal, ' Route again.')
       const decision = !refusals.size ? command.decision : { ...command.decision,
         candidates: command.decision.candidates.filter(c => !refusals.has(c.id)),
         excluded: [...command.decision.candidates.flatMap(c => refusals.has(c.id) ? [{ title: c.title, reason: refusals.get(c.id)!.reason }] : []),
           ...command.decision.excluded].slice(0, 200) }
-      const chosen = decision.candidates.find(c => c.id === decision.pick)!
-      const member = chosen.kind === 'member' ? state.agents.find(a => a.id === chosen.agentId) : undefined
+      // With no pick the coordinator chooses at the start or assignment, which checks its agent then.
+      const chosen = decision.pick === undefined ? undefined : decision.candidates.find(c => c.id === decision.pick)!
+      const member = chosen?.kind === 'member' ? state.agents.find(a => a.id === chosen.agentId) : undefined
       if (member) assignable(member)
       // An archived task is routed no more.
       const routedGroup = open(state, command.conversationId)
@@ -3289,9 +3325,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const stepUp = step ? { stepUp: { attempt: Math.min(3, step.attempt), reason: step.reason.slice(0, 200) } } : {}
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, ...stepUp, jobKind, instructionsRevision } })
       result.routeDecisionId = operationId
-      // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
+      // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record. A route that names no
+      // pick posts none: its start or assignment posts the row naming the candidate chosen (linkDecision).
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
+      if (chosen) message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
@@ -3316,9 +3353,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person changes a routing decision; the lead overrides when it starts or assigns.', 403)
       const decision = openDecision()
       open(state, decision.conversationId)
-      const current = decision.override?.candidateId ?? decision.record.pick
+      // A route that names no pick (task #2901) has no choice until a person or a start makes one.
+      const current = decision.override?.candidateId ?? decision.final?.candidateId ?? decision.record.pick
       const chosen = decision.record.candidates.find(c => c.id === command.candidateId) ?? fail('NOT_FOUND', 'Choose one of this decision’s candidates.', 404)
-      if (chosen.id === current) fail('ALREADY_CHOSEN', 'That candidate is already the choice.')
+      if (current !== undefined && chosen.id === current) fail('ALREADY_CHOSEN', 'That candidate is already the choice.')
       if (chosen.kind === 'member' && !state.agents.some(a => a.id === chosen.agentId)) fail('CANDIDATE_UNAVAILABLE', 'That agent left this Super Tab. Choose another.')
       // Its machine may have stopped showing its privacy since the route; the group's Lead is who would start it.
       const leadId = conversation(state, decision.conversationId).leadId
@@ -3327,7 +3365,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       effects.routeDecisions.push({ op: 'override', id: decision.id, override: { by: 'person', actorKey: actorKey(actor), candidateId: chosen.id, reason: command.reason } })
       const lead = conversation(state, decision.conversationId).leadId
       message(decision.conversationId,
-        `${sender.name} chose ${chosen.title} instead of ${routeTitle(decision, current)}. Reason: ${command.reason}`,
+        `${sender.name} chose ${chosen.title}${current === undefined ? '' : ` instead of ${routeTitle(decision, current)}`}. Reason: ${command.reason}`,
         lead ? [lead] : [], null, { kind: 'route-override', decisionId: decision.id, by: 'person' })
       break
     }
@@ -3412,16 +3450,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
       result.assignmentId = operationId
-      let routeNote: { decisionId: string; text: string } | null = null
+      let routeNote: { id: string; text: string; source: Record<string, unknown> } | null = null
       if (command.routeDecisionId) {
         const started = (d: RouteDecision) => d.final?.kind === 'new' &&
           !!state.starts?.some(s => s.id === (d.final as { startId: string }).startId && s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)
         // An agent started from this decision keeps the final that records its model and effort; only the assignment is added.
-        const { decision, override, instead } = linkDecision(group.id,
+        const { decision, override, instead, routed } = linkDecision(group.id,
           (c, d) => (c.kind === 'member' && c.agentId === worker.id) || (c.kind === 'new' && started(d) && d.final?.kind === 'new' &&
             startedAs(c, d.final)),
           d => started(d) ? d.final! : { kind: 'member', agentId: worker.id, machineId: worker.machineId }, command.overrideReason, operationId)
-        if (override) routeNote = { decisionId: decision.id, text: instead(`assigned ${worker.name}`) }
+        if (override) routeNote = { id: stableId(operationId, 'route-override'), text: instead(`assigned ${worker.name}`),
+          source: { kind: 'route-override', decisionId: decision.id, by: 'lead' } }
+        else if (routed) routeNote = { id: stableId(operationId, 'route'), ...routed }
       }
       // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information. Then
       // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
@@ -3431,8 +3471,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW)
       const news = assignedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
-      if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
-        text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' }) })
+      if (routeNote) effects.messages.push({ id: routeNote.id, conversationId: group.id, author: sender,
+        text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, routeNote.source) })
       break
     }
     case 'work.status': {

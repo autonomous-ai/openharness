@@ -23,6 +23,13 @@ describe('SWARM_TOOLS_SKILL', () => {
     for (const part of ['Team account', 'nobody types in it', 'none of the owner\'s tools', 'in their own session', 'handoff',
       '## GitHub', 'GitHub App', 'pull requests', 'where the repository\'s installation of the App granted it', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
   })
+  // Task #2901 (Ken, 2026-11-04): PMs took the route's top line against the project's Routing instructions.
+  it('says the route ranks nothing and names no pick, and that a start gives the Routing rule that chose it', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
+    expect(SWARM_TOOLS_SKILL).toContain('choose by your project\'s Routing instructions')
+    expect(SWARM_TOOLS_SKILL).toContain('`routeDecisionId` and `overrideReason`: the Routing rule that chose it')
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on|ranks who could/)
+  })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)
     for (const part of ['post GROUP', '--to AGENT', 'instructions', 'instructions.save']) expect(SWARM_TOOLS_SKILL).toContain(part)
