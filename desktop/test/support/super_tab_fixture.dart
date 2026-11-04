@@ -551,6 +551,10 @@ class ConversationServer {
   /// and the inbox ([inbox]) is read instead.
   Map<String, dynamic>? followedThreads;
 
+  /// Refuses the followed-threads read's `read` query, as a backend before
+  /// task #2835 does.
+  bool refuseThreadsRead = false;
+
   /// The inbox read's answer (backend read/inbox.ts): `{threads, latest,
   /// more}`; null answers 404.
   Map<String, dynamic>? inbox;
@@ -1794,6 +1798,14 @@ class ConversationServer {
           'OFFLINE',
           'No connection.',
           statusCode: threadListStatus,
+        );
+      }
+      // A backend before task #2835: its strict query refuses `read`.
+      if (refuseThreadsRead && uri.queryParameters.containsKey('read')) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Unrecognized key: "read"',
+          statusCode: 400,
         );
       }
       final answer = uri.pathSegments.last == 'threads'

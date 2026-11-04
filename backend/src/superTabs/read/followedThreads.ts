@@ -32,10 +32,14 @@ import type { ThreadMarkRow } from '../readMarks.js'
 import { FIELDS, inboxRead, INBOX_READS, INBOX_WINDOW_MS, isReply, MEMBER_SCAN, newestFirst, perRange, preview, readable, row, SCAN_FIELDS, threadKey,
   type InboxMessage, type InboxThread, type Row } from './inbox.js'
 
-/** Read threads answered, newest reply first. */
+/** Read threads answered, newest reply first, when the client asks for no number (a Desktop before task #2835). */
 export const MAX_READ_THREADS = 30
+/** The most read threads one read answers when asked (`?read=N`, Activity's Threads 50 at a time, task #2835). */
+export const READ_THREADS_ASKED_MAX = 250
 /** Thread mark rows checked for read threads, most recently moved first: room for those the person turns out not to be in. */
 export const READ_CANDIDATES = 2 * MAX_READ_THREADS
+/** Thread mark rows checked to answer [read] read threads: twice as many, as READ_CANDIDATES is for 30. */
+export const readCandidates = (read: number) => 2 * read
 /** Threads found only by the person's tags that are checked as candidates, newest tag first, besides READ_CANDIDATES. */
 export const TAGGED_THREADS = 30
 /** Rows read per candidate thread, newest first. */
@@ -58,7 +62,10 @@ export interface FollowedThread {
 }
 export interface FollowedThreads { unread: Array<InboxThread & { follow: boolean | null }>; read: FollowedThread[]; more: boolean }
 
-export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, tabId: string): Promise<FollowedThreads> {
+/** [read]: how many read threads to answer (Activity asks 50, then 100, ... as the person scrolls); the cost grows only by the
+ *  candidates checked, 2 × read of the person's marks (at most THREAD_MARK_CAP, already read for the inbox), their roots by id and
+ *  their summaries by root id. */
+export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, tabId: string, read = MAX_READ_THREADS): Promise<FollowedThreads> {
   const db = store.db, personId = user.sub
   const { inbox, state, chats, marks, threadRows } = await inboxRead(store, user, tabId, { latest: false })
   const follows = new Map(threadRows.map(r => [threadKey(r.conversationId, r.threadId), r]))
@@ -72,8 +79,9 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   const tagged = await taggedThreads(db, tabId, state, { kind: 'person', userId: personId, email: user.email }, Date.now(), TAGGED_THREADS + 1,
     t => groups.has(t.conversationId) && !held.has(threadKey(t.conversationId, t.threadId)) && !listed.has(threadKey(t.conversationId, t.threadId)))
   const byTag: ThreadMarkRow[] = tagged.slice(0, TAGGED_THREADS).map(t => ({ conversationId: t.conversationId, threadId: t.threadId, sequence: 0, follow: null, updatedAt: t.at }))
-  const candidates = [...eligible.slice(0, READ_CANDIDATES), ...byTag]
-  let more = inbox.more || eligible.length > READ_CANDIDATES || tagged.length > TAGGED_THREADS
+  const checked = readCandidates(read)
+  const candidates = [...eligible.slice(0, checked), ...byTag]
+  let more = inbox.more || eligible.length > checked || tagged.length > TAGGED_THREADS
   if (!candidates.length) return { unread, read: [], more }
   // Every root by its id, in one read; a root counts only in the chat its mark names, and only one the person reads.
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: candidates.map(c => c.threadId) }, tabId } },
@@ -100,7 +108,7 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   }
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
   const inIt = (m: Pick<Row, 'author' | 'mentions'>) => own(m.author) || m.mentions.includes(personId)
-  const read: Array<FollowedThread & { at: number }> = []
+  const answered: Array<FollowedThread & { at: number }> = []
   for (const c of withRoot) {
     const key = threadKey(c.conversationId, c.threadId), root = roots.get(key)!
     // Newest first. A summary row stands for `count` rows of one author and kind, its newest and oldest among them: the newest
@@ -118,12 +126,12 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
       createdAt: root.createdAt, agentOnly: false, routing: false }, ...replies.toReversed()]
     const [summary] = threadSummaries(state, groups.get(c.conversationId)!, rows)
     if (!summary) continue
-    read.push({ conversationId: c.conversationId, rootId: root.id, root: preview(root), replies: summary.replies, lastReplyAt: summary.lastAt.toISOString(),
+    answered.push({ conversationId: c.conversationId, rootId: root.id, root: preview(root), replies: summary.replies, lastReplyAt: summary.lastAt.toISOString(),
       lastReplySequence: summary.lastSequence, lastReplier: summary.authors[0] ?? null, follow: c.follow, at: summary.lastAt.getTime() })
   }
-  read.sort((a, b) => newestFirst({ at: a.at, id: a.rootId }, { at: b.at, id: b.rootId }))
-  if (read.length > MAX_READ_THREADS) more = true
-  return { unread, read: read.slice(0, MAX_READ_THREADS).map(({ at: _at, ...thread }) => thread), more }
+  answered.sort((a, b) => newestFirst({ at: a.at, id: a.rootId }, { at: b.at, id: b.rootId }))
+  if (answered.length > read) more = true
+  return { unread, read: answered.slice(0, read).map(({ at: _at, ...thread }) => thread), more }
 }
 
 const threadsReads = createRateLimiter('swarm-threads', THREADS_WINDOW_MS, THREADS_READS)

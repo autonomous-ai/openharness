@@ -31,7 +31,7 @@ import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
-import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
+import { READ_THREADS_ASKED_MAX, readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
 import { activityWait } from '../superTabs/activity.js'
 import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
@@ -109,6 +109,9 @@ const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
+/** The followed-threads read's query (read/followedThreads.ts): how many read threads to answer. */
+const threadsQuery = z.object({ read: z.string().regex(/^[1-9][0-9]{0,2}$/).transform(Number)
+  .refine(n => n <= READ_THREADS_ASKED_MAX, `At most ${READ_THREADS_ASKED_MAX}.`).optional() }).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
@@ -531,11 +534,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
     })
   // A person's followed threads, unread first (read/followedThreads.ts): Desktop's Threads view, read as the inbox is.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/threads',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+  // `read`: how many read threads to answer (Activity's Threads asks 50 at a time, task #2835); 30 when not asked.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof threadsQuery> }>('/api/super-tabs/:tabId/threads',
+    { preHandler: [validateParams(tabParams), validateQuery(threadsQuery)] }, async (req, reply) => {
       const wait = await threadsWait(req.user!, req.params.tabId)
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
+      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId, req.query.read))
     })
   // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
