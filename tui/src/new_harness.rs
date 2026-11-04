@@ -350,7 +350,7 @@ fn short_path(path: &str, home: &str) -> String {
 /// A machine's home folder: as its daemon reported it, or this computer's own.
 fn machine_home(app: &App, machine: &str) -> Option<String> {
     app.homes.get(machine).cloned().or_else(|| {
-        (machine == app.fleet.local_id || crate::local::is_local(machine)).then(|| std::env::var("HOME").ok()).flatten()
+        (machine == app.fleet.local_id || crate::local::is_local(machine)).then(|| std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()).flatten()
     })
 }
 

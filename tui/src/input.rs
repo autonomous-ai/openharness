@@ -1438,7 +1438,7 @@ pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serd
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
         let shell = app.options.session.get("default-shell").or_else(|| app.options.global_session.get("default-shell")).cloned()
-            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(crate::sys::sh);
         payload["shell"] = json!(shell);
         payload["term"] = json!(app.options.get("default-terminal", "", None).unwrap_or_else(|| "tmux-256color".into()));
         let mut env: serde_json::Map<String, serde_json::Value> = app.global_env.iter().map(|(k,v)| (k.clone(), if v.hidden { serde_json::Value::Null } else { json!(v.value) })).collect();

@@ -2207,7 +2207,7 @@ mod tests {
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("a copy 2.txt").exists());
         assert!(s.0.join(".Trash/files/a copy 2.txt").exists() && s.0.join(".Trash/info/a copy 2.txt.trashinfo").exists());
-        assert_eq!(f.message.as_deref(), Some("Moved 'a copy 2.txt' to the Trash"));
+        assert_eq!(f.message, Some(format!("Moved 'a copy 2.txt' to the {}", ops::TRASH_NAME)));
         // C-x on a.txt, then C-v in dir (from the explorer): moved.
         f.selected = names(&f).iter().position(|n| *n == "a.txt").unwrap();
         ctrl(&mut f, 'x');
