@@ -56,6 +56,10 @@ class _Backend {
   /// While set, the account's Swarm list fails so.
   Object? listFailure;
 
+  /// While true, this computer's Harness is restarting (a CLI update): every
+  /// request to it fails as its dropped socket does.
+  bool daemonRestarting = false;
+
   ConversationServer add(
     String id,
     String name, {
@@ -159,6 +163,7 @@ class _Connection extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     if (type != 'super_tabs') return {};
+    if (backend.daemonRestarting) throw Exception('WS disconnected');
     final action = payload['action'] as String?;
     if (action == 'backend') {
       return {
@@ -915,9 +920,10 @@ void main() {
       return (app, backend, tab, alpha);
     }
 
-    testWidgets('reads that drop, then are refused while the list still has '
-        'the Swarm (or cannot be read), keep it open in its tab under its own '
-        'name, saying Reconnecting; it reads again once the backend is back', (
+    testWidgets('a Harness restart, then reads that drop and are refused while '
+        'the list still has the Swarm (or cannot be read), keep it open in its '
+        'tab under its own name, saying Reconnecting; it reads again once the '
+        'backend is back', (
       tester,
     ) async {
       late AppNotifier app;
@@ -971,10 +977,20 @@ void main() {
         );
       }
 
+      // CLI v0.5.35 restarts this computer's Harness under the open Swarm.
+      backend.daemonRestarting = true;
+      await poll();
+      stillAlpha('daemon restarting');
+      expect(alpha.backendUnreachable, isTrue);
+      expect(find.text('Reconnecting…'), findsOneWidget);
+      backend.daemonRestarting = false;
+
+      // Then the backend restarts: its reads drop...
       backend.stateReadFailure = dropped;
       await poll();
       stillAlpha('dropped');
       expect(alpha.backendUnreachable, isTrue);
+      expect(find.text('Reconnecting…'), findsOneWidget);
 
       // The restarting backend refuses, and its list cannot be read yet.
       backend.listFailure = dropped;
@@ -992,7 +1008,12 @@ void main() {
         stillAlpha('${refusal.code}, list has it');
         expect(alpha.backendUnreachable, isTrue);
       }
-      expect(find.textContaining('Reconnecting'), findsWidgets);
+      // Quiet: one line, never the refusal's own words.
+      expect(find.text('Reconnecting…'), findsOneWidget);
+      for (final refusal in refusals) {
+        expect(find.text(refusal.message), findsNothing);
+      }
+      expect(find.text('Conversation unavailable.'), findsNothing);
 
       backend.stateReadFailure = null;
       await poll();
