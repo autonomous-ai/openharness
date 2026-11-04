@@ -8,7 +8,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { builtinSqlite } from '../lib/sqliteBuiltin.js'
 import type { CreationObservation } from '../lib/creationObservation.js'
 import type { MachineResources } from '../lib/machineResources.js'
-import { CapacityReservations, START_DEADLINE_MS } from './reservations.js'
+import { CapacityReservations, LAUNCH_DEADLINE_MS, START_DEADLINE_MS } from './reservations.js'
 
 const books: CapacityReservations[] = [], folders: string[] = []
 afterEach(() => { for (const book of books.splice(0)) book.stop(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
@@ -29,7 +29,7 @@ function setup() {
   vi.mocked(core.agents.byAgent).mockImplementation(key => live.has(key) ? { agentId: key, registeredAt: live.get(key)! } as never : undefined)
   const deps = { resources: vi.fn(async () => resources),
     disk: vi.fn(async (cwd: string) => ({ freeBytes: 100, volume: cwd === '/second-volume' ? 'second' : 'first', path: cwd })),
-    sqlite: () => builtinSqlite() as never, now: () => clock.now, agentMemory: vi.fn(async () => new Map(measured)) }
+    sqlite: () => builtinSqlite() as never, now: () => clock.now, agentMemory: vi.fn(async () => new Map(measured)), log: vi.fn() }
   const open = () => { const book = new CapacityReservations(core, 'machine-1', deps); books.push(book); return book }
   /** The start reserved as `n` launched as harness `agent-n` at this moment. */
   const launch = (n: number) => { native.set(id(n), { creationId: id(n), state: 'created', agentId: `agent-${n}` }); live.set(`agent-${n}`, clock.now) }
@@ -49,7 +49,8 @@ it("counts a start's memory only during its start window, so settled agents do n
   free(f, 7.85 * GiB)
   for (const n of [4, 5, 6]) { expect(await book.reserve(agentInput(n))).toMatchObject({ ok: true }); f.launch(n) }
   expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE',
-    detail: 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.' })
+    detail: 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for 3 agents still starting, the oldest '
+      + 'reserved under a minute ago (start receipts fixture-creation-4, fixture-creation-5, fixture-creation-6).' })
   // The first of the three new agents settles: its own use is in free memory now, and its window no longer holds.
   f.clock.now += 5 * MINUTE - 1
   expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
@@ -390,14 +391,55 @@ it('times the deadline from the last run that confirmed the reservation, so a re
   expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
 })
 
-it.each(['pending', 'unconfirmed', null] as const)('keeps holding a %s creation past the deadline, as it may still launch', async state => {
+// Issue #2989 (trunghieu, 2026-11-04): four dispatched 2 GiB starts that never got an agent, each failed by the Swarm ("did not
+// start it within 3 minutes"), read pending or unconfirmed on the machine for good, and every later start there was refused
+// with "8 GiB more is set aside for agents still starting", across a restart. Only a dispatched start has a creation, and
+// the Swarm fails every dispatched start with no agent by its own start deadline.
+it.each(['pending', 'unconfirmed', null] as const)('gives back a %s creation with no agent past the launch deadline, as the Swarm failed its start', async state => {
   const f = setup(), book = f.open()
   free(f, 3 * GiB)
   expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
   f.native.set(id(1), state ? { creationId: id(1), state } : null)
-  f.clock.now += 7 * 24 * 60 * MINUTE
+  // Still inside the Swarm's own wait for it (up to 15 minutes while its machine reports it preparing): it may launch.
+  f.clock.now += LAUNCH_DEADLINE_MS - 1
   expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
-  expect(await book.observe(id(1))).toMatchObject({ released: false })
+  expect(await book.observe(id(1))).toMatchObject({ released: false, harnessId: null })
+  expect(f.deps.log).not.toHaveBeenCalled()
+  f.clock.now += 1
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+  expect(await book.observe(id(1))).toMatchObject({ error: 'CAPACITY_RECEIPT_MISSING' })
+  expect(f.deps.log).toHaveBeenCalledTimes(1)
+  expect(f.deps.log).toHaveBeenCalledWith(expect.stringContaining(`start receipt ${id(1)}`))
+})
+
+it('clears every stuck row on the first start after an update and restart, and still refuses a real shortage', async () => {
+  const f = setup(), before = f.open()
+  free(f, 16 * GiB)
+  for (const n of [1, 2, 3, 4]) {
+    expect(await before.reserve(agentInput(n))).toMatchObject({ ok: true })
+    f.native.set(id(n), { creationId: id(n), state: n % 2 ? 'pending' : 'unconfirmed' })
+  }
+  before.stop()
+  f.clock.now += 26 * 60 * MINUTE
+  free(f, 8 * GiB)
+  const after = f.open()
+  expect(await after.reserve(agentInput(5))).toMatchObject({ ok: true })
+  expect(f.deps.log).toHaveBeenCalledTimes(4)
+  for (const n of [1, 2, 3, 4]) expect(await after.observe(id(n))).toMatchObject({ error: 'CAPACITY_RECEIPT_MISSING' })
+  // Only the new start holds now: 8 GiB free fits three more 2 GiB starts and refuses the fourth.
+  for (const n of [6, 7, 8]) expect(await after.reserve(agentInput(n))).toMatchObject({ ok: true })
+  expect(await after.reserve(agentInput(9))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE',
+    detail: expect.stringMatching(/^Not enough free memory: 0 GiB free, 2 GiB needed\. 8 GiB more is set aside for 4 agents still starting/) })
+})
+
+it('keeps a creation that launched after the launch deadline, with the identity it learns', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  f.clock.now += 7 * 24 * 60 * MINUTE
+  f.launch(1)
+  expect(await book.observe(id(1))).toMatchObject({ ok: true, harnessId: 'agent-1', released: false })
+  expect(f.deps.log).not.toHaveBeenCalled()
 })
 
 it('keeps a launched creation that reads as missing past the deadline: its learned identity is not erased', async () => {

@@ -56,6 +56,12 @@ export const START_WINDOW_MS = 5 * 60_000
  *  the start may still be waiting in the backend (a host asleep or down for longer), and its next run reserves again
  *  against what is free then. Each run that confirms the row restarts its deadline. */
 export const START_DEADLINE_MS = 15 * 60_000
+/** How long a start with a creation on its machine but no agent may hold its reservation. Only a dispatched start has a
+ *  creation, and the Swarm fails every dispatched start with no agent by its own deadline (backend liveness.ts: 3 minutes,
+ *  15 while its machine reports it preparing). One its machine still reads as pending, unconfirmed or unreadable after
+ *  that was held for good: trunghieu's Team account refused every start for four such 2 GiB starts the Swarm had failed,
+ *  across a restart (issue #2989, 2026-11-04). The start window on top covers the reservation made just before dispatch. */
+export const LAUNCH_DEADLINE_MS = START_DEADLINE_MS + START_WINDOW_MS
 const memoryOf = (core: CoreApi) => {
   const read = createHarnessResourcesReader(() => core.agents.live())
   return async () => new Map((await read()).agents.flatMap(row => row.memoryBytes === null ? [] : [[row.agentId, row.memoryBytes] as const]))
