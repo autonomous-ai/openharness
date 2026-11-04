@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/phone/voice_language_store.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -264,15 +265,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
         _voice = SwarmVoice(
-          create: create,
-          dictation: SwarmScope.dictationOf(context),
-          draft: () => _thread.draft,
-          write: (text) {
-            if (_mayReply) _thread.draft = text;
-          },
-          post: () {
-            if (mounted && _mayReply && _thread.canSend) unawaited(_send());
-          },
+          recorder: create,
+          post: (take) async => mounted && _mayReply
+              ? _thread.sendVoice(take, voiceLanguageStore.value)
+              : (sent: false, notice: null),
         );
       }
     }
@@ -706,7 +702,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     final canSend = t.canSend;
     final canAttach = !t.uploading && t.files.room > 0;
     final voice = _voice;
-    final talking = voice?.face != null;
+    final talking = voice?.active ?? false;
     final snapshot = t.reader.snapshot;
     final query = t.mentionQuery;
     final taggable =
@@ -763,21 +759,6 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 notice,
                 key: const ValueKey('swarm-thread-voice-note'),
                 style: AppType.caption(color: tty.yellow),
-              ),
-            ),
-          // Quiet: nothing went wrong, the words stay in the box.
-          if (_voice?.stopped case final stopped?)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.xs,
-                0,
-                AppSpace.xs,
-                AppSpace.s,
-              ),
-              child: Text(
-                stopped,
-                key: const ValueKey('swarm-thread-voice-stopped'),
-                style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
           SwarmComposerCard(

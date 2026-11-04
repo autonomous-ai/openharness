@@ -21,7 +21,13 @@ import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmIntroPage;
 import 'package:harness_mobile/swarm/swarm_style.dart'
-    show SwarmAvatar, SwarmBackButton, SwarmCaption, SwarmRowGlyph, SwarmTopBar;
+    show
+        SwarmAvatar,
+        SwarmBackButton,
+        SwarmCaption,
+        SwarmRowGlyph,
+        SwarmSegments,
+        SwarmTopBar;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -89,6 +95,7 @@ class SettingsPage extends StatelessWidget {
     required this.notifier,
     this.large = true,
     this.experiments,
+    this.appearance,
     this.swarm = false,
   });
 
@@ -102,6 +109,10 @@ class SettingsPage extends StatelessWidget {
   /// What Experimental switches: [experimentalFeaturesStore] unless a test hands in its own, so a
   /// tap there never writes to the developer's own state file.
   final ExperimentalFeaturesStore? experiments;
+
+  /// What Appearance changes: [appearancePrefsStore] unless a test hands in its own, for the same
+  /// reason as [experiments].
+  final AppearancePrefsStore? appearance;
 
   /// The tab's big title. Off when the page is pushed from a terminal's menu, where it needs the
   /// back chevron a large header does not draw.
@@ -118,6 +129,7 @@ class SettingsPage extends StatelessWidget {
       final body = _Body(
         notifier: notifier,
         experiments: experiments ?? experimentalFeaturesStore,
+        appearance: appearance ?? appearancePrefsStore,
       );
       // In the app's face, as Swarm's pages are; only the bar's title is the terminal's.
       if (swarm) {
@@ -196,10 +208,15 @@ class SettingsPage extends StatelessWidget {
 }
 
 class _Body extends StatelessWidget {
-  const _Body({required this.notifier, required this.experiments});
+  const _Body({
+    required this.notifier,
+    required this.experiments,
+    required this.appearance,
+  });
 
   final AppNotifier notifier;
   final ExperimentalFeaturesStore experiments;
+  final AppearancePrefsStore appearance;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -266,7 +283,17 @@ class _Body extends StatelessWidget {
         SettingsGroup(children: [_VoiceLanguageRow()]),
       ],
       const SettingsCaption('Appearance'),
-      SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
+      SettingsGroup(
+        children: [
+          // Swarm's Settings asks light or dark — System, Dark, Light — where the terminal's offers
+          // the eight palettes. The terminal's own page stays dark under either answer.
+          if (SettingsSwarmLook.of(context))
+            _ThemeRow(store: appearance)
+          else
+            _PaletteRow(store: appearance),
+          _TextSizeRow(),
+        ],
+      ),
       // The desktop's Labs ▸ Experimental, and in the same place: after how the app looks, before
       // Help. Features still being built, each off until turned on here.
       const SettingsCaption('Experimental'),
@@ -1102,10 +1129,11 @@ class _TerminalThemeRow extends StatelessWidget {
         valueListenable: terminalThemeStore,
         builder: (context, choice, _) {
           AppTheme.watch(context);
-          // "Same as the app" names a rule; the palette it resolves to names a colour.
+          // "Same as the app" names a rule; the palette it resolves to names a colour — the
+          // terminal's own, which stays dark while Swarm's Theme is chosen, whatever the app wears.
           String label(TerminalThemeChoice option) =>
               option == TerminalThemeChoice.matchApp
-              ? appearancePrefsStore.value.palette.label
+              ? AppTheme.terminalPalette.label
               : option.label;
           return SettingsRow(
             title: 'Colors',
@@ -1138,28 +1166,36 @@ class _TerminalThemeRow extends StatelessWidget {
 /// repaints on the tap anyway — [AppearancePrefsStore.setPalette] moves the notifier before it
 /// writes — so the preview IS the app behind the sheet, at full size, which no swatch can beat.
 ///
-/// Under Dark and Light captions, because a light palette is the whole of light mode: there is no
-/// other switch, and a person looking for one scans for the word.
+/// Under Dark and Light captions, because a light palette is the whole of light mode in the
+/// terminal's Settings: Swarm's Settings asks light or dark instead ([_ThemeRow]).
+///
+/// It names the palette on screen — which Swarm's Theme may have chosen (Paper, under Light) — and
+/// a pick here hands light and dark back to the palette ([AppearancePrefsStore.setPalette]).
 class _PaletteRow extends StatelessWidget {
+  const _PaletteRow({required this.store});
+
+  final AppearancePrefsStore store;
+
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<AppearancePrefs>(
-    valueListenable: appearancePrefsStore,
+    valueListenable: store,
     builder: (context, prefs, _) {
       AppTheme.watch(context);
+      final shown = AppTheme.palette.value;
       PhoneSheetAction choice(HarnessPalette palette) => PhoneSheetAction(
-        icon: palette == prefs.palette
+        icon: palette == shown
             ? LucideIcons.check300
             : LucideIcons.swatchBook300,
         label: palette.label,
         value: palette.description,
-        onTap: () => unawaited(appearancePrefsStore.setPalette(palette)),
+        onTap: () => unawaited(store.setPalette(palette)),
       );
       return SettingsRow(
         // "App colors", beside the terminal's own "Colors": both read Graphite by default, and
         // two rows with one value looked like the same setting twice.
         title: 'App colors',
         glyph: LucideIcons.contrast300,
-        value: prefs.palette.label,
+        value: shown.label,
         onTap: () => showPhoneSheet(
           context,
           title: 'App colors',
@@ -1176,6 +1212,48 @@ class _PaletteRow extends StatelessWidget {
                 ],
               ),
           ],
+        ),
+      );
+    },
+  );
+}
+
+/// Light or dark, in Settings opened from Swarm: System | Dark | Light, in App colors' place.
+///
+/// One tap, and every screen turns at once — the page behind is the preview — except the
+/// terminal's page, which keeps the dark side ([AppearancePrefs.terminalPalette]). Dark and Light
+/// keep the palette App colors chose while it is on their side, else Graphite and Paper. System
+/// follows the phone as it turns. Until it is touched, the control shows the side the palette is
+/// on, which is what that answer would draw.
+class _ThemeRow extends StatelessWidget {
+  const _ThemeRow({required this.store});
+
+  final AppearancePrefsStore store;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<AppearancePrefs>(
+    valueListenable: store,
+    builder: (context, prefs, _) {
+      AppTheme.watch(context);
+      return SettingsRow(
+        key: const ValueKey('settings-theme'),
+        title: 'Theme',
+        glyph: LucideIcons.sunMoon300,
+        // A little over half the row, so the title keeps its word at the largest text size; past
+        // that the control shrinks rather than pushing the row over its edge.
+        trailing: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * .55,
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SwarmSegments<AppThemeMode>(
+              values: AppThemeMode.values,
+              selected: prefs.shownThemeMode,
+              label: (mode) => mode.label,
+              onSelected: (mode) => unawaited(store.setThemeMode(mode)),
+            ),
+          ),
         ),
       );
     },

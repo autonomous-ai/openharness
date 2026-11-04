@@ -5,7 +5,6 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppPalette;
@@ -177,9 +176,8 @@ void main() {
   /// takes the keyboard's inset out for its body).
   late ValueNotifier<String?> account;
 
-  /// The microphone and the transcriber of the last [pump] with a voice.
+  /// The microphone of the last [pump] with a voice.
   late FakeVoiceRecorder recorder;
-  late FakeTranscriber stt;
 
   Future<SwarmHost> pump(
     WidgetTester tester,
@@ -192,7 +190,6 @@ void main() {
       ..value = {PhoneExperiment.swarm};
     account = ValueNotifier<String?>(me);
     recorder = FakeVoiceRecorder();
-    stt = FakeTranscriber();
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -201,13 +198,7 @@ void main() {
       notices: SilentSystemNotices(),
       features: features,
       readMarks: MemoryKeyValueStore(),
-      voice: voice
-          ? () => VoiceInputController(
-              transcriber: stt.call,
-              recorder: recorder,
-              language: ValueNotifier('en'),
-            )
-          : null,
+      voice: voice ? () => recorder : null,
     )..foreground = false;
     addTearDown(host.dispose);
     const page = SwarmConversationPage(swarmId: tab, conversationId: 'g1');
@@ -1087,9 +1078,9 @@ void main() {
     }
 
     testWidgets('signed out mid-take: the microphone closes, and nothing is '
-        'transcribed or kept', (tester) async {
-      await pump(tester, backend([message('m1', 1)]), voice: true);
-      stt.replies.add('after sign out');
+        'sent', (tester) async {
+      final fake = backend([message('m1', 1)]);
+      await pump(tester, fake, voice: true);
       await tester.tap(key('swarm-mic'));
       await tester.pump();
       await tester.pump();
@@ -1101,8 +1092,7 @@ void main() {
       }
 
       expect(recorder.recording, isFalse);
-      expect(stt.calls, isEmpty);
-      expect(find.text('after sign out'), findsNothing);
+      expect(fake.commands, isEmpty);
     });
 
     testWidgets('made read-only mid-take: the take goes with the composer', (
@@ -1120,27 +1110,24 @@ void main() {
       expect(key('swarm-composer-card'), findsNothing);
       expect(key('swarm-read-only'), findsOneWidget);
       expect(recorder.recording, isFalse);
-      expect(stt.calls, isEmpty);
+      expect(fake.commands, isEmpty);
     });
 
-    testWidgets('words transcribed after the Swarm was lost land nowhere', (
+    testWidgets('a take held when the Swarm was lost is never sent', (
       tester,
     ) async {
       final fake = backend([message('m1', 1)]);
       final host = await pump(tester, fake, voice: true);
-      stt.pending = Completer<String>();
       await tester.tap(key('swarm-mic'));
       await tester.pump();
       await tester.pump();
-      await tester.tap(key('swarm-voice-stop'));
-      await tester.pump();
-      expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
+      expect(recorder.recording, isTrue);
 
       await reread(tester, host, fake, lost: true);
-      stt.pending!.complete('too late');
       await tester.pumpAndSettle();
 
-      expect(find.text('too late'), findsNothing);
+      expect(recorder.recording, isFalse);
+      expect(key('swarm-voice-send'), findsNothing);
       expect(fake.commands, isEmpty);
     });
 

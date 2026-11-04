@@ -50,6 +50,25 @@ void main() {
     'createdAt': DateTime.utc(2026, 10, 27, 1, minute).toIso8601String(),
   };
 
+  /// [m] as a voice message: a 1:21 recording whose words are its text.
+  Map<String, dynamic> voiced(Map<String, dynamic> m) => {
+    ...m,
+    'attachments': [
+      {
+        'id': 'clip-${m['id']}',
+        'name': 'Voice message.wav',
+        'mime': 'audio/wav',
+        'size': 2592044,
+        'url': 'https://cdn.example.test/super-tabs/$tab/a/clip.wav',
+        'voice': {
+          'durationMs': 81000,
+          'waveform': List.filled(48, 9),
+          'transcribed': true,
+        },
+      },
+    ],
+  };
+
   /// Swarm [tab] with chat g1 reading [page] as its latest messages, and
   /// chat g2, "Release notes"; with [other], the account also has Swarm
   /// tab-2, whose chat h1 is "Billing". [members] join the reader in [tab].
@@ -378,6 +397,23 @@ void main() {
     await leave(tester);
   });
 
+  testWidgets('a link to a voice message says Voice message and its length, '
+      'not its words', (tester) async {
+    final fake = backend([
+      message('m1', 1, author: me, text: 'See harness://swarm/$tab/g2/v1'),
+    ]);
+    fake.routes[one('g2', 'v1')] = (_) => {
+      'messages': [
+        voiced(message('v1', 7, conversation: 'g2', text: 'Ship it today')),
+      ],
+    };
+    await pump(tester, fake);
+
+    expect(inPreview('$tab/g2/v1', 'Voice message (1:21)'), findsOneWidget);
+    expect(find.textContaining('Ship it today'), findsNothing);
+    await leave(tester);
+  });
+
   group('a reply whose original is not loaded', () {
     List<Map<String, dynamic>> page() => [
       for (var i = 10; i < 40; i++)
@@ -448,6 +484,27 @@ void main() {
         ),
         findsOneWidget,
       );
+      await leave(tester);
+    });
+
+    testWidgets('quotes a voice message as Voice message and its length, not '
+        'its words', (tester) async {
+      final fake = backend(page(), next: older);
+      fake.routes[one('g1', 'm1')] = (_) => {
+        'messages': [
+          voiced(message('m1', 1, author: 'agent-lead', text: 'Ship it today')),
+        ],
+      };
+      await pump(tester, fake);
+
+      expect(
+        find.descendant(
+          of: key('swarm-quote-m40'),
+          matching: find.text('Voice message (1:21)'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Ship it today'), findsNothing);
       await leave(tester);
     });
 
