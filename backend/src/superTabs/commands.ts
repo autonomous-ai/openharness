@@ -2,7 +2,7 @@ import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccount
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { renameAgentTo } from './agentRename.js'
+import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -2230,6 +2230,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // agent it re-added a person's Buddy to a task, added to the project chat, and registered any session of its
       // contributor's machines, the Swarm's or not, past conversation.agent's checks (security review S2).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person adds a session already running. Start a new agent instead.', 403)
+      const addedName = addedAgentName(state, actor, command.name)
       const group = open(state, command.conversationId)
       const project = groupProject(state, group)
       if (state.projects && group.id === project.leadConversationId && command.lead && command.project) {
@@ -2281,7 +2282,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
-        name: command.name, configuration: command.configuration, configurationVersion: operationId,
+        name: addedName, configuration: command.configuration, configurationVersion: operationId,
         ...(roleKind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(command.roleId ? { roleId: command.roleId } : {}),
         ...(roleName ? { roleName } : {}),
         ...(teamPool ? { teamAccount: true as const } : {}) })
@@ -2291,7 +2292,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
+      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(addedName)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
         undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
       else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {

@@ -5525,6 +5525,40 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
+  it('refuses a non-member and an agent of the machine owner\'s Team account, writing nothing', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    const team = f.add('team-agent', 'owner')
+    const before = JSON.stringify(f.state)
+    // Not a member of this Swarm at all.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'stranger', email: 'stranger@example.com' }), 'non-member').toThrow()
+    // A Team account's session acts as an agent, here one the machine owner runs: never as the person.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'agent', agentId: team, machineOwnerId: 'host-owner' }), 'team session').toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // Task #2912, security review 2: Add agent sends the typed harness name, so it gets the same rules; a name that fails them
+  // gives the agent a member name instead, as a role's name does, and the add still succeeds.
+  it('agent.add gives a member name to a name that is the Swarm\'s voice, a link, a person\'s or another agent\'s', () => {
+    const f = fixture()
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    f.run(rename(f.add('first'), 'Quinn'))
+    const group = f.group()
+    const named = (name: string, harnessId: string) => {
+      const id = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+      f.run({ type: 'conversation.create', title: `After ${harnessId}`, brief: 'Anything.', checks: [] })
+      return f.state.agents.find(a => a.id === id)!.displayName
+    }
+    for (const [i, name] of ['System', 'Everyone', '[Approve](https://ev.il)', 'minh nguyen', 'peer@example.com', 'quinn', 'Lead\u2800'].entries()) {
+      expect(named(name, `h${i}`), name).not.toBe(name)
+      expect(named(name, `h${i}`)).toBeTruthy()
+    }
+    expect(named('Release notes', 'ok')).toBe('Release notes')
+  })
+
   it('cleans credentials out of the name', () => {
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
