@@ -84,7 +84,8 @@ void main() {
         storage: MemoryStore(),
         onTabs: (_, _) {},
       )..bind('owner');
-      await client.open('tab');
+      // The Swarm's first read has landed, as when the sidebar shows it.
+      await (await client.open('tab')).refresh();
       addTearDown(client.dispose);
       return (client, server);
     }

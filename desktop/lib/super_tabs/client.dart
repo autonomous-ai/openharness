@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../core/models.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
