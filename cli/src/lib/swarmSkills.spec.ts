@@ -909,6 +909,12 @@ describe('a Buddy\'s folder', () => {
     expect(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).toBe(own)
     // Unlocked only where Harness's own guard shows Harness locked it.
     expect(statSync(join(workspace, 'locked.txt')).mode & 0o222).toBe(0)
+    // A project's own file of the guard's name is not Harness's lock: Harness's settings named it by this folder's own path
+    // (security review 2 of #2832).
+    writeFileSync(join(workspace, '.claude', 'buddy-guard.mjs'), 'theirs\n')
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
+    expect(readFileSync(join(workspace, '.claude', 'buddy-guard.mjs'), 'utf8')).toBe('theirs\n')
+    expect(statSync(join(workspace, 'locked.txt')).mode & 0o222).toBe(0)
   })
 
   // #2626: a relay to its owner's own sessions holds only for this launch, at its owner's last message (lib/buddyGuard.ts).
