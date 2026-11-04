@@ -31,7 +31,7 @@ import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { workspaceCan, type WorkspaceRole } from './workspaces.js'
+import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { othersWorkNotice } from './othersWork.js'
@@ -543,6 +543,9 @@ export interface CommandContext {
   pushOrigin?: PushOrigin
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
   workspaceRole?: WorkspaceRole
+  /** invite.create: the Workspace removed the account of the invited email, and the inviter's role cannot invite to the
+   *  Workspace, so it cannot bring them back (store.ts). */
+  inviteeRemoved?: boolean
   /** Machines of this Swarm also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
   otherWorkspaceMachines?: string[]
   /** No Harness GitHub App on this server (routes/superTabs.ts): a Mac's Harness Team account has no git login to fetch or
@@ -3087,9 +3090,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const landing = inviteLanding(state, command.conversationId) ?? fail('NO_PROJECT', 'Create a project before inviting people.')
       const email = command.email.trim().toLowerCase()
       if (state.people.some(p => p.email === email)) fail('ALREADY_MEMBER', 'This person is already in the Super Tab.')
+      // Not "not available": the inviter still reaches the Swarm, and that answer reads as the Swarm being gone.
+      if (context.inviteeRemoved) fail('WORKSPACE_ROLE_REQUIRED', `This person was removed from the ${WORKSPACE_LABEL}. Only its owners and admins can invite them back.`, 403)
       state.invitations = state.invitations.filter(i => i.email !== email)
       state.invitations.push({ id: operationId, email, role: command.role, conversationId: landing,
-        expiresAt: context.now + 7 * 86_400_000 })
+        expiresAt: context.now + 7 * 86_400_000, ...(actor.kind === 'person' ? { invitedBy: actor.userId } : {}) })
       result.inviteId = operationId
       break
     }
