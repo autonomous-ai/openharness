@@ -62,6 +62,11 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
     expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
   })
+  // River, 11-04 (task #2926): proposals answered before threads, or built without the task's link, closed by hand.
+  it('says how to close a proposal with a reason, posting nothing', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('`{"type":"proposal.close","projectId":"PROJECT","messageId":"PROPOSAL","reason":"built in #N, declined or duplicate"}`')
+    expect(SWARM_TOOLS_SKILL).toContain('posts nothing in the chat')
+  })
   // Task steps design: a step's name is the instructions', so the skill shows how to add one and lists no kinds of step.
   it('says how to add a step, naming no kinds of step', () => {
     expect(SWARM_TOOLS_SKILL).toContain('Add a step to a task:')
