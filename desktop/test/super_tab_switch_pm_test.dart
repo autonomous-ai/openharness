@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -115,7 +116,7 @@ void main() {
   Future<void> openMenu(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
   }
 
@@ -393,13 +394,10 @@ void main() {
     await tester.pumpAndSettle();
     final reason = find.textContaining('Update Harness on Old Mac');
     expect(reason, findsOneWidget);
-    final old = tester.widget<DropdownMenuItem<String>>(
-      find.ancestor(
-        of: reason,
-        matching: find.byType(DropdownMenuItem<String>),
-      ),
+    final old = tester.widget<AppMenuItem>(
+      find.ancestor(of: reason, matching: find.byType(AppMenuItem)),
     );
-    expect(old.enabled, isFalse);
+    expect(old.onPressed, isNull);
     await finish(tester);
   });
 
@@ -442,13 +440,10 @@ void main() {
         'Only the project’s owner moves its PM to another machine.',
       );
       expect(reason, findsOneWidget);
-      final other = tester.widget<DropdownMenuItem<String>>(
-        find.ancestor(
-          of: reason,
-          matching: find.byType(DropdownMenuItem<String>),
-        ),
+      final other = tester.widget<AppMenuItem>(
+        find.ancestor(of: reason, matching: find.byType(AppMenuItem)),
       );
-      expect(other.enabled, isFalse);
+      expect(other.onPressed, isNull);
       await finish(tester);
     },
   );

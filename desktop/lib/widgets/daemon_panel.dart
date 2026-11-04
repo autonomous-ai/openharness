@@ -317,12 +317,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         alignment: Alignment.centerLeft,
       ).copyWith(
         side: WidgetStateProperty.resolveWith(
-          (states) => BorderSide(
-            width: 1.5,
-            color: states.contains(WidgetState.focused)
-                ? DesktopChrome.accent
-                : Colors.transparent,
-          ),
+          (states) => BorderSide(width: 1.5, color: Colors.transparent),
         ),
         overlayColor: WidgetStateProperty.resolveWith(
           (states) => DesktopChrome.foreground.withValues(

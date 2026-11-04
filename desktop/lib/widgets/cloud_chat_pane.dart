@@ -451,9 +451,7 @@ class _CloudChatPaneState extends State<CloudChatPane> {
                   focusedBorder: InputBorder.none,
                   disabledBorder: InputBorder.none,
                   hintText: stopped ? 'Write to wake it' : 'Write to $_speaker',
-                  hintStyle: workspaceBarTextStyle(
-                    color: AppColors.mutedStrong,
-                  ),
+                  hintStyle: workspaceBarTextStyle(color: AppColors.muted),
                 ),
               ),
             ),

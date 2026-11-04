@@ -103,10 +103,11 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   );
 
   Widget _empty(String text) => Padding(
+    // Under the page title's edge.
     padding: const EdgeInsets.fromLTRB(
+      grid.AppDesktop.panelPadding,
       grid.AppDesktop.groupGap,
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.groupGap,
+      grid.AppDesktop.panelPadding,
       grid.AppDesktop.controlGap,
     ),
     child: Text(text, style: DesktopChrome.metadata()),

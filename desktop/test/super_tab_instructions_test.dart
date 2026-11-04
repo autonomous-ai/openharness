@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/instructions_panel.dart';
@@ -71,7 +72,7 @@ void main() {
     return (server, controller);
   }
 
-  Finder menuItem(String label) => find.widgetWithText(MenuItemButton, label);
+  Finder menuItem(String label) => find.widgetWithText(AppMenuItem, label);
 
   Future<void> openMenu(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));

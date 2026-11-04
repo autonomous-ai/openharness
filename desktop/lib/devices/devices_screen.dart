@@ -75,6 +75,9 @@ class _DevicesTabState extends State<DevicesTab> {
       showCompanion: widget.notifier.experimentalFeatures.enabled(
         ExperimentalFeature.focusBarCreature,
       ),
+      // Under a Swarm's Manage, whose own title and tabs already say where this
+      // is.
+      underManage: widget.notifier.activeSwarm.isSuperTab,
       onRefresh: () async {
         await Future.wait([widget.notifier.refreshDevices(), wifi.refresh()]);
       },
@@ -88,6 +91,7 @@ class DevicesScreen extends StatefulWidget {
     required this.controller,
     this.wifi,
     this.showCompanion = false,
+    this.underManage = false,
     this.openShop,
     this.onRefresh,
     this.pickPetFile,
@@ -101,6 +105,10 @@ class DevicesScreen extends StatefulWidget {
 
   /// Whether the desktop companion is on (Experimental), for the rows that follow it.
   final bool showCompanion;
+
+  /// Drawn under Manage's title and tabs: no second title, and on the page's
+  /// content edge.
+  final bool underManage;
   final Future<bool> Function(Uri)? openShop;
   final Future<void> Function()? onRefresh;
 
@@ -350,27 +358,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
       ),
     );
     if (widget.wifi == null) return button;
-    return MenuAnchor(
+    return AppDropdown(
       controller: _addMenu,
-      consumeOutsideTap: true,
-      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(),
-      menuChildren: [
+      children: [
         AppMenuItem(
           key: const Key('devices-add-usb'),
           label: 'USB cable',
-          onPressed: () {
-            _addMenu.close();
-            unawaited(_setup());
-          },
+          leadingSlot: false,
+          onPressed: () => unawaited(_setup()),
         ),
         AppMenuItem(
           key: const Key('devices-add-wifi'),
           label: 'Wi-Fi code',
-          onPressed: () {
-            _addMenu.close();
-            unawaited(_pairWifi());
-          },
+          leadingSlot: false,
+          onPressed: () => unawaited(_pairWifi()),
         ),
       ],
       child: button,
@@ -390,7 +391,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return ColoredBox(
-      color: grid.AppPalette.windowBg,
+      color: grid.AppPalette.swarmWelcome,
       child: ListenableBuilder(
         listenable: widget.controller,
         builder: (context, _) => LayoutBuilder(
@@ -412,11 +413,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 devices.firstOrNull;
             _selectedKey = selected?.key;
             final pet = _petFor(selected);
-            final pad = bounds.maxWidth < 640 ? 20.0 : 40.0;
+            final pad = widget.underManage
+                ? grid.AppDesktop.panelPadding
+                : bounds.maxWidth < 640
+                ? 20.0
+                : 40.0;
             return SingleChildScrollView(
               key: const PageStorageKey('devices-page'),
               controller: _page,
-              padding: EdgeInsets.fromLTRB(pad, 36, pad, 40),
+              padding: EdgeInsets.fromLTRB(
+                pad,
+                widget.underManage ? grid.AppDesktop.groupGap : 36,
+                pad,
+                40,
+              ),
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 1120),
@@ -429,19 +439,27 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         spacing: 24,
                         runSpacing: 18,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Devices', style: grid.AppType.display()),
-                              const SizedBox(height: 7),
-                              Text(
-                                'All your devices. Across your computers.',
-                                style: DesktopChrome.text(
-                                  color: DesktopChrome.muted,
-                                ),
+                          if (widget.underManage)
+                            Text(
+                              'All your devices. Across your computers.',
+                              style: DesktopChrome.text(
+                                color: DesktopChrome.muted,
                               ),
-                            ],
-                          ),
+                            )
+                          else
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Devices', style: grid.AppType.display()),
+                                const SizedBox(height: 7),
+                                Text(
+                                  'All your devices. Across your computers.',
+                                  style: DesktopChrome.text(
+                                    color: DesktopChrome.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
                           Wrap(
                             spacing: 10,
                             runSpacing: 10,

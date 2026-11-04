@@ -92,6 +92,15 @@ void main() {
         greaterThan(tester.getTopLeft(find.text('Projects')).dy),
       );
       expect(find.text('Notifications'), findsNothing);
+      // The foot lines up with the list, and ends on the chat box's bottom line.
+      final manage = tester.getRect(find.byKey(const ValueKey('super-manage')));
+      final activity = tester.getRect(
+        find.byKey(const ValueKey('super-activity')),
+      );
+      final sidebar = tester.getRect(find.byType(ProjectSidebar));
+      expect(manage.left, activity.left);
+      expect(manage.width, activity.width);
+      expect(sidebar.bottom - manage.bottom, ProjectSidebar.footGap);
       expect(tester.takeException(), isNull);
       await closeSwarm(tester, c);
     }, variant: TargetPlatformVariant.only(platform));

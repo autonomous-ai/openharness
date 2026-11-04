@@ -37,9 +37,9 @@ class SettingsNav extends StatefulWidget {
   /// shortcuts is left out.
   final bool compact;
 
-  /// The machine rail's own default width, so Settings opens without the left
-  /// column jumping.
-  static const double width = 260;
+  /// The workspace sidebar's width with its rule, so Settings opens without the
+  /// left column jumping.
+  static const double width = 276;
 
   @override
   State<SettingsNav> createState() => _SettingsNavState();
@@ -140,7 +140,7 @@ class _SettingsNavState extends State<SettingsNav> {
     grid.AppTheme.watch(context);
     return Container(
       width: widget.railWidth,
-      color: grid.AppSurface.recess,
+      color: grid.AppPalette.swarmWelcome,
       child: Padding(
         // Rows add their own icon gutter: their glyphs and group captions sit
         // on the same 24px content inset as the section on the right.

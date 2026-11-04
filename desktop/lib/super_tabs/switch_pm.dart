@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../state/lead_placement.dart';
 import '../usage/usage_account_key.dart';
 import '../widgets/desktop_chrome.dart';
@@ -260,21 +261,16 @@ Future<void> showSwitchPm(
                         children: [
                           const SizedBox(width: 74, child: Text('Machine')),
                           Expanded(
-                            child: DropdownButtonFormField<String>(
+                            child: AppSelectField<String?>(
                               key: const ValueKey('switch-pm-machine'),
-                              initialValue: machineId,
-                              isExpanded: true,
-                              decoration: const InputDecoration(isDense: true),
-                              items: [
+                              value: machineId,
+                              options: [
                                 for (final pool in machineRows)
-                                  DropdownMenuItem<String>(
+                                  SelectOption<String?>(
                                     value: pool['machineId'] as String,
                                     enabled: unavailable(pool) == null,
-                                    child: Text(
-                                      '${superTabMachineName(pool['name'] as String? ?? 'Mac')}${pool['machineId'] == currentLead?.machineId ? ' · Current' : ''}${unavailable(pool) == null ? '' : ' · ${unavailable(pool)}'}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                                    label:
+                                        '${superTabMachineName(pool['name'] as String? ?? 'Mac')}${pool['machineId'] == currentLead?.machineId ? ' · Current' : ''}${unavailable(pool) == null ? '' : ' · ${unavailable(pool)}'}',
                                   ),
                               ],
                               onChanged: (value) => update(() {
@@ -335,20 +331,18 @@ Future<void> showSwitchPm(
                         children: [
                           const SizedBox(width: 74, child: Text('Model')),
                           Expanded(
-                            child: DropdownButtonFormField<String?>(
+                            child: AppSelectField<String?>(
                               key: const ValueKey('switch-pm-model'),
-                              initialValue: model,
-                              isExpanded: true,
-                              decoration: const InputDecoration(isDense: true),
-                              items: [
-                                const DropdownMenuItem<String?>(
+                              value: model,
+                              options: [
+                                const SelectOption<String?>(
                                   value: null,
-                                  child: Text('Default'),
+                                  label: 'Default',
                                 ),
                                 for (final value in offeredModels.toSet())
-                                  DropdownMenuItem<String?>(
+                                  SelectOption<String?>(
                                     value: value,
-                                    child: Text(value),
+                                    label: value,
                                   ),
                               ],
                               onChanged: (value) => update(() => model = value),

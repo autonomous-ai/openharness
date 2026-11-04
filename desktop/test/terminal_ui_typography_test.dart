@@ -172,7 +172,7 @@ void main() {
       final widget = element.widget as EditableText;
       if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
           const ValueKey('new-harness-task')) {
-        expect(widget.style.fontSize, 15);
+        expect(widget.style.fontSize, 13);
         expect(widget.style.fontFamily, grid.AppType.sansFamily);
         continue;
       }
@@ -202,7 +202,7 @@ void main() {
     final task = tester.widget<TextField>(
       find.byKey(const ValueKey('new-harness-task')),
     );
-    expect(task.style!.fontSize, 15);
+    expect(task.style!.fontSize, 13);
     expect(task.style!.fontFamily, grid.AppType.sansFamily);
     expect(
       tester.getSize(find.byKey(const ValueKey('new-harness-composer'))).width,

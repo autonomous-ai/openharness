@@ -98,7 +98,7 @@ class WorkspaceAvatarButton extends StatelessWidget {
   final double size;
 
   /// The circle. Its slot in the row is [widthOf].
-  static const diameter = 24.0;
+  static const diameter = 20.0;
 
   static double widthOf(BuildContext context) => diameter + 8;
 

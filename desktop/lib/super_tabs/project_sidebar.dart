@@ -111,6 +111,9 @@ class ProjectSidebar extends StatelessWidget {
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
   static const _rowEnd = 10.0;
 
+  /// Under the chat box and under Manage beside it, so the two end on one line.
+  static const double footGap = 16;
+
   /// A sidebar section's heading, as Slack's "Channels": the row's size, medium and muted. A phone keeps the
   /// heading's own.
   TextStyle? get _headingStyle => compact
@@ -630,7 +633,8 @@ class ProjectSidebar extends StatelessWidget {
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, needsHuman, attention);
     return Material(
-      color: DesktopChrome.surface,
+      // The page's color: the rule at its edge is what separates them.
+      color: grid.AppPalette.swarmWelcome,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -731,8 +735,13 @@ class ProjectSidebar extends StatelessWidget {
           // At the foot, however long the list (Quiet Swarm, screen 1).
           if (onManage != null)
             Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: grid.AppDesktop.controlGap,
+              // On the chat box's bottom line, less the row's own 2 under it. A
+              // phone's has no box beside it, and keeps the list's 8.
+              padding: EdgeInsets.fromLTRB(
+                grid.AppDesktop.controlGap,
+                0,
+                grid.AppDesktop.controlGap,
+                (compact ? grid.AppDesktop.controlGap : footGap) - 2,
               ),
               child: _navigationRow(
                 key: 'super-manage',
