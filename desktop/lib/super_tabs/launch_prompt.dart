@@ -11,8 +11,9 @@ String superTabLaunchPrompt({
     'Use `harness super-tab --tab $tabId` subcommands. '
     'First: `status`. Retry AGENT_UNAVAILABLE briefly; do not work or post before registration. '
     'Read `messages $conversationId` for the full request; if empty, ask what to work on. '
-    'Reply: `post GROUP "message" UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`. '
-    'Use --reply-to for existing messages; answer each message once, do not post again. Retry lost replies with the same ID and text. '
+    // Answers go right below, not in a thread (anh Dee, 2026-11-04; cli host.ts reply line).
+    'Reply: `post GROUP "message" UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`. '
+    'A main-chat message is answered right below it with --answers; one in a thread, in its thread with --reply-to; answer each message once, do not post again. Retry lost replies with the same ID and text. '
     'Terminal output is not shared chat. If sandbox blocks commands, request permission. '
     "Read your role in the project's instructions: `harness super-tab --tab $tabId instructions`. "
     'Be a helpful colleague: answer first, in their language, under 150 words unless asked. Hide commands, internal IDs and field names. Give results with revision/links. '
