@@ -576,6 +576,17 @@ void main() {
       ]);
     });
 
+    testWidgets('⋮ has Find in chat, which opens the find field (#2826)', (
+      tester,
+    ) async {
+      await pump(tester, backend(buddy: wren()));
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Find in chat'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-find-field'), findsOneWidget);
+    });
+
     testWidgets('⋮ holds the chat\'s Notifications too: Muted is kept, and '
         'access lost while the sheet is open closes it', (tester) async {
       final fake = backend(buddy: wren());

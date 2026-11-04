@@ -276,6 +276,47 @@ void main() {
       expect(find.text('Muted'), findsNothing);
     });
 
+    testWidgets("Swarm Home C: the project's ⋮ finds in its chat (#2826)", (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      tester.view
+        ..physicalSize = const Size(1170, 2532)
+        ..devicePixelRatio = 3;
+      await pump(
+        tester,
+        backend(),
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeC,
+        ),
+      );
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-find'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-find-field'), findsOneWidget);
+    });
+
+    testWidgets("with tabs: the project chat's ⋮ finds in it (#2826)", (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(),
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
+      );
+      await open(tester);
+      await tester.tap(find.text('Find in chat'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-find-field'), findsOneWidget);
+    });
+
     testWidgets("with tabs: ⋮ for the project chat's Notifications while its "
         'Chat tab is shown, and not on another tab', (tester) async {
       final fake = backend();
