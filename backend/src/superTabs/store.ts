@@ -1986,6 +1986,11 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
+      // A task's agent's 👀 and ✅ on the message that asked for it (taskLine.ts), as that agent's own reaction.
+      for (const r of effects.reactions ?? []) {
+        await this.writeReaction(tx, tabId, { kind: 'agent', agentId: r.agentId, machineOwnerId: '' },
+          { type: 'message.react', conversationId: r.conversationId, messageId: r.messageId, emoji: r.emoji, on: true }, context.now)
+      }
       // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
       if (effects.messageEdit) {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
