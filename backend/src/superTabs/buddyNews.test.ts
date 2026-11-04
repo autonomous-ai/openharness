@@ -12,7 +12,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
-const proposal = { goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' as const }
+const proposal = { text: 'Sync edits made offline', goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' as const }
 
 /** A public project with its PM, a worker, and peer's Buddy with its chat, as buddy.create and its start leave them. */
 function setup() {
@@ -37,7 +37,7 @@ function setup() {
   state.conversations.push(chat)
   /** peer's Buddy sends their proposal; the store reads the ask it names. */
   const proposed = () => run({ type: 'buddy.propose', conversationId: chat.id, ownerMessageId: 'ask', ...proposal }, agentActor('buddy'),
-    { proposalAsk: { id: 'ask', conversationId: chat.id, source: false, createdAt: 900,
+    { proposalAsk: { id: 'ask', conversationId: chat.id, source: false, createdAt: 900, text: proposal.text,
       author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages
   const propose = () => proposed()[0]!
   /** The PM's post in the project chat, replying to [root] or to a reply in [root]'s thread, as the store loads that reply. */
@@ -228,7 +228,14 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     }
   })
 
+  // A proposal stored before task #2926 has its Buddy's first reply holding its details, the row its PM was delivered.
   describe('named by its details, the first reply and the row the PM is delivered (Scholes, 11-04)', () => {
+    /** A proposal's root and the Buddy's details reply under it, as buddy.propose wrote them before task #2926. */
+    const stored = (f: ReturnType<typeof setup>): [MessageDraft, MessageDraft] => {
+      const root = f.propose()
+      return [root, { id: 'details', conversationId: root.conversationId, author: { kind: 'agent', id: 'buddy', name: 'Buddy', membershipGeneration: 'first' },
+        text: 'Goal: Sync edits made offline\nScope: Desktop drafts only\nPriority: high', replyTo: root.id, thread: root.id, recipients: [f.pm] }]
+    }
     /** The row the store loads for the named reply, with the row it replies to. */
     const loaded = (reply: MessageDraft, root: MessageDraft) => ({ proposal: { id: reply.id, conversationId: reply.conversationId, author: reply.author,
       source: reply.source ?? null, root: { id: root.id, conversationId: root.conversationId, author: root.author, source: root.source ?? null } } })
@@ -237,7 +244,7 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     agentActor(f.pm), loaded(reply, root))
 
     it('links the proposal itself: its person asked, its row is the task\'s only line, its Buddy is credited', () => {
-      const f = setup(), [root, details] = f.proposed() as [MessageDraft, MessageDraft]
+      const f = setup(), [root, details] = stored(f)
       const created = open(f, details, root)
       const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
       expect(group.requesterId).toBe('peer')
@@ -247,7 +254,7 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     })
 
     it('refuses any other reply in its thread, and the Buddy\'s reply under anything but its own proposal: nothing opens', () => {
-      const f = setup(), [root, details] = f.proposed() as [MessageDraft, MessageDraft]
+      const f = setup(), [root, details] = stored(f)
       const before = f.state.conversations.length
       const wrongs: Array<[MessageDraft, MessageDraft]> = [
         [{ ...details, author: { ...details.author, id: f.pm } }, root],

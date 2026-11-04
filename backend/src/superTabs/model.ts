@@ -709,6 +709,8 @@ export interface CommandEffects {
   messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
+  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
