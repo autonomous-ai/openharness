@@ -330,6 +330,10 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
   );
   Timer? _openTimer, _closeTimer;
   var _overAnchor = false, _overCard = false, _above = false;
+
+  /// Escape closed the card: the focus it sends back to the name does not
+  /// open it again, until the focus has left the name.
+  var _dismissed = false;
   SuperTabIdentityFacts? _facts;
 
   @override
@@ -353,8 +357,9 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
   void _focusMoved() {
     if (!mounted) return;
     if (_anchorFocus.hasFocus && !_portal.isShowing) {
-      _show();
+      if (!_dismissed) _show();
     } else if (!_focused) {
+      _dismissed = false;
       _hideSoon();
     }
   }
@@ -408,6 +413,7 @@ class _SuperTabHoverCardState extends State<SuperTabHoverCard> {
       return KeyEventResult.ignored;
     }
     final inCard = _cardFocus.hasFocus;
+    _dismissed = true;
     _hideNow();
     // Back to the name the card belongs to.
     if (inCard) _anchorFocus.descendants.firstOrNull?.requestFocus();
