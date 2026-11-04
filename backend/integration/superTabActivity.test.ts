@@ -28,6 +28,10 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 let app: FastifyInstance
 let store: SuperTabStore
+// The same database through a client that reports each command, for the cost test; quiet unless `listening`.
+let measured: PrismaClient
+let measuredStore: SuperTabStore
+let tally: Record<string, number> | null = null
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
 const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
@@ -46,6 +50,14 @@ beforeAll(async () => {
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   store = new SuperTabStore(db)
+  measured = new PrismaClient({ datasources: { db: { url: uri } }, log: [{ emit: 'event', level: 'query' }] })
+  measuredStore = new SuperTabStore(measured)
+  measured.$on('query', (event: { query: string }) => {
+    if (!tally) return
+    const name = /db\.(\w+)\.(\w+)/.exec(event.query)
+    const key = name ? `${name[1]}.${name[2]}` : event.query.slice(0, 40)
+    tally[key] = (tally[key] ?? 0) + 1
+  })
   app = Fastify()
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with fixture accounts; every permission and write below is real.
@@ -60,16 +72,18 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close()
   await db?.$disconnect()
+  await measured?.$disconnect()
   await replica?.stop()
 })
 beforeEach(() => resetActivityReads())
 
 /** A Swarm in parts: a public chat ("Web", with a worker on the owner's machine), a project shared with the owner alone
  *  ("Secret work"), a public project the owner can make private later ("Open chat"), and peer's Buddy chat. */
-async function scene() {
+async function scene(extra: Array<{ kind: 'person'; userId: string; email: string }> = []) {
   const s = swarm(MIGRATED)
   s.join(peerActor)
   s.join(outsiderActor)
+  for (const person of extra) s.join(person)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const open = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }).projectId as string
   const openChat = s.group('Open chat', open)
@@ -260,6 +274,34 @@ describe('Activity: a reply tells everyone in its thread (task #2745)', () => {
     await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'private', memberIds: [] })
     const afterLosing = await send(s.tabId, s.openChat, 'Owner once more', owner, root)
     expect((await rowsOf(s.tabId, peer)).includes(afterLosing)).toBe(false)
+  })
+})
+
+describe('Activity: what one thread reply costs (task #2745)', () => {
+  it('reads three times by id whatever the thread, and writes one row per person told', async () => {
+    const counts: Array<{ people: number; total: number; commands: Record<string, number>; rows: number }> = []
+    for (const size of [1, 10, 50]) {
+      const extra = Array.from({ length: size }, (_, i) => ({ kind: 'person' as const, userId: `2${String(size).padStart(3, '0')}${String(i).padStart(20, '0')}`,
+        email: `fanout-${size}-${i}@example.com` }))
+      for (const person of extra) await db.user.create({ data: { id: person.userId, externalId: `fixture-${person.userId}`, email: person.email, autonomousEnv: 'prod' } })
+      const s = await scene(extra)
+      const root = await send(s.tabId, s.web, 'Owner root')
+      for (const person of extra) await send(s.tabId, s.web, 'In the thread', user(person), root)
+      // The reply measured: by peer, telling the starter and the `size` people who replied.
+      const commands: Record<string, number> = {}
+      tally = commands
+      const reply = await (async () => (await measuredStore.execute(peer, s.tabId, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: s.web, text: 'Measured reply', replyTo: root, recipientIds: [] } })) as { result: Record<string, unknown> })()
+      tally = null
+      const rows = await db.superTabActivity.count({ where: { tabId: s.tabId, messageId: reply.result.messageId as string } })
+      expect(rows).toBe(size + 1)
+      const total = Object.values(commands).reduce((n, v) => n + v, 0)
+      counts.push({ people: size + 1, total, commands: Object.fromEntries(Object.entries(commands).filter(([k]) => /Activity|ThreadMark|ChatSetting/.test(k))), rows })
+    }
+    console.log(`reply fan-out: ${JSON.stringify(counts)}`)
+    // The reads Activity makes are the same for a thread of 2 people and of 51.
+    const reads = (c: Record<string, number>) => Object.entries(c).filter(([k]) => /ThreadMark|ChatSetting/.test(k)).reduce((n, [, v]) => n + v, 0)
+    expect(new Set(counts.map(c => reads(c.commands))).size).toBe(1)
   })
 })
 
