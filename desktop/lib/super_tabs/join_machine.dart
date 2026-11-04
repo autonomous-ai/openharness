@@ -15,6 +15,19 @@ int? superTabSuggestedAgentSlots(MachineResources? resources) {
   return (total / (2 * _agentMemoryBytes)).floor().clamp(1, 16);
 }
 
+/// Whether [stored], on a machine row saved without its Agents setting, is
+/// the number joining suggested, which the server reads as As memory allows
+/// (backend superTabs/machines.ts agentLimit; Dee, 2026-11-04): 16, or the
+/// suggestion its measured memory gave (from 4 GiB, below which it was a
+/// floor of 1 rather than a figure from memory).
+bool superTabOldJoinSuggestion(int stored, MachineResources? resources) {
+  if (stored == 16) return true;
+  final total = resources?.memoryTotalBytes;
+  return total != null &&
+      total >= 2 * _agentMemoryBytes &&
+      stored == superTabSuggestedAgentSlots(resources);
+}
+
 /// The role [answer] says this account just became a member as: the
 /// server's own answer to the join that asked, a link join (store.ts
 /// `joinSwarm`) or an invitation's accept (commands.ts `invite.accept`). Null
@@ -184,6 +197,8 @@ class SwarmJoinMachine {
       'scope': 'swarm',
       'engines': engines,
       'maxAgents': slots,
+      // Joining sets no limit: free memory is checked at each start.
+      'agents': 'memory',
       'teamAccountOnly': true,
     });
     if (!current()) return null;

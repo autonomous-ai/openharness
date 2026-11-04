@@ -2839,6 +2839,7 @@ void main() {
         'scope': 'swarm',
         'engines': ['claude', 'codex'],
         'maxAgents': 8,
+        'agents': 'memory',
       });
       expect(tester.takeException(), isNull);
 
@@ -3138,7 +3139,7 @@ void main() {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
       f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
       ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
@@ -3155,21 +3156,21 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
       expect(find.byType(SuperTabDetailDialog), findsOneWidget);
-      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 3);
 
       // The owner changes their mind before trying again.
       await tester.tap(_limitStep('more'));
       await tester.pumpAndSettle();
       await tester.tap(_limitStep('more'));
       await tester.pumpAndSettle();
-      expect(_limit(tester), '6');
+      expect(_limit(tester), '5');
 
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
       expect(find.byType(SuperTabDetailDialog), findsNothing);
-      // The stored attempt is settled first, and then the six on screen — the
-      // four it was built with is not what the machine ends up with.
-      expect(f.connection.server.posts.last['command']!['maxAgents'], 6);
+      // The stored attempt is settled first, and then the five on screen — the
+      // three it was built with is not what the machine ends up with.
+      expect(f.connection.server.posts.last['command']!['maxAgents'], 5);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox());
