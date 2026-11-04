@@ -5640,7 +5640,7 @@ describe('requests per idle agent and machine per minute while the server pushes
 
   it('an idle worker: list reads only on the repeat, no terminal pickups; a Lead: a list read every 30 s', async () => {
     const worker = await measure(false), lead = await measure(true)
-    console.log(`[#2800 measure] per minute: worker list GETs ${worker.lists}, Lead list GETs ${lead.lists}, machine terminal pickups ${worker.pickups}`)
+    process.stderr.write(`[#2800 measure] per minute: worker list GETs ${worker.lists}, Lead list GETs ${lead.lists}, machine terminal pickups ${worker.pickups}\n`)
     expect(worker).toEqual({ lists: 0.2, pickups: 0 })
     expect(lead.lists).toBe(2)
   }, 60_000)
