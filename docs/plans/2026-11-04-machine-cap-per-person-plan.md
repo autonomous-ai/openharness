@@ -49,7 +49,7 @@ Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, wh
 - **Concurrency:** unchanged. Commands that add a machine already serialize on the Swarm's head, and the count is over
   `state.machines`, which the command has loaded.
 - **Read cost:** the check adds no read. Host rows filter `state.machines` once per row they would add, over a list they
-  already hold.
+  already hold. Raising the cap does make existing reads larger: see Scale.
 - **Scale at 10x (360 entries in one Swarm):** these are estimates from the measurements above, and Task 4 replaces them
   with measured numbers.
 
@@ -60,11 +60,16 @@ Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, wh
   | `readMachines` on a cache miss | 96 KB | About 1 MB | Every live machine part |
   | Machine writes to one Swarm | 2.4/s | 24/s | One per reading |
   | Cache patch (`applyByKey`) | 36 per changed part | 360 per changed part | Scans and copies the list |
-  | Host signature (`hostGroupsSignature`) | Unchanged | Unchanged | Its input is groups, not machines |
-  | Assignment pick (`cli` route, `workerIndex`) | Per call | 10x per call | Walks machines and agents |
+  | Host signature (`read/hostInputs.ts`), one check | 36 rows | 360 rows | Key and settings marker of every live machine |
+  | Host signature, all hosts of a Swarm together | 36 × 36 rows | 360 × 360 rows, 100x | Each host checks, and hosts grow with machines |
+  | Route (`cli/src/superTabs/routeCommand.ts`) | Probes each machine | 10x per route | Once per engine on each machine |
+  | Assignment (`work.assign`, `workerIndex`) | Unchanged | Unchanged | Walks agents, not machines |
 
-  What warns first: changes bytes on old clients, then `readMachines` result bytes in `db by shape`. This is why light
-  clients are a gate: a 10x Swarm on light clients should cost a reader less than today's largest Swarm costs on old ones.
+  What warns first: the host signature's `SwarmMachine` read in `db by shape`, the one path that grows with the square of
+  the machines. Then changes bytes on old clients, then `readMachines` result bytes. Light clients are a gate for the
+  bytes: a 10x Swarm on light clients should cost a reader less than today's largest Swarm costs on old ones. Neither gate
+  fixes the signature's square, so Task 4 measures it, and it may need its own fix (a cached entry, as the signature's
+  conversations already have) before a Swarm gets near 10x.
   There is no Swarm-wide count left, so the warning is `db by shape`, not a refusal. Review this design again when one
   Swarm passes 100 entries.
 - **Compatibility:**
@@ -105,7 +110,7 @@ Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, wh
 - The row condition and the command's check can't disagree: both use the one helper.
 - Team entries stay bounded, and a Mac's Team entry doesn't use up its owner's 20.
 - Old CLI behaviour, in a test with the old `JOIN_FINAL`.
-- Whether the numbers from Task 4 support going ahead.
+- Whether the numbers from Task 4 support going ahead, the host signature's above all.
 
 ## Task 1: Count machines per person
 
@@ -164,8 +169,9 @@ Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, wh
 
 - [ ] Before deploying, have an agent on Ken's Mac read `db by shape` for the machine reads, readings and changes, over one
   hour at the same time of day. Record reads, documents and result bytes. Compare it to the estimates above.
-- [ ] Add a bench with 36 and 360 entries: `readMachines` on a miss, a reading's write and patch, a changes poll on old and
-  light clients, and the route's pick. Put the numbers in the PR.
-- [ ] If a 10x Swarm on light clients costs a reader more than today's largest Swarm on old clients, stop and ask the PM
-  before building further.
+- [ ] Add a bench with 36 and 360 entries: the host signature's check, `readMachines` on a miss, a reading's write and
+  patch, and a changes poll on old and light clients. Put the numbers in the PR.
+- [ ] Stop and ask the PM before building further if either holds: a 10x Swarm on light clients costs a reader more than
+  today's largest Swarm on old clients, or the host signature's total read at 10x is a large share of the backend's
+  `db by shape` load.
 - [ ] After the release, read the same `db by shape` window and post both in the PR.
