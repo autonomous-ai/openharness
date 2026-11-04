@@ -61,6 +61,8 @@ import { placeAfter, queueSiblings } from './taskQueue.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
+/** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
+const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** What an older client's policy, skill-set, role or rule-removal save answers: accepted, kept nowhere (project instructions,
  *  phase 4, decision 3). The old rules, policy rows and role texts stay in place, unread. */
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
@@ -1128,14 +1130,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       final: { ...finalOf(decision), ...patch }, ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
     const chosenId = decision.override?.candidateId ?? decision.final?.candidateId ?? decision.record.pick
     if (chosenId === undefined) {
-      const reason = reasonText ?? fail('ROUTE_REASON_REQUIRED',
+      // The only candidate that can run needs no rule to choose it.
+      const only = decision.record.via === 'only' ? ONLY_CANDIDATE : undefined
+      const reason = reasonText ?? only ?? fail('ROUTE_REASON_REQUIRED',
         'This route names no pick: send, as overrideReason, the project\'s Routing rule that chose this candidate.')
       const chosen = decision.record.candidates.find(c => matches(c, decision))
       const override: RouteOverride | undefined = chosen ? undefined : { by: 'lead', actorKey: actorKey(actor), reason }
       final(chosen ? { candidateId: chosen.id } : {}, override)
       const instead = (done: string) => `${who} ${done}, which is none of the route's candidates. Reason: ${reason}`
-      const routed = chosen && { text: `Routed to ${chosen.title} — by the project's Routing instructions · "${reason}"`, source: { kind: 'route',
-        decisionId: decision.id, via: 'instructions', p: null, belowFloor: false, why: reason, pick: { id: chosen.id, title: chosen.title },
+      const routed = chosen && { text: `Routed to ${chosen.title} — ${only && !reasonText ? 'only candidate' : 'by the project\'s Routing instructions'} · "${reason}"`, source: { kind: 'route',
+        decisionId: decision.id, via: only && !reasonText ? 'only' : 'instructions', p: null, belowFloor: false, why: reason, pick: { id: chosen.id, title: chosen.title },
         alternatives: decision.record.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })) } }
       return { decision, override, instead, routed }
     }

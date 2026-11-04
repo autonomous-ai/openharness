@@ -56,7 +56,7 @@ override path, the instructions text, and that a neutral first row is still a fi
 ## Design
 
 - growth: route decisions are deleted as before, and nothing is added per route except the slim fit on pick-less
-  records: about 100 bytes a candidate, measured in `routeRecord.test.ts`.
+  records: about 130 bytes a candidate (14.6 KB for 42 candidates against 9.2 KB), measured in `routeRecord.test.ts`.
 - concurrency: unchanged. A decision is written inside the Swarm's store write, as before.
 - read cost: unchanged. routeHistory reads the same 50 decisions.
 - scale: 10x the machines means 64 candidates at most (`RECORD_MAX`). The stored size is the first metric to warn.
