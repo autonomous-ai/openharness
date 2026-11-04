@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
+import 'swarm_chat_agents.dart';
 import 'swarm_instructions_page.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_project_tasks.dart';
@@ -244,8 +245,10 @@ class SwarmProjectTeamSheet extends StatelessWidget {
 /// first ([swarmProjectAgents]), with what needs a look counted beside their
 /// caption, each opening the task it holds ([onOpen]), its time since its
 /// last progress kept true by a tick a minute ([tick]) and on coming back to
-/// the app. Its humans are on the project's leaderboard. A pull reads the
-/// Swarm again.
+/// the app. As Desktop's Members, a long press offers Remove from Swarm to
+/// whoever may ([showSwarmAgentMenu]), and Add agent ends the list
+/// ([showSwarmAddAgentSheet], into the project's chat). Its humans are on the
+/// project's leaderboard. A pull reads the Swarm again.
 class SwarmProjectTeam extends StatefulWidget {
   const SwarmProjectTeam({
     super.key,
@@ -317,8 +320,13 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
     final reader = widget.reader;
     return ListenableBuilder(
       // Needs and held answers move with the session and its inbox; the
-      // work and the team with the read.
-      listenable: Listenable.merge([session, session.inbox, reader]),
+      // work and the team with the read, and with a removal on its way.
+      listenable: Listenable.merge([
+        session,
+        session.inbox,
+        reader,
+        SwarmAgentWrites.of(reader),
+      ]),
       builder: (context, _) {
         final snapshot = reader.snapshot;
         final project = snapshot?.projects
@@ -330,12 +338,18 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
         final now = clock.now();
         final tasks = swarmProjectTasks(session.inbox, reader, project.id, now);
         final personName = swarmTaskPersonName(snapshot);
-        final agents = swarmProjectAgents(
-          snapshot,
-          project.id,
-          now: now,
-          viewerId: reader.accountId,
-        );
+        // One being removed is gone at once, and back if the server refuses.
+        final removing = SwarmAgentWrites.of(reader);
+        final agents = [
+          for (final a in swarmProjectAgents(
+            snapshot,
+            project.id,
+            now: now,
+            viewerId: reader.accountId,
+          ))
+            if (!removing.removing(a.agent.id)) a,
+        ];
+        final addsAgent = swarmCanAddAgent(reader, project.leadConversationId);
         final working = tasks.working;
         final folds = working.length > SwarmProjectTeam.workShown;
         final work = folds && !_allWork
@@ -424,8 +438,8 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                     'No agents yet.',
                     key: const ValueKey('swarm-team-no-agents'),
                   ),
-                )
-              else
+                ),
+              if (agents.isNotEmpty || addsAgent)
                 SwarmGroup(
                   children: [
                     for (final a in agents)
@@ -444,6 +458,24 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                           final task? => () => widget.onOpen(task.id),
                           null => null,
                         },
+                        onLongPress:
+                            swarmAgentRights(reader, a.agent.id)?.remove == true
+                            ? () => unawaited(
+                                showSwarmAgentMenu(context, reader, a.agent.id),
+                              )
+                            : null,
+                      ),
+                    if (addsAgent)
+                      SwarmRow(
+                        key: const ValueKey('swarm-team-add-agent'),
+                        title: 'Add agent',
+                        onTap: () => unawaited(
+                          showSwarmAddAgentSheet(
+                            context,
+                            reader,
+                            project.leadConversationId,
+                          ),
+                        ),
                       ),
                   ],
                 ),
@@ -483,8 +515,8 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
 /// One agent on a project's Team (Dee, 2026-10-29): the face in one column,
 /// with its state's [dot], the name and a quiet [detail] line beneath, ending
 /// in its [age], which a narrow phone never cuts: the line's words give way
-/// first. The same height with or without the line; a tap does [onTap], when
-/// there is one.
+/// first. The same height with or without the line; a tap does [onTap], and
+/// a long press [onLongPress], when there is one.
 class SwarmMemberRow extends StatelessWidget {
   const SwarmMemberRow({
     super.key,
@@ -494,6 +526,7 @@ class SwarmMemberRow extends StatelessWidget {
     this.detail,
     this.age,
     this.onTap,
+    this.onLongPress,
   });
 
   final Widget face;
@@ -505,7 +538,7 @@ class SwarmMemberRow extends StatelessWidget {
 
   /// How long since the agent's last progress: "4m".
   final String? age;
-  final VoidCallback? onTap;
+  final VoidCallback? onTap, onLongPress;
 
   static const double _face = 36, _dot = 11;
 
@@ -527,8 +560,10 @@ class SwarmMemberRow extends StatelessWidget {
       button: onTap != null,
       label: [name, if (line.isNotEmpty) line].join(', '),
       excludeSemantics: true,
+      onLongPress: onLongPress,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         child: ConstrainedBox(
           // A name over its line, with or without the line: every row of the
           // Team one height.

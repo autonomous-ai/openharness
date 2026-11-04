@@ -76,6 +76,8 @@ export const NAMED_INDEX = {
     /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on
      *  `compaction` and sorted, reading far more than a page. */
     settle: { status: 1, _id: 1 },
+    /** A message's deliveries in its Swarm. */
+    byMessage: { tabId: 1, messageId: 1 },
   },
   /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
   SuperTabReceipt: {

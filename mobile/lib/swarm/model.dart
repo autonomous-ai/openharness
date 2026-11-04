@@ -384,6 +384,8 @@ class SuperTabConversation {
               (row['shippedAt'] as num).toInt(),
             )
           : null,
+      queueRank = (row['queueRank'] as num?)?.toDouble(),
+      notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
@@ -437,6 +439,12 @@ class SuperTabConversation {
   /// When it shipped (its first Done); null until it has, and from a server
   /// that does not say.
   final DateTime? shippedAt;
+
+  /// Its place in its project's shared Next up and the day before which it
+  /// may not start, as Desktop's Tasks view reads them (task #2569); read here
+  /// for the phone's Tasks view to come.
+  final double? queueRank;
+  final DateTime? notBefore;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;

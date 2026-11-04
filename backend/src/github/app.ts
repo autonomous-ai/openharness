@@ -467,11 +467,13 @@ export class GitHubApp {
     }
   }
 
-  /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); null when GitHub
-   *  cannot say, which a caller must read as possibly open. */
-  async pullRequestState(repository: GitHubRepository, number: number, token: string): Promise<'open' | 'merged' | 'closed' | null> {
+  /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); missing when GitHub
+   *  answers 404, as for another repository's number read in this one (#2602); null when GitHub cannot say, which a caller
+   *  must read as possibly open. */
+  async pullRequestState(repository: GitHubRepository, number: number, token: string): Promise<'open' | 'merged' | 'closed' | 'missing' | null> {
     try {
       const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
+      if (answer.status === 404) return 'missing'
       const body = answer.body as Record<string, unknown>
       if (answer.status !== 200 || !['open', 'closed'].includes(String(body.state))) return null
       return body.state === 'open' ? 'open' : typeof body.merged_at === 'string' ? 'merged' : 'closed'

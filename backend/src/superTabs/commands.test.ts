@@ -13,6 +13,7 @@ import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
+import { groupView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -5215,5 +5216,93 @@ describe('lead.switch', () => {
     s.f.run(s.request)
     const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'signed out.\nplease\tretry.. ' }, s.as)
     expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: signed out. please retry. It is back on Codex.")
+  })
+})
+
+// A project's Next up (Tasks view, #2569): a person or the project's PM orders it, one sparse rank per task, and the PM marks a
+// promise with a not-before date.
+describe('the Next-up queue (work.queue)', () => {
+  function queued() {
+    const f = routed()
+    const open = (title: string, projectId?: string) => f.run({ type: 'conversation.create', ...projectId ? { projectId } : {}, title, brief: `${title}.`, checks: [] })
+      .result.conversationId as string
+    const [a, b, c] = [open('Drafts'), open('Sync'), open('Search')] as [string, string, string]
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    const queue = (conversationId: string, fields: { after?: string | null; notBefore?: string | null }) =>
+      commandSchema.parse({ type: 'work.queue', conversationId, ...fields })
+    return { f, a, b, c, open, task, queue }
+  }
+
+  it('moves a task after another for a person, between the two around it', () => {
+    const { f, a, b, c, task, queue } = queued()
+    f.run(queue(c, { after: a }))
+    expect(task(c).queueRank).toBeGreaterThan(task(a).number!)
+    expect(task(c).queueRank).toBeLessThan(task(b).number!)
+    // Only the task moved is written.
+    expect(task(a).queueRank).toBeUndefined()
+    expect(task(b).queueRank).toBeUndefined()
+    f.run(queue(b, { after: null }))
+    expect(task(b).queueRank).toBeLessThan(task(a).number!)
+    expect(groupView(task(c), new Set())).toMatchObject({ queueRank: task(c).queueRank })
+  })
+
+  it('takes the PM\'s not-before date, and clears it with null', () => {
+    const { f, a, task, queue } = queued()
+    f.run(queue(a, { notBefore: '2026-12-04' }), f.leadActor)
+    expect(task(a).notBefore).toBe('2026-12-04')
+    expect(task(a).queueRank).toBeUndefined()
+    expect(groupView(task(a), new Set())).toMatchObject({ notBefore: '2026-12-04' })
+    f.run(queue(a, { notBefore: null }), f.leadActor)
+    expect(task(a)).not.toHaveProperty('notBefore')
+  })
+
+  it('is refused to any other agent of the project', () => {
+    const { f, a, b, queue } = queued()
+    const engineer: Actor = { kind: 'agent', agentId: f.add('engineer'), machineOwnerId: 'host-owner' }
+    const before = structuredClone(f.state)
+    expect(() => f.run(queue(b, { after: a }), engineer)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    expect(() => f.run(queue(b, { notBefore: '2026-12-04' }), f.workerActor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    expect(f.state).toEqual(before)
+  })
+
+  it('refuses to place a task after one that is not an open task of its project, or after itself', () => {
+    const { f, a, b, c, open, queue } = queued()
+    const other = f.run({ type: 'project.create', name: 'Firmware', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const elsewhere = open('Flash', other.projectId)
+    const archived = open('Old')
+    f.run({ type: 'conversation.archive', conversationId: archived, archived: true })
+    const step = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: a, step: 'Review', checks: [] }).result.conversationId as string
+    const before = structuredClone(f.state)
+    for (const after of [elsewhere, other.conversationId, archived, step, b, 'lead', 'no-such-task']) {
+      expect(() => f.run(queue(b, { after })), after).toThrow(expect.objectContaining({ code: 'QUEUE_UNKNOWN', status: 400,
+        message: 'Name an open task of this project to place it after, or null for the top.' }))
+    }
+    // Nor does anything but an open task of the project move: its chat or a step.
+    for (const moved of ['lead', step]) expect(() => f.run(queue(moved, { after: c })), moved).toThrow(expect.objectContaining({ code: 'QUEUE_UNKNOWN', status: 400 }))
+    expect(() => f.run(queue(archived, { after: c }))).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+    f.state.conversations.push({ id: 'private', title: 'Private', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null,
+      lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
+    // A Chat with PM from before Buddies is nobody's to read now (buddies.test.ts), so it reads as missing.
+    expect(() => f.run(queue('private', { after: c }))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    f.state.conversations.pop()
+    expect(f.state).toEqual(before)
+  })
+
+  it('refuses a malformed date, and a move with neither field', () => {
+    const parse = (fields: Record<string, unknown>) => commandSchema.safeParse({ type: 'work.queue', conversationId: 'task', ...fields }).success
+    for (const notBefore of ['2026-12-4', '2026-02-30', '2026-13-01', 'Dec 4', '2026-12-04T00:00:00Z', '']) expect(parse({ notBefore }), notBefore).toBe(false)
+    expect(parse({})).toBe(false)
+    expect(parse({ after: 'other', notBefore: '2028-02-29' })).toBe(true)
+    expect(parse({ after: null })).toBe(true)
+    expect(parse({ notBefore: null })).toBe(true)
+  })
+
+  it('does the work once when the same operation comes again', () => {
+    const { f, a, c, task, queue } = queued()
+    f.run(queue(c, { after: a, notBefore: '2026-12-04' }), owner, { operationId: 'move' })
+    const once = structuredClone(f.state)
+    expect(task(c)).toMatchObject({ queueRank: expect.any(Number), notBefore: '2026-12-04' })
+    f.run(queue(c, { after: a, notBefore: '2026-12-04' }), owner, { operationId: 'move' })
+    expect(f.state).toEqual(once)
   })
 })

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
@@ -11,7 +12,6 @@ import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/task_groups.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
@@ -409,6 +409,32 @@ void main() {
         await close(tester, c);
       },
     );
+
+    testWidgets('a private Buddy project uses a lock in its project label', (
+      tester,
+    ) async {
+      final server = buddySwarm();
+      server.state['projects'] = [
+        projectFixture('lead', 'Pilot', 'lead', visibility: 'private'),
+      ];
+      giveBuddy(server);
+      final c = await show(tester, server);
+
+      await tester.tap(buddyEntry);
+      await tester.pumpAndSettle();
+
+      final bar = find.byKey(const ValueKey('super-buddy-bar'));
+      expect(
+        find.descendant(of: bar, matching: find.byIcon(AppIcons.lock)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: bar, matching: find.textContaining('#Pilot')),
+        findsNothing,
+      );
+
+      await close(tester, c);
+    });
 
     testWidgets(
       'the reader\'s Buddy row says where it runs; other people\'s Buddies appear nowhere',
@@ -1477,15 +1503,8 @@ void main() {
           },
         });
         final c = await show(tester, server);
-        if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
-        // Workgroups with no work are in The rest, unfolded here (#2309).
-        c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await tester.pumpAndSettle();
 
-        expect(
-          find.byKey(const ValueKey('super-group-offline')),
-          findsOneWidget,
-        );
         expect(find.byKey(const ValueKey('super-group-private')), findsNothing);
         expect(find.text('Pricing talk'), findsNothing);
         expect(await c.select('private'), isTrue);

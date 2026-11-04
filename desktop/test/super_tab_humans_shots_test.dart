@@ -50,7 +50,6 @@ void main() {
           ),
         ),
       );
-      c.expandedProjects.clear();
       if (!c.projectsGroupOpen) c.toggleProjectsGroup();
       await tester.pumpAndSettle();
 

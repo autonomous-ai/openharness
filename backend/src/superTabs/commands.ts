@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machinesFull, MACHINES_FULL_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
@@ -54,6 +54,7 @@ import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './
 import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
@@ -63,6 +64,12 @@ const NO_REASON = 'No reason given.'
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
+/** A calendar day, YYYY-MM-DD, that exists. */
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as YYYY-MM-DD.')
+  .refine(value => {
+    const date = new Date(`${value}T00:00:00Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value)
+  }, 'Give a date that exists.')
 /** What a host reports it can do for a Product Manager's switch; a host from before it is never asked (HOST_OUTDATED). */
 const SWITCH_CAPABILITY = 'leadSwitch'
 const SWITCH_LEASE_MS = 15 * 60_000
@@ -215,6 +222,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
+  // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
+  // to stay; `notBefore` a day it should not start before, null to clear.
+  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional() }).strict()
+    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.'),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -1356,7 +1367,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
       fail('MACHINE_CLEANING', 'This machine is still cleaning up after your last Buddy there. Try again in a minute.')
     }
-    if ((state.machines?.length ?? 0) >= 32) fail('MACHINES_FULL', 'This Swarm cannot take another machine.')
+    if (machinesFull(state)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
     const pool: ContributedMachine = { machineId, name: setup.name, cwd: setup.cwd, scope: 'swarm', engines: [...new Set(setup.engines)],
       maxAgents: 1, contributorId: me.id, membershipGeneration: me.generation, generation: operationId, paused: false, buddyOnly: true }
     ;(state.machines ??= []).push(pool)
@@ -1784,7 +1795,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
-      if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
+      if (!state.machines.some(m => m.machineId === command.machineId) && machinesFull(state, !!context.contribution?.hostMachineId)) fail('MACHINES_FULL', MACHINES_FULL_MESSAGE)
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
@@ -2058,6 +2069,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
       else delete group.requesterId
+      break
+    }
+    case 'work.queue': {
+      chatOnly(command.conversationId)
+      coordinatorOrPerson(state, actor, command.conversationId)
+      const task = open(state, command.conversationId)
+      // One answer for whatever is not an open task of this project, so it never tells what another project holds.
+      const siblings = queueSiblings(state, groupProject(state, task))
+      if (!siblings.includes(task)) fail('QUEUE_UNKNOWN', 'Only an open task of a project moves in its Next up.', 400)
+      if (command.after !== undefined) {
+        if (command.after !== null && (command.after === task.id || !siblings.some(s => s.id === command.after))) {
+          fail('QUEUE_UNKNOWN', 'Name an open task of this project to place it after, or null for the top.', 400)
+        }
+        for (const [groupId, rank] of placeAfter(siblings, task.id, command.after)) conversation(state, groupId).queueRank = rank
+      }
+      if (command.notBefore === null) delete task.notBefore
+      else if (command.notBefore !== undefined) task.notBefore = command.notBefore
       break
     }
     case 'conversation.merged': {

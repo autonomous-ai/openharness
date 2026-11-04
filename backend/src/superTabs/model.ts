@@ -392,6 +392,10 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
+  queueRank?: number
+  /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
+  notBefore?: string
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */

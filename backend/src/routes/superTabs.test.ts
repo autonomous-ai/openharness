@@ -306,3 +306,34 @@ describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => 
     expect(calls).toHaveLength(1)
   })
 })
+
+// The Tasks view's Proposals (#2569): one project's open Buddy proposals, read by the store as the project chat's reader.
+describe('a project\'s open proposals', () => {
+  let app: FastifyInstance
+  const calls: unknown[][] = []
+  beforeEach(async () => {
+    calls.length = 0
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { proposals: async (...args: unknown[]) => { calls.push(args); return { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('answers the store\'s list for the project named, as the signed-in person', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/super-tabs/tab-1/proposals?projectId=app' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ success: true, data: { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } })
+    expect(calls).toEqual([[expect.objectContaining({ sub: 'u1' }), 'tab-1', 'app']])
+  })
+
+  it('refuses a read that names no project, or anything else', async () => {
+    for (const query of ['', '?projectId=', '?projectId=app&asAgentId=a1']) {
+      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/tab-1/proposals${query}` })
+      expect(res.statusCode, query).toBe(400)
+    }
+    expect(calls).toEqual([])
+  })
+})
