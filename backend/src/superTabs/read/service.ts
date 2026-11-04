@@ -19,8 +19,8 @@ import { FIELDS, readable, row as messageRow } from './inbox.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
-import type { CacheView } from '../cache.js'
-import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
+import { sizeOf, type CacheView } from '../cache.js'
+import { readAccess, readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
@@ -46,6 +46,8 @@ import { memberSwarms } from '../swarmRows.js'
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
+/** What the group rows one-group reads keep may take, counted as their JSON size (SwarmReads.groupRows). */
+export const GROUP_ROWS_BYTES = 8 * 1024 * 1024
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
 type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
@@ -228,8 +230,79 @@ export class SwarmReads {
     })
   }
 
+  /** One conversation by id as the reader may read it (design 4.5). Identical reads in flight on this process share one answer:
+   *  the same sign-in, agent, Swarm and conversation get the same one (task #2875: many agents' hosts may ask at once). */
   async group(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
-    return { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
+    const key = JSON.stringify([tabId, conversationId, asAgentId ?? null, user])
+    const running = this.groupReads.get(key)
+    if (running) return running
+    const read = this.oneGroup(user, tabId, conversationId, asAgentId).finally(() => this.groupReads.delete(key))
+    this.groupReads.set(key, read)
+    return read
+  }
+  /** The one-group reads running now, by everything their answer depends on (group). */
+  private readonly groupReads = new Map<string, Promise<OneGroup>>()
+  /** The group rows one-group reads read last, by Swarm and key, least recently read first, within GROUP_ROWS_BYTES: the
+   *  next read of one asks for its data only when its version moved (parts/load.ts loadGroupUnless). */
+  private readonly groupRows = new Map<string, Part<GroupData>>()
+  private groupRowBytes = 0
+  private keepGroupRow(row: string, part: Part<GroupData> | null): void {
+    const old = this.groupRows.get(row)
+    if (old) { this.groupRows.delete(row); this.groupRowBytes -= sizeOf(old) }
+    if (part) { this.groupRows.set(row, part); this.groupRowBytes += sizeOf(part) }
+    for (const [oldest, held] of this.groupRows) {
+      if (this.groupRowBytes <= GROUP_ROWS_BYTES) break
+      this.groupRows.delete(oldest)
+      this.groupRowBytes -= sizeOf(held)
+    }
+  }
+
+  /**
+   * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
+   * readAccess), and for an agent its machine's account (onTeamAccount) and, when it is stored with no project, its active
+   * conversations (agentProjectId). Never the whole Swarm: its cached base and machines were refreshed from the Swarm's group,
+   * machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
+   * a Buddy chat an agent reads only as its Buddy. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
+   * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
+   * on every agent's project; so does an awake group stored without a number, which a whole read numbers after every other.
+   */
+  private async oneGroup(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
+    const answer = await this.read(user, tabId, async (tx, cached): Promise<OneGroup | null> => {
+      const row = `${tabId}\u0000${conversationId}`
+      const [access, found] = await Promise.all([readAccess(tx, cached, tabId), parts.loadGroupUnless(tx, tabId, conversationId, this.groupRows.get(row))])
+      this.keepGroupRow(row, found)
+      if (found?.data?.task?.requires?.machines?.length) return null
+      // An awake group stored without a number (111 on prod, 11-04) is numbered by a whole read after every other one
+      // (model.ts numberConversations, in visibleState): the whole read answers it. A project's chat and Leads have none.
+      if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
+        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
+      const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
+      const [context, machines] = target ? await Promise.all([
+        target.projectId ? Promise.resolve([]) : parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }),
+        parts.loadMachineAccounts(tx, tabId, [target.machineId])]) : [[], []]
+      // The conversation itself whole; another only as the light row the checks read, once.
+      const held = new Set(found ? [found.key] : [])
+      const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
+      const state = parts.reassemble({ ...access, groups, machines, starts: [], progress: [] }, { share: true })
+      const actor = await this.store.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      if (!found) return unavailable()
+      const buddy = isBuddyReader(state, actor)
+      // A quiet group passes the same read check as on the dormant list. No required machines here, so no reader's view of
+      // machines changes what it shows (model.ts withSeenRequirement).
+      if (found.dormant) {
+        if (!canReadGroup(state, actor, found.data!)) return unavailable()
+        return { group: envelope(found, groupView({ ...buddy ? groupForBuddy(found.data!) : found.data!, dormant: true }, new Set())) }
+      }
+      // An awake one as a whole-Swarm read lists it (views.ts readerView): a kind this release knows, never the removed Leads.
+      const group = state.conversations.find(c => c.id === conversationId)
+      if (!group || isLeads(group) || !canReadGroup(state, actor, group)) return unavailable()
+      const one = envelope(found, groupView(buddy ? groupForBuddy(group) : group, new Set()))
+      return { group: actor.kind === 'person' ? (await this.servedTops.served(tabId, state, [one]))[0]! : one }
+    })
+    return answer ?? { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
   }
 
   /** One conversation the reader can read, with the Swarm's state it was checked against. */

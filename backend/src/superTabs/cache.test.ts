@@ -298,6 +298,36 @@ describe('a stale entry is patched, not loaded again (spec 2026-11-02, Phase 1)'
     expect(delta.mock.calls[0]![2]).toEqual(['group'])
   })
 
+  // Task #2875: a one-group read refreshed the whole base, so every pod read the Swarm's group, machine and progress feeds at
+  // every stamp. Its access entry reads its own kinds.
+  it('an entry whose rule reads alone refreshes from its kinds only, and no other entry\'s delta takes it in', async () => {
+    const { stamps, delta, read, advance } = setup({ parts: [part('a2', 1, 'agent')] })
+    const alone: PatchRule<Held> = { ...rule(['head', 'member', 'agent']), alone: true }
+    await read(rule(['group']), 'main', 'base')
+    await read(rule(['machine']), 'all', 'machines')
+    advance(1)
+    await read(alone, 'main', 'access')
+    advance(1)
+    await stamps.bump('t1', ['main'])
+    expect(await read(alone, 'main', 'access')).toEqual({ keys: ['g1', 'a2'] })
+    expect(delta).toHaveBeenCalledTimes(1)
+    expect([...delta.mock.calls[0]![2]].sort()).toEqual(['agent', 'head', 'member'])
+    // The base's delta at the same stamp reads its own kinds, not the access entry's again or from its time.
+    await read(rule(['group']), 'main', 'base')
+    expect(delta).toHaveBeenCalledTimes(2)
+    expect([...delta.mock.calls[1]![2]].sort()).toEqual(['group', 'machine'])
+    // Each is shared with its own kind of entry at that stamp: no third read.
+    await read(alone, 'main', 'access')
+    await read(rule(['machine']), 'all', 'machines')
+    expect(delta).toHaveBeenCalledTimes(2)
+    // A bump forgets both: the next refresh of each reads again.
+    advance(1)
+    await stamps.bump('t1', ['main'])
+    await read(alone, 'main', 'access')
+    expect(delta).toHaveBeenCalledTimes(3)
+    expect([...delta.mock.calls[2]![2]].sort()).toEqual(['agent', 'head', 'member'])
+  })
+
   it('one delta per Swarm and stamp, over the kinds its stale entries need', async () => {
     const { stamps, delta, read, advance } = setup({ parts: [part('g2')] })
     await read(rule(['group']), 'main', 'base')
