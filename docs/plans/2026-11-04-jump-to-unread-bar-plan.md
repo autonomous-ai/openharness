@@ -94,7 +94,7 @@ above the screen, seen or not; the down pill stays; Move pane keeps Alt+Shift+Up
   - `SuperTabUnreadBar.label` — `1 new message · Jump`, `2 new messages · Jump`, `12+ new messages · Jump`.
 - [ ] **Step 2: Run them and watch them fail** — `flutter test test/super_tab_new_messages_test.dart`.
 - [ ] **Step 3: Build the bar** — a full-width flat row: `DesktopChrome.selection` fill, hairline `DesktopChrome.rim`
-  below, `AppIcons.arrowUp`, the count in semibold `DesktopChrome.accent`, ` · Jump` beside it, a hand cursor and one
+  below, `AppIcons.arrowUp`, the words (`N new messages · Jump`) in medium `DesktopChrome.accent`, the arrow after them, a hand cursor and one
   `Semantics` button. `_checkUnreadLine` takes the direction from the line's place in the list whether seen or not;
   the count is the main-stream messages from others from the line's message on, `more` when `c.hasNewer`. Esc in
   `_attentionKey` runs `_readAll()` while the bar shows.

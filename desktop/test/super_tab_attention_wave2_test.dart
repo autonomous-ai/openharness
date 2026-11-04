@@ -377,8 +377,9 @@ void main() {
     );
 
     testWidgets(
-      'on Linux and the web, Alt+Shift+Down and Up in the Swarm chat open the '
-      'next and previous unread chat, not Move pane',
+      'on Linux, where Alt is the workspace key as on the web, Alt+Shift+Down '
+      'and Up in the Swarm chat open the next and previous unread chat, not '
+      'Move pane',
       (tester) async {
         final (c, _) = await _show(
           tester,

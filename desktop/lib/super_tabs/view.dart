@@ -667,8 +667,13 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  /// Whether [id] shows the bar: its line above the reader, and its message
+  /// still held, since a jump can reach only a held row (the newest page read
+  /// in place of the held copy, or 500 newer, let it go).
+  bool _showsBar(String id) => _unread.offersBar(id) && _newFromLine(id) > 0;
+
   /// The bar's count: [id]'s messages from others in the main stream, from
-  /// its New messages line on.
+  /// its New messages line on; none while the line's message is not held.
   int _newFromLine(String id) {
     final shown = _shownMessages(id);
     final at = shown.indexWhere((m) => m.id == _unread.lineAt(id));
@@ -767,7 +772,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (event.logicalKey == LogicalKeyboardKey.escape &&
         !keys.isShiftPressed &&
         !keys.isAltPressed &&
-        _unread.offersBar(c.selectedId) &&
+        _showsBar(c.selectedId) &&
         _readAll()) {
       return KeyEventResult.handled;
     }
@@ -3756,7 +3761,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _unread.offersBar(c.selectedId)
+                      child: _showsBar(c.selectedId)
                           ? SuperTabUnreadBar(
                               count: _newFromLine(c.selectedId),
                               more: c.hasNewer(c.selectedId),
