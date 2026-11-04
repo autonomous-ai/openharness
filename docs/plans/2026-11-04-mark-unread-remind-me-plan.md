@@ -42,6 +42,7 @@
   as it is.
 - After Mark unread in the open chat, it stays unread with the New messages line above the message until the person
   leaves the chat; reading it again (opening it, Mark all read, Esc) works as before.
+- Another device with the chat open, in view and at its end, reads it again at once: a person is looking at it.
 - Remind me times are the person's local time. Setting a reminder again on the same message replaces its time.
 - A due reminder shows once in Activity and fires one notification on Desktop (none on the web, as tags), and counts
   in Activity's number until it is opened.
@@ -59,7 +60,8 @@
 - Concurrency: one document per write. Mark unread is a single conditional update (`sequence > target`); a read on
   another device after it raises the mark as before. Set and clear of a reminder are an upsert and a delete by id.
 - Read cost: the first load and each changes read already read the person's marks by `(tabId, personId, updatedAt)`;
-  they read one more field. The reminders digest is one indexed read of at most `REMINDER_CAP` ids and due times by
+  they read one more field. The reminders digest adds one indexed read to each person's read, as `activityDigest`
+  does (usually an empty range): one indexed read of at most `REMINDER_CAP` ids and due times by
   `(tabId, personId, dueAt)`. The reminders list reads due rows by the same index (`dueAt <= now`) and the next one
   after now (limit 1). Each query gets a plan test (IXSCAN on its index).
 - Scale: at 10x people, rows grow per person and are capped; the first warning is the reminders read's latency in the

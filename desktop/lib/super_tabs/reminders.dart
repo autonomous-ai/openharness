@@ -26,6 +26,9 @@ class SuperTabReminder {
   final String? threadId;
   final String? authorName;
   final DateTime dueAt;
+
+  /// This reminder at this time: set again on its message, it is another.
+  String get key => '$id@${dueAt.toUtc().toIso8601String()}';
 }
 
 /// When Remind me brings a message back, from now in the reader's own time.
@@ -69,10 +72,12 @@ class SuperTabReminders extends ChangeNotifier {
   String? _digest;
   int? _epoch;
   Timer? _wake;
+  DateTime? _next;
   Future<void>? _loading;
   bool _dirty = false, _disposed = false;
 
-  /// The reminders already told of; one due before this started is not news.
+  /// The reminders already told of, by id and due time: one set again on the
+  /// same message is news again. One due before this started is not news.
   final _told = <String>{};
   final DateTime _since = clock.now();
 
@@ -86,7 +91,10 @@ class SuperTabReminders extends ChangeNotifier {
     final digest = snapshot.remindersDigest;
     // A backend before reminders sends none: there is nothing to read.
     if (digest == null) return;
-    if (digest == _digest && epoch == _epoch) return;
+    // A timer may not run while the computer sleeps: a Swarm read after the
+    // due time reads the list too.
+    final overdue = _next != null && !clock.now().isBefore(_next!);
+    if (digest == _digest && epoch == _epoch && !overdue) return;
     _digest = digest;
     _epoch = epoch;
     unawaited(load());
@@ -108,6 +116,9 @@ class SuperTabReminders extends ChangeNotifier {
 
   Future<void> _read() async {
     final Map<String, dynamic> answer;
+    // A failed read is not tried again on each Swarm read; Retry or the next
+    // digest reads it.
+    _next = null;
     try {
       answer = await controller.request('GET', '$_path/reminders');
     } on SuperTabFailure catch (failure) {
@@ -130,7 +141,7 @@ class SuperTabReminders extends ChangeNotifier {
     error = null;
     due = List.unmodifiable(fresh);
     for (final reminder in fresh.reversed) {
-      if (_told.add(reminder.id) && !reminder.dueAt.isBefore(_since)) {
+      if (_told.add(reminder.key) && !reminder.dueAt.isBefore(_since)) {
         onArrived?.call(reminder);
       }
     }
@@ -142,6 +153,7 @@ class SuperTabReminders extends ChangeNotifier {
   void _schedule(DateTime? next) {
     _wake?.cancel();
     _wake = null;
+    _next = next;
     if (next == null) return;
     final wait = next.difference(clock.now());
     _wake = Timer(

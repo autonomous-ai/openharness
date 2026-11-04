@@ -100,7 +100,7 @@ void Function(String tabId, SuperTabReminder reminder)? superTabReminderNotice(
 }) => web
     ? null
     : (tabId, reminder) => system.postNotice(
-        id: 'harness-reminder:$tabId:${reminder.id}',
+        id: 'harness-reminder:$tabId:${reminder.key}',
         title: reminder.authorName ?? reminder.conversationTitle,
         body: reminder.text,
         chat: (tabId: tabId, conversationId: reminder.conversationId),
