@@ -439,7 +439,8 @@ void main() {
     });
   });
 
-  testWidgets('unreads only hides read rows', (tester) async {
+  testWidgets('Mentions opens on Unreads only; turning it off shows read '
+      'rows', (tester) async {
     final server = swarm()..followedThreads = null;
     server.tag('message-1', messageSequence: 1, leadId: 'a', text: 'Old news');
     server.tag('message-2', messageSequence: 9, leadId: 'b', text: 'New news');
@@ -450,6 +451,14 @@ void main() {
       await show(tester, await loaded(tester, server));
       final read = _key('super-activity-row-mention:mention-1');
       final unread = _key('super-activity-row-mention:mention-2');
+      expect(
+        tester.widget<Switch>(_key('super-activity-unreads-only')).value,
+        isTrue,
+      );
+      expect(read, findsNothing);
+      expect(unread, findsOneWidget);
+      await tester.tap(_key('super-activity-unreads-only'));
+      await tester.pumpAndSettle();
       expect(read, findsOneWidget);
       expect(unread, findsOneWidget);
       expect(
