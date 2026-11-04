@@ -6,6 +6,7 @@ import { noteChange } from '../cache.js'
 import type { AgentStart } from '../model.js'
 import { ms } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
+import { HELD, type HeldParts } from './held.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -74,23 +75,30 @@ export function loadActive(tx: Transaction, tabId: string,
  * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
  * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are. No project's report
  * progress either: only commands and native events note reports (projectUpdates.ts), so none is loaded or committed.
+ * Machine parts and conversations come through `held` (parts/held.ts): whole only those changed since this process last
+ * read them (B3, #2597).
  */
-export async function loadObserved(tx: Transaction, tabId: string, machineId: string): Promise<SwarmParts> {
+export async function loadObserved(tx: Transaction, tabId: string, machineId: string, held: HeldParts = HELD): Promise<SwarmParts> {
   const live = { deleted: false }
-  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: null, start: { ...live, finishedAt: null }, group: [] })
+  const read = held.read(tabId)
+  const [loaded, machineRows] = await Promise.all([
+    assemble(tx, tabId, { member: live, agent: live, machine: null, progress: null, start: { ...live, finishedAt: null }, group: [] }),
+    read.machines(tx)])
+  const machines = machineRows.map(row => toPart<MachineData>('machine', row))
   const { projects } = loaded.head.data!
   // The Lead conversations; the removed Leads conversation is no longer read (model.ts leadsRemoved).
   const leads = projects ? projects.map(p => p.leadConversationId) : ['lead']
   // One read per index (parts/indexed.ts); none of them reads a quiet conversation.
-  const groups = await liveGroups(tx, tabId, [['running', { executionMachineId: { $ne: null }, dormant: false }],
-    ['key', { key: { $in: [...new Set([...leads, ...loaded.starts.map(s => s.data!.request.conversationId)])] }, dormant: false }]])
+  const groups = (await read.groups(tx, [['running', { executionMachineId: { $ne: null }, dormant: false }],
+    ['key', { key: { $in: [...new Set([...leads, ...loaded.starts.map(s => s.data!.request.conversationId)])] }, dormant: false }]])).map(rawGroupRow)
   const working = new Set(groups.flatMap(row => (row.data as GroupData).assignment?.status === 'working' ? [(row.data as GroupData).assignment!.agentId] : []))
   const legacy = loaded.agents.filter(a => !a.data!.projectId).map(a => a.key)
   const lending = loaded.agents.filter(a => a.data!.machineId === machineId && working.has(a.key)).map(a => a.key)
-  const more = await liveGroups(tx, tabId, [...legacy.length ? [['agents', { agentIds: { $in: legacy }, dormant: false }] as const] : [],
-    ...lending.length ? [['agents', { agentIds: { $in: lending }, dormant: false, 'data.audience': { $ne: null } }] as const] : []])
+  const more = legacy.length || lending.length ? (await read.groups(tx, [...legacy.length ? [['agents', { agentIds: { $in: legacy }, dormant: false }] as const] : [],
+    ...lending.length ? [['agents', { agentIds: { $in: lending }, dormant: false, 'data.audience': { $ne: null } }] as const] : []])).map(rawGroupRow) : []
+  read.done()
   const rows = [...new Map([...groups, ...more].map(row => [row.key, row])).values()]
-  return { ...loaded, groups: rows.map(row => toPart<GroupData>('group', row)) }
+  return { ...loaded, machines, groups: rows.map(row => toPart<GroupData>('group', row)) }
 }
 
 /** Machine parts by id (`${tabId}:${machineId}`), with their version, in one read by `_id`: what a reading-only report reads

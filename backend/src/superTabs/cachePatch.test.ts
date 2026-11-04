@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { stableId } from './model.js'
-import { baseRule, cacheDigest, dormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
-import type { Part, PartKind, SwarmParts } from './parts/index.js'
+import { baseRule, cacheDigest, dormantAgentRule, lightDormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import type { GroupData, Part, PartKind, SwarmParts } from './parts/index.js'
+import { projectLightGroup } from './parts/lightSelect.js'
 import type { SwarmDelta } from './parts/load.js'
 
 // Part<never> fits any entry's list in these tests.
@@ -137,6 +138,25 @@ describe('dormant selections', () => {
     expect((dormantProjectRule('lead').apply([], delta([sleep])) as Part[]).map(g => g.key)).toEqual(['g5'])
     expect(dormantProjectRule('p1').apply([], delta([sleep]))).toEqual([])
     expect(dormantAgentRule('a8').apply([], delta([sleep]))).toEqual([])
+  })
+})
+
+describe('lightDormantAgentRule (B4, #2597)', () => {
+  const whole = (key: string, version: number, agentIds: string[], dormant = true) => part('group', key, version, { id: key, title: key, kind: 'task', agentIds,
+    brief: 'a long brief', checks: [{ id: 'c1', description: 'Works', independent: false, status: 'pending' }], archived: false, audience: null, assignment: null },
+    dormant ? { dormant: true } : {}) as Part<GroupData>
+
+  it('holds a changed quiet conversation of the agent light, as a light load gives it', () => {
+    const next = lightDormantAgentRule('a1').apply([], delta([whole('g1', 2, ['a1'])])) as Part<GroupData>[]
+    expect(next).toEqual([projectLightGroup(whole('g1', 2, ['a1']))])
+    expect(next[0]!.data!.brief).toBe('')
+    expect(next[0]!.data!.checks).toEqual([])
+  })
+
+  it('lets go of one the agent left or that woke, and keeps the held list when nothing newer came', () => {
+    const held = [projectLightGroup(whole('g1', 2, ['a1'])), projectLightGroup(whole('g2', 2, ['a1']))]
+    expect((lightDormantAgentRule('a1').apply(held, delta([whole('g1', 3, ['a2']), whole('g2', 3, ['a1'], false)])) as Part[])).toEqual([])
+    expect(lightDormantAgentRule('a1').apply(held, delta([whole('g1', 2, ['a1']), whole('g9', 1, ['a2'])]))).toBe(held)
   })
 })
 
