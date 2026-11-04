@@ -874,7 +874,7 @@ describe('SwarmCards tag notices', () => {
       tag('tag3', 'g-web', { createdAt: '2026-10-22T00:09:00.000Z' }), tag('tag4', 'lead-mobile', { projectId: 'mobile' }))
     expect(t.webLead()?.notice).toMatchObject({ chat: 'group', id: 'tag3' })
     expect(t.seen.at(-1)?.[0].leads.find(l => l.id === 'a2')?.notice).toMatchObject({ chat: 'lead', chatId: 'lead-mobile', id: 'tag4' })
-    await t.tagged(tag('tag5', 'pm-web'))
+    await t.tagged(tag('tag5', 'pm-web', { createdAt: '2026-10-22T00:10:00.000Z' }))
     expect(t.webLead()?.notice).toMatchObject({ chat: 'pm', chatId: 'pm-web', id: 'tag5' })
   })
 
@@ -922,7 +922,7 @@ describe('SwarmCards tag notices', () => {
     const t = tagSwarm()
     await t.cards.tick()
     await t.tagged(tag('tag1', 'g-gone', { projectId: 'gone' }), tag('tag2', 'g-web', { createdAt: '2026-10-21T00:00:00.000Z' }))
-    expect(t.seen.at(-1)?.[0].leads.map(l => l.notice?.id)).toEqual([undefined, 'tag2'])
+    expect(Object.fromEntries(t.seen.at(-1)![0].leads.map(l => [l.id, l.notice?.id]))).toEqual({ a1: 'tag2', a2: undefined })
   })
 })
 
