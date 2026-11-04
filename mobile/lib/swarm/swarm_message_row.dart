@@ -275,6 +275,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.below,
     this.receipt,
     this.card,
+    this.links,
     this.onLongPress,
     this.references = const {},
     this.onOpenConversation,
@@ -337,6 +338,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// Under its text and files: the live card this message is
   /// (swarm_live_card.dart); null for a plain message.
   final Widget? card;
+
+  /// Under its text, files and card: the messages its links point at
+  /// (swarm_link_previews.dart); null when it links to none.
+  final Widget? links;
 
   /// Drawn under its text and files: its reaction counts.
   final Widget? reactions;
@@ -452,6 +457,7 @@ class SwarmMessageRow extends StatelessWidget {
         ?swarmCutShort(message),
         for (final file in message.attachments) _attachment(context, file),
         ?card,
+        ?links,
         ?reactions,
         ?thread,
         ?below,
@@ -680,13 +686,27 @@ class SwarmChatAvatar extends StatelessWidget {
 }
 
 /// What a reply answers: its author and the start of its text, or that it
-/// is not loaded. A tap leads to it.
+/// is not loaded. A tap leads to it. A message link's preview wears it too,
+/// naming the [chat] its message is in.
 class SwarmQuote extends StatelessWidget {
-  const SwarmQuote({super.key, this.author, this.text, this.onTap});
+  const SwarmQuote({
+    super.key,
+    this.author,
+    this.chat,
+    this.text,
+    this.onTap,
+    this.label = 'Go to the quoted message',
+  });
 
   /// Null while the original is not loaded.
   final String? author, text;
+
+  /// After [author]: the chat the message is in, when it is another one.
+  final String? chat;
   final VoidCallback? onTap;
+
+  /// What a tap does, read aloud.
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -710,8 +730,20 @@ class SwarmQuote extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (author case final author?)
-            Text(
-              author,
+            Text.rich(
+              TextSpan(
+                text: author,
+                children: [
+                  if (chat case final chat?)
+                    TextSpan(
+                      text: ' · $chat',
+                      style: swarmChatText(
+                        13.5,
+                        color: AppPalette.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: swarmChatText(13.5, weight: FontWeight.w600),
@@ -728,7 +760,7 @@ class SwarmQuote extends StatelessWidget {
     if (onTap == null) return quote;
     return Semantics(
       button: true,
-      label: 'Go to the quoted message',
+      label: label,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
