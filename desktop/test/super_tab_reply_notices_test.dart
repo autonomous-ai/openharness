@@ -108,6 +108,17 @@ void main() {
     });
 
     test(
+      'a reply in the thread open in a window the person is away from tells',
+      () async {
+        final (server, c, told) = await opened();
+        c.openThread('root-1');
+        c.away = true;
+        await arrive(server, c, [row('r1', conversationId: c.selectedId)]);
+        expect(told.map((r) => r.id), ['r1']);
+      },
+    );
+
+    test(
       'a reply in the thread open and being read now tells nothing',
       () async {
         final (server, c, told) = await opened();
