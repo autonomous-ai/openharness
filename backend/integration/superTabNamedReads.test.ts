@@ -390,6 +390,18 @@ describe('the stored notices a time check keeps', () => {
     console.info(`stored notices by id: ${JSON.stringify(plan(rows))}`)
   })
 
+  it('answers each source as Prisma reads it, so a notice already stored is kept, not written twice', async () => {
+    const tabId = `tab-${randomUUID()}`
+    const author = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: tabId }
+    // What a lost task's notice holds: ids, a time in ms past 2^31, a fraction, a list and a nested object.
+    const source = { kind: 'work-lost', worker: 'w-1', assignmentId: 'a-1', at: 1793804932778, share: 0.25, ids: ['x', 'y'], why: { code: 'stalled', n: 3 } }
+    await db.superTabMessage.create({ data: { id: `${tabId}-n`, tabId, conversationId: 'c', sequence: 1, text: 'n', author, recipientIds: [], mentions: [], source } })
+    const prisma = await db.superTabMessage.findUniqueOrThrow({ where: { id: `${tabId}-n` }, select: { source: true } })
+    const [found] = await storedMessages(db, [`${tabId}-n`])
+    expect(found!.source).toStrictEqual(prisma.source)
+    expect(found!.source).toStrictEqual(source)
+  })
+
   it('reads nothing for no ids', async () => {
     const entries = await profiled(db, async () => { expect(await storedMessages(db, [])).toEqual([]) })
     expect(entries.filter(e => e.ns.endsWith('.SuperTabMessage'))).toEqual([])
