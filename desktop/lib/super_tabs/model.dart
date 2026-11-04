@@ -384,6 +384,8 @@ class SuperTabConversation {
               (row['shippedAt'] as num).toInt(),
             )
           : null,
+      queueRank = (row['queueRank'] as num?)?.toDouble(),
+      notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -479,6 +481,15 @@ class SuperTabConversation {
   /// When it shipped (its first Done); null until it has, and from a server
   /// that does not say.
   final DateTime? shippedAt;
+
+  /// Its place in its project's shared Next up, set by a person or the PM
+  /// (backend taskQueue.ts); null until someone moves it, when its number
+  /// places it (task_groups.dart).
+  final double? queueRank;
+
+  /// The day before which its work may not start, a promise the PM keeps
+  /// ("remove the preview route after Dec 4"); null when there is none.
+  final DateTime? notBefore;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -509,6 +520,11 @@ class SuperTabProject {
       ],
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       status = SuperTabProjectStatus.read(row['status']),
+      openProposals = List.unmodifiable([
+        for (final proposal in row['openProposals'] as List? ?? const [])
+          if (proposal is Map && proposal['messageId'] is String)
+            SuperTabProposal.fromJson(superTabMap(proposal)),
+      ]),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
@@ -535,7 +551,26 @@ class SuperTabProject {
   /// status card at the top of its chat; null from an older backend and
   /// before the first report.
   final SuperTabProjectStatus? status;
+
+  /// Buddy proposals in its chat the PM has not answered, oldest first; none
+  /// from a backend before them (task #2569).
+  final List<SuperTabProposal> openProposals;
   final Map<String, dynamic>? repository;
+}
+
+/// A Buddy proposal in a project's chat that the PM has not answered yet: its
+/// root message, its title, and the person it was sent for.
+class SuperTabProposal {
+  SuperTabProposal.fromJson(Map<String, dynamic> row)
+    : messageId = _text(row, 'messageId'),
+      title = _text(row, 'title'),
+      personId = row['personId'] as String?,
+      at = DateTime.fromMillisecondsSinceEpoch(
+        (row['at'] as num? ?? 0).toInt(),
+      );
+  final String messageId, title;
+  final String? personId;
+  final DateTime at;
 }
 
 /// A project's status card text: one per project, replaced by each report
