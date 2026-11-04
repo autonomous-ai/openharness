@@ -470,8 +470,11 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
 }
 
 /** Removes coordination only; the command removes the project's agents first.
- * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
-export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
+ * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. [orphaned] names the
+ * contributed starts still settling whose agent was already removed before this delete: only their machine settles one,
+ * and it closed that agent's session when it was removed, so none of them ever settles (2026-11-04: 17 such starts on four
+ * Macs, from agents stopped while a project was cleaned up, kept its owner from deleting it). */
+export function deleteProject(state: SuperTabState, actor: Actor, projectId: string, orphaned: ReadonlySet<string> = new Set()): void {
   const project = manageProject(state, actor, projectId)
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
@@ -482,7 +485,7 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   const archived = new Set(groups.filter(c => c.archived).map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
     !(!s.dispatched && !s.harnessId && archived.has(s.request.conversationId)) &&
-    (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
+    (!s.harnessId || s.poolGeneration && !s.poolSettled && !orphaned.has(s.id)))) {
     fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
   }
   if (groups.some(activeWork)) fail('WORK_ACTIVE', 'Resolve this project’s active work before deleting it.')

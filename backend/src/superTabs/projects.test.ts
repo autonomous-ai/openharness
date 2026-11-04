@@ -199,9 +199,14 @@ describe('projects inside an invite-only swarm', () => {
       cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String(f.run({ type: 'agent.start', request }).startId)
-    const start = f.state.starts!.find(s => s.id === startId)!
+    let start = f.state.starts!.find(s => s.id === startId)!
     start.dispatched = phase !== 'queued'
-    if (phase === 'settling') { start.poolGeneration = 'pool'; start.harnessId = 'native'; start.poolSettled = false }
+    if (phase === 'settling') {
+      start.poolGeneration = 'pool'; start.harnessId = 'native'; start.poolSettled = false
+      // Its agent is up while its machine settles it (agent.started adds it); one whose agent is gone is a test below.
+      f.add(request.conversationId, 'native', false)
+      start = f.state.starts!.find(s => s.id === startId)!
+    }
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts')
     if (phase === 'settling') start.poolSettled = true
     else f.run({ type: 'agent.startFailed', startId, error: 'The machine confirmed nothing started.' })
@@ -217,6 +222,20 @@ describe('projects inside an invite-only swarm', () => {
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     f.run({ type: 'agent.start', request })
     f.state.conversations.find(c => c.id === conversationId)!.archived = true
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.starts).toEqual([])
+  })
+
+  it('deletes past a settling start whose agent was removed earlier, which its machine never settles', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String(f.run({ type: 'agent.start', request }).startId)
+    Object.assign(f.state.starts!.find(s => s.id === startId)!, { dispatched: true, poolGeneration: 'pool', harnessId: 'native', poolSettled: false })
+    const agentId = f.add(conversationId, 'native', false)
+    f.run({ type: 'agent.remove', agentId })
     f.run({ type: 'project.delete', projectId: p.projectId })
     expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
     expect(f.state.starts).toEqual([])
