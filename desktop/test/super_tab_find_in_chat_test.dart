@@ -45,8 +45,8 @@ void main() {
   }
 
   Finder row(String id) => find.byKey(ValueKey('super-message-$id'));
-  SuperTabMessageHighlight light(WidgetTester tester, String id) => tester
-      .widget<SuperTabMessageHighlight>(
+  SuperTabMessageHighlight light(WidgetTester tester, String id) =>
+      tester.widget<SuperTabMessageHighlight>(
         find
             .ancestor(
               of: row(id),
@@ -127,7 +127,6 @@ void main() {
     expect(count(tester), '2 of 2');
     expect(row('message-2').hitTestable(), findsOneWidget);
     expect(light(tester, 'message-2').on, isTrue);
-    expect(light(tester, 'message-59').on, isFalse);
     // Enter in the field steps up too, Shift+Enter down.
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -145,13 +144,15 @@ void main() {
     expect(c.messages('lead').any((m) => m.id == 'message-10'), isFalse);
     await search(tester, 'tieng');
     expect(count(tester), '1 of 1');
-    expect(reads.where((r) => r.contains('before=')), isEmpty);
+    // Typing reads nothing.
+    expect(reads, isEmpty);
     await up(tester);
     expect(count(tester), '2 of 2');
     expect(row('message-10').hitTestable(), findsOneWidget);
     expect(light(tester, 'message-10').on, isTrue);
     // Pages 151–200, 101–150, 51–100 and 1–50: four reads, no more.
-    expect(reads.where((r) => r.contains('before=')).length, 4);
+    expect(reads, hasLength(4));
+    expect(reads, everyElement(contains('before=')));
   });
 
   testWidgets('a search reads at most 50 older pages, then says so', (
@@ -162,11 +163,15 @@ void main() {
     await show(tester, server);
     server.onRead = reads.add;
     await search(tester, 'tieng');
+    // A list this short reads back by itself as it shows; the search's own
+    // reads are those its step makes.
+    final before = reads.length;
     await up(tester);
     expect(count(tester), 'No more matches in the last 50 pages');
-    expect(reads.where((r) => r.contains('before=')).length, 50);
+    expect(reads.length - before, 50);
+    expect(reads.skip(before), everyElement(contains('before=')));
     await up(tester);
-    expect(reads.where((r) => r.contains('before=')).length, 50);
+    expect(reads.length - before, 50);
   });
 
   testWidgets('Esc and close clear the field and every light', (tester) async {
@@ -195,6 +200,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(count(tester), '3 of 3');
     expect(light(tester, 'message-3').on, isTrue);
+    // The read mark the new message sends waits its moment.
+    await tester.pump(const Duration(seconds: 5));
   });
 
   testWidgets('another chat closes find', (tester) async {

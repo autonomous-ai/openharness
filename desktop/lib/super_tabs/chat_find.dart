@@ -7,6 +7,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import 'message_row.dart' show SuperTabMessageRow;
 import 'model.dart';
 
 /// How many older pages one search reads at most, as far back as a tagged
@@ -69,11 +70,11 @@ class SuperTabChatFind extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The rows changed: the current match stays the same message.
+  /// Matches the rows again as the list draws them, telling no one: what the
+  /// list draws next reads them. The current match stays the same message.
   void refresh() {
     _match();
     if (!matching.contains(current)) current = matches.lastOrNull;
-    notifyListeners();
   }
 
   void clear() => search('');
@@ -232,8 +233,9 @@ class _SuperTabFindBarState extends State<SuperTabFindBar> {
         final status = _status(find);
         return Container(
           key: const ValueKey('super-find-bar'),
+          // The field lines up with the messages' text under it.
           padding: const EdgeInsets.fromLTRB(
-            20,
+            SuperTabMessageRow.horizontalInset,
             grid.AppDesktop.controlGap,
             grid.AppDesktop.controlGap,
             grid.AppDesktop.controlGap,
