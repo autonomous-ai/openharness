@@ -5343,7 +5343,8 @@ describe('a delivery held by a busy pane', () => {
     await seconds(t, host, 1)
     await seconds(t, host, 60)
     expect(writes(t)).toBe(30)
-    expect(reads(t)).toBe(4)
+    // Held, its list was read every 30 s; once the cancel is read it is idle, read only when told (task #2800).
+    expect(reads(t)).toBe(2)
   })
 
   it('an acked message costs no extra list read', async () => {

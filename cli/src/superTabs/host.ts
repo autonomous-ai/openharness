@@ -352,9 +352,10 @@ const DELIVERY_RETRY_MAX_MS = 30_000
 const CLAIM_FAILURE_LOG_MS = 5 * 60_000
 /** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
  *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
- *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
- *  It matches the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read still runs a Lead's time checks. */
-const DELIVERY_FALLBACK_MS = 30_000
+ *  names the agent when work waits, and tells again of a delivery still queued after 10 s (backend superTabs/deliveryRepush.ts,
+ *  task #2800: GET deliveries was 84% empty, mostly these reads). An idle worker's list is then read only when told; a Lead's
+ *  still this often, matching the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read runs its time checks. */
+const LEAD_LIST_MS = 30_000
 /** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
  *  this process started after the last one), every list is read each second again. */
 const PUSH_LEASE_MS = 10 * 60_000
@@ -1147,7 +1148,10 @@ export class SuperTabHost {
       const listKey = `list:${target.tabId}:${target.agent.id}`
       if (this.backedOff(listKey)) continue
       const last = this.lists.get(listKey)
-      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.now() - last.readAt >= (last.held ? HELD_LIST_MS : DELIVERY_FALLBACK_MS)
+      // A read that failed is due again once its backoff (checked above) ends, told or not: it was no list read.
+      const every = last?.held ? HELD_LIST_MS : row.lead === true ? LEAD_LIST_MS : null
+      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.deliveryRetries.has(listKey)
+        || (every !== null && this.now() - last.readAt >= every)
       if (!due) {
         // Unread this time, its deliveries are as the last read left them: none is taken as gone.
         for (const id of last.ids) seen.add(id)
