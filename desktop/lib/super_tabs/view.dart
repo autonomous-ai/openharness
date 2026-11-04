@@ -4919,6 +4919,22 @@ class _SuperTabViewState extends State<SuperTabView>
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
       final threadDrawer = thread != null && !wide;
+      // A terminal on screen keeps its chat beside it, in the right pane, as
+      // a thread sits; a thread or Members takes that side, and a narrow
+      // window shows one at a time (Huy, 11-04, #2792).
+      final chatBeside =
+          wide &&
+          thread == null &&
+          !_rosterOpen &&
+          terminal != null &&
+          _terminalsVisible &&
+          !_manageVisible &&
+          !_notificationsVisible &&
+          c.snapshot?.projects.isEmpty != true;
+      final chat = SuperTabImageGallery(
+        images: () => _images(_shownMessages(c.selectedId)),
+        child: _conversation(narrow),
+      );
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
@@ -4969,8 +4985,15 @@ class _SuperTabViewState extends State<SuperTabView>
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
-                right: !wide ? null : thread ?? (_rosterOpen ? roster : null),
-                rightDefault: thread == null
+                right: !wide
+                    ? null
+                    : thread ??
+                          (_rosterOpen
+                              ? roster
+                              : chatBeside
+                              ? chat
+                              : null),
+                rightDefault: thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 // Over the chat, beside an open thread, as in Slack.
@@ -5007,10 +5030,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             ? 5
                             : 0,
                         children: [
-                          SuperTabImageGallery(
-                            images: () => _images(_shownMessages(c.selectedId)),
-                            child: _conversation(narrow),
-                          ),
+                          chatBeside ? const SizedBox.shrink() : chat,
                           terminal ?? const SizedBox.shrink(),
                           _showPullRequests
                               ? SuperTabPullRequests(
