@@ -1181,10 +1181,10 @@ class SuperTabVoice {
 
   /// A voice that does not read as one is none: the file still shows, as a
   /// file.
-  static SuperTabVoice? read(Object? raw) {
-    if (raw is! Map) return null;
-    final ms = raw['durationMs'], bars = raw['waveform'];
-    final transcribed = raw['transcribed'];
+  static SuperTabVoice? read(Object? row) {
+    if (row is! Map) return null;
+    final ms = row['durationMs'], bars = row['waveform'];
+    final transcribed = row['transcribed'];
     if (ms is! num || bars is! List || transcribed is! bool) return null;
     return SuperTabVoice(
       length: Duration(milliseconds: ms.toInt()),
@@ -1192,7 +1192,7 @@ class SuperTabVoice {
         for (final bar in bars) bar is num ? bar.toInt().clamp(0, barMax) : 0,
       ]),
       transcribed: transcribed,
-      overLimit: raw['failure'] == 'limit',
+      overLimit: row['failure'] == 'limit',
     );
   }
 
