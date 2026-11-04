@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { stableId, type AgentStart } from './model.js'
-import type { Part } from './parts/index.js'
+import { PART_KINDS, type Part, type PartKind } from './parts/index.js'
 import { deriveLight, namedStarts, readChanged, readDelta, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readMachines, readParts } from './cachedReads.js'
-import { CacheView } from './cache.js'
+import { CacheView, SwarmCache } from './cache.js'
+import { MemoryStamps } from './cache.test-support.js'
 import { baseRule, dormantRule, feedRule, machinesRule } from './cachePatch.js'
 
 /** A start, finished once it has a harness. `untouchable`: reading its request throws, so a test sees the read hash its
@@ -241,5 +242,40 @@ describe('light and host state derived from held entries (spec 2026-11-02 poll c
     const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'gone' })
     expect(names.filter(n => n.startsWith('light-dormant:agent:'))).toEqual([])
     expect(light.groups.map(x => x.key)).toEqual(['run'])
+  })
+})
+
+describe('the change feed by stamp scope (#2783)', () => {
+  /** A database whose part collections each hold one row changed at `at`, and that records which collections were read. */
+  function partsDb(at: number) {
+    const read: string[] = []
+    const db = new Proxy({}, { get: (_t, model) => ({ aggregateRaw: async () => {
+      read.push(String(model))
+      return [{ _id: `t:${String(model)}`, tabId: 't', key: String(model), version: 1, changedAt: { $date: new Date(at).toISOString() }, ordinal: 1, data: {} }]
+    } }) }) as never
+    return { db, read }
+  }
+  function setup() {
+    let now = 1_000_000
+    const stamps = new MemoryStamps(), kinds: PartKind[][] = []
+    const cache = new SwarmCache(stamps, { now: () => now, delta: async (_tabId, _since, asked) => { kinds.push([...asked]); return { parts: [], head: null } } })
+    return { stamps, kinds, view: () => cache.at(['t']), now: () => now, advance: (ms: number) => { now += ms } }
+  }
+
+  it('a machine reading refreshes only the machine part of the feed: one collection, not seven', async () => {
+    const { stamps, kinds, view, now, advance } = setup()
+    const { db } = partsDb(now() - 5_000)
+    await readChanged(db, await view(), 't', now() - 10_000)
+    advance(1_000)
+    await stamps.bump('t', ['machine'])
+    await readChanged(db, await view(), 't', now() - 10_000)
+    expect(kinds).toEqual([['machine']])
+  })
+
+  it('answers every kind, as loadChanged does', async () => {
+    const { view, now } = setup()
+    const { db } = partsDb(now() - 5_000)
+    const parts = await readChanged(db, await view(), 't', now() - 10_000)
+    expect(parts.map(p => p.kind).sort()).toEqual([...PART_KINDS].sort())
   })
 })
