@@ -28,7 +28,11 @@ class ReceiptFixture {
   Map<String, dynamic> get delivery =>
       (message['deliveries'] as List).single as Map<String, dynamic>;
 
-  Future<void> show({AppNotifier? app, void Function()? prepare}) async {
+  Future<void> show({
+    AppNotifier? app,
+    void Function()? prepare,
+    Brightness brightness = Brightness.light,
+  }) async {
     server.state['agents'] = [
       {
         'id': 'lead-agent',
@@ -72,7 +76,8 @@ class ReceiptFixture {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
