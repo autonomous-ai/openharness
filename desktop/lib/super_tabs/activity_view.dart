@@ -15,6 +15,7 @@ import 'avatar_art.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
+import 'identity.dart' show superTabPersonName;
 import 'machine_status.dart' show superTabAgoShort;
 import 'model.dart';
 import 'notifications.dart';
@@ -657,6 +658,22 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   // ---- Threads ----
 
+  /// How the Swarm shows a thread's [author] now, as the chat does: a person
+  /// by the name they set, an agent by its shown name; else the name recorded
+  /// with the message, an email cut to its name (it named people by email,
+  /// Diego, #2887).
+  String _authorName(Map<String, dynamic> author) {
+    final id = author['id'] as String? ?? '';
+    final recorded = author['name'] as String? ?? '';
+    final snapshot = _snapshot;
+    if (author['kind'] == 'agent') {
+      final fallback = author['displayName'] as String? ?? recorded;
+      return snapshot?.agentName(id, fallback: fallback) ?? fallback;
+    }
+    return snapshot?.people.where((p) => p.id == id).firstOrNull?.shownName ??
+        superTabPersonName(recorded);
+  }
+
   /// Every thread listed is unread (Activity lists today's new replies), so
   /// there is no Unreads only here.
   List<Widget> _threads() {
@@ -679,8 +696,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         ..._byDay<SuperTabFollowedThread>(rows, (t) => t.lastReplyAt, (t) {
           // The data holds the root and the newest reply's author, not the
           // reply's text: the preview is the root, said by the root's author.
-          final author = t.rootAuthor['name'] as String? ?? '';
-          final replier = t.lastReplier?['name'] as String? ?? '';
+          final author = _authorName(t.rootAuthor);
+          final replier = _authorName(t.lastReplier ?? const {});
           final project = _snapshot?.projectFor(t.conversationId);
           final subject = threadSubject(t.rootText);
           final root = _oneLine(t.rootText);
