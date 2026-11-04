@@ -19,11 +19,10 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of the name a person sets (plan
-/// 2026-11-03-person-display-name, Task 6): You with its Profile row
-/// (name and status) above Username, and a chat whose author and tag read by that name beside one
-/// who set none. On a 390-point
-/// phone in both phone themes, from made-up data only, to the folder
-/// `SWARM_DISPLAY_NAME_SHOTS` names.
+/// 2026-11-03-person-display-name, Task 6): You headed by that name, and a
+/// chat whose author and tag read by it beside one who set none. On a
+/// 390-point phone in both phone themes, from made-up data only, to the
+/// folder `SWARM_DISPLAY_NAME_SHOTS` names.
 final shots = Platform.environment['SWARM_DISPLAY_NAME_SHOTS'];
 void main() {
   setUpAll(() async {

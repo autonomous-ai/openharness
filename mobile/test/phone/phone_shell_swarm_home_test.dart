@@ -145,6 +145,37 @@ void main() {
     );
   });
 
+  testWidgets("You's Notifications asks the phone's own notice centre, and "
+      "Settings under it has none of its own", (tester) async {
+    await open(tester);
+    await openYou(tester);
+
+    expect(
+      tester
+          .widget<NotificationsSettingsRow>(
+            find.descendant(
+              of: find.byType(SwarmYouPage),
+              matching: find.byType(NotificationsSettingsRow),
+            ),
+          )
+          .notices,
+      same(app.agentNotices.system),
+    );
+
+    await tester.ensureVisible(key('swarm-you-settings'));
+    await tester.pump();
+    await tester.tap(key('swarm-you-settings'));
+    await frames(tester);
+    expect(find.byType(SettingsPage), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(SettingsPage),
+        matching: find.byType(NotificationsSettingsRow),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('an agent explicitly opened puts the terminal at the root; '
       'back goes to Swarm Home; each keeps the other out of sight', (
     tester,
