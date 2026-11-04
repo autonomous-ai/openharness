@@ -442,10 +442,10 @@ void main() {
       expect(_pill(tester, _chatPill), monday);
       expect(_pill(tester, _threadPill), _day(tester, _tuesday));
 
-      // Tuesday's day line right where the pill is (Huy 11-04): one label,
+      // Tuesday's day line half under the pill (Huy 11-04): one label,
       // on a fill nothing reads through.
       final tuesday = _day(tester, _tuesday);
-      await _tuesdayLineAt(tester, scroll, tuesday, 10);
+      await _tuesdayLineAt(tester, scroll, tuesday, 22);
       await tester.pumpAndSettle();
       await _shoot(tester, picture, 'day-pill-over-line-${brightness.name}');
       _oneLabel(tester, [monday, tuesday], brightness.name);
