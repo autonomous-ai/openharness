@@ -4,7 +4,7 @@
 
 **Goal:** A check failed by a checker who has since left the Swarm can pass again in the same attempt: a later pass by the task's PM, or by a person who owns the project or the Swarm, clears every earlier failure from checkers no longer in the Swarm. Fix to what ships ("reviewed and tested before merge": a task whose Reviewer was stopped could never pass its check).
 
-**Architecture:** `recordCheckVerdict` (checkVerdicts.ts) takes the set of checkers whose failures this verdict clears. `work.check` (commands.ts) passes it only for a pass by someone accountable for the task: its PM (`group.leadId`), the project's owner or the Swarm's owner. The cleared checkers are those whose verdict names an agent or a person the Swarm no longer lists. `passedBy` and `evidence` are recomputed from the verdicts that remain, as today.
+**Architecture:** `recordCheckVerdict` (checkVerdicts.ts) takes the set of checkers whose failures this verdict clears. `work.check` (commands.ts) passes it only for a pass by someone accountable for the task: its PM (the project's current coordinator, `ledProject`; a replaced PM's removal clears the lead of the tasks it led), the project's owner or the Swarm's owner. The cleared checkers are those whose verdict names an agent or a person the Swarm no longer lists. `passedBy` and `evidence` are recomputed from the verdicts that remain, as today.
 
 **Tech Stack:** TypeScript, Vitest (backend); the CLI's task text (Vitest spec).
 
@@ -34,7 +34,7 @@
 
 ## Review Focus
 
-- Who counts as accountable: the task's `leadId`, `project.ownerId`, `state.ownerId`.
+- Who counts as accountable: the project's current coordinator, `project.ownerId`, `state.ownerId`.
 - Who counts as departed: an agent no longer in `state.agents`, a person no longer in `state.people`.
 - A live checker's failure is never cleared.
 
