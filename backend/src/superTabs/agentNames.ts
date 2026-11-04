@@ -59,23 +59,3 @@ export function agentDisplayName(agents: readonly NamedAgent[], id: string): str
   assignAgentDisplayNames(named)
   return named.find(agent => agent.id === id)!.displayName
 }
-
-/** A name a person gives an agent with Rename Harness: NFKC, trimmed, 1 to 60 characters, nothing that hides its shape (controls,
- *  bidi overrides, default-ignorables). Not a role's name or the Reviewer's (isRoleName), which would be given a member name
- *  instead, and not another agent's, compared as names are everywhere (NFKC, lowercase). */
-const AGENT_NAME_LENGTH = 60
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u
-const key = (name: string): string => name.normalize('NFKC').toLowerCase().trim()
-export function checkAgentName(agents: readonly NamedAgent[], id: string, input: string):
-  { name: string } | { code: 'INVALID_AGENT_NAME' | 'AGENT_NAME_ROLE' | 'AGENT_NAME_TAKEN'; message: string } {
-  const name = input.normalize('NFKC').replace(/\s+/g, ' ').trim()
-  const length = [...name].length
-  if (!length || length > AGENT_NAME_LENGTH || HIDDEN.test(name)) {
-    return { code: 'INVALID_AGENT_NAME', message: `Use 1 to ${AGENT_NAME_LENGTH} visible characters for an agent's name.` }
-  }
-  if (isRoleName(name) || reviewer.test(name)) return { code: 'AGENT_NAME_ROLE', message: `${name} is a role's name. Choose another.` }
-  if (agents.some(other => other.id !== id && key(agentDisplayName(agents, other.id) ?? other.name) === key(name))) {
-    return { code: 'AGENT_NAME_TAKEN', message: `${name} is taken in this Swarm. Choose another.` }
-  }
-  return { name }
-}

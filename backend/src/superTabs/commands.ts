@@ -1,7 +1,8 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
-import { agentDisplayName, assignAgentDisplayNames, checkAgentName } from './agentNames.js'
+import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -2943,18 +2944,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       result.expiresAt = context.now + 120_000
       break
     }
-    case 'agent.rename': {
-      const target = agent(state, command.agentId)
-      // Its person, not the Swarm's owner, a teammate, an agent (a Buddy is refused earlier) or a Team session: the name is
-      // theirs to give, as Rename Harness is on their own Mac.
-      if (actor.kind !== 'person' || (actor.userId !== target.contributorId && actor.userId !== target.machineOwnerId)) {
-        fail('FORBIDDEN', 'Only the person who runs this agent, or its machine\'s owner, can rename it.', 403)
-      }
-      const checked = checkAgentName(state.agents, target.id, command.name)
-      if ('code' in checked) fail(checked.code, checked.message, checked.code === 'AGENT_NAME_TAKEN' ? 409 : 400)
-      target.displayName = checked.name
+    case 'agent.rename':
+      renameAgentTo(state, actor, agent(state, command.agentId), command.name)
       break
-    }
     case 'agent.remove': {
       const target = agent(state, command.agentId)
       const hostStop = actor.kind === 'agent' && actor.agentId === target.id && target.workDecision === 'stop'
