@@ -501,7 +501,7 @@ const receiptOrder = (m: Pick<SuperTabMessage, 'recipientIds'>) => (a: PageDeliv
 }
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
- *  its source (liveness.ts loseTask), a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine), and
+ *  its source (liveness.ts loseTask), a machine leaving the Swarm (commands.ts removeMachine; `machine-left` rows, stored before #2742), and
  *  the machine a Product Manager started on (leadStart.ts leadJoined; Diego, 10-30) or a removed session is still held on
  *  (liveness.ts unpurged; review 2 of #2258). */
 export function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
@@ -3318,12 +3318,11 @@ export class SuperTabStore {
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
-      const ended = expireRemovals(state, now)
+      expireRemovals(state, now)
       const stamp = clock.next(), removedIds: string[] = []
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
-      // when a task there is lost or a removal ends.
-      const saved = async (lost: MessageDraft[] = []) => {
-        const rows = [...ended, ...lost]
+      // when a task there is lost.
+      const saved = async (rows: MessageDraft[] = []) => {
         const sequences = numberMessages(state, rows, now)
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
