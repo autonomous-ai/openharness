@@ -843,6 +843,12 @@ describe('the Buddy skill talks in its owner\'s chat and waits for nothing (Scho
     expect(text()).not.toContain('refused at once')
   })
 
+  // Security review 1 of #2832: the Swarm knows a Buddy only by the pane it runs in; from any other shell it would act as its owner.
+  it('runs its Swarm commands only in its own pane, never with --agent', () => {
+    expect(text()).toContain('Run harness super-tab only in your own pane, never from another shell or a background job and never with --agent: '
+      + 'the Swarm knows you as your owner\'s Buddy only there, and anywhere else you would act as your owner.')
+  })
+
   it('asks its owner before what deletes or rewrites their work, pushes, merges or reaches outside the machine', () => {
     expect(text()).toContain('ask before anything that deletes or rewrites their work, pushes, merges, or reaches outside this machine, unless '
       + 'they asked for exactly that')
