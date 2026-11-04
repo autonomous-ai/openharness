@@ -493,19 +493,20 @@ recorded is never changed.
 
 ## Routing
 
-**Advice, not rules.** `harness super-tab route` ranks the candidates for a task
+**Advice, not rules.** `harness super-tab route` lists the candidates for a task
 before an agent is started or assigned. By default the coordinator does it; the
 project's instructions may give routing to another role. The route leaves out
 only facts: a machine that is offline, removed or paused; an engine that is
 signed out or suspended; a model the machine does not serve (a grid model whose
-host is down). Each candidate left out says why. It ranks the rest by strength,
-price, quota fit and idle agents. The project's instructions say what the
-project prefers in their Routing section; where they say nothing, the route's
-order stands. Quota and task requirements are notes on a candidate, never a
-reason to refuse one. A route decision records the revision of the instructions
-it relied on, stamped by the server when the decision is recorded. A person or
-an agent may follow any candidate; following one other than the first needs no
-reason.
+host is down). Each candidate left out says why. It ranks nothing and names no
+pick (task #2901): the rest come by machine name, then engine, each with its
+facts (strength, price, quota fit with weekly quota left and its reset, the
+agents on its machine). The project's instructions choose, in their Routing
+section. Quota and task requirements are notes on a candidate, never a reason
+to refuse one. A route decision records the revision of the instructions it
+relied on, stamped by the server when the decision is recorded. The start or
+assignment that follows it gives the Routing rule that chose its candidate, and
+the decision records which candidate that was.
 
 **The model catalog.** A reviewed, read-only list in the backend (`catalog.ts`,
 `MODEL_CATALOG`) holds each engine's models and the efforts offered, with a
