@@ -149,3 +149,11 @@ it('names a Redis message by its subscriber and channel kind, never the id in th
   expect(busKind('main', 'Weird Channel:1')).toBe('bus main other')
   expect(busKind('main', `${'x'.repeat(40)}:1`)).toBe('bus main other')
 })
+
+it('hands every kind\'s busy ms of the minute to onWindow, for the counters and the last hour (#2957)', async () => {
+  const windows: Array<Map<string, number>> = []
+  stop = startSelfProfile({ everyMs: 3_600_000, reportMs: 200, log: () => {}, onWindow: busy => { windows.push(new Map(busy)) } })
+  await new Promise<void>(resolve => setImmediate(() => { markCpuKind('http GET /api/y'); spin(30); resolve() }))
+  await reported(windows)
+  expect(windows[0]!.get('http GET /api/y')).toBeGreaterThanOrEqual(25)
+})

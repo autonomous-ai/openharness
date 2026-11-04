@@ -280,3 +280,23 @@ describe('the query hook', () => {
     await expect(run({ model: 'User', operation: 'count', args: {}, query: async () => 3 })).resolves.toBe(3)
   })
 })
+
+describe('the minute handed on to the counters (#2957)', () => {
+  it('hands every route of the minute to onWindow, not only the 40 the line lists', () => {
+    const windows: Array<Map<string, { n: number; ms: number; bytes: number }>> = []
+    const { s, infos } = stats({ sampleEvery: 1, onWindow: routes => { windows.push(new Map(routes)) } })
+    for (let i = 0; i < 45; i++) runWork(`http GET /api/r${i}`, () => s.record('User', 'findFirst', { where: { k: 'y' } }, 1, [{ a: 1 }]))
+    s.flush()
+    expect(Object.keys(infos[0]!.context.routes as object)).toHaveLength(40)
+    expect(windows[0]!.size).toBe(45)
+    expect(windows[0]!.get('http GET /api/r44')).toMatchObject({ n: 1, ms: 1, bytes: JSON.stringify([{ a: 1 }]).length })
+  })
+
+  it('still logs its line, and warns, when onWindow throws', () => {
+    const { s, infos, warns } = stats({ onWindow: () => { throw new Error('counter broke') } })
+    runWork('http GET /api/a', () => s.record('User', 'count', {}, 1, 3))
+    expect(() => s.flush()).not.toThrow()
+    expect(infos).toHaveLength(1)
+    expect(warns.map(w => w.message)).toContain('query stats window failed')
+  })
+})
