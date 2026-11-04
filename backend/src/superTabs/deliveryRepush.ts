@@ -17,14 +17,17 @@ const BATCH = 500
 
 /** Tells each machine once per agent that has a delivery queued REPUSH_AFTER_MS or more. Reads queued rows only, by the
  *  delivery status index `(status, _id)` with a plain match, page by page: ids are hashes, so no page order puts new rows
- *  first. Resolves to the number of agents told. */
-export async function repushQueuedDeliveries(db: PrismaClient, tell: (waiting: DeliveriesWaiting) => void, now: number): Promise<number> {
+ *  first. Resolves to the agents told and the rows read: the rows are the pass's cost, and grow with an offline machine's
+ *  queue while the agents told stay few (review of #2977). A delivery its host keeps withholding (cli host.ts mayRead) stays
+ *  queued and is told every pass, so that one agent's list is read every 15 s, where it was every 30 s. */
+export async function repushQueuedDeliveries(db: PrismaClient, tell: (waiting: DeliveriesWaiting) => void, now: number): Promise<{ told: number; read: number }> {
   const told = new Set<string>()
-  let after: string | null = null
+  let after: string | null = null, read = 0
   for (;;) {
     const rows = await readBy(db as unknown as Prisma.TransactionClient, 'SuperTabDelivery', 'settle', [
       { $match: { status: 'queued', ...after ? { _id: { $gt: after } } : {} } }, { $sort: { _id: 1 } }, { $limit: BATCH },
       { $project: { tabId: 1, agentId: 1, machineId: 1, updatedAt: 1 } }])
+    read += rows.length
     for (const row of rows) {
       const { tabId, agentId, machineId } = row as { tabId: string; agentId: string; machineId: string }
       if (now - ms(row.updatedAt) < REPUSH_AFTER_MS) continue
@@ -33,7 +36,7 @@ export async function repushQueuedDeliveries(db: PrismaClient, tell: (waiting: D
       told.add(key)
       tell({ machineId, tabId, agentId })
     }
-    if (rows.length < BATCH) return told.size
+    if (rows.length < BATCH) return { told: told.size, read }
     after = rows.at(-1)!._id as string
   }
 }
@@ -46,7 +49,8 @@ export function startDeliveryRepush(db: PrismaClient, tell: (waiting: Deliveries
     if (running) return
     running = true
     void repushQueuedDeliveries(db, tell, Date.now())
-      .then(count => { if (count) logger.info('[swarm-deliveries] re-announced', { count }) })
+      // The first sign of growth: rows read nearing a page (500) or past it, from queues of machines that are away.
+      .then(({ told, read }) => { if (read) logger.info('[swarm-deliveries] re-announced', { told, read }) })
       .catch(error => logger.error('[swarm-deliveries] re-announce failed; a delivery whose push was lost waits for its host\'s 4-minute read',
         { error: error instanceof Error ? error.message : String(error) }))
       .finally(() => { running = false })

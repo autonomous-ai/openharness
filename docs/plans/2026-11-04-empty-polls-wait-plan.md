@@ -16,8 +16,9 @@ moves that net to the server, where it costs one read for all machines instead o
 1. The server repeats a push that may have been lost: a pass in the singleton worker every 15 s reads the queued deliveries
    (one indexed read for every Swarm) and tells each machine whose agent has one waiting 10 s or more; a sender waiting on
    a terminal request tells the machine again on each of its rechecks while the request is still pending.
-2. The 4-minute "this server pushes" repeat goes through the machine's Redis channel, as the host-changes repeat does, so a
-   silent Redis stops it and the daemon falls back to reading each second instead of trusting a dead channel.
+2. The "this server pushes" repeat goes through the machine's Redis channel, as the host-changes repeat does: a lease renewal
+   each minute (`__deliveries_lease`, which older daemons drop) and the old word every 4 minutes. The daemon's lease is 2.5
+   minutes, so a silent Redis puts it back to reading each second within minutes, and it logs that once.
 3. While the server pushes, the daemon reads an idle worker's list only when told (a push, a repeat, a reconnect, a retry
    after a failed read) and picks up terminal requests only when told. The Lead's list keeps its 30 s read: its poll runs the
    project's time checks (liveness.ts). Without the push lease everything stays as today (each second, every 3 s).
@@ -43,16 +44,19 @@ moves that net to the server, where it costs one read for all machines instead o
 - **Read cost:** one indexed read of queued deliveries `(status, _id)` every 15 s for all Swarms, at most one 500-row page;
   the terminal re-push adds no read (the sender's recheck already reads the row).
 - **Scale:** at 10x agents the pass still makes 4 reads a minute; the publishes grow with machines that have queued work.
-  The first metric to warn is the `[swarm-deliveries] re-announced` count per pass (logged when non-zero) reaching the page
-  size of 500.
+  The first metric to warn is the rows read per pass in the `[swarm-deliveries] re-announced` log (logged when non-zero)
+  nearing the page size of 500: queues of machines that are away grow it while the agents told stay few.
 - **Compatibility:** frame shapes unchanged (`super_tab_deliveries` with or without ids, `__terminal_waiting`). The Redis
   repeat message `{ pushes: true }` is new on the server's own channel and only the server reads it.
-- **Migration + rollback:** none. Rolling the backend back stops the repeat; within 10 minutes daemons fall back to reading
-  each second (PUSH_LEASE_MS), as today.
+- **Migration + rollback:** none. Rolling the backend back to before this change brings back its in-process 4-minute word:
+  new daemons hold their 2.5-minute lease for part of each 4 minutes and read each second for the rest, and a lost push waits
+  for that word (up to 4 minutes) instead of the re-push pass.
 - **Audience:** a push names only ids and reaches only the machine's own socket; the host reads through the checked poll.
 - **Identity:** unchanged; the pass publishes per machine id from the delivery row.
-- **Failure:** Redis away → no repeat → lease lapses → each-second reads, logged as today. A failed list read is retried after
-  its backoff without waiting for a push.
+- **Failure:** Redis away → no minute renewal → the daemon's lease (2.5 minutes) lapses → each-second reads, and the daemon
+  logs the lapse once (review of #2977, Important 1: with the old 10-minute lease an idle worker's delivery could wait 10
+  minutes). A failed list read is retried after its backoff without waiting for a push. A delivery the host keeps withholding
+  stays queued and is told every 15 s, so that agent's list is read every 15 s instead of 30 s.
 - **Platforms:** CLI daemon on macOS, Linux and Windows alike; no platform code.
 
 ## Review Focus
