@@ -3219,7 +3219,8 @@ describe('machine.remove', () => {
   })
 
   // Diego's Mac, 2026-10-28: a host that keeps reporting but never confirms held its machine 'Cleaning up' for a day.
-  it('drops the machine\'s records after 30 minutes without an acknowledgement, says so in the project\'s chat, and keeps the cleanup for its host', () => {
+  // anh Dee, 11-04 (#2742): the Machines list shows which machines are in the Swarm; no chat says one left.
+  it('drops the machine\'s records after 30 minutes without an acknowledgement, says nothing in any chat, and keeps the cleanup for its host', () => {
     const { f, removalId } = cleaning()
     const day = 30 * 60_000
     // Its host keeps reporting, so only the fallback can expire it.
@@ -3227,9 +3228,7 @@ describe('machine.remove', () => {
     expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 }).messages).toEqual([])
     expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
     expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
-    expect(f.run({ type: 'tab.rename', name: 'Half an hour later' }, owner, { now: 1000 + day }).messages).toEqual([
-      expect.objectContaining({ conversationId: 'lead', source: { kind: 'machine-left', machine: 'Studio' },
-        text: 'Studio left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.' })])
+    expect(f.run({ type: 'tab.rename', name: 'Half an hour later' }, owner, { now: 1000 + day }).messages).toEqual([])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
@@ -3309,20 +3308,11 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
-  it('tells each project\'s chat that the machine left once its host confirmed the cleanup', () => {
+  it('says nothing in any project\'s chat once its host confirmed the cleanup', () => {
     const { f, removalId } = cleaning()
-    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { conversationId: string }
-    expect(f.run(cleaned(removalId)).messages).toEqual(['lead', docs.conversationId].map(conversationId => expect.objectContaining({
-      conversationId, source: { kind: 'machine-left', machine: 'Studio' }, recipients: [], text: 'Studio left the Swarm: its host confirmed its cleanup.' })))
-  })
-
-  it('writes the line only in the chats of projects its machine owner can open', () => {
-    const f = fixture()
-    f.invite()
-    contribute(f, 'peer')
-    f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })
-    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }, peer).result.removalId as string
-    expect(f.run(cleaned(removalId), peer).messages.map(m => [m.conversationId, m.author.id])).toEqual([['lead', 'peer']])
+    f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })
+    expect(f.run(cleaned(removalId)).messages).toEqual([])
+    expect(f.state.machines).toEqual([])
   })
 
   it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
@@ -3333,8 +3323,7 @@ describe('machine.remove', () => {
       expect(visibleState(f.state, owner).machines).toHaveLength(1)
       const effects = f.run({ type: 'machine.remove', machineId: 'host' })
       const removalId = effects.result.removalId as string
-      expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'machine-left', machine: 'Studio' },
-        text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
+      expect(effects.messages.filter(m => m.source?.kind === 'machine-left')).toEqual([])
       expect(f.state.machines).toEqual([])
       expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
       expect(visibleState(f.state, owner).machines).toEqual([])
@@ -3371,9 +3360,8 @@ describe('machine.remove', () => {
     expect(visibleState(f.state, owner, later).machines).toEqual([])
     expect(visibleState(f.state, owner, later).machineCleanups).toBeUndefined()
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host' })])
-    // The next change applies the same rule, says why, and keeps the cleanup for its host.
-    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([expect.objectContaining({
-      conversationId: 'lead', text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
+    // The next change applies the same rule, says nothing, and keeps the cleanup for its host.
+    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     f.run(cleaned(removalId))

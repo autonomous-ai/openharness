@@ -215,10 +215,10 @@ it('reads a machine leaving the Swarm without its name, in the project chat and 
   await f.store.execute(owner, f.tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'probe-studio', removalId } })
 
   const pm = [...(await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages, ...(await f.store.messages(owner, f.tab, group, {}, f.lead)).messages]
-  const left = pm.find(m => m.text.startsWith('OWNER-STUDIO-HOST left the Swarm'))!, removed = pm.find(m => m.text.includes('removed OWNER-STUDIO-HOST from the Swarm'))!
-  expect([left, removed].map(m => (m.source as { kind?: string }).kind)).toEqual(['machine-left', 'machine-removed'])
+  // Only the row in the task's group: no chat says the machine left (#2742).
+  expect(pm.filter(m => m.text.includes('OWNER-STUDIO-HOST')).map(m => (m.source as { kind?: string }).kind)).toEqual(['machine-removed'])
+  const removed = pm.find(m => m.text.includes('removed OWNER-STUDIO-HOST from the Swarm'))!
   const seen = [...(await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages, ...(await f.store.messages(peer, f.tab, group, {}, agentId)).messages]
-  expect(seen.find(m => m.id === left.id)!.text).toBe('A machine left the Swarm: its host confirmed its cleanup.')
   expect(seen.find(m => m.id === removed.id)!.text).toMatch(/^owner removed a machine from the Swarm, and \S+ with it\.$/)
   expect(JSON.stringify(seen)).not.toContain('OWNER-STUDIO-HOST')
 })
