@@ -353,6 +353,19 @@ const notStarted = (env: NodeJS.ProcessEnv, a: Asked, away: Away | null = null):
 
 interface Target { daemon: Daemon; frame: Frame; machineId: string; machine: string; yours: boolean; remote: boolean }
 
+/**
+ * Whether [t] is a harness the person started on this machine and the caller a Swarm session here (started by an agent with
+ * no starter on this machine): the shape of a person's Buddy passing their words to their own harness (#2626). Only a filter
+ * on what is asked: this machine decides from its own registry whether the caller is that person's Buddy, with their grant,
+ * and whose the harness is (messages/tell.ts `relayRefusal`). Never for another machine's harness.
+ */
+function relayable(s: Setup, o: Opened, t: Target): boolean {
+  const caller = o.caller
+  if (!caller || caller.outside || !s.pane || t.remote || t.machineId !== o.where.machineId || t.frame.location === 'cloud') return false
+  const self = o.frames.find((f) => f.id === caller.agentId)
+  return self?.startedBy === 'agent' && !self.parentAgentId && t.frame.startedBy !== 'agent' && !t.frame.parentAgentId && t.frame.id !== caller.agentId
+}
+
 /** A machine's harnesses by the names the verbs call them: a terminal is the person's, and an unnamed one is its id's start. */
 const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
 
@@ -773,8 +786,14 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     const o = await opened(s)
     let t: Target | null = null
     try {
-      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
+      const notYours = () => new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
+      if (o.orphan) throw notYours()
       t = await target(s, o, names[0], away)
+      // A person's Buddy here passes their words to their own idle harness here, as its machine allows (#2626).
+      if (o.caller) {
+        if (!relayable(s, o, t)) throw notYours()
+        return await relayReply(s, o, t, text, flags.has('--json'))
+      }
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
       const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
@@ -795,6 +814,22 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+/** `harness reply` from a person's Buddy (#2626): asked of this machine from its pane, as a tell is; the machine checks it is their
+ *  Buddy and their harness, the switch, and that the harness is idle. */
+async function relayReply(s: Setup, o: Opened, t: Target, text: string, json: boolean): Promise<number> {
+  if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
+  const name = t.frame.name ?? t.frame.id.slice(0, 8)
+  let reply: Record<string, unknown>
+  try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'tell', pane: s.pane, machine: o.machine, agentId: t.frame.id, text, reply: true }, 20_000) } catch (error) {
+    if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+    throw error
+  }
+  const failed = reply.state === 'failed'
+  const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.` : `${name} has it: typed once its composer is free.`
+  s.out(json ? JSON.stringify({ ok: !failed, name, id: t.frame.id, message: reply.id ?? null, state: reply.state ?? 'queued', effect }) : `${name} on ${t.machine}: ${effect}`)
+  return failed ? EXIT.failed : EXIT.ok
 }
 
 /** How long words sent from here still steer a follow-up that names nothing ("and the other one?") to where they went. */
@@ -924,7 +959,7 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness tell reaches a harness in a pane only.`)
-      if (!t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
+      if (!t.yours && !relayable(s, o, t)) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
       // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts).
       if (stateOf(t.frame) === 'stopped') {
         throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
