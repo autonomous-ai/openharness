@@ -21,7 +21,7 @@ const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup() })
 
 /** A backend that refuses every select as webWs.ts refuses a relay's select of an offline machine. */
-async function offlineBackend() {
+async function offlineBackend(onRecheck?: (maxAgeMs: number) => void) {
   const dials: string[] = []
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await new Promise<void>(resolve => wss.once('listening', resolve))
@@ -36,13 +36,14 @@ async function offlineBackend() {
   })
   let now = 1_000_000
   let rechecks = 0
+  const asked: number[] = []
   const peers = new MachinePeerStore()
   peers.pin(machineId, b64e(newIdentity().pub), 'test remote')
   peers.pin(other, b64e(newIdentity().pub), 'test remote 2')
   const pool = new RemoteRelayPool(
     { accessToken: async () => 'fixture-token' } as never,
     `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
-    newIdentity(), peers, { p2p: false, now: () => now, recheckList: () => { rechecks++ } },
+    newIdentity(), peers, { p2p: false, now: () => now, recheckList: async (maxAgeMs) => { rechecks++; asked.push(maxAgeMs); onRecheck?.(maxAgeMs) } },
   )
   cleanups.push(async () => {
     peers.unlink(machineId); peers.unlink(other)
@@ -54,6 +55,7 @@ async function offlineBackend() {
     pool,
     dials: (id = machineId) => dials.filter(d => d === id).length,
     rechecks: () => rechecks,
+    asked: () => asked,
     advance(ms: number) { now += ms },
     window: (id = machineId) => pool.acquire(id, 'prod', select(id), sink, () => {}),
     redial: () => pool.acquire(machineId, 'prod', select(machineId, { forceReconnect: true }), sink, () => {}),
@@ -108,6 +110,26 @@ describe('a machine the machine list shows offline', () => {
     b.advance(1)
     await expect(b.window()).rejects.toMatchObject(offline)
     expect(b.rechecks()).toBe(2)
+  })
+
+  // Review of #2891: no online event reaches the CLI (the backend pushes a list change only on create, rename, delete or
+  // share), so a person pressing Retry on a machine back for a minute would have waited for the 5-minute recheck.
+  it('asks the list again on an explicit redial, at most 30 s old, and dials if it shows the machine back', async () => {
+    let back = false
+    let pool: RemoteRelayPool | null = null
+    const b = await offlineBackend(() => { if (back) pool?.listed([]) })
+    pool = b.pool
+    b.pool.listed([machineId])
+    await expect(b.window()).rejects.toMatchObject(offline)
+    await expect(b.redial()).rejects.toMatchObject(offline)
+    expect(b.dials()).toBe(0)
+    expect(b.asked()).toEqual([5 * 60_000, 30_000])
+
+    back = true
+    b.advance(60_000)
+    await expect(b.redial()).rejects.toMatchObject(offline)
+    expect(b.dials()).toBe(1)
+    expect(b.asked()).toEqual([5 * 60_000, 30_000, 30_000])
   })
 
   it('holds nothing on a list that is not the backend\'s, or one read more than 15 minutes ago', async () => {
