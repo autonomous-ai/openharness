@@ -464,6 +464,36 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     setState(() {});
   }
 
+  /// What a Waiting on you notice asked to open
+  /// ([SuperTabController.openAgentTerminal]): the agent's terminal, focused,
+  /// beside the chat it waits in, where its card's Open terminal can open it
+  /// (#2951's rules); or a line saying why it can't (Huy, #2792).
+  void _takeAgentTerminal(SuperTabController controller, String tabId) {
+    final request = controller.agentTerminalRequest;
+    if (!mounted || request == null || controller.snapshot == null) return;
+    controller.agentTerminalRequest = null;
+    final agent = controller.snapshot!.agent(request.agentId);
+    if (agent == null) return;
+    final groups = superTabAgentTerminalGroups(controller, agent.id);
+    if (groups.isEmpty) {
+      final reason = superTabOpenTerminalBlocked(controller, agent.id);
+      if (reason != null) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(reason)));
+      }
+      return;
+    }
+    bool waitsThere(SuperTabConversation group) =>
+        group.assignment?['agentId'] == agent.id &&
+        superTabWorkWaits(group.assignment?['status']);
+    final group =
+        groups.where((g) => g.id == request.conversationId).firstOrNull ??
+        groups.where(waitsThere).firstOrNull ??
+        groups.where((g) => g.id == controller.selectedId).firstOrNull ??
+        groups.first;
+    _focusAgent(controller, tabId, agent, group.id);
+  }
+
   Future<void> _chooseAgentGroup(
     SuperTabController controller,
     String tabId,
@@ -535,6 +565,11 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   unawaited(PersonalMachines.of(app).sync(controller));
                 }
               });
+            }
+            if (controller.agentTerminalRequest != null) {
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => _takeAgentTerminal(controller, tab.id),
+              );
             }
             _syncTerminal(controller, tab.id);
             final agents = controller.terminalAgents(controller.selectedId);
