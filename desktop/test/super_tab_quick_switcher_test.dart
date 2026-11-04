@@ -171,9 +171,6 @@ void main() {
     'recents first, unread bold, hidden chats absent, archived only exact',
     (tester) async {
       final (f, c) = await setup(tester);
-      // The project's closed groups read, as its Tasks view reads them:
-      // opening a task no longer reads them (task #2569).
-      await c.loadDormant('lead');
       await c.select('offline');
       await tester.pump();
       await c.select('release');
