@@ -1992,6 +1992,7 @@ class AppNotifier extends ChangeNotifier {
           controller.accountId != currentUser?.id) {
         return;
       }
+      _syncChosenNames();
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
         if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
@@ -14062,6 +14063,7 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    _syncChosenNames();
     _watchHeldLaunches(machine);
     for (final agent in agents) {
       _reconcileAgentActivity(machine, agent, previous[agent.id]);
@@ -14161,6 +14163,7 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    _syncChosenNames();
     _reconcileAgentActivity(machine, agent, previous);
     if (previous?.name != agent.name) _recordAgentName(machine, agent);
     _syncAgentName(machine, agent);
@@ -14211,6 +14214,41 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  bool _syncingChosenNames = false, _chosenNamesAgain = false;
+
+  /// Sends the names people chose for their agents, as the daemon says, to the
+  /// Swarms that show something else (task #2920): an agent renamed before
+  /// the rename reached the Swarm shows its name with no second rename. Runs
+  /// when a Swarm loads and when a machine's agents change; each name goes
+  /// once. Only this person's own machines: a shared one is view-only.
+  void _syncChosenNames() {
+    if (_disposed) return;
+    if (_syncingChosenNames) {
+      // Something changed while names were going out: look again after.
+      _chosenNamesAgain = true;
+      return;
+    }
+    _syncingChosenNames = true;
+    unawaited(
+      superTabs
+          .syncChosenNames((machineId, harnessId) {
+            final machine = machineStates[machineId];
+            if (machine == null || machine.machine.isShared) return null;
+            return machine.agents
+                .where((agent) => agent.id == harnessId)
+                .firstOrNull;
+          })
+          .then((_) {}, onError: (Object _) {})
+          .whenComplete(() {
+            _syncingChosenNames = false;
+            if (_chosenNamesAgain) {
+              _chosenNamesAgain = false;
+              _syncChosenNames();
+            }
+          }),
+    );
   }
 
   bool _renameAgent(MachineState machine, String agentId, String name) {
