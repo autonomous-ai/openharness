@@ -15,8 +15,9 @@ import { logger } from '../utils/logger.js'
 // task, in the task's write (steps.ts endSteps), and never on its own clock while that task is open (task steps design): it
 // is taken here only once its task is done or cancelled and every pull request of both is merged or closed.
 
-export type PullRequestState = 'open' | 'merged' | 'closed' | null
-/** What a sweep asks GitHub: a pull request's state (null: it cannot say), and `done` once the sweep is over. */
+export type PullRequestState = 'open' | 'merged' | 'closed' | 'missing' | null
+/** What a sweep asks GitHub: a pull request's state (missing: GitHub knows no such pull request there; null: it cannot say),
+ *  and `done` once the sweep is over. */
 export interface PullRequests { state(url: string): Promise<PullRequestState>; done(): Promise<void> }
 
 /** Without the Harness GitHub App nothing can say a pull request is merged: a group that links one stays open. */
