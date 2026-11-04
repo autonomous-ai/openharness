@@ -124,8 +124,8 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 
 **Files:**
 - Modify: `backend/src/superTabs/store.ts` (the claim's row mapping, beside `rowForBuddy`)
-- Modify: `backend/src/superTabs/activity.ts`, `read/inbox.ts`, `read/followedThreads.ts`, `mentions.ts`, `catchUp.ts`, `noticeDigest.ts` (each preview text goes through `previewText`)
-- Modify: `backend/src/superTabs/voiceMessages.ts` (`previewText(message: { text: string; attachments?: unknown }): string`, `agentText(...)`)
+- Modify: `backend/src/superTabs/read/inbox.ts` (its `FIELDS` projection and `row`, which activity, the inbox and followed threads all read through, name a voice message `Voice message (M:SS)`). `mentions.ts` and `catchUp.ts` stay as they are: a voice message tags no one, and catch-up lists only status rows and tags. `noticeDigest.ts` stays too: a digest line shows a notice's words, and an agent reads a voice message's words there without the mark (review of #2887, Minor 3).
+- Modify: `backend/src/superTabs/voiceMessages.ts` (`agentText(text, attachments)`, `voiceMsOf(attachments)`)
 - Test: `backend/src/superTabs/voiceMessages.test.ts` and each reader's existing test file
 
 - [ ] Step 1: write failing tests:

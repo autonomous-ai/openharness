@@ -11,6 +11,10 @@ const swarmVoiceFileName = 'Voice message.wav';
 const swarmVoiceOverLimit = "Sent without words: today's voice limit is used";
 const swarmVoiceNotTranscribed = "Sent without words: they couldn't be heard";
 
+/// What the chat says when the read of a clip got no answer, from the
+/// backend or the computer it goes through; the take is kept.
+const swarmVoiceNoAnswer = "Not sent · couldn't reach the server";
+
 /// What the chat says to a server from before voice messages; the take is
 /// kept.
 const swarmVoiceNeedsServer = 'Voice messages need a newer server';
@@ -56,6 +60,10 @@ Future<({SuperTabVoice? voice, String? refused})> swarmReadVoice(
         return (voice: null, refused: swarmVoiceNeedsServer);
       }
       return (voice: null, refused: failure.message);
+    } on Object {
+      // A timeout or a lost connection, forwarding through a computer too:
+      // nothing was sent, and the take waits for another Send.
+      return (voice: null, refused: swarmVoiceNoAnswer);
     }
   }
 }

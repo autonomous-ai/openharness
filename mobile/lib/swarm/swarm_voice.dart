@@ -63,6 +63,9 @@ class SwarmVoice extends ChangeNotifier {
   /// What a take that came back empty says.
   static const nothingRecorded = "Couldn't record anything · tap the mic again";
 
+  /// What a send that failed without saying why says; the take is kept.
+  static const notSent = 'Not sent · tap Send to try again';
+
   /// Makes the microphone on the first tap, which this owns and disposes: a
   /// recorder opens a platform channel, and a chat nobody talks in should not.
   final VoiceRecorder Function() recorder;
@@ -213,8 +216,16 @@ class SwarmVoice extends ChangeNotifier {
     final take = _take!, turn = _turn;
     _notice = null;
     _set(SwarmVoiceState.sending);
-    final (:sent, :notice) = await post(take);
+    SwarmVoicePosted posted;
+    try {
+      posted = await post(take);
+    } on Object {
+      // Whatever failed, the take stays with Send and X: a row left on
+      // sending would hold it out of reach.
+      posted = (sent: false, notice: notSent);
+    }
     if (turn != _turn || _disposed) return;
+    final (:sent, :notice) = posted;
     _notice = notice;
     if (!sent) {
       _set(SwarmVoiceState.held);
