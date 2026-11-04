@@ -37,8 +37,8 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 
 type Json = Record<string, unknown>
-// A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
-// refuses any --agent, so it can never act as another agent (security review 2 of #2092, lib/buddyGuard.ts).
+// A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its machine
+// refuses an --agent that is not its own from that pane (security review 2 of #2092).
 const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
   `${prefix} --tab ${shellQuote(entry.tabId)}${buddy ? '' : ` --agent ${shellQuote(entry.agentId)}`}`
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
@@ -76,7 +76,7 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     // This machine's roster row is the server's record of its sessions, read as the machine's owner: it binds the session
     // and says whether it is a Buddy. The agent's own read below cannot: a Buddy's read blanks every agent's machine and
     // session ids, its own too (backend model.ts visibleState), so matching them there read every Buddy as no Swarm member
-    // and a restart brought it back without its guard (security reviews of #2248).
+    // and a restart brought it back without its role (security reviews of #2248).
     const buddy = isBuddy(target)
     const { state } = await sources.reads.read(String(row.tabId), String(target.id))
     const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
@@ -95,7 +95,7 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     // as a Reviewer (`role: 'reviewer'`) keeps its swarm-review file for a Swarm with no instructions.
     return member ? { role: 'agent' as const, ...(agent.role === 'reviewer' ? { fallback: 'review' as const } : {}), mode: groupSkillMode(state, member) } : null
   }))
-  // A Buddy first: a session that is a Buddy anywhere keeps its guard, whatever else it is elsewhere. Then the coordinator, an
+  // A Buddy first: a session that is a Buddy anywhere keeps its role, whatever else it is elsewhere. Then the coordinator, an
   // agent, and last an agent that was a Reviewer.
   return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null
 }
@@ -664,7 +664,7 @@ export class SuperTabHost {
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
-    // Which account is signed in here, for every Buddy's guard: none until it is read again, so a grant made before a sign-out
+    // Which account is signed in here, for every Buddy's grant: none until it is read again, so a grant made before a sign-out
     // or another account's sign-in (each restarts the daemon) holds nothing (delta reviews of #2310).
     try { writeBuddyAccount(null) } catch (error) { this.log(`Buddy account mark: ${error instanceof Error ? error.message : String(error)}`) }
     void this.core.account.identity().then(identity => writeBuddyAccount(identity?.accountId ?? null))
@@ -2083,9 +2083,9 @@ export class SuperTabHost {
     download.stop.abort()
   }
 
-  /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its
-   *  guard lets it read (lib/buddyGuard.ts). Which agent the session is comes from this host: the id the backend gave the
-   *  agent this machine's session joined as. The Swarm as the Buddy reads it now decides the rest, never the delivery alone;
+  /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one message that grants it its
+   *  owner's presence and lists their Artifact links (lib/buddyGuard.ts). Which agent the session is comes from this host:
+   *  the id the backend gave the agent this machine's session joined as. The Swarm as the Buddy reads it now decides the rest, never the delivery alone;
    *  it names no session or machine of the Buddy's own (backend model.ts agentWithoutMachine), so it cannot say which
    *  session it is (security review 1 of #2248: the success path compared that blank id and never ran). Not its person's
    *  own: news from outside its chat (the server marks it), the PM's private lines there, another person's message, another
