@@ -92,6 +92,22 @@ void main() {
     },
   );
 
+  test('an engine list that cannot be read is asked for once, not at every '
+      'read of the computers', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('m').answers['engines_probe'] = (_) =>
+        throw refusal('UNSUPPORTED');
+    final computers = AppSwarmComputers(rig.app);
+    addTearDown(computers.dispose);
+
+    for (var i = 0; i < 3; i++) {
+      expect(computers.leadComputers.single.engines, ['claude']);
+      await settle();
+    }
+    expect(rig.conn('m').payloadsOf('engines_probe'), hasLength(1));
+  });
+
   test('startLead creates the Lead in the repo\'s folder and answers what it '
       'started', () async {
     final rig = await signedInWith({'m': []});
