@@ -3973,7 +3973,18 @@ class _SuperTabViewState extends State<SuperTabView>
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Row(
               children: [
-                Expanded(child: Text(c.error!, style: DesktopChrome.control())),
+                // A Swarm that was read and now cannot be (a backend or this
+                // computer's Harness restarting) keeps what it shows and says
+                // so quietly; it reads again by itself (task #2647).
+                Expanded(
+                  child: c.backendUnreachable && c.snapshot != null
+                      ? Text(
+                          'Reconnecting…',
+                          key: const ValueKey('super-reconnecting'),
+                          style: DesktopChrome.metadata(),
+                        )
+                      : Text(c.error!, style: DesktopChrome.control()),
+                ),
                 if (!c.accessRevoked && !c.updateRequired)
                   TextButton(
                     onPressed: () => unawaited(c.refresh()),
