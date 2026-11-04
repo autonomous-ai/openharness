@@ -35,7 +35,7 @@ import { machineAlive, prisma } from '../lib/prisma.js'
 import { pub } from '../lib/bus.js'
 import { TEAM_CONVERSION_PROOF_MS, teamConversionMessage } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { INVALID_ACCOUNT_NAME_MESSAGE, parseAccountName } from '../lib/accountName.js'
+import { parseAccountName } from '../lib/accountName.js'
 
 /**
  * Whether [user] is the computer [computerId] itself, which alone may turn itself into a team machine
@@ -439,7 +439,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // Answers as GET /api/auth/me does, so the app shows the saved name at once.
   app.patch<{ Body: { name?: unknown } }>('/api/auth/me', async (req, reply) => {
     const parsed = parseAccountName(req.body?.name)
-    if (!parsed.ok) return sendError(reply, INVALID_ACCOUNT_NAME_MESSAGE, 'INVALID_NAME', 400)
+    if (!parsed.ok) return sendError(reply, parsed.message, parsed.code, 400)
     // A row gone since sign-in answers 404 (UserService.update's NotFoundError).
     const user = await userService.update(req.user!.sub, { name: parsed.name })
     return sendSuccess(reply, { user: userService.toPublic(user), avatarUrl: null, description: null })
