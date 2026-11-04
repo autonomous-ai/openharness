@@ -146,6 +146,18 @@ describe('five-part task commands', () => {
       expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
     })
   }
+  // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which still settles it.
+  it('sends an answer as a reply to a backend that refuses answers, once, with the same operation', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { answers?: unknown } }).command.answers
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "answers"' } } } as never
+      : original(...args))
+    const post = { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: null, answers: 'm1', recipientIds: [] }
+    expect(await send(t, post)).toMatchObject({ ok: true })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
+    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
+      command: { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: 'm1', recipientIds: [] } })
+  })
   it('renders a task\'s review plan into its brief as the backend does', async () => {
     const t = setup()
     const review = { focus: ' Check revoked access first. ', reviews: 2 }
@@ -791,6 +803,20 @@ describe('which messages still need an answer', () => {
     // A person's email is passed as the backend sent it.
     expect((value.messages[0]!.author as { name: string }).name).toBe('sam@example.com')
   })
+  // An answer right below a message settles the agent's delivery and has no replyTo (task #2929): its delivery says it was answered.
+  it('marks a message answered when the caller\'s delivery of it was answered, as by an answer right below it', async () => {
+    const t = setup()
+    const delivery = (status: string) => [{ id: 'd1', agentId: t.agentId, status }, { id: 'd2', agentId: 'someone-else', status: 'answered' }]
+    const feed = [
+      { id: 'q1', sequence: 1, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('answered') },
+      { id: 'q2', sequence: 2, author: person, recipientIds: [t.agentId], replyTo: null, deliveries: delivery('delivered') },
+      { id: 'a1', sequence: 3, author: { kind: 'agent', id: t.agentId, name: 'Lead' }, recipientIds: [], replyTo: null },
+    ]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/messages') ? { messages: feed, next: null } : swarmData(t.agent, path) } }))
+    const value = (await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner) as { value: { messages: Record<string, unknown>[] } }).value
+    expect(value.messages.map(m => m.answered)).toEqual([true, false, undefined])
+  })
   it('names the thread root on each thread reply only, so an agent reading one feed sees which thread a reply is in', async () => {
     const t = setup()
     const feed = [
@@ -1330,7 +1356,8 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain('--answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread.')
     // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
     expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
@@ -1371,7 +1398,7 @@ describe('a Buddy\'s help', () => {
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>, asker: Parameters<ReturnType<typeof setup>['ask']>[1] = owner) =>
     object(object(await t.ask({ action: 'help', ...payload }, asker)).help)
   const expectBuddy = (each: Record<string, unknown>) => {
-    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
+    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--answers MESSAGE_ID \| --reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
     expect(String(each.post)).toContain(QUOTED)
     expect(String(each.post)).not.toContain('TEXT|-')
     expect(String(each.post)).not.toContain(STDIN_HINT)

@@ -195,6 +195,15 @@ it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
     expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
   }
 })
+// Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+it('posts an answer right below one message with --answers, never with --reply-to too', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--answers', 'msg-1', '--to', 'a1'], where).payload.command)
+    .toEqual({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, answers: 'msg-1', recipientIds: ['a1'] })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload.command).not.toHaveProperty('answers')
+  for (const tail of [['--answers'], ['--answers', '../x'], ['--answers', 'a', '--answers', 'b'], ['--answers', 'a', '--reply-to', 'b'], ['--reply-to', 'b', '--answers', 'a']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
 it('parses repeated --attach, allows empty text with a file, and refuses empty text alone', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '', 'op-1', '--attach', 'a.png', '--reply-to', 'm1', '--attach', 'b.log'], where).payload)
     .toMatchObject({ attach: [resolve('a.png'), resolve('b.log')], command: { text: '', replyTo: 'm1' } })
