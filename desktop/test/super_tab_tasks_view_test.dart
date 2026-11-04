@@ -522,6 +522,31 @@ void main() {
       await _close(tester, c);
     });
 
+    testWidgets('a drop above a Needs-you card ranked last goes to the top of '
+        'the rest', (tester) async {
+      final server = queued();
+      // `third` needs the reader: it shows first, though it is last in the
+      // queue.
+      var c = await _show(tester, server, asking: {'third'});
+      expect(_cardsIn(tester, 'nextUp'), ['third', 'shipped-means', 'preview']);
+      await dragTo(
+        tester,
+        'preview',
+        tester.getTopLeft(_card('third')) + const Offset(20, 2),
+      );
+      expect(moves(server), [
+        {'type': 'work.queue', 'conversationId': 'preview', 'after': null},
+      ]);
+      await _close(tester, c);
+      c = await _show(tester, server, asking: {'third'});
+      expect(_cardsIn(tester, 'nextUp'), ['third', 'preview', 'shipped-means']);
+      await _close(tester, c);
+      // Without the lift, as everyone else sees it.
+      c = await _show(tester, server);
+      expect(_cardsIn(tester, 'nextUp'), ['preview', 'shipped-means', 'third']);
+      await _close(tester, c);
+    });
+
     testWidgets('a card dropped on another column goes back', (tester) async {
       final server = queued();
       final c = await _show(tester, server);
