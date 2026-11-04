@@ -427,6 +427,107 @@ void main() {
     },
   );
 
+  // Scholes, 2026-11-04: a new member typed his password and the lock sat on
+  // its spinner with nothing to press. The daemon had stopped answering
+  // `running` (the setup ended with no account and nothing remembered, or the
+  // daemon restarted), and the lock read that `none` as "still waiting".
+  testWidgets(
+    'a setup that stops with nothing to say ends the wait at once, with Try again',
+    (tester) async {
+      daemon.statuses
+        ..clear()
+        ..addAll([
+          {'ok': true, 'state': 'running'},
+          {'ok': true, 'state': 'none'},
+        ]);
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(
+        outcome(tester),
+        'Setup stopped before the Harness Team account was made. Try again.',
+      );
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+      // Nothing is read again once it has ended.
+      final reads = daemon.asked.where((a) => a == 'teamSetupStatus').length;
+      await tester.pump(const Duration(seconds: 10));
+      expect(
+        daemon.asked.where((a) => a == 'teamSetupStatus'),
+        hasLength(reads),
+      );
+    },
+  );
+
+  testWidgets(
+    'while it waits, Try again and Remove are there, and the waiting text stays',
+    (tester) async {
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      expect(
+        outcome(tester),
+        'macOS is asking for your password in a window titled “osascript”. '
+        'Setup then takes a minute or two, and Harness opens when it is done.',
+      );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+      expect(find.text('Remove this Mac from the Swarm'), findsOneWidget);
+
+      // Still running: Try again reads the status and starts nothing.
+      await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+      await tester.pump();
+      await tester.pump();
+      expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(1));
+      expect(daemon.asked.last, 'teamSetupStatus');
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // Remove asks first; Back returns to the wait.
+      await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pump();
+      expect(find.byKey(const Key('team-account-lock-confirm')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('team-account-lock-remove-back')));
+      await tester.pump();
+      expect(find.byKey(const Key('team-account-lock-confirm')), findsNothing);
+      expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // No setup runs any more: Try again starts one.
+      daemon.statuses
+        ..clear()
+        ..add({'ok': true, 'state': 'none'});
+      await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+      await tester.pump();
+      await tester.pump();
+      expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(2));
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    },
+  );
+
+  testWidgets('Try again while it waits opens the app once the account is made', (
+    tester,
+  ) async {
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    daemon.statuses
+      ..clear()
+      ..add({'ok': true, 'state': 'exists'});
+    await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+    await tester.pump();
+    await tester.pump();
+    expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(1));
+    expect(find.byKey(const Key('team-account-lock')), findsNothing);
+  });
+
   testWidgets('Harness unreachable says so, with Try again', (tester) async {
     daemon.run = {'error': 'SERVICE_UNAVAILABLE'};
     await window(tester, app);
