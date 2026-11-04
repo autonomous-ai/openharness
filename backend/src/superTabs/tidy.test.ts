@@ -177,14 +177,19 @@ describe('what a finished group\'s archive waits on', () => {
   const named = (result: string) => group({ assignment: done({ result }) })
   it('waits on a "PR #N" of its project\'s repository, never on one another repository\'s name sits next to', () => {
     expect(archiveWaitsFor(named('Merged PR #40. Ported from autonomous-harness PR #2716.'), repo)).toEqual([pull(40)])
-    for (const result of ['other/tool PR #12', 'PR #12 in other/tool', 'PR #12 of autonomous-harness', 'Ported (from autonomous-harness PR #12)']) {
+    for (const result of ['Ported (from autonomous-harness PR #12)', 'From other/tool PR #12', 'from foo.js/bar_baz PR #12',
+      'acme/tool PR #12', 'PR #12 in acme/tool', 'PR #12 of ACME/tool']) {
       expect(archiveWaitsFor(named(result), repo)).toEqual([])
     }
   })
 
+  // Review of #2895: dropping one of its own numbers archives it while that PR is open (#558); reading another's as its own
+  // waits at most until that number of its own closes, or is not found. So a name counts only where it plainly says so.
   it('still reads a number its own repository names, or an ordinary word sits next to, as its project\'s', () => {
     for (const result of ['acme/openharness PR #12', 'ACME/OpenHarness PR #12', 'openharness PR #12', 'Follow-up PR #12', 'Re-opened PR #12',
-      'Merged. PR #12', 'Merged PR #12', 'PR #12 in review', 'PR #12 of the batch']) {
+      'Merged. PR #12', 'Merged PR #12', 'PR #12 in review', 'PR #12 of the batch', 'from openharness PR #12', 'from acme/openharness PR #12',
+      'Desktop/CLI PR #12 is open', 'test-only PR #12', 'docs-only PR #12', 'backend-only PR #12', 'CLI-side PR #12', 'v0.5.33 PR #12',
+      'fix/2598-relay-offline-hold PR #12', 'PR #12 in docs/plans', 'PR #12 in desktop/src', 'PR #12 of 2026-11-04', 'PR #12 of autonomous-harness']) {
       expect(archiveWaitsFor(named(result), repo)).toEqual([pull(12)])
     }
   })
