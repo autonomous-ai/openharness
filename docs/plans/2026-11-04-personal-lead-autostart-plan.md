@@ -48,12 +48,14 @@ on the person's own machine and is delivered to it once it runs, instead of "Not
 - Concurrency: both are written by commands, which run under the Swarm state's one lock, so two claims are ordered.
 - Read cost: no new read; the late deliveries read each waiting message by its primary key (at most 20).
 - Scale: 10x people means 10x Personal Swarms, each with its own state; nothing is shared between them.
-- Compatibility: an older Desktop or the phone sends no claim and keeps "Not sent"; its message still waits for the
-  Lead. A newer Desktop against an older backend gets `lead.claim` refused as unknown and shows the start failed with
+- Compatibility: an older Desktop sends no claim and keeps "Not sent"; its message still waits for the Lead. The phone
+  says "Waiting for a Lead · open Harness on your computer to start one" for a message the server keeps (River, 11-04);
+  a phone with an older server keeps "Not sent". A newer Desktop against an older backend gets `lead.claim` refused as unknown and shows the start failed with
   Add a Lead.
 - Migration and rollback: new optional fields only; a rollback leaves them unread.
 - Audience: the server refuses `lead.claim` outside the owner's Personal Swarm and from anyone but a person who manages
-  the project; deliveries go only to the Lead that joined, of the person's own messages.
+  the project; deliveries go only to the Lead that joined, of the person's own messages. A Buddy reads no claim (it names
+  a machine).
 - Identity: the Lead runs on the person's own machine as them, through the existing local start.
 - Failure: a refused claim or a failed start says why on the receipt with Add a Lead.
 - Platforms: Desktop on macOS, Linux and Windows run the same code; the phone is unchanged.
@@ -79,11 +81,11 @@ on the person's own machine and is delivered to it once it runs, instead of "Not
 - `SwarmProject.leadWaiting?: Array<{ id: string; at: number }>`, `SwarmProject.leadClaim?: { id; machineId; at }`.
 - `CommandEffects.lateDeliveries[].lead?: true`.
 
-- [ ] Failing tests: a Personal Swarm send with no Lead records the message; a claim answers `start`, a second from
+- [x] Failing tests: a Personal Swarm send with no Lead records the message; a claim answers `start`, a second from
       another machine `waiting`; `agent.add` as Lead (with a repo, and without) yields a late delivery of the message
       and clears both; a Team Swarm records nothing and refuses the claim.
-- [ ] Run them and watch them fail.
-- [ ] Implement; run the tests of the changed files.
+- [x] Run them and watch them fail.
+- [x] Implement; run the tests of the changed files.
 
 ### Task 2: Desktop: the starter
 
@@ -96,11 +98,11 @@ on the person's own machine and is delivered to it once it runs, instead of "Not
 - `PersonalLeadStarter.of(app)`: `wants(c, conversationId)`, `afterSend(c, conversationId)`, `stateOf(...)` →
   starting / failed(reason).
 
-- [ ] Failing tests: a send with no Lead claims and starts one in the repo's folder (repo case) or a new Harness folder
+- [x] Failing tests: a send with no Lead claims and starts one in the repo's folder (repo case) or a new Harness folder
       (no-repo case), and joins it as Lead; a failed start records the reason; two quick sends make one start; a Team
       Swarm starts nothing.
-- [ ] Run them and watch them fail.
-- [ ] Implement; run the tests of the changed files.
+- [x] Run them and watch them fail.
+- [x] Implement; run the tests of the changed files.
 
 ### Task 3: Desktop: the receipt note
 
@@ -108,7 +110,17 @@ on the person's own machine and is delivered to it once it runs, instead of "Not
 - Modify: `desktop/lib/super_tabs/message_receipt.dart`
 - Test: `desktop/test/super_tab_receipt_test.dart`, `desktop/test/super_tab_personal_lead_shots_test.dart`
 
-- [ ] Failing tests: "Starting a Lead…" while starting; "Couldn't start a Lead: <reason>" with Add a Lead after a
+- [x] Failing tests: "Starting a Lead…" while starting; "Couldn't start a Lead: <reason>" with Add a Lead after a
       failure; a Team Swarm still says "Not sent · this chat has no Lead".
-- [ ] Run them and watch them fail.
-- [ ] Implement; capture light and dark screenshots of both lines; run the receipt tests.
+- [x] Run them and watch them fail.
+- [x] Implement; capture light and dark screenshots of both lines; run the receipt tests.
+
+### Task 4: Phone: the waiting line (River, 11-04)
+
+**Files:**
+- Modify: `mobile/lib/swarm/model.dart`, `mobile/lib/swarm/swarm_message_receipt.dart`
+- Test: `mobile/test/swarm/swarm_no_lead_receipt_test.dart`
+
+- [x] Failing test: a message the server keeps for the Lead (`leadWaiting`) reads "Waiting for a Lead · open Harness on
+      your computer to start one", without Not sent or Add a Lead.
+- [x] Implement; run the phone receipt tests.
