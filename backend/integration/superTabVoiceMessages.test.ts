@@ -11,6 +11,8 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type VoiceTranscription } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { logger } from '../src/utils/logger.js'
+import { FIELDS, preview, row } from '../src/superTabs/read/inbox.js'
+import { readBy } from '../src/superTabs/parts/indexed.js'
 
 // Chat voice messages (task #2584): the phone uploads a WAV, the server transcribes it once before it is sent, and the words
 // become the message's text, so agents read them in the delivery written with the message.
@@ -190,5 +192,41 @@ describe('sending a voice message', () => {
     const file = await f.upload(wav(2))
     await db.superTabAttachment.update({ where: { id: file.id }, data: { voiceSince: new Date() } })
     await expect(send(f, file.id)).rejects.toMatchObject({ code: 'VOICE_TRANSCRIBING', status: 409 })
+  })
+})
+
+describe('what agents and previews read of a voice message', () => {
+  async function sent(words: string, quota: 'ok' | 'limit' = 'ok') {
+    const voice = fakeVoice(words)
+    voice.quota = quota
+    const f = await swarm(voice)
+    const file = await f.upload(wav(81))
+    await f.store.readVoice(owner, f.tab, file.id, 'en')
+    const messageId = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })).result.messageId)
+    return { f, messageId }
+  }
+  const claim = async (f: Awaited<ReturnType<typeof swarm>>, messageId: string) => {
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId } })
+    return (await f.store.delivery(owner, f.tab, f.lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message
+  }
+
+  it('hands an agent the words, marked as a voice message with its length', async () => {
+    const { f, messageId } = await sent('hello team')
+    expect((await claim(f, messageId))!.text).toBe('Voice message (1:21): hello team')
+    // What is stored stays the words alone: people read them under the bubble.
+    expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: messageId } })).text).toBe('hello team')
+  })
+
+  it('tells an agent when a voice message has no words', async () => {
+    const { f, messageId } = await sent('unheard', 'limit')
+    expect((await claim(f, messageId))!.text).toBe('Voice message (1:21), not transcribed.')
+  })
+
+  it('previews it as "Voice message (1:21)", and a plain message as its text', async () => {
+    const { f, messageId } = await sent('hello team')
+    const plain = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Typed words', replyTo: null, recipientIds: [] })).result.messageId)
+    const rows = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [messageId, plain] }, tabId: f.tab } },
+      { $project: { ...FIELDS, conversationId: 1 } }])).map(row)
+    expect(Object.fromEntries(rows.map(r => [r.id, preview(r).text]))).toEqual({ [messageId]: 'Voice message (1:21)', [plain]: 'Typed words' })
   })
 })
