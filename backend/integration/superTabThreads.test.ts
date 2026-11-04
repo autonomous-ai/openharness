@@ -7,10 +7,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
-import { refreshThreads, threadFacet } from '../src/superTabs/pageReads.js'
+import { foldReplies, refreshThreads, threadFacet } from '../src/superTabs/pageReads.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -113,6 +113,10 @@ const pages = async (s: Awaited<ReturnType<typeof scene>>) => Object.fromEntries
   [name, await store.messages(as, s.tabId, conversationId, {}, agentId)] as const)))
 const replies = (page: { threads: Array<{ id: string; replies: number }> }) => Object.fromEntries(page.threads.map(t => [t.id.replace(/^s\d+-/, ''), t.replies]))
 const sorted = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).sort()
+/** The stored summaries of `roots` as the database holds them, types included, their parts and tags in a stable order. */
+const rawSummaries = async (roots: string[]) => ((await db.$runCommandRaw({ find: 'SuperTabThread', filter: { _id: { $in: roots } }, sort: { _id: 1 } }) as unknown as
+  { cursor: { firstBatch: Array<Record<string, unknown>> } }).cursor.firstBatch)
+  .map(({ updatedAt: _, parts, mentions, ...rest }) => ({ ...rest, parts: sorted(parts as unknown[]), mentions: sorted(mentions as unknown[]) }))
 
 describe('thread summaries (spec 5 phase D)', () => {
   it('gives every reader the same page from the summaries as from the $facet, lone roots and hidden replies included', async () => {
@@ -173,6 +177,111 @@ describe('thread summaries (spec 5 phase D)', () => {
     const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: s.id('w-a') } })
     expect(sorted(stored.parts as unknown[])).toEqual(sorted((await threadFacet(db, s.tabId, s.web, [s.id('w-a')])).parts))
     expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(505)
+  })
+
+  it('stores a folded summary as the full rebuild stores it, for replies of every kind and tag (task #2974)', async () => {
+    const s = await scene()
+    await backfillThreads(db, Date.now())
+    const more: Row[] = [
+      { id: 'w-a6', conversationId: s.web, thread: 'w-a', author: agent(s.worker) },
+      { id: 'w-a7', conversationId: s.web, thread: 'w-a', author: agent(s.lead), recipientIds: [s.worker], source: { kind: 'note', recipientsOnly: true } },
+      { id: 'w-a8', conversationId: s.web, thread: 'w-a', author: agent(s.lead), source: { kind: 'system', ask: 'on-it' } },
+      { id: 'w-a9', conversationId: s.web, thread: 'w-a', author: person(peer), mentions: [outsider.sub, owner.sub, outsider.sub] },
+      { id: 'w-b2', conversationId: s.web, thread: 'w-b', author: person(owner), mentions: [peer.sub] },
+      { id: 'w-b3', conversationId: s.web, thread: 'w-b', author: person(owner) },
+    ]
+    const roots = ['w-a', 'w-b'].map(s.id)
+    await transaction(db, async tx => {
+      await tx.superTabMessage.createMany({ data: more.map(row => ({ recipientIds: [], mentions: [], ...row, id: s.id(row.id), thread: s.id(row.thread),
+        tabId: s.tabId, text: row.id, sequence: ++sequence, createdAt: new Date() })) })
+      await foldReplies(tx, s.tabId, s.web, more.map(row => ({ id: s.id(row.id), thread: s.id(row.thread) })))
+    })
+    const chat = [{ id: s.id('b-r4'), conversationId: s.buddyChat, thread: s.id('b-root'), author: agent(s.buddy), buddySession: true }]
+    await transaction(db, async tx => {
+      await tx.superTabMessage.createMany({ data: chat.map(row => ({ recipientIds: [], mentions: [], ...row, tabId: s.tabId, text: 'x', sequence: ++sequence })) })
+      await foldReplies(tx, s.tabId, s.buddyChat, chat)
+    })
+    const folded = await rawSummaries([...roots, s.id('b-root')])
+    await refreshThreads(db, s.tabId, s.web, roots)
+    await refreshThreads(db, s.tabId, s.buddyChat, [s.id('b-root')])
+    expect(folded).toEqual(await rawSummaries([...roots, s.id('b-root')]))
+    expect(Object.keys(folded[0]!).sort()).toEqual(['_id', 'conversationId', 'mentions', 'parts', 'tabId'])
+  })
+
+  it('leaves the full rebuild\'s summary after folded replies are edited and deleted, and none once the last reply goes (task #2974)', async () => {
+    const s = await scene()
+    await backfillThreads(db, Date.now())
+    const send = async (replyTo: string, as: AuthUser, mentions: string[] = []) => String((await store.execute(as, s.tabId, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: s.web, text: 'r', replyTo, recipientIds: [], mentions } as never })).result.messageId)
+    const run = (as: AuthUser, command: object) => store.execute(as, s.tabId, { operationId: randomUUID(), command: { conversationId: s.web, ...command } as never })
+    const same = async (root: string) => {
+      const stored = await db.superTabThread.findUnique({ where: { id: root } })
+      const facet = await threadFacet(db, s.tabId, s.web, [root])
+      if (!facet.parts.some(p => !p._id.root)) return expect(stored).toBeNull()
+      expect(sorted(stored!.parts as unknown[])).toEqual(sorted(facet.parts))
+      expect(sorted(stored!.mentions as unknown[])).toEqual(sorted(facet.mentions))
+    }
+    const root = s.id('w-c')
+    const first = await send(root, owner, [peer.sub]), second = await send(root, peer), third = await send(root, owner, [outsider.sub])
+    await same(root)
+    await run(owner, { type: 'message.edit', messageId: first, text: 'edited' })
+    await same(root)
+    // The newest of its part, the only reply of its part, then the oldest of what is left: each moves what the summary holds.
+    for (const [messageId, as] of [[third, owner], [second, peer], [first, owner]] as const) {
+      await run(as, { type: 'message.delete', messageId })
+      await same(root)
+    }
+    // The route row the scene wrote is the thread's last reply; once it goes (as no person can delete it), so does the summary.
+    await db.superTabMessage.delete({ where: { id: s.id('w-c1') } })
+    await refreshThreads(db, s.tabId, s.web, [root])
+    await same(root)
+    expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-c']).toBeUndefined()
+  })
+
+  it('counts both of two replies sent at once, the second reading the summary the first committed (task #2974)', async () => {
+    const s = await scene()
+    await backfillThreads(db, Date.now())
+    const root = s.id('w-a')
+    // Both transactions read the summary before either writes it: the later write conflicts and its transaction runs again.
+    let waiting = 0, release!: () => void
+    const bothRead = new Promise<void>(resolve => { release = resolve })
+    const attempts: number[] = []
+    const reply = (name: string, as: object) => { const at = attempts.push(0) - 1; return transaction(db, async tx => {
+      const first = ++attempts[at]! === 1
+      await tx.superTabMessage.create({ data: { id: s.id(name), tabId: s.tabId, conversationId: s.web, thread: root, sequence: ++sequence, text: name,
+        author: as, recipientIds: [], mentions: [] } })
+      const paused = new Proxy(tx, { get(target, key, receiver) {
+        if (key !== '$runCommandRaw') return Reflect.get(target, key, receiver)
+        return async (command: Record<string, unknown>) => {
+          if (command.update === 'SuperTabThread' && first) {
+            if (++waiting === 2) release()
+            await Promise.race([bothRead, new Promise(resolve => setTimeout(resolve, 5_000))])
+          }
+          return target.$runCommandRaw(command as Prisma.InputJsonObject)
+        }
+      } })
+      await foldReplies(paused, s.tabId, s.web, [{ id: s.id(name), thread: root }])
+    }) }
+    await Promise.all([reply('w-a-at-once-1', person(peer)), reply('w-a-at-once-2', agent(s.worker))])
+    // Both read the summary before either wrote it, and one of them ran again after the other committed.
+    expect(waiting).toBe(2)
+    expect(Math.max(...attempts)).toBeGreaterThanOrEqual(2)
+    const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: root } })
+    expect(sorted(stored.parts as unknown[])).toEqual(sorted((await threadFacet(db, s.tabId, s.web, [root])).parts))
+    expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(6)
+  })
+
+  it('counts both of two replies sent at once through the store (task #2974)', async () => {
+    const s = await scene()
+    await backfillThreads(db, Date.now())
+    const send = (as: AuthUser) => store.execute(as, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
+      conversationId: s.web, text: 'At once', replyTo: s.id('w-a'), recipientIds: [] } as never })
+    // One reply each first, so the two at once fold into parts the summary already holds.
+    for (const as of [owner, peer]) await send(as)
+    await Promise.all([owner, peer].map(send))
+    const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: s.id('w-a') } })
+    expect(sorted(stored.parts as unknown[])).toEqual(sorted((await threadFacet(db, s.tabId, s.web, [s.id('w-a')])).parts))
+    expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(8)
   })
 
   it('leaves no summary when the reply\'s transaction fails', async () => {
