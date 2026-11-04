@@ -19,8 +19,8 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of the username on the phone (Tony 11-01, task 10):
-/// You with its Username row, then the profile with a taken name refused
-/// under its field. On a 390-point phone in both phone themes, from made-up
+/// You headed by it, then the profile with a taken name refused under its
+/// field. On a 390-point phone in both phone themes, from made-up
 /// data only, to the folder `SWARM_USERNAME_SHOTS` names.
 final shots = Platform.environment['SWARM_USERNAME_SHOTS'];
 void main() {
@@ -145,9 +145,9 @@ void main() {
         });
       }
 
-      expect(find.byKey(const ValueKey('swarm-you-username')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-you-me')), findsOneWidget);
       await capture('you');
-      await tester.tap(find.byKey(const ValueKey('swarm-you-username')));
+      await tester.tap(find.byKey(const ValueKey('swarm-you-me')));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-username-field')),
