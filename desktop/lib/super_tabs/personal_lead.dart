@@ -77,6 +77,14 @@ class PersonalLeadStarter extends ChangeNotifier {
     return status;
   }
 
+  /// Sets [conversationId]'s start as a test reads it.
+  @visibleForTesting
+  void setStatusForTest(
+    SuperTabController c,
+    String conversationId,
+    PersonalLeadStatus status,
+  ) => _set(_key(c, conversationId), status);
+
   void _set(String key, PersonalLeadStatus status) {
     _status[key] = status;
     notifyListeners();
