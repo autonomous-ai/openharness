@@ -51,7 +51,7 @@ import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liv
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, proposalTitle, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
-import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
@@ -199,6 +199,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
+  // A Personal Swarm's one start of a project's Lead by its person's Desktop, on their message in its chat (leadStart.ts).
+  z.object({ type: z.literal('lead.claim'), projectId: id, machineId: id }).strict(),
   z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id, machineId: id.optional(),
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional() }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
@@ -1241,6 +1243,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    * one already starting takes it too. Nothing while they have no one Buddy, as before. When it cannot start, why, in plain
    * words, for the line that tells its person (buddyDownLine).
    */
+  /** [project]'s Lead [agentId] joined its chat: it hears what its person sent there while it had none (leadStart.ts). */
+  const arrived = (project: SwarmProject, agentId: string) => {
+    if (!project.leadWaiting && !project.leadClaim) return
+    const late = leadArrived(state, project, agentId, context.now)
+    if (late.length) effects.lateDeliveries = [...effects.lateDeliveries ?? [], ...late]
+  }
   const startOldChatBuddy = (chat: Conversation): string | undefined => {
     if (command.type !== 'message.send' || actor.kind !== 'person') return
     const owner = requireChatOwner(state, chat, actor.userId)
@@ -1569,6 +1577,26 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A branch a Team agent pushed, or GitHub cannot place, never starts a PM in the main account (audit H2).
       if (context.pushOrigin && context.pushOrigin !== 'clean' && !teamAccountPool(state.machines?.find(m => m.machineId === start.request.machineId))) failTeamWritten()
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
+      break
+    }
+    case 'lead.claim': {
+      // Only a Personal Swarm: its person's Desktop starts the Lead on their own machine, where their project's folder is. A
+      // Team Swarm's project gets its coordinator from a person who chooses it (task #2633).
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person starts a project\'s coordinator.', 403)
+      if (!isPersonalSwarm(state)) fail('PERSONAL_SWARM_ONLY', 'Only a Personal Swarm starts a project\'s coordinator on its first message.', 409)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
+      const project = manageProject(state, actor, command.projectId)
+      const home = conversation(state, project.leadConversationId)
+      if (home.leadId && home.agentIds.includes(home.leadId)) fail('LEAD_EXISTS', `This project already has its ${coordinatorNameOf(project)}.`)
+      // One start at a time: another machine's recent claim, or a start the Swarm runs, is the one. The same machine claims
+      // again only once its own start ended, which its Desktop knows.
+      const held = project.leadClaim
+      if (leadStarting(state, project.id) || (held && held.machineId !== command.machineId && context.now - held.at < LEAD_CLAIM_MS)) {
+        result.leadStart = 'waiting'
+        break
+      }
+      project.leadClaim = { id: operationId, machineId: command.machineId, at: context.now }
+      result.leadStart = 'start'
       break
     }
     case 'lead.switch': {
@@ -2215,6 +2243,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
         group.leadId = agentId
+        if (group.id === project.leadConversationId) arrived(project, agentId)
       }
       result.agentId = agentId
       // Creation already handed this first request to the native harness (and
@@ -2669,6 +2698,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
           const joined = leadJoined(state, start, group, agentId)
           message(group.id, joined.text, [], null, joined.source)
+          if (group.leadId === agentId) arrived(projectOf(state, start.request.leadFor.projectId), agentId)
         }
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
@@ -3111,6 +3141,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
+      // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
+      // A Team Swarm's says Not sent, as before.
+      const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
+      if (unled && unled.leadConversationId === group.id && state.projects?.includes(unled) && !(group.leadId && group.agentIds.includes(group.leadId))) {
+        leadWaits(unled, operationId, context.now)
+      }
       // The message that makes it LOOP_NOTICE_AT in a row between two agents tells their Lead, once; delivery is never held.
       const speaker = actor.kind === 'agent' ? agent(state, actor.agentId) : null
       const partner = speaker && recipients.length === 1 && recipients[0] !== speaker.id ? agent(state, recipients[0]!) : null
