@@ -382,11 +382,14 @@ void main() {
       SuperTabPullRequestFacts? facts,
       DateTime? today,
       VoidCallback? beforeBuild,
+      SuperTabController? held,
     }) async {
       opened.clear();
-      final c = shown = server.controller();
-      addTearDown(c.dispose);
-      await c.refresh();
+      final c = shown = held ?? server.controller();
+      if (held == null) {
+        addTearDown(c.dispose);
+        await c.refresh();
+      }
       beforeBuild?.call();
       await tester.binding.setSurfaceSize(const Size(1100, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -743,6 +746,66 @@ void main() {
         expect(
           find.byKey(const ValueKey('super-backlog-shipped-retry')),
           findsOneWidget,
+        );
+      });
+
+      Iterable<String> closedReads(ConversationServer server) =>
+          server.parts.reads.where((p) => p.contains('dormant=1'));
+
+      testWidgets('opening the tab again reads nothing again and keeps the '
+          'rows', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30)]);
+        final c = await show(tester, server, today: at);
+        expect(row('recent'), findsOneWidget);
+        final reads = closedReads(server).length;
+        await tester.pumpWidget(const SizedBox());
+        await show(tester, server, today: at, held: c);
+        expect(row('recent'), findsOneWidget);
+        expect(closedReads(server), hasLength(reads));
+      });
+
+      testWidgets('a task that closes while the app is open stays listed '
+          'after the tab opens again', (tester) async {
+        final server = swarm();
+        server.parts.clock = now;
+        final c = await show(tester, server, today: at);
+        await tester.pumpWidget(const SizedBox());
+        (server.state['conversations'] as List).cast<Map>().firstWhere(
+          (g) => g['id'] == 'shipped',
+        )['archived'] = true;
+        await c.refresh();
+        await show(tester, server, today: at, held: c);
+        expect(row('shipped'), findsOneWidget);
+      });
+
+      testWidgets('trying again reads only the project that failed', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [
+          archived('here', 80),
+          {...archived('there', 81), 'projectId': 'api'},
+        ]);
+        await show(
+          tester,
+          server,
+          today: at,
+          beforeBuild: () => server.failReadsOf = 'projectId=lead',
+        );
+        server.parts.reads.clear();
+        server.failReadsOf = null;
+        await tester.tap(
+          find.byKey(const ValueKey('super-backlog-shipped-retry')),
+        );
+        await tester.pumpAndSettle();
+        expect(row('here'), findsOneWidget);
+        expect(row('there'), findsOneWidget);
+        expect(
+          closedReads(server).where((p) => p.contains('projectId=api')),
+          isEmpty,
         );
       });
 
