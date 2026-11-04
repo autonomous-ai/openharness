@@ -41,7 +41,7 @@ import { shippedAt } from './ship.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
@@ -285,6 +285,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
+  z.object({ type: z.literal('member.timeZone'), timeZone: z.string().min(1).max(64).nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
   z.object({ type: z.literal('member.username'), username: z.string().max(64).nullable() }).strict(),
   z.object({ type: z.literal('member.name'), name: z.string().max(200).nullable() }).strict(),
@@ -632,9 +633,9 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'swarm.delete' || command.type === 'swarm.restore') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  // So does choosing one's own username (usernames.ts) or name (personNames.ts).
+  // So does choosing one's own username (usernames.ts) or name (personNames.ts), and one's app telling one's time zone.
   if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username'
-    || command.type === 'member.name') return void author(state, actor)
+    || command.type === 'member.name' || command.type === 'member.timeZone') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -880,7 +881,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username'
-    && command.type !== 'member.name')
+    && command.type !== 'member.name' && command.type !== 'member.timeZone')
   authorizeCommandAccess(state, actor, command, context)
   /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
    *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
@@ -2930,6 +2931,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'member.status':
       setStatus(state, actor, command.status, context.now)
+      break
+    case 'member.timeZone':
+      setTimeZone(state, actor, command.timeZone)
       break
     case 'message.react': {
       // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4).
