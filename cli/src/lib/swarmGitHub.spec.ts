@@ -121,7 +121,7 @@ describe('commits in a Swarm session', { timeout: 60_000 }, () => {
     const dir = fresh('commit')
     const repo = join(dir, 'repo')
     mkdirSync(repo)
-    const launch = swarmGitHubLaunch(`harness-claude-fixture-${made}`, { dataDir: shared, command: `/bin/sh ${shellWord(cli)}`, port: 18500, machineId: 'machine-1' }, 'darwin')!
+    const launch = swarmGitHubLaunch(`harness-claude-fixture-${made}`, { dataDir: shared, command: `/bin/sh ${shellWord(cli)}`, port: 18500, machineId: 'machine-1' })!
     expect(git(repo, ['init', '-q', '-b', 'main']).status).toBe(0)
     const env = { GIT_CONFIG_PARAMETERS: launch.env.GIT_CONFIG_PARAMETERS!, HARNESS_SWARM_GITHUB_DIR: launch.env.HARNESS_SWARM_GITHUB_DIR! }
     const commit = (args: string[], extra: Record<string, string> = {}) => git(repo, ['commit', '-q', '--allow-empty', ...args], { ...env, ...extra })
@@ -280,11 +280,11 @@ describe('a session\'s GitHub folder at launch', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'swarm-github-launch-'))
     try {
       const tools = { dataDir, command: 'harness', port: 18473, machineId: 'm1' }
-      expect(swarmGitHubLaunch('harness-codex-held', tools, 'darwin')).not.toBeNull()
+      expect(swarmGitHubLaunch('harness-codex-held', tools)).not.toBeNull()
       const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-held')!
       const old = new Date(Date.now() - 20 * 60_000)
       utimesSync(dir, old, old)
-      swarmGitHubLaunch('harness-codex-held', tools, 'darwin')
+      swarmGitHubLaunch('harness-codex-held', tools)
       expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000)
     } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
