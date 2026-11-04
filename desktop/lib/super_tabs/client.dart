@@ -456,6 +456,9 @@ class SuperTabClient {
     _tagCounts.clear();
     _tagDigests.clear();
     _owners = const {};
+    _listed = const {};
+    _listAnswers = 0;
+    _listAsked.clear();
     _tagsSeen.clear();
     _listMentions = true;
     discoveryError = null;
@@ -584,6 +587,7 @@ class SuperTabClient {
         discoveryError = null;
         _owners = owners;
         _listed = tabs.keys.toSet();
+        _listAnswers++;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.
@@ -618,14 +622,36 @@ class SuperTabClient {
     });
   }
 
-  /// The Swarms the last list read that answered named.
+  /// The Swarms the last list read that answered named, and how many list
+  /// reads have answered for this account.
   Set<String> _listed = const {};
+  int _listAnswers = 0;
 
-  /// Whether the account's list still names Swarm [id], read afresh (or
-  /// joining a read under way): a Swarm refuses a read while its backend
-  /// restarts, and only the list says it is gone. Throws when the list cannot
-  /// be read, or the account changed meanwhile.
+  /// When each Swarm last asked for the list ([_stillListed]), and how many
+  /// list reads had answered then.
+  final _listAsked = <String, ({DateTime at, int answers})>{};
+
+  /// Whether the account's list still names Swarm [id]: a Swarm refuses a
+  /// read while its backend restarts, and only the list says it is gone.
+  /// Throws when the list cannot be read, or the account changed meanwhile.
+  ///
+  /// A restart refuses every read for a while, so the list is read for a
+  /// Swarm at most once a minute (task #2767). Within that minute the answer
+  /// is the latest list that answered since this Swarm asked, whoever read it
+  /// (discovery too); with none, it is unknown.
   Future<bool> _stillListed(String id) async {
+    final now = clock.now();
+    final asked = _listAsked[id];
+    if (asked != null && now.difference(asked.at) < kSwarmListRecheckEvery) {
+      if (_listAnswers == asked.answers) {
+        throw const SuperTabFailure(
+          'LIST_UNREAD',
+          'The Swarm list has not answered since it was asked.',
+        );
+      }
+      return _listed.contains(id);
+    }
+    _listAsked[id] = (at: now, answers: _listAnswers);
     final generation = _generation;
     await refreshTabs();
     if (generation != _generation) {

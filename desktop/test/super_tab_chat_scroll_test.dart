@@ -19,6 +19,11 @@ void main() {
   }) async {
     final c = server.controller(reading: reading);
     await c.refresh();
+    // A window as tall as a laptop's: below about 620 px, with the composer's
+    // two rows (#2662), the group at the top of the view starts above the rows
+    // laid out, and the dividing row does not move (_moveSplitToView).
+    await tester.binding.setSurfaceSize(const Size(800, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),

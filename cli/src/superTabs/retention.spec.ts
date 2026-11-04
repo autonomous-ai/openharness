@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { mayBeBuddy, mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
+import { ASSIGNED_GRACE_MS, mayBeBuddy, mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const root = () => { const dir = mkdtempSync(join(tmpdir(), 'super-retention-')); roots.push(dir); return dir }
@@ -160,4 +160,26 @@ it('lets a Buddy lapse with a roster nobody confirms for a week', () => {
   retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'buddy', machineId: 'machine', buddyOf: { personId: 'diego' } } }], now)
   expect(mayBeBuddy(dir, 'buddy', now + RETENTION_LAPSE_MS - 1000)).toBe(true)
   expect(mayBeBuddy(dir, 'buddy', now + RETENTION_LAPSE_MS + 1000)).toBe(false)
+})
+
+// 11-04 on the Mac Studio: Tern's last group was archived, so the roster no longer kept it, and the idle cleanup may close it
+// in the very poll its next task arrives in (task #2744). An assignment the host holds keeps its harness, and for a minute.
+it('retains a harness that holds an assignment, and for a minute after the host first received it', () => {
+  const dir = root(), now = Date.now(), file = retentionFile(dir)
+  const work = (harnessId: string) => ({ tabId: 'tab', assignmentId: `work-${harnessId}`, harnessId })
+  retainContributions(dir, 'machine', [row('tern', { active: false })], now, [work('tern'), { tabId: 'tab' }, work('../bad')])
+  expect([...retainedHarnesses(dir, now)]).toEqual(['tern'])
+  // Unchanged while it holds it: no write each poll.
+  const before = statSync(file, { bigint: true }).mtimeNs
+  retainContributions(dir, 'machine', [row('tern', { active: false })], now + 20_000, [work('tern')])
+  expect(statSync(file, { bigint: true }).mtimeNs).toBe(before)
+  // Its assignment ended: kept until a minute after it first came, then released.
+  retainContributions(dir, 'machine', [row('tern', { active: false })], now + ASSIGNED_GRACE_MS - 1, [])
+  expect([...retainedHarnesses(dir, now + ASSIGNED_GRACE_MS - 1)]).toEqual(['tern'])
+  retainContributions(dir, 'machine', [row('tern', { active: false })], now + ASSIGNED_GRACE_MS, [])
+  expect([...retainedHarnesses(dir, now + ASSIGNED_GRACE_MS)]).toEqual([])
+  // A roster read alone, as an older caller makes it, keeps the minute of one received just now.
+  retainContributions(dir, 'machine', [], now, [work('heron')])
+  retainContributions(dir, 'machine', [], now + 1000)
+  expect([...retainedHarnesses(dir, now + 1000)]).toEqual(['heron'])
 })

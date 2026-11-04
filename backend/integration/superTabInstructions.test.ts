@@ -18,6 +18,7 @@ import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
+import { PM_SCHEDULE_TEXT } from '../src/superTabs/pmSchedule.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Project instructions, phase 2 (docs/plans/2026-10-30-project-instructions-plan.md): the document, its revisions, the
@@ -253,6 +254,46 @@ describe('reading the instructions', () => {
 
 // An older client's saves (project instructions, phase 4, decision 3): a rule lands in the Routing section as a new revision;
 // a policy, a skill set or a role is answered and kept nowhere.
+describe('the built-in PM schedule beside the instructions', () => {
+  const doc = (tab: string, asAgentId?: string) => `/api/super-tabs/${tab}/projects/lead/instructions${asAgentId ? `?asAgentId=${asAgentId}` : ''}`
+  const withWorker = async () => {
+    const { tab, lead } = await withLead()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    return { tab, lead, worker }
+  }
+
+  it('is in the coordinator\'s read alone, and the document read is unchanged', async () => {
+    const { tab, lead, worker } = await withWorker()
+    const asLead = (await get(host, doc(tab, lead))).json().data
+    expect(asLead.builtIn).toBe(PM_SCHEDULE_TEXT)
+    expect(asLead).toMatchObject({ revision: 1, text: INSTRUCTIONS_TEMPLATE, hash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
+    for (const [user, as] of [[host, worker], [owner]] as Array<[AuthUser, string?]>) {
+      const answer = await get(user, doc(tab, as))
+      expect(answer.statusCode, answer.body).toBe(200)
+      expect(answer.json().data).not.toHaveProperty('builtIn')
+    }
+  })
+
+  it('moves the coordinator\'s roster row by its hash; no other agent\'s row carries one', async () => {
+    const { tab, lead, worker } = await withWorker()
+    const rows = (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; instructions: Record<string, unknown> }>
+    expect(rows.find(r => r.agent.id === lead)!.instructions.builtInHash).toBe(instructionsHash(PM_SCHEDULE_TEXT))
+    expect(rows.find(r => r.agent.id === worker)!.instructions).not.toHaveProperty('builtInHash')
+  })
+
+  it('refuses a save holding the built-in section, and takes the document as read', async () => {
+    const { tab, lead } = await withLead()
+    const read = (await get(host, doc(tab, lead))).json().data
+    await expect(run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: `${read.text}\n\n${read.builtIn}`, summary: 'Copied',
+      askedBy: owner.sub }, host, lead)).rejects.toMatchObject({ code: 'INSTRUCTIONS_BUILT_IN' })
+    expect((await get(owner, doc(tab))).json().data.revision).toBe(1)
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: `${read.text}\nOne more line.`, summary: 'One more line',
+      askedBy: owner.sub }, host, lead)
+    expect((await get(owner, doc(tab))).json().data.revision).toBe(2)
+  })
+})
+
 describe('an older client\'s saves', () => {
   it('takes an old Desktop\'s saves', async () => {
     const { tab, lead } = await withLead()

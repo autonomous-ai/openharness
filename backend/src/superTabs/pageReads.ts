@@ -302,8 +302,9 @@ export async function threadsAcross(tx: Transaction, tabId: string, threads: Rea
 
 /**
  * Rewrites the summaries of the threads rooted at `roots` in one conversation from their rows now: one document per thread
- * with a reply, as threadFacet gives it. Run in the transaction that inserts a reply (refreshReplies), so a summary holds what
- * its rows do: two replies at once write the same document, and one of their transactions runs again.
+ * with a reply, as threadFacet gives it, and none for a thread left with no reply. Run in the transaction that inserts a reply
+ * (refreshReplies) or deletes one, so a summary holds what its rows do: two replies at once write the same document, and one
+ * of their transactions runs again.
  */
 export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
   if (!roots.length) return { parts: [], mentions: [] }
@@ -317,6 +318,9 @@ export async function refreshThreads(tx: Transaction, tabId: string, conversatio
   })
   // Raw, so the stored parts read back as the $facet returns them, dates as dates.
   if (updates.length) await tx.$runCommandRaw({ update: 'SuperTabThread', updates: updates as unknown as Prisma.InputJsonArray })
+  // A thread whose last reply was deleted (messageEdits.ts) has no summary left.
+  const empty = roots.filter(root => !parts.some(p => p._id.thread === root && !p._id.root))
+  if (empty.length) await tx.$runCommandRaw({ delete: 'SuperTabThread', deletes: [{ q: { _id: { $in: empty }, tabId, conversationId }, limit: 0 }] as unknown as Prisma.InputJsonArray })
   return facet
 }
 
@@ -344,7 +348,7 @@ const BACKFILL_CHECK_MS = 60_000
 const backfilled = new Map<string, { done: boolean; at: number }>()
 
 /** Whether the Swarm's thread summaries are backfilled (threadBackfill.ts), as this process read it in the last minute. */
-async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
+export async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
   const known = backfilled.get(tabId), now = Date.now()
   if (known && now - known.at < BACKFILL_CHECK_MS) return known.done
   const done = !!await tx.superTabThreadBackfill.findUnique({ where: { id: tabId }, select: { id: true } })

@@ -1403,6 +1403,17 @@ describe('a delivery poll or claim that keeps failing', () => {
   })
 })
 
+// Task #2744: Tern's last group was archived, so its roster row no longer kept it from the idle cleanup when its next task came.
+it('keeps a harness its poll lists an assignment for, though its groups are archived', async () => {
+  const t = setup()
+  vi.mocked(t.core.account.backend).mockImplementation(async () => ({ status: 200, body: { data: hostForm([], { assignments: [
+    { tabId: 'tab', assignmentId: 'work-1', harnessId: 'tern' }] }) } }))
+  const host = t.open()
+  await host.tick()
+  expect([...retainedHarnesses(t.dir)]).toEqual(['tern'])
+  host.stop()
+})
+
 it('confirms a stopped assignment only with fresh native evidence, including after contribution removal', async () => {
   const t = setup()
   const stopped = vi.fn(async (id: string) => id === 'gone')
@@ -3680,6 +3691,8 @@ describe('project instructions from the roster', () => {
      *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
     const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
     let lag: number | undefined, history = true
+    /** The built-in PM schedule the backend serves its coordinator's read (2026-11-04 PM schedule design). */
+    let builtIn = '## Built-in PM schedule (from the Swarm)\n\nThe Swarm wakes you for these jobs.'
     /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
     let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
     const rows = () => agents.map(agent => {
@@ -3714,7 +3727,7 @@ describe('project instructions from the roster', () => {
         }
         const at = saves[(lag ?? saves.length) - 1]!
         return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
-          coordinatorName: 'Product Manager', notesRevision: 1,
+          coordinatorName: 'Product Manager', notesRevision: 1, ...(read[2] === 'a-pm' ? { builtIn } : {}),
           ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
       }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
@@ -3744,10 +3757,33 @@ describe('project instructions from the roster', () => {
       /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
       template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
         doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
-      setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+      setDoc: (next: typeof doc) => { doc = next }, setBuiltIn: (text: string) => { builtIn = text }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
   }
   const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  // 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, which changes with backend
+  // builds while the document's revision and hash stay; the roster's builtInHash says when.
+  it('rereads when the built-in hash moves', async () => {
+    const f = docFixture(['pm'])
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-1' })
+    const host = await f.pass()
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('The Swarm wakes you for these jobs.')
+    f.setBuiltIn('## Built-in PM schedule (from the Swarm)\n\nEvery 30 minutes, the open-task sweep.')
+    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-2' })
+    await f.pass(host, 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(2)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('Every 30 minutes, the open-task sweep.')
+  })
+
+  it('caches the coordinator\'s read apart from a worker\'s', async () => {
+    const f = docFixture(['pm', 'tester'])
+    await f.pass()
+    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(1)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('## Built-in PM schedule (from the Swarm)')
+    expect(readFileSync(f.file('tester'), 'utf8')).not.toContain('Built-in PM schedule')
+  })
 
   // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
   // the daemon restarted. The template's hash moves with each backend build that changes it.
@@ -3951,12 +3987,13 @@ describe('project instructions from the roster', () => {
   it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
     const f = docFixture(['pm', 'tester'])
     const host = await f.pass()
-    expect(f.reads).toEqual([instructionsRead('a-pm'), historyRead('a-pm')])
+    // The coordinator's read carries the built-in PM schedule, so it is its own; the project's other agents share one.
+    expect([...f.reads].sort()).toEqual([instructionsRead('a-pm'), historyRead('a-pm'), instructionsRead('a-tester'), historyRead('a-tester')].sort())
     expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
     expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
     f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
     await f.pass(host, 1_000)
-    expect(f.reads).toHaveLength(4)
+    expect(f.reads).toHaveLength(8)
     expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
     expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
   })

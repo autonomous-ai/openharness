@@ -880,3 +880,31 @@ describe('Linux', () => {
     })
   })
 })
+
+describe("the macOS root script trusts no PATH of the owner's (#2765)", () => {
+  it.each([
+    ['setup', () => buildSetupScript(input())],
+    // Security review 2: removal runs as root too, with sudo in the owner's terminal, which keeps their PATH.
+    ['removal', () => buildRemoveScript({ user: 'harnessteam', home: '/Users/harnessteam', ownerHome: OWNER_HOME })],
+  ])('the %s script pins PATH to system folders before its first command', (_, build) => {
+    const lines = build().split('\n')
+    const pin = lines.indexOf('PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH')
+    expect(pin).toBeGreaterThan(0)
+    // Only the shell's own settings come before it.
+    expect(lines.slice(0, pin).filter((l) => l && !l.startsWith('#'))).toEqual(['set -eu'])
+  })
+
+  it.runIf(process.platform === 'darwin')('checks that / is root\'s with a GNU stat first on the PATH (micromamba)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-path-'))
+    try {
+      // GNU stat's -f means the file system, and prints no owner: what Darren-MacBook's PATH put first.
+      writeFileSync(join(dir, 'stat'), '#!/bin/sh\nprintf \'  File: "%s"\\n    ID: 0 Namelen: 255 Type: apfs\\n\' "$3"\n', { mode: 0o755 })
+      const script = buildSetupScript(input())
+      const head = script.slice(0, script.indexOf('\n[ "$(id -u)" = 0 ] || die "run as root"'))
+      const run = spawnSync('/bin/sh', ['-c', `${head}\nowned_by_root /\necho checked`], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } })
+      expect(run.stderr).toBe('')
+      expect(run.stdout.trim()).toBe('checked')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+

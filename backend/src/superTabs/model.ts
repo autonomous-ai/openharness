@@ -603,6 +603,8 @@ export const NOTICE_READERS = {
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // The coordinator's wake for its built-in schedule (pmSchedule.ts).
+  'schedule-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
@@ -614,7 +616,10 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
@@ -697,6 +702,8 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
+  messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
@@ -963,6 +970,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens

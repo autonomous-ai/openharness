@@ -1180,6 +1180,17 @@ describe('routing contributed capacity', () => {
     expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
       reason: 'Its terminal is not running.' })]))
   })
+  // Task #2744: the idle cleanup closed Tern, and the PM assigned it anyway, over the route's pick; the reason says what to do.
+  // Only for one its idle cleanup closed: one listed stopped alone may be a Change agent before its rebind (review of #2953).
+  it('says a contributed member its idle cleanup closed was closed, and to start a new agent', async () => {
+    for (const [closed, reason] of [[['h1'], 'Its session was closed. Start a new agent.'], [[], 'Its terminal is not running.']] as const) {
+      const pool = healthy(); pool.observation.runningHarnessIds = []
+      Object.assign(pool.observation, { stoppedHarnessIds: ['h1'], closedHarnessIds: closed })
+      const { answer, s } = await runPool(pool, true)
+      expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'), reason })]))
+    }
+  })
   it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
     const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
     const { answer, s } = await runPool(pool, true)
@@ -1510,6 +1521,18 @@ describe('routing contributed capacity', () => {
     offline.observation.receivedAt = 0
     const silent = await runPool(offline, false, {}, owners)
     expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
+  // Task #2806 (River, 11-04): a machine whose owner lets teammates' work run in their own account (backend machines.ts
+  // ownAccountWork). The teammate whose task lands there did not choose it, so the route says so, for new agents and members.
+  it('says a machine runs a teammate\'s work in its owner\'s own account, and says nothing for the owner\'s own project', async () => {
+    const said = 'Contributed laptop runs teammates\' work in Mate\'s own account.'
+    const pool = { ...healthy(), contributorId: 'mate', teamWork: { allowed: true, ownAccount: said } }
+    const teammate = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'owner' })).answer
+    const rows = [teammate.pick, ...teammate.alternatives as unknown[]] as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain(said)
+    const own = (await runPool(pool, true, {}, { id: 'lead', ownerId: 'mate' })).answer
+    expect(JSON.stringify(own)).not.toContain(said)
   })
   // Task #2390 (Tony, 11-03): a machine its owner keeps for some projects (backend machines.ts machine.projects) is left out of
   // every other project's route, new agents and members alike, with why. The backend refuses it too.

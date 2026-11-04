@@ -254,8 +254,9 @@ describe('costs and a project\'s GitHub access, read through the read cache (tas
 
 describe('a route decision as stored (task #2488)', () => {
   // As production's routes were on 2026-11-03: every engine on every machine, 13 candidates with labels of ~540 characters and
-  // 47 exclusions of 5 reasons, ~20 KB a row. Only the pick's label and each reason once are kept; readers get the record whole.
-  it('keeps the pick\'s label and each exclusion reason once, reads back every candidate and exclusion, and still links its start', async () => {
+  // 47 exclusions of 5 reasons, ~20 KB a row. The pick is kept whole, of the others who and where they are and their titles (task
+  // #2769), and each reason once; readers get every candidate and exclusion back.
+  it('keeps the pick whole and each exclusion reason once, reads back every candidate and exclusion, and still links its start', async () => {
     const f = await swarm()
     const long = (text: string, size: number) => `${text} ${'·'.repeat(Math.max(0, size - text.length - 1))}`
     const fit = { status: 'fits', coverage: 1.5, effectiveCost: 3, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'k'.repeat(64) }
@@ -279,7 +280,8 @@ describe('a route decision as stored (task #2488)', () => {
       const record = read.record as unknown as typeof decision
       expect(record.candidates.map(c => c.id)).toEqual(candidates.map(c => c.id))
       expect(record.candidates.map(c => c.label)).toEqual([candidates[0]!.label, ...Array(12).fill(undefined)])
-      expect(record.candidates.map(({ label: _label, ...c }) => c)).toEqual(candidates.map(({ label: _label, ...c }) => c))
+      expect(record.candidates[0]).toEqual(candidates[0])
+      expect(record.candidates.slice(1)).toEqual(candidates.slice(1).map(({ label: _l, quality: _q, cost: _c, fit: _f, ...c }) => c))
       expect(record.excluded).toHaveLength(47)
       expect(new Set(record.excluded.map(e => JSON.stringify(e)))).toEqual(new Set(excluded.map(e => JSON.stringify(e))))
       expect(read).not.toHaveProperty('record.unavailable')

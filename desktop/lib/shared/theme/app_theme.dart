@@ -1460,6 +1460,15 @@ abstract final class AppDesktop {
   static const double groupGap = 16;
   static const double controlGap = 8;
 
+  /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the
+  /// phone's corners (`SwarmComposer.cardRadius`), the text [composerTop]
+  /// below the top and [composerSide] in from each side, and [composerRowGap]
+  /// between the text and the row of actions under it.
+  static const double composerRadius = 24;
+  static const double composerTop = 12;
+  static const double composerSide = groupGap;
+  static const double composerRowGap = 12;
+
   /// Between one sidebar row and the next (design system: Geometry).
   static const double listRowGap = 2;
 

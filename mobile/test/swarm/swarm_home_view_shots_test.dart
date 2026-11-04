@@ -163,7 +163,9 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      await tap('swarm-home-view');
+      await tap('swarm-title-button');
+      await capture('switcher');
+      await tap('swarm-switch-view');
       await capture('menu');
       await tap('swarm-view-sort');
       await tap('swarm-view-unreads-true');

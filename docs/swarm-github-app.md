@@ -25,7 +25,7 @@ On GitHub, open the organization, then **Settings → Developer settings → Git
 | Homepage URL | `https://harness.autonomous.ai` |
 | Callback URL, Setup URL | Leave empty. |
 | Webhook → Active | Clear it. Harness subscribes to no events. |
-| Repository permissions | **Contents:** Read and write. **Pull requests:** Read and write. **Checks:** Read-only. **Actions:** Read-only. **Metadata:** Read-only (GitHub sets this one). Leave every other permission at *No access*. |
+| Repository permissions | **Contents:** Read and write. **Pull requests:** Read and write. **Checks:** Read-only. **Actions:** Read-only. **Metadata:** Read-only (GitHub sets this one). **Workflows:** Read and write, and **Issues:** Read and write, if agents should push changes to `.github/workflows` and write issues (see [Workflows and issues](#workflows-and-issues)). Leave every other permission at *No access*. |
 | Organization and account permissions | No access. |
 | Where can this GitHub App be installed? | **Only on this account** |
 
@@ -43,7 +43,9 @@ register with [GitHub's manifest flow](https://docs.github.com/apps/sharing-gith
     "pull_requests": "write",
     "checks": "read",
     "actions": "read",
-    "metadata": "read"
+    "metadata": "read",
+    "workflows": "write",
+    "issues": "write"
   },
   "default_events": []
 }
@@ -66,6 +68,32 @@ organization's **Settings → GitHub Apps → Configure**.
 
 If a project uses a repository the app is not installed on, its agents cannot push.
 They receive the install link to pass on to an organization owner.
+
+### Workflows and issues
+
+An agent's token also asks for **Workflows** and **Issues** where the repository's
+installation has granted them, at no more than the granted level. Without
+Workflows, GitHub refuses a push that changes `.github/workflows`, and on a large
+repository it can refuse a push it could not finish checking for workflow changes in
+time. Harness reads what each installation has granted and asks only for that, so an
+installation that has not granted them keeps getting today's tokens. A grant is
+remembered ten minutes, and read again at once when GitHub refuses a token for its
+permissions.
+
+To grant them on an app already installed:
+
+1. On the app's settings page (**Settings → Developer settings → GitHub Apps →
+   the app → Permissions & events**), set **Workflows** and **Issues** to **Read and
+   write** and click **Save changes**.
+2. An owner of each organization the app is installed on opens **Settings → GitHub
+   Apps → Configure** for the app, reviews the request and clicks **Accept new
+   permissions**. Until then, that installation's tokens leave the new permissions out.
+
+Every agent that gets its token from the app, for a repository whose installation
+granted these, gets them, Harness Team account agents included. A workflow change
+runs in CI with the repository's secrets, so a branch an agent pushes can run code
+with them; the default branch's pull request rule (below) still keeps such a change
+from reaching the default branch unreviewed.
 
 ### 3. Require pull requests on the default branch
 

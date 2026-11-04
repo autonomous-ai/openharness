@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart';
 
+import 'activity_rows.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'decisions.dart';
@@ -11,10 +12,10 @@ import 'notifications.dart';
 import 'reminders.dart';
 
 /// What one row of Needs you is.
-enum SuperTabNeedKind { decision, agent, mention }
+enum SuperTabNeedKind { decision, agent }
 
-/// One row of Needs you: a decision asked of the reader, an agent waiting on
-/// them, or a tag of them.
+/// One row of Needs you: a decision asked of the reader, or an agent waiting
+/// on them.
 class SuperTabNeed {
   const SuperTabNeed({
     required this.kind,
@@ -23,36 +24,32 @@ class SuperTabNeed {
     required this.conversationId,
     this.at,
     this.decision,
-    this.mention,
-    this.privateProjectName,
+    this.question,
   });
   final SuperTabNeedKind kind;
 
-  /// Stable across reads: `decision:<id>`, `agent:<group>`, `mention:<id>`.
+  /// Stable across reads: `decision:<id>`, `agent:<group>`.
   final String id;
 
-  /// What the row says: the question, `<agent> is waiting on you`, or
-  /// `<author> mentioned you in # <project>`; a private project carries its
-  /// name separately for the lock mark.
+  /// What the row says: the question, or `<agent> is waiting on you`.
   final String title;
   final String conversationId;
   final DateTime? at;
   final SuperTabDecision? decision;
-  final SuperTabMention? mention;
 
-  /// When a mention names a private project, its lock replaces the textual #.
-  final String? privateProjectName;
+  /// What an agent row asks: the question the task is waiting on, else the
+  /// task's title. Null for a decision, which has its own.
+  final String? question;
 }
 
 /// The reader's Activity in one Swarm: the one place for everything new for
 /// them (Quiet Swarm design, screens 6 and 11b). Three lists over what the
 /// Swarm already holds, no feed of its own:
 ///
-/// * Needs you: decisions asked of them, agents waiting on them and their
-///   tags. Its length is Activity's number.
-/// * Reminders: messages they asked to come back to, once due.
-/// * New replies: the followed threads with replies they have not read.
-/// * Done today: tasks that shipped today.
+/// * Needs you: reminders they set that are due, decisions asked of them and
+///   agents waiting on them. Its length is Activity's number.
+/// * Mentions: the tags of them, folded by author and chat.
+/// * Threads: the followed threads with replies they have not read.
 ///
 /// Leaving the view marks nothing read: it shows no reply or reaction row,
 /// and a thread is read when it is opened. One per controller.
@@ -87,24 +84,15 @@ class SuperTabActivity extends ChangeNotifier {
   SuperTabSnapshot? get _snapshot =>
       controller.accessRevoked ? null : controller.snapshot;
 
-  /// Decisions asked of the reader, then agents waiting on them, then their
-  /// tags; each newest first.
+  /// Decisions asked of the reader, then agents that asked them by name; each
+  /// newest first. Tags are not here: they are the Mentions list.
   List<SuperTabNeed> get needsYou {
     final snapshot = _snapshot;
     if (snapshot == null) return const [];
-    bool isPrivateProject(String projectId) =>
-        snapshot.projects
-            .where((p) => p.id == projectId)
-            .firstOrNull
-            ?.isPrivate ==
-        true;
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
-    final asked = decisions.open;
-    final decided = {for (final d in asked) d.conversationId};
-    final people = {for (final p in snapshot.people) p.id: p};
     return [
       for (final d in [
-        ...asked,
+        ...decisions.open,
       ]..sort((a, b) => (b.createdAt ?? epoch).compareTo(a.createdAt ?? epoch)))
         SuperTabNeed(
           kind: SuperTabNeedKind.decision,
@@ -114,30 +102,14 @@ class SuperTabActivity extends ChangeNotifier {
           at: d.createdAt,
           decision: d,
         ),
-      for (final group in snapshot.conversations)
-        if (_waiting(snapshot, group, decided))
-          SuperTabNeed(
-            kind: SuperTabNeedKind.agent,
-            id: 'agent:${group.id}',
-            title:
-                '${_agentName(snapshot, group.assignment!['agentId'] as String)} is waiting on you',
-            conversationId: group.id,
-          ),
-      for (final m in [
-        ..._tags,
-      ]..sort((a, b) => (b.createdAt ?? epoch).compareTo(a.createdAt ?? epoch)))
+      for (final group in _asking(snapshot))
         SuperTabNeed(
-          kind: SuperTabNeedKind.mention,
-          id: 'mention:${m.id}',
+          kind: SuperTabNeedKind.agent,
+          id: 'agent:${group.id}',
           title:
-              '${people[m.leadId]?.shownName ?? m.leadName} mentioned you in '
-              '${isPrivateProject(m.projectId) ? '' : '# ${m.projectName}'}',
-          conversationId: m.conversationId,
-          at: m.createdAt,
-          mention: m,
-          privateProjectName: isPrivateProject(m.projectId)
-              ? m.projectName
-              : null,
+              '${_agentName(snapshot, group.assignment!['agentId'] as String)} is waiting on you',
+          conversationId: group.id,
+          question: _askedBy(group),
         ),
     ];
   }
@@ -146,34 +118,47 @@ class SuperTabActivity extends ChangeNotifier {
   /// answered, past any read mark. Not `1 << 52`: a shift is 32 bits on the web.
   static const _unknown = 9007199254740991;
 
-  /// The tags that need the reader: not read past (the number clears by
-  /// reading). A tagged thread may also be in New replies; its mention remains
-  /// a separate Needs you item so the conversation badge represents it.
+  /// The tags that are not read past (the number clears by reading). They are
+  /// bold in Mentions but never counted: a tag asks for nothing.
   Iterable<SuperTabMention> get _tags {
     return mentions.waiting.where(mentionUnread);
   }
 
-  /// A task whose agent waits on the reader (it needs a decision, or is
-  /// stuck) and has not already asked it as a decision.
+  /// The tasks whose agent asked the reader by name, newest chat first. Only
+  /// once the decisions are loaded: that list says which of them is already
+  /// a decision, and a task with one must not count twice.
+  List<SuperTabConversation> _asking(SuperTabSnapshot snapshot) {
+    if (!decisions.loaded) return const [];
+    final decided = {for (final d in decisions.open) d.conversationId};
+    return [
+      for (final g in snapshot.conversations)
+        if (_waiting(snapshot, g, decided)) g,
+    ]..sort((a, b) => b.lastMessageSequence.compareTo(a.lastMessageSequence));
+  }
+
+  /// A task whose agent asked the reader by name and has not already asked it
+  /// as a decision. A stuck task nobody was asked about stays with the PM.
   bool _waiting(
     SuperTabSnapshot snapshot,
     SuperTabConversation group,
     Set<String> decided,
   ) {
     final work = group.assignment;
-    if (work == null ||
-        group.closed ||
-        group.isBuddyChat ||
-        decided.contains(group.id) ||
-        !superTabWorkWaits(work['status']) ||
-        snapshot.agent(work['agentId'] as String? ?? '') == null) {
-      return false;
-    }
-    // Whoever it asked, else whoever asked for the task, else the Swarm's
-    // owner: a task waiting on nobody named is for no other reader.
-    final forThem =
-        work['askedOf'] as String? ?? group.requesterId ?? snapshot.ownerId;
-    return forThem == controller.accountId;
+    return work != null &&
+        !group.closed &&
+        !group.isBuddyChat &&
+        !decided.contains(group.id) &&
+        work['status'] == 'needs_human' &&
+        work['askedOf'] == controller.accountId &&
+        snapshot.agent(work['agentId'] as String? ?? '') != null;
+  }
+
+  /// The question a waiting task carries: its assignment's result text is the
+  /// agent's ask (task_status.dart reads it the same way); the title when it
+  /// has none.
+  String _askedBy(SuperTabConversation group) {
+    final asked = (group.assignment?['result'] as String?)?.trim();
+    return asked == null || asked.isEmpty ? group.title : asked;
   }
 
   String _agentName(SuperTabSnapshot snapshot, String agentId) {
@@ -197,42 +182,65 @@ class SuperTabActivity extends ChangeNotifier {
       if (attention.isNew(t)) t,
   ];
 
-  /// Tasks that shipped today (the reader's day), newest first: no review or
-  /// test step, no Buddy chat.
-  List<SuperTabConversation> get doneToday {
-    final snapshot = _snapshot;
-    if (snapshot == null) return const [];
-    final now = clock.now();
-    bool today(DateTime at) =>
-        at.year == now.year && at.month == now.month && at.day == now.day;
-    return [
-      for (final g in snapshot.conversations)
-        if (g.shippedAt case final at? when today(at.toLocal()))
-          if (g.reviewOf == null && !g.isBuddyChat) g,
-    ]..sort((a, b) => b.shippedAt!.compareTo(a.shippedAt!));
-  }
-
-  /// The Activity row's red number: what needs the reader, and nothing else.
-  /// A tag counts until it is read, a decision or an agent waiting until it
-  /// is answered, a due reminder until it is opened. Before the tags are read the server's count stands in.
+  /// The Activity row's red number: what was asked of the reader and is
+  /// unanswered, plus the reminders they set that are due. Tags, replies and
+  /// stuck tasks nobody was asked about are in Activity but add nothing. Until
+  /// the decisions are read the server's count stands in for them.
   int get count {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
-    final decided = {for (final d in decisions.open) d.conversationId};
-    final tags = mentions.waiting.isEmpty && snapshot.mentionsWaiting > 0
-        ? snapshot.mentionsWaiting
-        : _tags.length;
-    return tags +
-        reminders.due.length +
-        snapshot.decisionsWaiting +
-        snapshot.conversations
-            .where((g) => _waiting(snapshot, g, decided))
-            .length;
+    return (decisions.loaded
+            ? decisions.open.length
+            : snapshot.decisionsWaiting) +
+        _asking(snapshot).length +
+        reminders.due.length;
   }
 
-  /// Whether the Activity row is bold: something needs the reader, or a thread
-  /// they follow has replies they have not read.
-  bool get unread => count > 0 || attention.threadsUnread;
+  /// Whether the Activity row is bold: something needs the reader, or a tag
+  /// or a thread they follow has news they have not read.
+  bool get unread => count > 0 || _tags.isNotEmpty || attention.threadsUnread;
+
+  /// What the reader's PM answered for them today, newest first: decisions
+  /// they left to the PM, or that waited 24 hours.
+  List<SuperTabDecision> get handledToday {
+    final now = clock.now();
+    return [
+      for (final d in decisions.answered)
+        if (d.delegated &&
+            d.answeredAt != null &&
+            dayOf(d.answeredAt!.toLocal(), now) == SuperTabDay.today)
+          d,
+    ]..sort((a, b) => b.answeredAt!.compareTo(a.answeredAt!));
+  }
+
+  /// The tags that wait and the earlier ones (read or answered), newest first,
+  /// folded by author and chat; unread ones are bold, the rest are read rows.
+  List<SuperTabMentionRow> get mentionRows {
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    final all = [...mentions.waiting, ...mentions.earlier];
+    // The index breaks ties: `sort` is not stable, and equal times must keep
+    // the server's order so neighbours from one author still fold.
+    final order = [for (var i = 0; i < all.length; i++) i]
+      ..sort((a, b) {
+        final byTime = (all[b].createdAt ?? epoch).compareTo(
+          all[a].createdAt ?? epoch,
+        );
+        return byTime != 0 ? byTime : a.compareTo(b);
+      });
+    return groupMentions([for (final i in order) all[i]], mentionUnread);
+  }
+
+  /// The followed threads with news today.
+  List<SuperTabFollowedThread> get threadRows => newReplies;
+
+  /// What the listed [decided] call their PM: the coordinator of their
+  /// project, or `the PMs` when they come from several.
+  String coordinatorFor(Iterable<SuperTabDecision> decided) {
+    final projects = {for (final d in decided) d.projectId};
+    final snapshot = _snapshot;
+    if (projects.length != 1 || snapshot == null) return 'the PMs';
+    return snapshot.coordinatorNameOf(projects.single);
+  }
 
   /// The view opened: reads what it lists now; what is new stays bold until
   /// [closed].

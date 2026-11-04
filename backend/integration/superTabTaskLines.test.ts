@@ -111,6 +111,21 @@ describe('a task\'s one message in its project chat', () => {
     await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: 'missing' })).rejects.toThrow('own message')
   })
 
+  // Diego, 2026-11-04 (task #2693): a stop its host confirms is no command, so its thread kept saying On it.
+  it('says Not building this in the thread once when the host confirms the stop', async () => {
+    const s = await swarm()
+    const P = await s.add('Coordinator', 'lead', true)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [] })).result.conversationId)
+    const root = (await s.page('lead')).lines[0]!.id
+    const E = await s.add('Engineer', T)
+    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
+    await store.stopped(host, s.tab, assignmentId, 'fixture stop receipt')
+    await store.stopped(host, s.tab, assignmentId, 'fixture stop receipt')
+    const replies = (await store.messages(owner, s.tab, 'lead', { thread: root })).messages.filter(m => m.text.startsWith('Not building this'))
+    expect(replies).toEqual([expect.objectContaining({ text: 'Not building this: The execution host confirmed that this harness stopped.',
+      thread: root, replyTo: root, recipientIds: [], author: expect.objectContaining({ id: P }) })])
+  })
+
   it('posts none for a task\'s steps', async () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)

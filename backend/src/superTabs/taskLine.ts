@@ -1,7 +1,7 @@
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { shippedNotice } from './buddyNews.js'
-import { isLeads, stableId, type Author, type CommandEffects, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import { isStep } from './steps.js'
 import { usernameOf } from './usernames.js'
@@ -57,6 +57,10 @@ function taskAsk(group: Conversation): TaskAsk {
   return status === 'done' && !group.pullRequestUrls?.length && !group.cards?.pullRequests?.length ? 'closed' : 'on-it'
 }
 
+/** What a task's thread says when its builder stops reporting and its task is lost, and when its work is stopped. */
+const stuck = (builder: string) => `Stuck: ${builder} stopped. Next: another engineer takes it over.`
+const notBuilding = (assignment: Assignment) => `Not building this: ${sentence(assignment.result) || 'it was stopped.'}`
+
 /** The thread's reply for what changed in [group] in this command, in the words Dee approved (2026-11-03), or none. */
 function progress(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, pm: string): string | null {
   const cards = group.cards?.pullRequests
@@ -85,8 +89,8 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
     }
     case 'working': return was.status === 'review' ? `Changes needed: ${sentence(assignment.result) || 'see the review.'} ${builder} is fixing it.` : null
     case 'blocked': return `Stuck: ${sentence(assignment.result) || `${builder} cannot go on.`} Next: ${pm} is looking at it.`
-    case 'lost': return `Stuck: ${builder} stopped. Next: another engineer takes it over.`
-    case 'cancelled': case 'stopped': return `Not building this: ${sentence(assignment.result) || 'it was stopped.'}`
+    // A lost task says Stuck where it is lost, the one place that sees every loss (liveness.ts loseTask, endedReply).
+    case 'cancelled': case 'stopped': return notBuilding(assignment)
     case 'done': return (group.pullRequestUrls ?? []).length || (group.cards?.pullRequests ?? []).length ? null : 'Done.'
     default: return null
   }
@@ -154,4 +158,27 @@ function moved(state: SuperTabState, effects: CommandEffects, group: Conversatio
     const news = sender && shippedNotice(state, group, sender, operationId)
     if (news) effects.messages.push(news)
   }
+}
+
+/** The thread reply of a task that ended outside any command, which syncTaskLines never sees (Diego, 2026-11-04, task #2693):
+ *  lost to the liveness sweep, its machine's report or its Lead's poll (liveness.ts loseTask, the agent.alert command's too), or
+ *  stopped by its host's receipt (store.ts stopped). As the command path's replies are: in its line's thread, by its project's
+ *  coordinator, else [fallback], waking nobody. None for a task with no line, or whose project chat is gone. */
+export function endedReply(state: SuperTabState, group: Conversation, id: string, fallback?: Author): MessageDraft[] {
+  const line = group.cards?.line, assignment = group.assignment
+  if (!line || !assignment) return []
+  const chat = state.conversations.find(c => c.id === line.conversationId)
+  const author = chat && lineAuthor(state, chat, fallback)
+  if (!chat || !author) return []
+  const text = assignment.status === 'lost' ? stuck(agentDisplayName(state.agents, assignment.agentId) ?? 'its engineer') : notBuilding(assignment)
+  return [{ id, conversationId: chat.id, author, text, replyTo: line.messageId, thread: line.messageId, recipients: [],
+    source: { kind: 'system', ask: taskAsk(group) } }]
+}
+
+/** The project chats holding the lines of [state]'s open tasks that its load left out: a store path that may end a task outside
+ *  any command loads them first, so endedReply has its thread to write in. Empty on every path today, which loads every project chat. */
+export function taskLineChats(state: SuperTabState): string[] {
+  const loaded = new Set(state.conversations.map(c => c.id))
+  return [...new Set(state.conversations.flatMap(c => activeWork(c) && c.cards?.line && !loaded.has(c.cards.line.conversationId)
+    ? [c.cards.line.conversationId] : []))]
 }

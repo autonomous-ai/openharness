@@ -233,8 +233,8 @@ void main() {
       );
       expect(
         find.text('Projects'),
-        findsOneWidget,
-        reason: 'one Swarm: its projects, not its name',
+        findsNothing,
+        reason: 'one Swarm: no heading, the title names it',
       );
 
       openSwarmNeeds(

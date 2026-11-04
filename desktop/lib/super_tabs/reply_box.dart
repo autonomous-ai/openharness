@@ -9,6 +9,7 @@ import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import 'composer_actions.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
@@ -16,8 +17,9 @@ import 'swarm_type.dart';
 
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
-/// ⇧Enter breaks the line, attach and the arrow at its right end. [options]
-/// sits left of them, such as the pane's Also send and New session.
+/// ⇧Enter breaks the line. Under the text, one row as on the phone (Huy and
+/// Scholes, 11-04): + (attach) and @ Tag, then [options] such as the pane's
+/// New session, and the mic (with [onMic]) and the arrow at its right end.
 class SuperTabReplyBox extends StatelessWidget {
   const SuperTabReplyBox({
     super.key,
@@ -32,11 +34,15 @@ class SuperTabReplyBox extends StatelessWidget {
     required this.onEdited,
     required this.onSend,
     this.options,
+    this.onTag,
+    this.onMic,
     this.onKey,
     this.inputFormatters = const [],
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
     this.fieldKey = const ValueKey('super-thread-composer'),
     this.sendKey = const ValueKey('super-thread-send'),
+    this.tagKey = const ValueKey('super-thread-tag'),
+    this.micKey = const ValueKey('super-thread-mic'),
     this.hint = 'Reply',
   });
 
@@ -55,23 +61,29 @@ class SuperTabReplyBox extends StatelessWidget {
   final VoidCallback onSend;
   final Widget? options;
 
+  /// @ Tag's press, and the mic's: no mic without one; @ Tag greyed.
+  final VoidCallback? onTag, onMic;
+
   /// Sees each key first, such as an open @ completion list's arrows and
   /// Enter; a non-null answer is the key's.
   final KeyEventResult? Function(KeyEvent event)? onKey;
   final List<TextInputFormatter> inputFormatters;
-  final Key surfaceKey, fieldKey, sendKey;
+  final Key surfaceKey, fieldKey, sendKey, tagKey, micKey;
 
   /// The field's hint: what an empty box says it is for.
   final String hint;
 
-  /// The Tab order inside an [OrderedTraversalPolicy] group around the box:
-  /// the field (and its files) first, then the options, wherever the owner
-  /// places them ([optionsOrder], such as the pane's Also send on its own line
-  /// under the box), then attach and send. Outside such a group it has no
-  /// effect, and the reading order applies.
+  /// The Tab order inside an [OrderedTraversalPolicy] group around the box,
+  /// the row's own: the field (and its files) first, then + and @ Tag, the
+  /// options ([optionsOrder], such as the pane's New session), the mic and
+  /// send, and last what the owner puts under the box ([underOrder], such as
+  /// the pane's Also send). Outside such a group it has no effect, and the
+  /// reading order applies.
   static const fieldOrder = NumericFocusOrder(1),
+      toolsOrder = NumericFocusOrder(1.5),
       optionsOrder = 2.0,
-      sendOrder = NumericFocusOrder(3);
+      sendOrder = NumericFocusOrder(3),
+      underOrder = NumericFocusOrder(4);
 
   @override
   Widget build(BuildContext context) => NewHarnessDropZone(
@@ -89,22 +101,17 @@ class SuperTabReplyBox extends StatelessWidget {
       key: surfaceKey,
       decoration: BoxDecoration(
         color: DesktopChrome.field,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
         border: Border.all(color: DesktopChrome.rim),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          grid.AppDesktop.groupGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SuperTabComposerChips(controller: controller, files: files),
-            Focus(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SuperTabComposerChips(controller: controller, files: files),
+          Padding(
+            padding: composerFieldInsets(target: grid.AppControl.height),
+            child: Focus(
               onKeyEvent: (_, event) {
                 if (onKey?.call(event) case final handled?) return handled;
                 switch (composerEnter(
@@ -157,26 +164,49 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ),
             ),
-            if (error case final error?)
-              Padding(
-                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-                child: Text(
-                  error,
-                  key: const ValueKey('super-thread-error'),
-                  style: DesktopChrome.control(),
-                ),
+          ),
+          if (error case final error?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.composerSide,
+                0,
+                grid.AppDesktop.composerSide,
+                grid.AppDesktop.controlGap,
               ),
-            const SizedBox(height: grid.AppDesktop.controlGap),
-            Row(
+              child: Text(
+                error,
+                key: const ValueKey('super-thread-error'),
+                style: DesktopChrome.control(),
+              ),
+            ),
+          Padding(
+            padding: composerRowInsets(target: grid.AppControl.height),
+            child: Row(
               children: [
-                Expanded(child: options ?? const SizedBox.shrink()),
                 FocusTraversalOrder(
-                  order: sendOrder,
+                  order: toolsOrder,
                   child: NewHarnessAttachButton(
                     attachments: files,
                     enabled: writable && !busy,
+                    icon: AppIcons.plus,
                   ),
                 ),
+                FocusTraversalOrder(
+                  order: toolsOrder,
+                  child: SuperTabComposerTagButton(
+                    key: tagKey,
+                    onPressed: writable ? onTag : null,
+                  ),
+                ),
+                Expanded(child: options ?? const SizedBox.shrink()),
+                if (onMic case final onMic?)
+                  FocusTraversalOrder(
+                    order: sendOrder,
+                    child: SuperTabComposerMic(
+                      key: micKey,
+                      onPressed: writable ? onMic : null,
+                    ),
+                  ),
                 FocusTraversalOrder(
                   order: sendOrder,
                   child: ListenableBuilder(
@@ -197,8 +227,8 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     ),
   );

@@ -15,7 +15,7 @@ const IN_PROGRESS: Record<string, string> = { planned: 'planned', working: 'work
 const HELD_UP: Record<string, string> = { blocked: 'stuck', lost: 'lost', needs_human: 'waits for a person' }
 
 /** The project's local date and time ("2026-10-27", "08:00") at `now`. */
-function localNow(timeZone: string, now: number): { date: string; time: string } {
+export function localNow(timeZone: string, now: number): { date: string; time: string } {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
     minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map(p => [p.type, p.value]))
   return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` }

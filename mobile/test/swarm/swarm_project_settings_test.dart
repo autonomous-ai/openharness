@@ -991,7 +991,6 @@ void main() {
       WidgetTester tester, {
       required String visibility,
       String name = 'Mobile',
-      String? swarmName,
       SwarmProjectNews news = swarmNoProjectNews,
       double width = 390,
     }) {
@@ -1027,7 +1026,6 @@ void main() {
                     project: snapshot.projects.single,
                     news: news,
                   ),
-                  swarmName: swarmName,
                   onTap: () {},
                 ),
               ),
@@ -1085,13 +1083,12 @@ void main() {
       expect(tester.getTopRight(tags).dx, 390 - AppSpace.l);
     });
 
-    testWidgets('a long name and its Swarm ellipsize and keep the lock in '
+    testWidgets('a long name ellipsizes and keeps the lock in '
         'sight', (tester) async {
       await row(
         tester,
         visibility: 'private',
         name: 'A project with a name far too long for one row of a phone',
-        swarmName: 'Phone Swarm',
         width: 240,
       );
       expect(tester.takeException(), isNull);

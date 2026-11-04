@@ -18,7 +18,7 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of New message (Tony, 10-30: as Slack Mobile starts
-/// one): Home with its floating +, the sheet it opens, narrowed by To:, a
+/// one): Home with its + in the top bar, the sheet it opens, narrowed by To:, a
 /// chat picked with a message typed, and a send refused — in both phone
 /// themes, 390 points wide and on a small phone, 320, from made-up Swarm
 /// data only, to the folder `SWARM_NEW_MESSAGE_SHOTS` names. On the small

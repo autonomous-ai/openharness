@@ -111,17 +111,21 @@ it('with the Swarm off, cleans up a harness its saved roster names, as any other
   expect(t.closeStarted.mock.calls).toEqual([['orphan', 'now'], ['idle', 'idle'], ['pm', 'idle']])
   expect(sessions.map(s => s.agentId)).toEqual(['alive'])
   t.cleanup.port.stop()
-  // In the core's process too (services/inline.ts): started without the Swarm it keeps no one, and with it, its members.
-  for (const [retained, closed] of [[undefined, ['orphan']], [(dataDir: string) => retainedHarnesses(dataDir), []]] as const) {
+  // In the core's process too (services/inline.ts): started without the Swarm it keeps no one and tells no one, and with it,
+  // keeps its members and tells it what it closed.
+  const told: string[] = []
+  const swarm = { retained: (dataDir: string) => retainedHarnesses(dataDir), closed: (_dataDir: string, agentId: string) => { told.push(agentId); return true } }
+  for (const [given, closed] of [[undefined, ['orphan']], [swarm, []], [{ closed: swarm.closed }, ['orphan']]] as const) {
     const ports = emptyPorts(), live = [kid('orphan')]
     const closeStarted = vi.fn(async (agentId: string) => { live.splice(live.findIndex(s => s.agentId === agentId), 1); return { closed: true as const } })
-    startAgentCleanup(fakeCore({ dataDir: dir, agents: { live: vi.fn(() => [...live]), resolve: vi.fn(() => undefined), closeStarted } }), ports, retained)
+    startAgentCleanup(fakeCore({ dataDir: dir, agents: { live: vi.fn(() => [...live]), resolve: vi.fn(() => undefined), closeStarted } }), ports, given)
     ports.agentCleanup!.closed('lead')
     await vi.waitFor(() => expect(live.map(s => s.agentId)).toEqual(closed.length ? [] : ['orphan']))
     await settle()
     expect(closeStarted.mock.calls.map(([id]) => id)).toEqual(closed)
     ports.agentCleanup!.stop()
   }
+  expect(told).toEqual(['orphan'])
 })
 
 it('rechecks retention after waiting on activity or another orphan close', async () => {
@@ -145,6 +149,39 @@ it('rechecks retention after waiting on activity or another orphan close', async
   expect(cascade.closeStarted.mock.calls).toEqual([['first', 'now']])
   t.cleanup.port.stop()
   cascade.cleanup.port.stop()
+})
+
+// 11-04 on the Mac Studio (task #2744): Tern's last group was archived, so no membership kept it. A task its host receives
+// while the cleanup waits on its activity keeps it; another just as idle with no task still closes.
+it('keeps an agent whose assignment arrives inside the close window, and still closes one idle with no task', async () => {
+  const t = setup([kid('tern'), kid('heron')], { tern: 2 * IDLE_CLOSE_MS, heron: 2 * IDLE_CLOSE_MS })
+  const roster = [{ tabId: 'tab', active: false, agent: { harnessId: 'tern', machineId: 'machine' } }, { tabId: 'tab', active: false, agent: { harnessId: 'heron', machineId: 'machine' } }]
+  retainContributions(dir, 'machine', roster)
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  t.lastActivity.mockImplementationOnce(async () => {
+    retainContributions(dir, 'machine', roster, Date.now(), [{ tabId: 'tab', assignmentId: 'work', harnessId: 'tern' }])
+    return NOW - IDLE_CLOSE_MS
+  })
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['heron', 'idle']])
+  t.cleanup.port.stop()
+})
+
+// The review of #2953: the Swarm refuses new work only for a session the cleanup closed, never one stopped for Change agent.
+it('tells the Swarm each harness it closed, idle or orphaned, and none it could not close', async () => {
+  const told: string[] = []
+  const t = setup([kid('idle'), kid('working'), kid('orphan', { parentAgentId: 'gone' })], { idle: 2 * IDLE_CLOSE_MS, working: 2 * IDLE_CLOSE_MS },
+    { closed: (dataDir, agentId) => { expect(dataDir).toBe(dir); told.push(agentId); return agentId !== 'orphan' }, refuse: { working: { error: 'SESSION_NOT_IDLE' } } })
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  await t.cleanup.look()
+  await t.cleanup.closeStartedBy('gone')
+  expect(told).toEqual(['idle', 'orphan'])
+  // One the Swarm could not record is said: it is then only listed stopped, and may still be assigned.
+  expect(t.log.mock.calls.filter(([line]) => String(line).includes('could not tell the Swarm'))).toEqual([
+    ['[agent-cleanup] could not tell the Swarm it closed orphan (orphan): a task given to it now is lost.']])
+  t.cleanup.port.stop()
 })
 
 describe('closing the harnesses a closed harness started', () => {

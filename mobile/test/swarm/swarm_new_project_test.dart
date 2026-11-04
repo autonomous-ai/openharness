@@ -1183,6 +1183,33 @@ void main() {
       }
     }
 
+    /// New project, from the Swarm switcher in Home's title (River,
+    /// 2026-11-04: Home keeps one +, New message's).
+    Future<void> openNewProject(
+      WidgetTester tester, {
+      bool settle = true,
+    }) async {
+      Future<void> step() => settle ? tester.pumpAndSettle() : pumpFor(tester);
+      await tester.tap(key('swarm-title-button'));
+      await step();
+      await tester.tap(key('swarm-switch-new-project'));
+      await step();
+    }
+
+    /// Whether the switcher offers New project; it is closed again after.
+    Future<bool> offersNewProject(
+      WidgetTester tester, {
+      bool settle = true,
+    }) async {
+      Future<void> step() => settle ? tester.pumpAndSettle() : pumpFor(tester);
+      await tester.tap(key('swarm-title-button'));
+      await step();
+      final offered = key('swarm-switch-new-project').evaluate().isNotEmpty;
+      await tester.tapAt(const Offset(195, 40));
+      await step();
+      return offered;
+    }
+
     /// [text] on the Agent row.
     Finder onAgent(String text) => find.descendant(
       of: key('swarm-new-project-agent'),
@@ -1212,32 +1239,44 @@ void main() {
       swarmPickerCopyFolders = picker.copies;
     });
 
-    testWidgets('+ New project is the last row of Projects for someone who '
-        'may write in the Swarm', (tester) async {
+    testWidgets('New project is in the Swarm switcher, just before Join or '
+        'create a Swarm, for someone who may write in the Swarm; Home has no '
+        'row for it, its one + being New message (River, 2026-11-04)', (
+      tester,
+    ) async {
       await pump(tester, [NewProjectSwarm()]);
-      expect(key('swarm-new-project'), findsOneWidget);
-      expect(find.text('New project'), findsOneWidget);
-      final rows = [
-        key('swarm-project-$tab-$project'),
-        key('swarm-project-$tab-project-2'),
-      ];
-      for (final row in rows) {
-        expect(
-          tester.getTopLeft(row).dy,
-          lessThan(tester.getTopLeft(key('swarm-new-project')).dy),
-        );
-      }
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(key('swarm-new-project'), findsNothing);
+      expect(find.text('New project'), findsNothing);
+
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
+      final row = key('swarm-switch-new-project');
+      expect(
+        find.descendant(of: row, matching: find.text('New project')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(row).dy,
+        lessThan(tester.getTopLeft(key('swarm-switch-join')).dy),
+      );
+      expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
+
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      expect(key('swarm-switch-join'), findsNothing, reason: 'it closed');
+      expect(key('swarm-new-project-sheet'), findsOneWidget);
     });
 
     testWidgets('a collaborator has it; a viewer does not', (tester) async {
       await pump(tester, [NewProjectSwarm(role: 'collaborator')]);
-      expect(key('swarm-new-project'), findsOneWidget);
+      expect(await offersNewProject(tester), isTrue);
     });
 
-    testWidgets('a viewer has no + New project', (tester) async {
+    testWidgets('a viewer has no New project', (tester) async {
       await pump(tester, [NewProjectSwarm(role: 'viewer')]);
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
-      expect(key('swarm-new-project'), findsNothing);
+      expect(await offersNewProject(tester), isFalse);
     });
 
     testWidgets('a Swarm whose first read failed offers it once its read '
@@ -1247,13 +1286,13 @@ void main() {
       // A skeleton breathes for as long as it shows: nothing settles under it.
       await pumpFor(tester);
       expect(key('swarm-projects-loading-$tab'), findsOneWidget);
-      expect(key('swarm-new-project'), findsNothing);
+      expect(await offersNewProject(tester, settle: false), isFalse);
 
       swarm.unreadable = false;
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
-      expect(key('swarm-new-project'), findsOneWidget);
-      await tap(tester, 'swarm-new-project');
+      expect(await offersNewProject(tester), isTrue);
+      await openNewProject(tester);
       expect(key('swarm-new-project-sheet'), findsOneWidget);
     });
 
@@ -1264,7 +1303,7 @@ void main() {
         NewProjectSwarm(id: 'tab-viewed', name: 'Viewed', role: 'viewer'),
         NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm', role: 'collaborator'),
       ]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(key('swarm-new-project-sheet'), findsOneWidget);
       expect(key('swarm-new-project-swarm'), findsOneWidget);
       await tap(tester, 'swarm-new-project-swarm');
@@ -1282,7 +1321,7 @@ void main() {
 
     testWidgets('one Swarm shown: no Swarm row', (tester) async {
       await pump(tester, [NewProjectSwarm()]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(key('swarm-new-project-swarm'), findsNothing);
     });
 
@@ -1332,7 +1371,7 @@ void main() {
           NewProjectSwarm(),
           NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
         ]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Phone Swarm');
         expect(note(tester), isNot(contains(swarmLeadSwarmPaused)));
         await tap(tester, 'swarm-new-project-swarm');
@@ -1347,7 +1386,7 @@ void main() {
           NewProjectSwarm(name: 'Swarm review verification')..paused = true,
           NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
         ]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Lamp Swarm');
         expect(note(tester), isNot(contains(swarmLeadSwarmPaused)));
         await pickMachine(tester, 'mac-1');
@@ -1384,7 +1423,7 @@ void main() {
         ]);
         host.session!.home.show(tab);
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Lamp Swarm');
         await tap(tester, 'swarm-new-project-swarm');
         expect(listed(tester, [tab, 'tab-2', 'tab-viewed']), ['tab-2', tab]);
@@ -1406,7 +1445,7 @@ void main() {
         ]);
         host.session!.home.show('tab-2');
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Lamp Swarm');
       });
 
@@ -1418,7 +1457,7 @@ void main() {
         ]);
         host.session!.home.show('tab-2');
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Lamp Swarm');
         expect(note(tester), contains(swarmLeadSwarmPaused));
         expect(
@@ -1437,7 +1476,7 @@ void main() {
         final host = await pump(tester, [NewProjectSwarm(), lamp]);
         host.session!.home.show('tab-2');
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await pickMachine(tester, 'mac-1');
         lamp.paused = true;
         await host.session!.inbox.reader('tab-2')!.refresh();
@@ -1465,7 +1504,7 @@ void main() {
         ]);
         host.session!.home.show(tab);
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         opensOn('Lamp Swarm');
         lamp.revoked = true;
         await host.session!.inbox.reader('tab-2')!.refresh();
@@ -1486,7 +1525,7 @@ void main() {
       await pump(tester, [
         NewProjectSwarm(projects: [swarmProject(project, 'Mobile')]),
       ]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(hint(), findsOneWidget);
       await tap(tester, 'swarm-new-project-repository');
       await tap(tester, 'swarm-new-project-pick-link');
@@ -1502,7 +1541,7 @@ void main() {
       tester,
     ) async {
       await pump(tester, [NewProjectSwarm()]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(
         find.descendant(
           of: key('swarm-new-project-repository'),
@@ -1516,7 +1555,7 @@ void main() {
         'others and a link a tap away; a link the server would refuse is '
         'not taken', (tester) async {
       await pump(tester, [NewProjectSwarm()]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(
         find.descendant(
           of: key('swarm-new-project-repository'),
@@ -1555,7 +1594,7 @@ void main() {
         ],
       );
       final host = await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(find.text(swarmLeadChooseMachine), findsOneWidget);
       await tap(tester, 'swarm-new-project-machine');
       expect(key('swarm-new-project-pick-machine-mac-1'), findsOneWidget);
@@ -1601,7 +1640,7 @@ void main() {
         'machine picked and opens its project screen', (tester) async {
       final swarm = NewProjectSwarm();
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(
         key('swarm-new-project-brief'),
         'Phone New project',
@@ -1638,7 +1677,7 @@ void main() {
         return null;
       };
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
 
@@ -1672,7 +1711,7 @@ void main() {
         return null;
       };
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       expect(key('swarm-new-project-error'), findsOneWidget);
@@ -1702,7 +1741,7 @@ void main() {
         return null;
       };
       final host = await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       await host.session!.inbox.reader(tab)!.refresh();
@@ -1731,7 +1770,7 @@ void main() {
       swarm.answer = (command) =>
           command['type'] == 'project.create' ? held.future : null;
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tester.tap(key('swarm-new-project-create'));
       await pumpFor(tester);
@@ -1777,7 +1816,7 @@ void main() {
         return null;
       };
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await tap(tester, 'swarm-new-project-visibility');
       await tap(tester, 'swarm-new-project-pick-visibility-private');
@@ -1787,7 +1826,7 @@ void main() {
       await tap(tester, 'swarm-new-project-close');
       expect(key('swarm-new-project-sheet'), findsNothing);
 
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(
         find.text('Couldn’t create the project: The Swarm didn’t answer.'),
         findsOneWidget,
@@ -1838,13 +1877,13 @@ void main() {
             )
           : null;
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       expect(key('swarm-new-project-error'), findsOneWidget);
       await tap(tester, 'swarm-new-project-close');
 
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(key('swarm-new-project-error'), findsNothing);
       expect(find.text('Create'), findsOneWidget);
       expect(
@@ -1874,7 +1913,7 @@ void main() {
         return null;
       };
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
@@ -1908,7 +1947,7 @@ void main() {
         return null;
       };
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       expect(key('swarm-new-project-start-over'), findsNothing);
@@ -1941,12 +1980,12 @@ void main() {
           ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
           : null;
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       await tap(tester, 'swarm-new-project-close');
       // Opened again on the steps: they still know, the sheet did not see it.
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tap(tester, 'swarm-new-project-start-over');
       expect(key('swarm-new-project-maybe-made'), findsOneWidget);
 
@@ -1962,7 +2001,7 @@ void main() {
           ? throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.')
           : null;
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
@@ -1982,7 +2021,7 @@ void main() {
         swarm,
         NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm', role: 'collaborator'),
       ]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       await tap(tester, 'swarm-new-project-start-over');
@@ -2000,7 +2039,7 @@ void main() {
       swarm.answer = (command) =>
           command['type'] == 'message.send' ? held.future : null;
       await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       await tester.tap(key('swarm-new-project-create'));
@@ -2013,8 +2052,7 @@ void main() {
       await pumpFor(tester);
       expect(key('swarm-new-project-sheet'), findsNothing);
 
-      await tester.tap(key('swarm-new-project'));
-      await pumpFor(tester);
+      await openNewProject(tester, settle: false);
       expect(find.text('Creating…'), findsOneWidget, reason: 'still waiting');
       expect(key('swarm-new-project-start-over'), findsNothing);
       held.complete(null);
@@ -2045,7 +2083,7 @@ void main() {
       tester.view.physicalSize = const Size(960, 1704);
       tester.view.padding = const FakeViewPadding(top: 60);
       await tester.pumpAndSettle();
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       final error = key('swarm-new-project-error');
@@ -2118,7 +2156,7 @@ void main() {
       final swarm = NewProjectSwarm();
       final swarms = [swarm];
       final host = await pump(tester, swarms);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await pickMachine(tester, 'mac-1');
       final inbox = host.session!.inbox;
       final before = inbox.reader(tab);
@@ -2131,7 +2169,7 @@ void main() {
       expect(swarmMayCreateProject(inbox, tab), isTrue);
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
-      expect(key('swarm-new-project'), findsOneWidget, reason: 'listed again');
+      expect(await offersNewProject(tester), isTrue, reason: 'listed again');
       expect(swarm.sent, isEmpty);
     });
 
@@ -2144,7 +2182,7 @@ void main() {
       swarm.answer = (command) =>
           command['type'] == 'project.create' ? held.future : null;
       final host = await pump(tester, swarms);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       await tester.tap(key('swarm-new-project-create'));
@@ -2166,7 +2204,7 @@ void main() {
       );
       expect(SwarmNewProjectSteps.heldBy(inbox.reader(tab)!), isNull);
 
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(key('swarm-new-project-error'), findsNothing);
       expect(
         tester
@@ -2181,7 +2219,7 @@ void main() {
         'once', (tester) async {
       final swarm = NewProjectSwarm();
       final host = await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       expect(key('swarm-new-project-sheet'), findsOneWidget);
       swarm.revoked = true;
       await host.session!.inbox.reader(tab)!.refresh();
@@ -2195,18 +2233,18 @@ void main() {
     testWidgets('made a viewer while it is open closes it', (tester) async {
       final swarm = NewProjectSwarm();
       final host = await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       swarm.role = 'viewer';
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
-      expect(key('swarm-new-project'), findsNothing);
+      expect(await offersNewProject(tester), isFalse);
     });
 
     testWidgets('signing out while it is open closes it', (tester) async {
       final account = ValueNotifier<String?>(me);
       await pump(tester, [NewProjectSwarm()], account: account);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       account.value = null;
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
@@ -2220,7 +2258,7 @@ void main() {
       swarm.answer = (command) =>
           command['type'] == 'project.create' ? held.future : null;
       final host = await pump(tester, [swarm]);
-      await tap(tester, 'swarm-new-project');
+      await openNewProject(tester);
       // A brief: the next step would post it.
       await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
@@ -2247,7 +2285,7 @@ void main() {
           'left alone, Create starts it as before', (tester) async {
         final swarm = NewProjectSwarm();
         await pump(tester, [swarm]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         expect(onAgent('Claude Code'), findsOneWidget);
         expect(onAgent('Opus 5.5 · xhigh'), findsOneWidget);
         await pickMachine(tester, 'mac-1');
@@ -2283,7 +2321,7 @@ void main() {
           ],
         );
         await pump(tester, [swarm]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await tap(tester, 'swarm-new-project-agent');
         expect(
           find.descendant(
@@ -2345,7 +2383,7 @@ void main() {
           'Create off and says to choose another engine', (tester) async {
         final swarm = NewProjectSwarm();
         final host = await pump(tester, [swarm]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await pickMachine(tester, 'mac-1');
         await tap(tester, 'swarm-new-project-agent');
         await tap(tester, 'swarm-new-project-pick-agent-codex');
@@ -2388,7 +2426,7 @@ void main() {
             ],
           };
         await pump(tester, [swarm]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         expect(onAgent('Claude Code'), findsOneWidget);
         expect(onAgent('Default model'), findsOneWidget);
       });
@@ -2403,7 +2441,7 @@ void main() {
             ],
           };
         await pump(tester, [swarm]);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         expect(onAgent('Codex'), findsOneWidget);
         await tap(tester, 'swarm-new-project-agent');
         expect(
@@ -2422,7 +2460,7 @@ void main() {
       ) async {
         final account = ValueNotifier<String?>(me);
         await pump(tester, [NewProjectSwarm()], account: account);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await tap(tester, 'swarm-new-project-attach');
         expect(key('swarm-attach-files'), findsOneWidget);
         account.value = null;
@@ -2439,7 +2477,7 @@ void main() {
         final swarm = NewProjectSwarm();
         picks(['spec.pdf']);
         await pump(tester, [swarm], upload: uploads.upload);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await attachFiles(tester);
         expect(key('swarm-outgoing-spec.pdf'), findsOneWidget);
         await pickMachine(tester, 'mac-1');
@@ -2459,7 +2497,7 @@ void main() {
       ) async {
         picks([for (var i = 1; i <= 11; i++) 'f$i.log']);
         await pump(tester, [NewProjectSwarm()], upload: FakeUploads().upload);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await attachFiles(tester);
         expect(
           tester.widget<Text>(key('swarm-new-project-attach-note')).data,
@@ -2489,7 +2527,7 @@ void main() {
         };
         picks(['build.log']);
         await pump(tester, [swarm], upload: uploads.upload);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await attachFiles(tester);
         await tap(tester, 'swarm-new-project-agent');
         await tap(tester, 'swarm-new-project-pick-agent-codex');
@@ -2499,7 +2537,7 @@ void main() {
         await tap(tester, 'swarm-new-project-close');
         expect(key('swarm-new-project-sheet'), findsNothing);
 
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         expect(key('swarm-outgoing-build.log'), findsOneWidget);
         expect(onAgent('Codex'), findsOneWidget);
         expect(
@@ -2542,7 +2580,7 @@ void main() {
             : null;
         picks(['build.log']);
         await pump(tester, [swarm], upload: uploads.upload);
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await attachFiles(tester);
         await pickMachine(tester, 'mac-1');
         await tap(tester, 'swarm-new-project-create');
@@ -2579,7 +2617,7 @@ void main() {
         tester.view.physicalSize = const Size(960, 1704);
         tester.view.padding = const FakeViewPadding(top: 60);
         await tester.pumpAndSettle();
-        await tap(tester, 'swarm-new-project');
+        await openNewProject(tester);
         await attachFiles(tester);
         await pickMachine(tester, 'mac-1');
         await tap(tester, 'swarm-new-project-brief');
