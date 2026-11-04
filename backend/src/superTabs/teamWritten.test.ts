@@ -183,6 +183,19 @@ describe('a task a Team agent worked on', () => {
     expect(refusal(() => post(task, [tester], owner))).toBeNull()
   })
 
+  // #2963: @Name in the text names an agent too, but only one the sender may name; it never turns a post into a refusal.
+  it('skips a main-account member a post names by @Name in a marked task, and still posts', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.member('main-tester', 'mac')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: tester, present: true, lead: false })
+    f.state.conversations.find(c => c.id === task)!.teamWritten = true
+    const team = f.member('team-tester', 'mac-team')
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: team, present: true, lead: false })
+    const sent = f.run({ type: 'message.send', conversationId: task, text: '@main-tester and @team-tester, please test again.', replyTo: null, recipientIds: [] },
+      { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
+    expect(sent.messages[0]!.recipients).toEqual([team])
+  })
+
   it('reads who pushed before adding an agent: a bot\'s push or an unknown refuses the main account, and a Team agent still joins', () => {
     const f = swarm(), task = f.group(), main = f.member('main-reviewer', 'mac')
     const add = (agentId: string, pushOrigin: 'team' | 'unknown') => f.run({ type: 'conversation.agent', conversationId: task, agentId, present: true, lead: false }, owner, { pushOrigin })
