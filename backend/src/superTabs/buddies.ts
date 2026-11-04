@@ -220,11 +220,24 @@ const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+
 const unquoted = (text: string): string => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
 const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
 
-/** The whole lines the owner's own message offers to post: all of it, all after its lead-in ("Send this to the PM: …"), and
- *  each quoted line in it. Never a piece of one (security review 1 of #3024): a fragment can change what it says. */
+/** A lead-in that asks the Buddy to send what follows it ("Send this to the PM", "ok, post it", "Gửi PM"): it opens with a
+ *  send word, after at most a few ok/please words; it says no "not", has no sentence break and is at most 10 words. Words
+ *  that read as a label as often as an ask ("Report: …", "File: …", "Pass: …") are left out: in doubt, the Buddy shows the line. */
+const SEND_LEAD = /^(?:(?:ok(?:ay)?|yes|yeah|sure|please|pls|can you|could you|would you|go ahead and|and|then|just|ừ|vâng|được|làm ơn|hãy)[\s,]+)*(?:post|send|share|propose|tell|forward|submit|raise|gửi|đăng|chuyển|nói|đề xuất)(?=[\s,]|$)/iu
+const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|đừng|không|chưa)(?![\p{L}])|n['’]t(?![\p{L}])/iu
+const asksToSend = (lead: string): boolean => {
+  const said = lead.normalize('NFKC').trim()
+  return SEND_LEAD.test(said) && !NEGATED.test(said) && !/[.!?;\n]/u.test(said) && said.split(/\s+/u).length <= 10
+}
+
+/** The whole lines the owner's own message offers to post: all of it, each quoted line in it, and all after its first colon
+ *  when what comes before asks to send it (task #2989). A label ("Bug: …"), someone else's words ("Ken said: …") or a
+ *  "don't post this: …" is not their ask, so the rest of that message alone is not their words to post. Never a piece of a
+ *  line (security review 1 of #3024): a fragment can change what it says. */
 const ownerLines = (said: string): string[] => {
   const colon = said.indexOf(':')
-  return [said, ...colon >= 0 ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
+  const lead = colon >= 0 && asksToSend(said.slice(0, colon))
+  return [said, ...lead ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
 }
 
 /** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
