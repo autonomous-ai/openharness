@@ -64,3 +64,61 @@ export function toldText(message: Message): string {
   // Names another machine recorded: no control or format character reaches the pane (model.ts `header`).
   return `[from ${shown(from.name)} · ${engineName(shown(from.engine))} · ${shown(from.machine)}, the harness that started you: more work. It reads your answer itself.]\n\n${message.text}`
 }
+
+/**
+ * A person's Buddy passing their words to their own harnesses on their own Mac (#2626, thaibao56: a lead who handed their
+ * lead session to their Buddy relayed every message by hand). Not a starter's tell: the Buddy started none of them. Only
+ * the person's own Buddy (a Swarm session of role buddy here, whose person the host proved, at their last message within
+ * the hour, is the account signed in on this machine: the grant its wide reads hold), only a harness the person started on
+ * this machine (never a guest's, which is another person's; never a Swarm session, nor one an agent started), and only
+ * while the person allows `agents-tell-agents`, the switch that already covers agents giving harnesses work. One way:
+ * the Buddy reads nothing back. Kept under the pseudo-tab `relayed`; checked again at each delivery look.
+ */
+export const RELAYED_TAB = 'relayed'
+
+/** A harness here a Buddy would pass words to, as this machine's registry records it. */
+export interface RelayTarget {
+  /** A Swarm session (any role): the Swarm's to direct, not the person's. */
+  swarm: boolean
+  /** Started by an agent (`harness new`, the Swarm, an agent outside Harness): its starter's to tell. */
+  startedByAgent: boolean
+  /** A guest's: another person's, on a machine its owner shares. */
+  guest: boolean
+  /** A terminal, which has no agent to take words. */
+  terminal: boolean
+  /** The Buddy itself. */
+  self: boolean
+}
+
+export interface RelayCheck {
+  /** `agents-tell-agents`, as this machine keeps it. */
+  on: boolean
+  /** The Buddy holds its owner's live grant on this machine. */
+  granted: boolean
+  /** The harness, or null when none of that id runs here. */
+  target: RelayTarget | null
+}
+
+/** Said when the owner is not proven here: the grant lapses an hour after their last message, and a relaunch drops it. */
+export const OWNER_AWAY_TEXT = 'You pass words to your owner\'s harnesses only while they are with you: once they write to you in your chat, on ' +
+  'this Mac signed in as them, for an hour. Nothing was sent. Tell your owner in one line.'
+
+/** Why a Buddy may not pass words to [check.target] here, or null. */
+export function relayRefusal(check: RelayCheck): { code: 'TELL_OFF' | 'OWNER_AWAY' | 'NOT_YOURS' | 'NOT_RUNNING'; message: string } | null {
+  if (!check.on) return { code: 'TELL_OFF', message: `Your owner has not allowed agents to give their harnesses work. ${askThePersonFirst('agents-tell-agents', 'tell them what to pass on, and let them do it.')}` }
+  if (!check.granted) return { code: 'OWNER_AWAY', message: OWNER_AWAY_TEXT }
+  const t = check.target
+  if (!t) return { code: 'NOT_RUNNING', message: 'That harness is no longer running here: it was closed or stopped. Tell your owner.' }
+  const whose = t.self ? 'That is you.'
+    : t.guest ? 'That harness is another person\'s.'
+    : t.swarm ? 'That is a Swarm agent: the Swarm directs it.'
+    : t.startedByAgent ? 'An agent started that harness: only it, or your owner, gives it work.'
+    : t.terminal ? 'That is a terminal, not a harness.' : null
+  return whose ? { code: 'NOT_YOURS', message: `${whose} A Buddy passes words only to harnesses its owner started on this Mac. Nothing was sent.` } : null
+}
+
+/** A relayed message as the harness reads it: from the person's Buddy, their words, and that the Buddy reads no answer. */
+export function relayedText(message: Message): string {
+  const from = message.from
+  return `[from ${shown(from.name)} · ${shown(from.machine)}, your person's Buddy in Harness: their words, passed on. It does not read your answer; your person does.]\n\n${message.text}`
+}
