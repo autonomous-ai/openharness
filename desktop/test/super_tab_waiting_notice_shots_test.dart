@@ -105,6 +105,19 @@ void main() {
         connectionFactory: (store) => _PromptConnection(store),
       );
       final c = await waitingSwarm(f);
+      // Nova's word in its task, beside the prompt it stopped at.
+      final server = f.connection.server
+        ..append(
+          'Running the waiting-notice widget tests next. Claude Code needs '
+          'your OK for the command; it is in my terminal.',
+          conversationId: 'task',
+        );
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'nova',
+        'name': 'Nova',
+      };
+      await c.refresh();
       // No threads followed: Activity lists only what needs the reader.
       f.connection.server.followedThreads = {
         'unread': <dynamic>[],
