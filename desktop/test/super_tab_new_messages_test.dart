@@ -429,6 +429,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isFalse);
     expect(find.byKey(_jump), findsNothing);
+    // Read to the end: the mark's save runs out.
+    await tester.pump(const Duration(seconds: 1));
   });
 
   /// The offline chat's 60 messages from the Lead, read up to [mark].
