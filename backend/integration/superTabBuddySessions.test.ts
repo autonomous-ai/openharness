@@ -349,7 +349,7 @@ describe('a Buddy thread session', () => {
     const { agentId, first } = await f.session(root, 'Measure prod CPU for the last day', { sessionProjectId: 'lead' })
     const plain = await f.session(plainRoot, 'Ask the PM for it')
     const mainAsk = await f.say('Send the other thing to the PM')
-    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, goal: 'CPU fix',
+    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, text: 'Measure prod CPU for the last day', goal: 'CPU fix',
       scope: 'Backend', priority: 'normal' }, peer, as)
     await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
     await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })

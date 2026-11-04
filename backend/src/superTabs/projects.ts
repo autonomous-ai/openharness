@@ -388,6 +388,11 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
   if (SERVER_WORDS.has(row?.kind)) return 'none'
   if (row?.kind === 'review-failed') return 'unknown'
   if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
+  // A Buddy's proposal, posted as its owner: its Buddy wrote the goal and scope and picked the words (security review 2 of #3024).
+  if (row?.kind === 'buddy-proposal') {
+    const buddyId = (row as { buddyId?: unknown }).buddyId
+    return typeof buddyId === 'string' ? { agentId: buddyId } : 'unknown'
+  }
   return 'author'
 }
 

@@ -1,7 +1,5 @@
 import '../notify/alert_sounds.dart';
 import '../super_tabs/activity.dart';
-import '../super_tabs/decisions.dart';
-import '../super_tabs/notifications.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
@@ -196,12 +194,13 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
   }
 }
 
-/// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
-/// of this account, then the tags waiting for it and not read past, newest
-/// first in each, as Activity lists them. Only from conversations it can read now,
-/// none from a Swarm it lost, none signed out: the lists are what was read
-/// last, and access can leave before they are read again. Choosing one opens
-/// it there (`SuperTabController.openNotice`).
+/// The menu bar's Swarm section: in each open Swarm tab, exactly what its
+/// Activity lists, in Activity's order ([SuperTabActivity.notices]): the
+/// reminders that are due, the agents waiting on this account, the decisions
+/// asked of it, then every tag of it not read (task #2914). So a Swarm's rows
+/// are Activity's red number once its lists are read. None from a Swarm it
+/// lost, none signed out. Choosing one opens it there
+/// (`SuperTabController.openNotice`).
 List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
   if (app.currentUser == null) return [];
   final needs = nativeActivityPayload(HarnessActivity.needsInput);
@@ -212,60 +211,50 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
     if (controller == null || snapshot == null || controller.accessRevoked) {
       continue;
     }
-    Map<String, Object?> row(
-      String kind,
-      String noticeId,
-      String title,
-      String message,
-      String projectName,
-      String conversationTitle,
-      DateTime? createdAt,
-    ) => {
-      'swarmTabId': id,
-      'kind': kind,
-      'id': noticeId,
-      'title': title,
-      'message': statusMenuMessage(message),
-      'unread': true,
-      'activity': needs,
-      'tabName': snapshot.name,
-      'detail': [
-        projectName,
-        conversationTitle,
-      ].where((part) => part.isNotEmpty).join(' · '),
-      'receivedAt': createdAt?.millisecondsSinceEpoch,
-    };
-    bool readable(String conversationId) =>
-        snapshot.conversation(conversationId) != null;
-    for (final d in SuperTabDecisions.of(controller).open) {
-      if (!readable(d.conversationId)) continue;
-      rows.add(
-        row(
-          'decision',
-          d.id,
-          '${d.askerName} asks you',
-          d.question,
-          d.projectName,
-          d.conversationTitle,
-          d.createdAt,
+    for (final notice in SuperTabActivity.of(controller).notices) {
+      final (title, message, project, chat, at) = switch (notice.kind) {
+        SuperTabNoticeKind.reminder => (
+          // Set by the reader, on anyone's message: what it says leads.
+          'Reminder',
+          notice.reminder!.text,
+          snapshot.projectFor(notice.conversationId)?.name ?? '',
+          notice.reminder!.conversationTitle,
+          notice.reminder!.dueAt,
         ),
-      );
-    }
-    final activity = SuperTabActivity.of(controller);
-    for (final m in SuperTabMentions.of(controller).waiting) {
-      // Read past, it leaves here as it leaves Activity.
-      if (!readable(m.conversationId) || !activity.mentionUnread(m)) continue;
-      rows.add(
-        row(
-          'mention',
-          m.id,
-          '${m.leadName} tagged you',
-          m.text,
-          m.projectName,
-          m.conversationTitle,
-          m.createdAt,
+        SuperTabNoticeKind.agent => (
+          notice.need!.title,
+          notice.need!.question ?? '',
+          snapshot.projectFor(notice.conversationId)?.name ?? '',
+          snapshot.conversation(notice.conversationId)?.title ?? '',
+          notice.need!.at,
         ),
-      );
+        SuperTabNoticeKind.decision => (
+          '${notice.need!.decision!.askerName} asks you',
+          notice.need!.decision!.question,
+          notice.need!.decision!.projectName,
+          notice.need!.decision!.conversationTitle,
+          notice.need!.decision!.createdAt,
+        ),
+        SuperTabNoticeKind.mention => (
+          '${notice.mention!.leadName} tagged you',
+          notice.mention!.text,
+          notice.mention!.projectName,
+          notice.mention!.conversationTitle,
+          notice.mention!.createdAt,
+        ),
+      };
+      rows.add({
+        'swarmTabId': id,
+        'kind': notice.kind.name,
+        'id': notice.id,
+        'title': title,
+        'message': statusMenuMessage(message),
+        'unread': true,
+        'activity': needs,
+        'tabName': snapshot.name,
+        'detail': [project, chat].where((part) => part.isNotEmpty).join(' · '),
+        'receivedAt': at?.millisecondsSinceEpoch,
+      });
     }
   }
   return rows;

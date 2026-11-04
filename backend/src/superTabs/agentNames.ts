@@ -51,7 +51,7 @@ export function assignAgentDisplayNames(agents: NamedAgent[]): void {
 
 /** Read-only callers (native observations and legacy snapshots) get the same
  * names as the next authorized transaction, without mutating stored state. */
-export function agentDisplayName(agents: NamedAgent[], id: string): string | undefined {
+export function agentDisplayName(agents: readonly NamedAgent[], id: string): string | undefined {
   const member = agents.find(agent => agent.id === id)
   if (!member) return undefined
   if (member.displayName && !reviewer.test(member.displayName.trim())) return member.displayName

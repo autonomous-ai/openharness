@@ -334,6 +334,23 @@ describe('the machine lines of a change read', () => {
     expect(changes).not.toHaveBeenCalled()
   })
 
+  // Task #2906: a client that holds the summary echoes its etag; a released client sends none and is asked nothing new.
+  it('passes the summary etag a client echoes, with lines or without', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=e1_-Z')).statusCode).toBe(200)
+    expect(changes.mock.calls[0]!.slice(2)).toEqual(['abc', undefined, { derivedEtag: 'e1_-Z' }])
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=light&derivedEtag=e2')).statusCode).toBe(200)
+    expect(changes.mock.calls[1]!.slice(2)).toEqual(['abc', undefined, { lightMachines: true, derivedEtag: 'e2' }])
+  })
+
+  it('refuses a malformed summary etag', async () => {
+    for (const etag of ['bad!', '', 'x'.repeat(65)]) {
+      const res = await get(`/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=${etag}`)
+      expect(res.statusCode, etag).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(changes).not.toHaveBeenCalled()
+  })
+
   it('serves the whole readings on demand, for an agent too', async () => {
     expect((await get('/api/super-tabs/tab1/machine-readings?asAgentId=agent1')).statusCode).toBe(200)
     expect(machineReadings.mock.calls[0]!.slice(1)).toEqual(['tab1', 'agent1'])

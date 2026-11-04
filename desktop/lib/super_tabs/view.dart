@@ -1837,7 +1837,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       setState(() => _showNotifications = _showManage = _showTasks = false);
       // Choosing a conversation leaves the Manage pane: its Devices page left
@@ -1865,8 +1864,10 @@ class _SuperTabViewState extends State<SuperTabView>
     return c.openBuddyChat(projectId);
   }
 
-  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
-  /// at its message, a decision on the Notifications page where it is answered.
+  /// What the menu bar asked to open ([SuperTabController.openNotice]), as
+  /// its Activity row opens it (task #2914): a tag or a due reminder at its
+  /// message, an agent waiting in its chat with its terminal beside it, a
+  /// decision on the Notifications page where it is answered.
   void _takeNotice() {
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
@@ -1877,11 +1878,24 @@ class _SuperTabViewState extends State<SuperTabView>
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
-    if (request.kind != 'mention') return;
-    final mention = SuperTabMentions.of(c).waiting
-        .where((m) => m.id == request.id)
+    final notice = SuperTabActivity.of(c).notices
+        .where((n) => n.kind.name == request.kind && n.id == request.id)
         .firstOrNull;
-    if (mention != null) unawaited(_openMention(mention));
+    switch (notice) {
+      case SuperTabNotice(:final mention?):
+        unawaited(_openMention(mention));
+      case SuperTabNotice(:final reminder?):
+        unawaited(_openReminder(reminder));
+      case SuperTabNotice(kind: SuperTabNoticeKind.agent, :final need?):
+        if (_openConversation(need.conversationId) && need.agentId != null) {
+          c.openAgentTerminal(
+            need.agentId!,
+            conversationId: need.conversationId,
+          );
+        }
+      case _:
+        break;
+    }
   }
 
   /// Shows Activity in the main pane, as its sidebar row does. [from] is the

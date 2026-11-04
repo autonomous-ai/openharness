@@ -2264,7 +2264,10 @@ export class SuperTabHost {
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo, buddy)}\n\n`
       : '')
     const source = object(message.source)
-    const body = `${String(message.text)}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
+    // A Buddy's proposal is its owner's own message (anh Dee, task #2926): its goal, scope and priority ride in its source, for the PM.
+    const details = source.kind === 'buddy-proposal' && typeof source.goal === 'string' && typeof source.scope === 'string'
+      ? `\n\nProposal details from their Buddy, for the PM:\nGoal: ${source.goal}\nScope: ${source.scope}\nPriority: ${String(source.priority)}` : ''
+    const body = `${String(message.text)}${details}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
     const said = (otherAccount ? OTHER_ACCOUNT : '') + (othersWords ? BUDDY_OTHERS : '')
       + `Message ${String(message.id)} from ${shownName(message.author, 'a collaborator')}:\n${othersWords ? setOff(body) : body}`
     // News for a Buddy's owner from outside its chat (backend buddyNews.ts), its agent-only line about a task too: the

@@ -393,6 +393,27 @@ class SuperTabClient {
   String? leadProtectionReasonForHarness(String machineId, String harnessId) =>
       _leadOfHarness(machineId, harnessId)?.reason;
 
+  /// Renames the agent a harness is in every loaded Swarm that holds it
+  /// (Rename Harness, task #2912): each Swarm shows the agent by its own
+  /// name, so the rename reaches everyone's sidebar. Why each Swarm that
+  /// refused did, empty when all took it or none holds the harness.
+  Future<List<String>> renameHarnessAgent(
+    String machineId,
+    String harnessId,
+    String name,
+  ) async {
+    final errors = <String>[];
+    for (final controller in loadedControllers.toList()) {
+      final agent = controller.snapshot?.agents
+          .where((a) => a.machineId == machineId && a.harnessId == harnessId)
+          .firstOrNull;
+      if (agent == null) continue;
+      final error = await controller.renameAgent(agent.id, name);
+      if (error != null) errors.add(error);
+    }
+    return errors;
+  }
+
   /// The coordinator's name in the project the machine's harness coordinates.
   String? leadCoordinatorForHarness(String machineId, String harnessId) =>
       _leadOfHarness(machineId, harnessId)?.coordinator;
@@ -863,8 +884,23 @@ class SuperTabClient {
           told(id, reminder);
     }
     if (onNotices case final changed?) {
-      SuperTabMentions.of(controller).addListener(changed);
+      // What Activity lists is what the menu bar's Swarm section draws
+      // (task #2914): it hears every list that moves it.
+      final mentions = SuperTabMentions.of(controller)..addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);
+      SuperTabReminders.of(controller).addListener(changed);
+      // A read mark moved here reads a tag with no list or count moving:
+      // told only when the unread number moves, not on every change.
+      var unread = 0;
+      controller.addListener(() {
+        final now = [
+          ...mentions.waiting,
+          ...mentions.earlier,
+        ].where((m) => superTabMentionUnread(controller, m)).length;
+        if (now == unread) return;
+        unread = now;
+        changed();
+      });
     }
     _tagCounts.remove(id);
     _tagDigests.remove(id);

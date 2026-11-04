@@ -2010,6 +2010,160 @@ describe('any agent of the project', () => {
       text: 'owner added "Shared" to the project. The project chat holds only its coordinator among agents, so "Shared" works in its tasks.' })])
   })
 
+  // Dee, 2026-11-04 (#2924): the agent doing the work answers people in the project chat itself. It posts there without
+  // joining it, so #2207 holds: the chat's members stay the coordinator alone, and no second terminal opens there.
+  describe('an agent with work in the project posting in its chat', () => {
+    const actorOf = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (text: string, replyTo: string | null = null, recipientIds: string[] = []) =>
+      ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds }) as Command
+    /** routed()'s coordinator, an Engineer assigned a task and a Reviewer holding its step, neither in the project chat. */
+    function working() {
+      const f = routed(), task = f.group()
+      const engineer = f.add('engineer', 'owner', task)
+      f.define(task)
+      f.run({ type: 'work.assign', conversationId: task, agentId: engineer })
+      const step = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: task, checks: [] }).result.conversationId as string
+      const reviewer = f.add('reviewer', 'owner', step)
+      f.run({ type: 'work.assign', conversationId: step, agentId: reviewer })
+      const chat = () => f.state.conversations.find(c => c.id === 'lead')!
+      /** A new agent assigned a task of its own in the project, with its assignment in [status]. */
+      const assigned = (name: string, status?: 'done' | 'lost' | 'stopped') => {
+        const own = f.group(), agentId = f.add(name, 'owner', own)
+        f.define(own)
+        f.run({ type: 'work.assign', conversationId: own, agentId })
+        if (status) f.state.conversations.find(c => c.id === own)!.assignment!.status = status
+        return { agentId, get task() { return f.state.conversations.find(c => c.id === own)! } }
+      }
+      return { f, task, step, engineer, reviewer, chat, assigned }
+    }
+
+    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator as before', () => {
+      const { f, engineer, reviewer, chat } = working()
+      const members = [...chat().agentIds]
+      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+      for (const agentId of [engineer, reviewer]) {
+        const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
+        expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [f.lead] })
+        const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
+          { reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: 0, thread: asked.id } }).messages.at(-1)!
+        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [f.lead] })
+      }
+      expect(chat().agentIds).toEqual(members)
+      expect(chat().agentIds).not.toContain(engineer)
+      expect(chat().agentIds).not.toContain(reviewer)
+    })
+
+    it('refuses everyone else there, and still adds no agent to the project chat', () => {
+      const { f, task, engineer, chat, assigned } = working()
+      // Of this project, with no task or step in it: added to a task it is not assigned.
+      const idle = f.add('idle', 'owner', task)
+      // Its task ended: cancelled, or lost to another agent.
+      const ended = f.add('ended', 'owner', f.group())
+      const endedTask = f.state.conversations.find(c => c.agentIds.includes(ended))!.id
+      f.define(endedTask)
+      const assignmentId = f.run({ type: 'work.assign', conversationId: endedTask, agentId: ended }).result.assignmentId as string
+      f.run({ type: 'work.cancel', conversationId: endedTask, assignmentId, reason: 'Not needed.' })
+      // Of another project, working on a task there.
+      const other = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+      const otherTask = f.run({ type: 'conversation.create', projectId: other.projectId as string, title: 'Elsewhere', brief: 'Build it.', checks: [] }).result.conversationId as string
+      const outsider = f.add('outsider', 'owner', otherTask)
+      f.run({ type: 'work.assign', conversationId: otherTask, agentId: outsider })
+      // A Buddy assigned work (which no Buddy is) still only proposes.
+      const buddy = f.add('buddy', 'owner', f.group())
+      const buddyTask = f.state.conversations.find(c => c.agentIds.includes(buddy))!
+      f.define(buddyTask.id)
+      f.run({ type: 'work.assign', conversationId: buddyTask.id, agentId: buddy })
+      f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
+      // A stopping agent with its task still open.
+      const stopping = f.add('stopping', 'owner', f.group())
+      const stoppingTask = f.state.conversations.find(c => c.agentIds.includes(stopping))!.id
+      f.define(stoppingTask)
+      f.run({ type: 'work.assign', conversationId: stoppingTask, agentId: stopping })
+      f.state.agents.find(a => a.id === stopping)!.workDecision = 'stop'
+      // A task lost to another agent or stopped, and one archived, whatever its status (security reviews of #2924).
+      const lost = assigned('lost', 'lost').agentId, stopped = assigned('stopped', 'stopped').agentId
+      const archive = assigned('archived')
+      archive.task.archived = true
+      const before = structuredClone(f.state)
+      // Another project's agent does not read this chat at all; a Buddy posts only in its own chat (buddies.ts).
+      const refusals: Array<[string, string]> = [[idle, 'FORBIDDEN'], [ended, 'FORBIDDEN'], [lost, 'FORBIDDEN'], [stopped, 'FORBIDDEN'],
+        [archive.agentId, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
+      for (const [agentId, code] of refusals) {
+        expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
+        expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
+          { reaction: { messageId: 'm1', reacted: false } }))
+          .toThrow(expect.objectContaining({ code }))
+      }
+      // Naming an agent that is not in it, or adding one, is refused as before (#2207), the working Engineer's post too.
+      const notMember = expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' })
+      expect(() => f.run(post('Look at this.', null, [idle]), actorOf(engineer))).toThrow(notMember)
+      expect(() => f.run(post('Look at this.', null, [engineer]), f.leadActor)).toThrow(notMember)
+      for (const actor of [f.leadActor, owner, actorOf(engineer)]) {
+        expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: engineer, present: true, lead: false }, actor)).toThrow()
+      }
+      expect(f.state).toEqual(before)
+      expect(chat().agentIds).not.toContain(engineer)
+    })
+
+    // Decided, not by accident (security reviews of #2924): a done task's agent posts its result line in main until the task
+    // archives with its merged pull request.
+    it('lets a done task\'s agent post there until its task archives', () => {
+      const { f, chat, assigned } = working()
+      const done = assigned('done', 'done')
+      f.run(post('Shipped: the login bug is fixed.'), actorOf(done.agentId))
+      expect(chat().agentIds).not.toContain(done.agentId)
+      done.task.archived = true
+      expect(() => f.run(post('One more thing.'), actorOf(done.agentId))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    })
+
+    // Security review 1 of #2924: posting there is no joining, so a Team account's agent marks nothing Team-written there and
+    // no main-account member is told to stop.
+    it('marks nothing Team-written when a Team account\'s agent posts there', () => {
+      const { f, engineer, chat } = working()
+      f.state.agents.find(a => a.id === engineer)!.teamAccount = true
+      const effects = f.run(post('I am on it.'), actorOf(engineer))
+      expect(chat().teamWritten).toBeUndefined()
+      expect(effects.messages.map(m => m.conversationId === 'lead' ? m.text : null)).toEqual(['I am on it.'])
+      expect(effects.messages).toHaveLength(1)
+    })
+
+    // River, 2026-11-04 (#2924): an agent with work in the project reacts there (👀 on an ask it takes), with no other right.
+    it('lets it react there without joining', () => {
+      const { f, engineer, reviewer, chat } = working()
+      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+      const members = [...chat().agentIds]
+      for (const agentId of [engineer, reviewer]) {
+        expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
+          { reaction: { messageId: asked.id, reacted: false } }).result.changed).toBe(true)
+      }
+      expect(chat().agentIds).toEqual(members)
+    })
+
+    // River, 2026-11-04 (#2924): a person answering an agent's line in main, in its thread or right below it, reaches that agent
+    // as a delivery; it joins nothing. Right below, the coordinator is told too, as a new ask there may be its.
+    it('delivers a person\'s reply to the agent whose line it answers, in its thread or right below it', () => {
+      const { f, engineer, chat, assigned } = working()
+      const members = [...chat().agentIds]
+      const line = f.run(post('I am on it.'), actorOf(engineer)).messages.at(-1)!
+      const inThread = f.run(post('Thanks, which build?', line.id), owner,
+        { reply: { id: line.id, conversationId: 'lead', author: line.author, createdAt: 0, thread: line.id } }).messages.at(-1)!
+      expect(inThread).toMatchObject({ replyTo: line.id, thread: line.id, recipients: [engineer] })
+      const below = f.run(post('Also the phone build, please.'), owner, { above: { author: line.author } }).messages.at(-1)!
+      expect(below.recipients).toEqual([engineer, f.lead])
+      // Below a person's or the coordinator's line, or with nothing read above it, the coordinator alone, as before.
+      expect(f.run(post('And the web?'), owner, { above: { author: below.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(f.run(post('And the web?'), owner).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(chat().agentIds).toEqual(members)
+      // An agent whose work there ended is not told: the coordinator hears it, as any post there.
+      const done = assigned('ended')
+      const ended = f.run(post('Done here.'), actorOf(done.agentId)).messages.at(-1)!
+      done.task.assignment!.status = 'cancelled'
+      expect(f.run(post('Wait, one more?', ended.id), owner,
+        { reply: { id: ended.id, conversationId: 'lead', author: ended.author, createdAt: 0, thread: ended.id } }).messages.at(-1)!.recipients).toEqual([f.lead])
+      expect(f.run(post('Hello?'), owner, { above: { author: ended.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
+    })
+  })
+
   // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
   // leaves a row there naming who did it, shown to the chat's readers and waking nobody.
   it('leaves a row naming who added or removed an agent', () => {
@@ -2415,11 +2569,11 @@ describe('cancelling work', () => {
     const assignment = f.state.conversations.find(c => c.id === group)!.assignment!
     expect(assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
     expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(false)
-    // Beside it, only the task's ordinary thread reply in the project chat (taskLine.ts).
+    // Nothing beside it: no message asked for this task, so it says nothing in the project chat (taskLine.ts).
     const inTask = effects.messages.filter(m => m.conversationId === group)
     expect(inTask).toHaveLength(1)
     expect(inTask[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
-    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([expect.objectContaining({ text: 'Not building this: Duplicate of another task.', recipients: [] })])
+    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([])
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
     expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
     f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)
@@ -5593,5 +5747,151 @@ describe('assigning an agent whose session was closed', () => {
     resumed.f.state.harnessReservations = [{ machineId: 'host', harnessId: 'worker', generation: 'g2', renewed: true } as never]
     resumed.f.run({ type: 'work.assign', conversationId: resumed.group, agentId: resumed.worker })
     expect(resumed.f.state.conversations.find(c => c.id === resumed.group)!.assignment).toMatchObject({ agentId: resumed.worker })
+  })
+})
+
+describe('agent.rename (renaming a harness renames its agent, task #2912)', () => {
+  const rename = (agentId: string, name: string): Command => ({ type: 'agent.rename', agentId, name })
+  const shownTo = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) =>
+    visibleState(f.state, reader).agents.find(a => a.id === agentId)!.displayName
+  const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
+
+  it('lets the agent\'s contributor rename it, and every reader sees the new name', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(rename(agentId, '  Darren\'s PM  '), peer)
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+    expect(shownTo(f, peer, agentId)).toBe('Darren\'s PM')
+    // A later command does not hand it a generated name again.
+    f.run({ type: 'conversation.create', title: 'Later', brief: 'Anything.', checks: [] })
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+  })
+
+  it('lets the machine owner rename it', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
+    f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
+    expect(shownTo(f, owner, agentId)).toBe('Studio')
+  })
+
+  it('refuses a teammate who is neither, the Swarm owner, an agent and a Buddy, writing nothing', () => {
+    const f = fixture(), agentId = peerContributorAgent(f), other = f.add('other', 'owner')
+    const buddyId = f.add('buddy', 'owner')
+    f.state.agents.find(a => a.id === buddyId)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
+    const before = JSON.stringify(f.state)
+    for (const [actor, code] of [
+      [owner, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: buddyId, machineOwnerId: 'host-owner' }, 'BUDDY_FORBIDDEN'],
+    ] as Array<[Actor, string]>) {
+      expect(() => f.run(rename(agentId, 'Stolen'), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code }))
+    }
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  it('refuses a role\'s name, another agent\'s name, an empty or invisible name', () => {
+    const f = fixture(), agentId = f.add('mine'), taken = f.add('taken')
+    f.run(rename(taken, 'Quinn'))
+    for (const name of ['Lead', 'Engineer 2', 'Reviewer', 'quinn', ' ', '​​']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_ROLE|AGENT_NAME_TAKEN|INVALID_AGENT_NAME)$/) }))
+    }
+    expect(commandSchema.safeParse(rename(agentId, 'x'.repeat(201))).success).toBe(false)
+    // Its own name again is no conflict.
+    f.run(rename(taken, 'Quinn'))
+  })
+
+  // Security review 2 of #3015: an agent's name passes every rule a person's does, and tells nobody what they cannot read.
+  it('refuses the Swarm\'s own voices, a web address or link, and a blank made of Braille (security review 2)', () => {
+    const f = fixture(), agentId = f.add('mine')
+    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)', '[Approve](//ev.il)',
+      'Lead\u2800', '\u2800', '\u2800\u2800\u2800']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(INVALID_AGENT_NAME|AGENT_NAME_ROLE|INVALID_NAME|NAME_RESERVED)$/) }))
+    }
+  })
+
+  it('refuses a name a person here goes by: their name, username or email', () => {
+    const f = fixture(), agentId = f.add('mine')
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    for (const name of ['minh nguyen', 'Ｍinh Nguyen', 'peer', '@Peer', 'peer@example.com', 'owner']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_TAKEN|NAME_TAKEN)$/) }))
+    }
+  })
+
+  it('does not tell a reader that an agent they cannot read has a name (security review 2)', () => {
+    const f = fixture()
+    f.invite()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: '' }).result
+    const hidden = f.add('hidden', 'owner', other.conversationId as string)
+    f.run(rename(hidden, 'Quinn'))
+    const mine = f.add('mine', 'peer')
+    // The peer reads nothing of the private project: the name is not taken for them, and no refusal says it exists.
+    f.run(rename(mine, 'Quinn'), peer)
+    expect(shownTo(f, peer, mine)).toBe('Quinn')
+    // The owner reads both, so a second Quinn is refused for them.
+    const third = f.add('third', 'owner')
+    expect(() => f.run(rename(third, 'Quinn'))).toThrow(expect.objectContaining({ code: 'AGENT_NAME_TAKEN' }))
+  })
+
+  it('refuses a viewer', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
+  it('refuses a non-member and an agent of the machine owner\'s Team account, writing nothing', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    const team = f.add('team-agent', 'owner')
+    const before = JSON.stringify(f.state)
+    // Not a member of this Swarm at all.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'stranger', email: 'stranger@example.com' }), 'non-member').toThrow()
+    // A Team account's session acts as an agent, here one the machine owner runs: never as the person.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'agent', agentId: team, machineOwnerId: 'host-owner' }), 'team session').toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // Task #2912, security review 2: Add agent sends the typed harness name, so it gets the same rules; a name that fails them
+  // gives the agent a member name instead, as a role's name does, and the add still succeeds.
+  it('agent.add gives a member name to a name that is the Swarm\'s voice, a link, a person\'s or another agent\'s', () => {
+    const f = fixture()
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    f.run(rename(f.add('first'), 'Quinn'))
+    const group = f.group()
+    const named = (name: string, harnessId: string) => {
+      const id = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+      f.run({ type: 'conversation.create', title: `After ${harnessId}`, brief: 'Anything.', checks: [] })
+      return f.state.agents.find(a => a.id === id)!.displayName
+    }
+    for (const [i, name] of ['System', 'Everyone', '[Approve](https://ev.il)', 'minh nguyen', 'peer@example.com', 'quinn', 'Lead\u2800'].entries()) {
+      expect(named(name, `h${i}`), name).not.toBe(name)
+      expect(named(name, `h${i}`)).toBeTruthy()
+    }
+    expect(named('Release notes', 'ok')).toBe('Release notes')
+  })
+
+  // The row Add agent writes in the project chat names the agent as readers see it, never the name the rules refused.
+  it('agent.add in the project chat writes no refused name into its row', () => {
+    const f = fixture()
+    for (const [i, name] of ['[Approve](https://ev.il)', '[Approve](//ev.il)', 'System'].entries()) {
+      const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+      const row = effects.messages.find(m => m.text.includes('to the project'))!.text
+      expect(row, name).not.toContain(name)
+      // Both halves name the agent as its readers' lists show it: its member name, not "Agent".
+      const shown = visibleState(f.state, owner).agents.find(a => a.id === effects.result.agentId)!.displayName!
+      expect(row, name).toBe(`owner added "${shown}" to the project. The project chat holds only its coordinator among agents, so "${shown}" works in its tasks.`)
+    }
+  })
+
+  it('cleans credentials out of the name', () => {
+    const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
+    expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
+    expect(removed).toEqual(['github'])
   })
 })

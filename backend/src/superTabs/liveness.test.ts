@@ -672,6 +672,8 @@ describe('the next time a machine\'s worker can lose its task (DB 2.5)', () => {
 describe('a task lost outside any command says Stuck in its project-chat thread', () => {
   const lost = () => {
     const f = stepsFixture()
+    // Asked for in a person's message, whose thread is the task's (taskLine.ts); a task no message asked for says nothing there.
+    f.group(f.task).cards = { ...f.group(f.task).cards, line: { messageId: 'ask', conversationId: 'lead' } }
     const root = f.group(f.task).cards!.line!.messageId
     const worker = f.state.agents.find(a => a.id === f.dev)!
     const text = `Stuck: ${worker.displayName ?? worker.name} stopped. Next: another engineer takes it over.`
