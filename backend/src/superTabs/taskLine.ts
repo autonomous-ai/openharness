@@ -47,12 +47,24 @@ function pullRequests(urls: readonly string[]): string {
 
 const PULL_REQUEST = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g
 
+/** What a task's reply says for its row in the chat (threads.ts): the group leaves the apps once it archives, and this stays. */
+export type TaskAsk = 'on-it' | 'shipped' | 'closed'
+
+function taskAsk(group: Conversation): TaskAsk {
+  if (group.ledger?.mergedAt != null) return 'shipped'
+  const status = group.assignment?.status
+  if (status === 'cancelled' || status === 'stopped') return 'closed'
+  return status === 'done' && !group.pullRequestUrls?.length && !group.cards?.pullRequests?.length ? 'closed' : 'on-it'
+}
+
 /** The thread's reply for what changed in [group] in this command, in the words Dee approved (2026-11-03), or none. */
 function progress(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, pm: string): string | null {
   const cards = group.cards?.pullRequests
   const merged = cards?.length ? cards.filter(card => card.mergedAt !== undefined
     && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url) : []
   if (merged.length) return `Merged: ${pullRequests(merged)}. Ships in the next release.`
+  // A merge with no card to mark is still the merge: its row has no other way to say it shipped.
+  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) return `Merged: ${pullRequests(group.pullRequestUrls ?? [])}. Ships in the next release.`
   const assignment = group.assignment
   const was = previous?.assignment
   // Most tasks did not move in this command: they say nothing, and nothing more is read for them.
@@ -120,7 +132,7 @@ function moved(state: SuperTabState, effects: CommandEffects, group: Conversatio
   const pm = chat.leadId && coordinator.kind === 'agent' && coordinator.id === chat.leadId ? coordinator.displayName ?? coordinator.name : 'the PM'
   const reply = (id: string, words: string) => {
     const root = group.cards!.line!.messageId
-    effects.messages.push({ id, conversationId: chat.id, author: coordinator, text: words, replyTo: root, thread: root, recipients: [], source: { kind: 'system' } })
+    effects.messages.push({ id, conversationId: chat.id, author: coordinator, text: words, replyTo: root, thread: root, recipients: [], source: { kind: 'system', ask: taskAsk(group) } })
   }
   if (!line) {
     const proposal = group.ledger?.proposal

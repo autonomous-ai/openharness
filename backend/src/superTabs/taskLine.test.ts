@@ -99,10 +99,11 @@ describe('ordinary task messages and progress replies', () => {
       expect(marks(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual(['shipped'])
     })
 
-    it('closes on a stop, and on a task finished with no pull request', () => {
-      const stopped = fixture(), a = stopped.group(), rootA = stopped.task(a).cards!.line!.messageId, kai = stopped.add('Kai', a)
-      stopped.run({ type: 'work.assign', conversationId: a, agentId: kai })
-      expect(marks(stopped.status(a, kai, 'stopped', 'Not needed.'), rootA)).toEqual(['closed'])
+    it('closes on a cancel, and on a task finished with no pull request', () => {
+      const cancelled = fixture(), a = cancelled.group(), rootA = cancelled.task(a).cards!.line!.messageId, kai = cancelled.add('Kai', a)
+      cancelled.run({ type: 'work.assign', conversationId: a, agentId: kai })
+      expect(marks(cancelled.run({ type: 'work.cancel', conversationId: a, assignmentId: cancelled.task(a).assignment!.id, reason: 'Not needed.' }), rootA))
+        .toEqual(['closed'])
       const done = fixture(), b = done.group(), rootB = done.task(b).cards!.line!.messageId, lee = done.add('Lee', b)
       done.run({ type: 'work.assign', conversationId: b, agentId: lee })
       expect(marks(done.status(b, lee, 'done', 'Answered in the thread.'), rootB)).toEqual(['closed'])
@@ -135,7 +136,7 @@ describe('ordinary task messages and progress replies', () => {
     for (const [url, n] of [[PR, 7], [second, 8]] as const) {
       const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url })
       expect(merged.messages.filter(m => m.thread === root)).toEqual([expect.objectContaining({ text: `Merged: PR #${n}. Ships in the next release.`,
-        source: { kind: 'system' } })])
+        source: { kind: 'system', ask: 'shipped' } })])
       expect(thread(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url }), root)).toEqual([])
     }
   })
