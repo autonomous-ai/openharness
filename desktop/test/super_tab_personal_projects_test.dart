@@ -229,6 +229,69 @@ void main() {
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   }
 
+  for (final brightness in Brightness.values) {
+    testWidgets('pictures of a Personal project leaving the list once its '
+        'panes close (task #3042), in ${brightness.name}', (tester) async {
+      if (_shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2560, 1440);
+      addTearDown(tester.view.reset);
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      c.select(
+        c.snapshot!.projects
+            .firstWhere((p) => p.name == 'web')
+            .leadConversationId,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                onAddAgent: (_) {},
+                onNewProject: () {},
+                onNewSwarm: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-open-${brightness.name}',
+      );
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.notifyListeners();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-closed-${brightness.name}',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
+
   group('a repo is one string on every computer', () {
     test('ssh, https, case, user, port and .git are the same repo', () {
       const forms = [

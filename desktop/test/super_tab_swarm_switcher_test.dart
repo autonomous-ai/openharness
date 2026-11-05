@@ -210,11 +210,12 @@ void _ownMachine(
   bool team = false,
   bool shared = false,
   bool linked = true,
+  String? name,
 }) {
   final machine = Machine(
     machineId: id,
     authMode: MachineAuthMode.remote,
-    name: 'Machine $id',
+    name: name ?? 'Machine $id',
     sessionKind: team ? 'team' : null,
     machineShare: shared
         ? MachineShare(
@@ -1849,6 +1850,62 @@ void main() {
           contains('rig'),
         );
       });
+
+      for (final brightness in Brightness.values) {
+        testWidgets('pictures of the rows saying why, with Try again (task '
+            '#3042), in ${brightness.name}', (tester) async {
+          if (_shots == null) return;
+          final previous = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = previous);
+          tester.view.devicePixelRatio = 2;
+          tester.view.physicalSize = const Size(1400, 700);
+          addTearDown(tester.view.reset);
+          late AppNotifier app;
+          late SuperTabController c;
+          await tester.runAsync(() async {
+            final (a, backend, opened) = await personal(
+              before: (a) =>
+                  _ownMachine(a, 'studio', name: 'Studio', online: false),
+            );
+            app = a;
+            c = opened;
+            backend
+              ..failPrepareOn = 'mini'
+              ..prepareFailure = const SuperTabFailure(
+                'MACHINE_UNAVAILABLE',
+                'This machine is not signed in.',
+              );
+            _ownMachine(a, 'mini', name: 'Mac mini');
+            await PersonalMachines.of(a).sync(c);
+            await _settle();
+          });
+          await tester.pumpWidget(
+            MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: grid.buildAppTheme(brightness: brightness),
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: SuperTabMachines(
+                    controller: c,
+                    app: app,
+                    embedded: true,
+                    onAddAgent: (_) {},
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump();
+          await captureWindow(
+            tester,
+            _shots,
+            'personal-machine-rows-${brightness.name}',
+          );
+          await _releaseAll(tester, app);
+        });
+      }
 
       testWidgets('another Swarm lists none', (tester) async {
         late AppNotifier app;
