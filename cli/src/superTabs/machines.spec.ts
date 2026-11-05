@@ -442,7 +442,7 @@ describe('contributed machine executor', () => {
     it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
       const f = fixture({}, () => null, () => true)
       withEngines(f)
-      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.ownerSignIn }
+      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.down }
       const relayHealth = vi.fn(async () => health)
       const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
       await machine.tick()
@@ -456,6 +456,39 @@ describe('contributed machine executor', () => {
       // The engines themselves were probed once: only the relay is asked again.
       expect(probes(f)).toHaveLength(1)
       expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    // Security review 2 of #3098: the probe asks Claude's path, so an owner sign-in it cannot read is Claude's alone. A Mac
+    // whose owner has only ChatGPT kept getting Codex work before, and must still.
+    it('reads only Claude signed out when the owner\'s Claude sign-in cannot be read, Codex still on the relay', async () => {
+      const f = fixture({}, () => null, () => true)
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: false }] } : usage(type, ...rest as []))
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
+    // Each probe has the owner's daemon read the owner's Keychain item: while macOS refuses it, it may ask on the owner's screen.
+    it('asks again only five minutes after the owner\'s Claude sign-in could not be read', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      f.step(4 * 60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledOnce()
+      f.step(60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads a probe that failed outright as a relay that does not answer', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => { throw new Error('unexpected') })
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
     })
 
     it('never asks the relay on a machine without one', async () => {
@@ -2636,9 +2669,17 @@ describe('the allowance a machine reports', () => {
   it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
     const f = fixture({}, () => null, () => true)
     f.request.mockImplementation(answer({ outcome: 'signedOut' }))
-    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn }) } as never)
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.refused }) } as never)
     await machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.ownerSignIn })
+    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.refused })
+  })
+
+  it("keeps Codex's reason when only the owner's Claude sign-in cannot be read", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
   })
 
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {

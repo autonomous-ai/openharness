@@ -8,8 +8,8 @@ import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { TEAM_RELAY_GUEST } from '../team/relay.js'
 import { probeRelay, RELAY_REASONS } from './relayHealth.js'
 
-async function relay(owner: { read: () => Promise<unknown>; refresh: () => Promise<null> }) {
-  const upstream = createServer((req, res) => { res.writeHead(req.url === '/v1/models' ? 200 : 404); res.end('{"data":[]}') })
+async function relay(owner: { read: () => Promise<unknown>; refresh: () => Promise<null> }, status = 200) {
+  const upstream = createServer((req, res) => { res.writeHead(req.url === '/v1/models' ? status : 404); res.end('{"type":"error","error":{"type":"overloaded_error"}}') })
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   onTestFinished(() => { upstream.closeAllConnections(); upstream.close() })
   const started = await startSubscriptionRelay({ owner: owner as never, upstream: { claude: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` } })
@@ -25,8 +25,17 @@ describe('asking the owner\'s relay whether it answers', () => {
 
   it('says the owner\'s sign-in cannot be read, and what the owner does, when the relay finds none (Kay\'s Mac)', async () => {
     const grant = await relay({ read: async () => null, refresh: async () => null })
-    expect(await probeRelay(grant)).toEqual({ ok: false, reason: RELAY_REASONS.ownerSignIn })
+    // Claude's alone: the relay may still serve the owner's Codex.
+    expect(await probeRelay(grant)).toEqual({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true })
     expect(RELAY_REASONS.ownerSignIn).toMatch(/allow/)
+  })
+
+  it('reads Anthropic busy or failing as the relay answering, never as the owner\'s sign-in (security reviews of #3098)', async () => {
+    for (const status of [503, 529, 429, 500]) expect(await probeRelay(await relay(signedIn, status)), String(status)).toEqual({ ok: true })
+  })
+
+  it('says Anthropic refused the owner\'s Claude sign-in, as Claude\'s alone, apart from the relay refusing this account', async () => {
+    expect(await probeRelay(await relay(signedIn, 401))).toEqual({ ok: false, reason: RELAY_REASONS.claudeRefused, claudeOnly: true })
   })
 
   it('says the token was refused, and that nothing listens, without the token in either', async () => {
