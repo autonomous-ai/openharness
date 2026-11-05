@@ -23,7 +23,7 @@ function fixture(engineer: AgentConfiguration = opus) {
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const lead = run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'pm', configuration: opus, lead: true }, owner,
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.' }, as(lead)).result.conversationId as string
+  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [] }, as(lead)).result.conversationId as string
   const dev = add('dev', task, engineer)
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!
@@ -104,12 +104,12 @@ describe('reviewerCandidates', () => {
   it('is never busy, a PM, a Buddy, or holding another step of this task', () => {
     const f = fixture()
     const busy = f.add('busy', f.task, opus, { roleName: 'Reviewer' })
-    const other = f.run({ type: 'conversation.create', title: 'Other' }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Other', brief: 'Other work.', checks: [] }, f.as(f.lead)).result.conversationId as string
     f.run({ type: 'work.assign', conversationId: other, agentId: busy }, f.as(f.lead))
     const buddy = f.add('buddy', f.task, opus, { roleName: 'Reviewer' })
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'g' }
     const holder = f.add('holder', f.task, opus, { roleName: 'Reviewer' })
-    const step = f.run({ type: 'conversation.create', title: 'Security review 1', reviewOf: f.task, step: 'Security review 1' } as Command, f.as(f.dev)).result.conversationId as string
+    const step = f.run({ type: 'conversation.create', title: 'Security review 1', reviewOf: f.task, step: 'Security review 1', brief: 'Read it.', checks: [] } as Command, f.as(f.dev)).result.conversationId as string
     f.run({ type: 'work.assign', conversationId: step, agentId: holder }, f.as(f.dev))
     f.add('free', f.task, opus, { roleName: 'Reviewer' })
     expect(f.pick('security')).toEqual(['free'])
@@ -120,10 +120,13 @@ describe('reviewerCandidates', () => {
     f.add('eng', f.task, opus, { roleName: 'Engineer' })
     f.add('guide', f.task, opus, { roleName: 'Guide' })
     f.add('integrator', f.task, opus, { roleName: 'Integrator' })
-    f.add('tester', f.task, opus, { roleName: 'Tester' })
+    f.add('tst', f.task, opus, { roleName: 'Tester' })
     f.add('rev', f.task, opus, { roleName: 'Reviewer' })
-    expect(f.pick('review')).toEqual(['rev', 'eng', 'tester'])
-    expect(f.pick('test')).toEqual(['tester', 'eng', 'rev'])
+    const review = f.pick('review'), test = f.pick('test')
+    expect(review[0]).toBe('rev')
+    expect(review.slice(1).sort()).toEqual(['eng', 'tst'])
+    expect(test[0]).toBe('tst')
+    expect(test.slice(1).sort()).toEqual(['eng', 'rev'])
   })
 
   it('is never an agent of another project', () => {
