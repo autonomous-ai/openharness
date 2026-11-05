@@ -2706,6 +2706,7 @@ void main() {
         String repo = 'notes-app',
       }) async {
         await openNewProject(tester);
+        await pickMachine(tester, 'mac-1');
         await toNewRepository(tester);
         await name(tester, repo);
         await tap(tester, 'swarm-new-repo-use');

@@ -559,6 +559,9 @@ class SuperTabProject {
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null,
+      repositoryCreation = row['repositoryCreation'] is Map
+          ? Map.unmodifiable(superTabMap(row['repositoryCreation']))
+          : null,
       leadWaiting = {
         for (final entry in row['leadWaiting'] as List? ?? const [])
           if (entry is Map && entry['id'] is String) entry['id'] as String,
@@ -604,6 +607,13 @@ class SuperTabProject {
   /// Status sheet.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+
+  /// New project's New repository for it (task #3373): what was asked
+  /// (`owner`, `name`, `private`, `by`, `at`) and how GitHub's sign-in came
+  /// back (`state`: waiting, created, taken, refused, failed or cancelled,
+  /// with `repositoryUrl`, `reachable` and `reason`). Null from a server
+  /// before it, and for a project nobody asked one for.
+  final Map<String, dynamic>? repositoryCreation;
 }
 
 /// A project's status card text, as the desktop's model reads it
