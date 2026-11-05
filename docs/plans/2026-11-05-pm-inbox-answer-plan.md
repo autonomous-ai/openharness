@@ -8,8 +8,10 @@
 - **Task 1** as planned, with one change: `answer` is a mode of `message.send` (`answer: true` with `answers`), not a new
   command type, so it goes through every store path a post goes through (reply context, attachments, owed asks, deliveries).
   `placeAnswer` turns it into a reply when the ask is inside a thread. The CLI's `answer` subcommand sends it.
-- **Task 3** as planned, narrowed by River's ruling: only another agent's post with no system source waits. A person's
-  message, every system row (stop, cancel, assignment, moved task), and anything to a coordinator or a Buddy go at once.
+- **Task 3** as planned, with River's rulings (11-05): a post by an agent other than the PM, with no system source, waits
+  when it goes to any agent except a PM or a Buddy. That is crew as the board counts it, not only #3222's standing crew.
+  A person's message, the PM's own post (a redirect), every system row (stop, cancel, assignment, moved task), and
+  anything to a PM or a Buddy go at once.
   `waitsUntil` is cleared one row at a time by the agent's own `work.status`, and the list row carries `waitsForTurnEnd`
   by the server's clock.
 - **Task 4** changed: the host can run outside the core's process, so a per-delivery flag in `inCore/deliveries.ts` would
