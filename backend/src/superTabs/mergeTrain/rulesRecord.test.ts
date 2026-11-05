@@ -17,10 +17,10 @@ const MINUTE = 60_000
 /** A task whose review step passed at [head] of [url], once by each of [reviewers]. */
 function approvedTask(url: string, head: string, reviewers: string[]): TrainTask {
   const check = (by: string): Check => ({ id: `c-${by}`, description: 'Review', independent: true, evidence: 'ok', passedBy: by,
-    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}` }] as unknown as Check['verdicts'] })
+    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}`, base: 'main' }] as unknown as Check['verdicts'] })
   return {
     checks: [],
-    pullRequestHeads: { [url]: { head, patch: `patch-${head}`, at: 1 } },
+    pullRequestHeads: { [url]: { head, patch: `patch-${head}`, at: 1, base: 'main' } },
     steps: reviewers.map(by => ({ step: 'Review', title: 'Review', archived: false, checks: [check(by)], assignment: { status: 'done' } as Conversation['assignment'] })),
   }
 }

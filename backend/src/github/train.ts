@@ -73,6 +73,9 @@ const PASSED = new Set(['success', 'neutral'])
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
 const text = (value: unknown): string | null => typeof value === 'string' ? value : null
+/** A branch name with no control or format character: one with a zero-width space or a bidi override can read as "main" on
+ *  screen and be another branch (task #3493), so the train reads such a pull request as unreadable. */
+const plainRef = (value: unknown): value is string => typeof value === 'string' && !!value && !/[\p{Cc}\p{Cf}]/u.test(value)
 
 /** The train's calls on `owner/name` [repository] through [call]. */
 export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
@@ -99,7 +102,7 @@ export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
     const body = object(value), head = object(body.head), into = object(body.base)
     const state = body.state
     if (typeof body.number !== 'number' || (number !== undefined && body.number !== number) || (state !== 'open' && state !== 'closed')
-      || typeof body.draft !== 'boolean' || !text(body.html_url) || !text(head.ref) || !text(into.ref)) throw new TrainReadError(what, 200)
+      || typeof body.draft !== 'boolean' || !text(body.html_url) || !plainRef(head.ref) || !plainRef(into.ref)) throw new TrainReadError(what, 200)
     const mergeable = body.mergeable === true || body.mergeable === false ? body.mergeable : null
     return { number: body.number, url: text(body.html_url)!, state, merged: body.merged === true, draft: body.draft, title: text(body.title) ?? '',
       body: text(body.body) ?? '', mergeable, head: sha(head.sha, what), headRef: text(head.ref)!,

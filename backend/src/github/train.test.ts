@@ -103,6 +103,13 @@ describe('the merge train on GitHub', () => {
     expect(calls.map(c => c.method)).toEqual(['PUT', 'POST', 'PATCH', 'DELETE'])
   })
 
+  it('reads a pull request whose base or head branch name hides a control or format character as unreadable', async () => {
+    for (const bad of [{ base: { ref: 'main\u200b' } }, { base: { ref: 'ma\u202ein' } }, { head: { sha: SHA, ref: 'feature\u0007', repo: { full_name: 'acme/app' } } }]) {
+      const { train } = stub({ 'GET /repos/acme/app/pulls/7': { status: 200, body: pullBody(7, bad) } })
+      await expect(train.pull(7)).rejects.toBeInstanceOf(TrainReadError)
+    }
+  })
+
   it('reads a fork\'s pull request as from another repository', async () => {
     const { train } = stub({ 'GET /repos/acme/app/pulls/7': { status: 200, body: pullBody(7, { head: { sha: SHA, ref: 'harness-train/p1/1', repo: { full_name: 'outsider/app' } } }) } })
     expect(train.repository).toBe('acme/app')

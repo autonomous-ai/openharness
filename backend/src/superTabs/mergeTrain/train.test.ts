@@ -11,10 +11,10 @@ const ON: TrainRules = { enabled: true, rules: SEED_RULES }
 /** A task whose one review step passed at [head] of [url]. */
 function approvedTask(url: string, head: string, reviewers = ['agent:reviewer']): TrainTask {
   const check = (by: string): Check => ({ id: `c-${by}`, description: 'Review', independent: true, evidence: 'ok', passedBy: by,
-    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}` }] as unknown as Check['verdicts'] })
+    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}`, base: 'main' }] as unknown as Check['verdicts'] })
   return {
     checks: [],
-    pullRequestHeads: { [url]: { head, patch: `patch-${head}`, at: 1 } },
+    pullRequestHeads: { [url]: { head, patch: `patch-${head}`, at: 1, base: 'main' } },
     steps: reviewers.map(by => ({ step: 'Review', title: 'Review', archived: false, checks: [check(by)], assignment: { status: 'done' } as Conversation['assignment'] })),
   }
 }
@@ -68,6 +68,19 @@ describe('the merge train builds batches', () => {
     repo.state.ci.set(repo.batches()[0]!.head, 'success')
     await pass()
     expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[b.head]])
+  })
+
+  it('never batches a pull request retargeted to main after its review was read against another branch (Ledger, #3218)', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts'])
+    swarm.approve(a)
+    // The review passed at this head against "release", and the watch last read it there; GitHub now shows it into main.
+    const task = swarm.tasks.get('task-7')!.task
+    task.pullRequestHeads![a.url] = { ...task.pullRequestHeads![a.url]!, base: 'release' }
+    for (const step of task.steps) for (const check of step.checks) for (const verdict of check.verdicts!) verdict.base = 'release'
+    await pass()
+    expect(repo.batches()).toEqual([])
+    expect(repo.state.squashes).toEqual([])
   })
 
   it('never batches a pull request whose verdict is not at its head', async () => {
