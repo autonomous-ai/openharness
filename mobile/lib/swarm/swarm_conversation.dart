@@ -1189,7 +1189,7 @@ class SwarmConversation extends ChangeNotifier
     return refused == null;
   }
 
-  /// The person may edit and delete [message]: their own plain post (no
+  /// The person may edit [message]: their own plain post (no
   /// note the server wrote in their name), not deleted, where they may post.
   /// The backend decides again (messageEdits.ts); this only hides the menu.
   bool mayChange(SuperTabMessage message) =>
@@ -1197,6 +1197,17 @@ class SwarmConversation extends ChangeNotifier
       message.author['kind'] == 'person' &&
       message.authorId == reader.accountId &&
       message.source.isEmpty &&
+      !message.deleted;
+
+  /// Buddy proposals are delete-only, for the attributed person whose id
+  /// also matches their source. The backend independently authorizes this.
+  bool mayDelete(SuperTabMessage message) =>
+      canPost &&
+      message.author['kind'] == 'person' &&
+      message.authorId == reader.accountId &&
+      (message.source.isEmpty ||
+          (message.source['kind'] == 'buddy-proposal' &&
+              message.source['personId'] == reader.accountId)) &&
       !message.deleted;
 
   /// Puts [text], trimmed, in place of [message]'s (backend `message.edit`):

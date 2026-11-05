@@ -1867,7 +1867,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       onEdit: mine
           ? () => unawaited(_edit(shown, (m, text) => t.editMessage(m, text)))
           : null,
-      onDelete: mine ? () => unawaited(_delete(shown, t.deleteMessage)) : null,
+      onDelete: c.mayDelete(message)
+          ? () => unawaited(_delete(shown, t.deleteMessage))
+          : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
@@ -1932,7 +1934,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       react: c.canPost,
       link: link ? _linkTo(c, id) : null,
       onEdit: mine ? () => unawaited(_edit(shown, c.editMessage)) : null,
-      onDelete: mine ? () => unawaited(_delete(shown, c.deleteMessage)) : null,
+      onDelete: link && c.mayDelete(message)
+          ? () => unawaited(_delete(shown, c.deleteMessage))
+          : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
