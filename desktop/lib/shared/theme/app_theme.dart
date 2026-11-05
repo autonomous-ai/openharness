@@ -173,6 +173,9 @@ abstract final class AppPalette {
   static Color get swarmAccent => AppTheme.surfacePalette.accent;
   // Shared with the native search field for a continuous input/results surface.
   static Color get swarmSearchSurface => AppTheme.surfacePalette.search;
+  // The Swarm's project sidebar: the workspace color, or a palette's own
+  // (Plum's plum). Its ink is `SidebarInk`'s.
+  static Color get swarmSidebar => AppTheme.surfacePalette.sidebar;
   // Getters, not consts: a light palette brings its own panel and card.
   static Color get agentEntrySurface =>
       AppTheme.pick(AppTheme.surfacePalette.panel, const Color(0xff101113));
@@ -383,10 +386,14 @@ abstract final class AppPalette {
   static Color get onboardingTagline =>
       AppTheme.pick(const Color(0xFF7D5A2C), const Color(0xFFD4A574));
 
+  // A palette may bring its own three grays (Plum, Night, Cloud, Storm); the
+  // rest share these ramps.
   static Color get textPrimary =>
+      AppTheme.surfacePalette.text ??
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
 
   static Color get textSecondary =>
+      AppTheme.surfacePalette.muted ??
       AppTheme.pick(const Color(0xFF62615B), const Color(0xFFA8A8A2));
 
   /// Meta text and hints. Light is #7A7973, not the #8E8D86 it was: that one
@@ -394,12 +401,14 @@ abstract final class AppPalette {
   /// (#E2E2DF) and 2.60 on Mist's (#DCE4EE). This holds 3.36 / 3.40 there and
   /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
   /// [textSecondary] so the three steps still read as three.
-  static Color get textFaint => textFaintFor(isDark: AppTheme.isDark);
+  static Color get textFaint =>
+      AppTheme.surfacePalette.faint ?? textFaintFor(isDark: AppTheme.isDark);
 
   /// [textFaint] for a theme being built, whose brightness need not be the
   /// current one. Every field's placeholder is this color.
   static Color textFaintFor({required bool isDark}) =>
-      isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973);
+      AppTheme.paletteFor(isDark ? Brightness.dark : Brightness.light).faint ??
+      (isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973));
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -956,12 +965,16 @@ ThemeData buildAppTheme({
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
           surface: AppTheme.paletteFor(brightness).background,
-          onSurface: const Color(0xFFF5F5F5),
-          onSurfaceVariant: const Color(0xFFA8A8A2),
+          onSurface:
+              AppTheme.paletteFor(brightness).text ?? const Color(0xFFF5F5F5),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFFA8A8A2),
           surfaceContainerHighest: AppTheme.paletteFor(brightness).card,
           outline: const Color(0x14FFFFFF),
           outlineVariant: const Color(0x14FFFFFF),
-          error: const Color(0xFFFF7068),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFFF7068),
         )
       : ColorScheme.light(
           primary: AppPalette.accent,
@@ -971,14 +984,17 @@ ThemeData buildAppTheme({
           // the dark scheme's does.
           surface: AppTheme.paletteFor(brightness).background,
           onSurface: AppTheme.paletteFor(brightness).foreground,
-          onSurfaceVariant: const Color(0xFF62615B),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFF62615B),
           // The field fill. Not the card, which is pure white on both light
           // palettes: a white field in a white dialog has no edge at all. The
           // panel tone is the step the old light theme's #F3F3F2 was.
           surfaceContainerHighest: AppTheme.paletteFor(brightness).panel,
           outline: const Color(0x0F000000),
           outlineVariant: const Color(0x0F000000),
-          error: const Color(0xFFB3261E),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFB3261E),
         );
   final scheme = highContrast
       ? baseScheme.copyWith(

@@ -63,7 +63,12 @@ void main() {
         isNot(matches(RegExp('slack|discord|aubergine'))),
       );
     }
-    expect(newPalettes.map((p) => p.label), ['Plum', 'Night', 'Cloud', 'Storm']);
+    expect(newPalettes.map((p) => p.label), [
+      'Plum',
+      'Night',
+      'Cloud',
+      'Storm',
+    ]);
     // Paper and Mist stay, and the default is still Graphite.
     expect(HarnessPalette.values, contains(HarnessPalette.paper));
     expect(HarnessPalette.values, contains(HarnessPalette.mist));
