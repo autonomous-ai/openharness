@@ -245,19 +245,18 @@ void main() {
   // Task #3462: a crew time's median · slowest is the widest cell; it stays on one line in its row.
   testWidgets('keeps a crew move time on one line', (tester) async {
     await loadPreviewFonts();
-    // Width is a property of a real face: without one (Linux CI has neither the system face nor Roboto), Flutter's test font
-    // draws every glyph an em wide, so "i" and "W" measure the same and nothing here means anything. Roboto at the table's
-    // 13 px puts "9m59 · 9m59" at 76 px, inside the 96 px cell.
+    // Width is a property of a real face, which loadPreviewFonts now gives every machine, Linux CI too (bundled Roboto,
+    // task #3511): it runs everywhere, and fails rather than skips if the one-em test font is ever back. Roboto at the
+    // table's 13 px puts "9m59 · 9m59" at 76 px, inside the 96 px cell; a too-narrow cell wraps (preview_fonts_test.dart).
     double width(String text) => (TextPainter(
       text: TextSpan(text: text, style: DesktopChrome.control()),
       textDirection: TextDirection.ltr,
     )..layout()).width;
-    if (width('i') == width('W')) {
-      markTestSkipped(
-        'needs a real text face to measure; the test font is one em per glyph',
-      );
-      return;
-    }
+    expect(
+      width('i'),
+      lessThan(width('W') / 2),
+      reason: 'needs a real text face; the test font is one em per glyph',
+    );
     final reader = SuperTabScorecardReader(
       tabId: 'tab',
       request: (method, path, {body}) async => {
