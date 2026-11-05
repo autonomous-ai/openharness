@@ -7,8 +7,9 @@ import type { AgentStart, SuperTabState } from './model.js'
 
 /** Failed starts in a row that suspend an engine on a machine. */
 export const SUSPEND_AFTER = 2
-/** How long a suspension stands at most. */
-export const SUSPENSION_MS = 6 * 3_600_000
+const LEGACY_SUSPENSION_MS = 6 * 3_600_000
+const duration = (level: number) => Math.min(30 * 60_000 * 2 ** (level - 1), 12 * 3_600_000)
+type EngineSuspension = NonNullable<ContributedMachine['engineSuspensions']>[string]
 const NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const named = (engine: string) => NAME[engine] ?? engine
 /** Match the host's engine summaries, never arbitrary preparation errors. On 11-05, clone/token/tool/request failures
@@ -37,12 +38,15 @@ function readsFine(machine: ContributedMachine, engine: string): boolean {
 }
 function active(machine: ContributedMachine, engine: string, now: number) {
   const suspension = machine.engineSuspensions?.[engine]
-  return suspension && now - suspension.at < SUSPENSION_MS ? suspension : null
+  return suspension && now - suspension.at < (suspension.durationMs ?? LEGACY_SUSPENSION_MS) ? suspension : null
 }
-function suspensionReason(engine: string, fine: boolean): string {
+function suspensionReason(engine: string, suspension: EngineSuspension): string {
+  const minutes = (suspension.durationMs ?? LEGACY_SUSPENSION_MS) / 60_000
+  const after = minutes < 60 ? `${minutes} minutes` : `${minutes / 60} ${minutes === 60 ? 'hour' : 'hours'}`
+  const reading = suspension.cause === 'sign-in' ? 'once a reading shows it signed in, '
+    : !suspension.cause && !suspension.fine ? 'once a reading shows it signed in with quota left, ' : ''
   return `${named(engine)} is suspended on this machine for new work: its last ${SUSPEND_AFTER} starts there failed. `
-    + (fine ? 'It is offered again within 6 hours, or once its owner resumes it.'
-      : 'It is offered again once a reading shows it signed in with quota left, within 6 hours, or once its owner resumes it.')
+    + `It is offered again ${reading}after ${after}, or once its owner resumes it.`
 }
 
 /** Counts a failed start against its engine on its machine. Returns the suspension's sentence when this failure suspends
@@ -51,27 +55,37 @@ export function noteStartFailed(state: SuperTabState, start: AgentStart, now: nu
   const machine = pool(state, start.request.machineId), engine = start.request.engine
   if (!machine || !counts(start) || active(machine, engine, now)) return null
   const failures = (machine.engineFailures?.[engine] ?? 0) + 1
-  if (failures < SUSPEND_AFTER) { machine.engineFailures = { ...machine.engineFailures, [engine]: failures }; return null }
+  const previous = machine.engineBackoff?.[engine]
+  const cause = engineFailure(start.error!) === 'engine' || (failures > 1 && previous?.cause !== 'sign-in') ? 'engine' : 'sign-in'
+  if (failures < SUSPEND_AFTER) {
+    machine.engineFailures = { ...machine.engineFailures, [engine]: failures }
+    machine.engineBackoff = { ...machine.engineBackoff, [engine]: { level: previous?.level ?? 0, cause } }
+    return null
+  }
   const { [engine]: _done, ...others } = machine.engineFailures ?? {}
   machine.engineFailures = others
-  const fine = readsFine(machine, engine)
-  machine.engineSuspensions = { ...machine.engineSuspensions, [engine]: { at: now, fine } }
-  return suspensionReason(engine, fine)
+  const level = Math.min((previous?.level ?? 0) + 1, 6)
+  machine.engineBackoff = { ...machine.engineBackoff, [engine]: { level, cause } }
+  const suspension = { at: now, fine: cause === 'engine', durationMs: duration(level), cause } as const
+  machine.engineSuspensions = { ...machine.engineSuspensions, [engine]: suspension }
+  return suspensionReason(engine, suspension)
 }
 
 /** A start that ran: its engine's failures there are no longer in a row. */
 export function noteStartSucceeded(state: SuperTabState, start: AgentStart): void {
   const machine = pool(state, start.request.machineId)
-  if (!machine?.engineFailures?.[start.request.engine]) return
-  const { [start.request.engine]: _reset, ...others } = machine.engineFailures
-  machine.engineFailures = others
+  if (machine && !start.request.gridModel) resumeEngine(machine, start.request.engine)
 }
 
 /** After a reading is stored: a suspension ends once the engine reads fine, unless it already read fine as it was suspended
  *  (its starts failed for another reason, and every report would end it at once). Ended and expired ones are dropped. */
 export function readingClearsSuspensions(machine: ContributedMachine, now: number): void {
   if (!machine.engineSuspensions) return
-  const kept = Object.entries(machine.engineSuspensions).filter(([engine, s]) => now - s.at < SUSPENSION_MS && (s.fine || !readsFine(machine, engine)))
+  const kept = Object.entries(machine.engineSuspensions).filter(([engine, s]) => {
+    if (!active(machine, engine, now)) return false
+    if (s.cause === 'sign-in') return machine.observation?.readiness?.engines?.find(e => e.engine === engine)?.signedIn !== true
+    return !!s.cause || s.fine || !readsFine(machine, engine)
+  })
   machine.engineSuspensions = Object.fromEntries(kept)
 }
 
@@ -80,13 +94,14 @@ export function resumeEngine(machine: ContributedMachine, engine: string): boole
   const had = !!machine.engineSuspensions?.[engine]
   if (machine.engineSuspensions) { const { [engine]: _ended, ...others } = machine.engineSuspensions; machine.engineSuspensions = others }
   if (machine.engineFailures) { const { [engine]: _reset, ...others } = machine.engineFailures; machine.engineFailures = others }
+  if (machine.engineBackoff) { const { [engine]: _reset, ...others } = machine.engineBackoff; machine.engineBackoff = others }
   return had
 }
 
 /** Each engine suspended on the machine now, with why: what the route leaves out and Desktop strikes through. */
 export function suspendedEngines(machine: ContributedMachine, now: number): Record<string, string> {
   return Object.fromEntries(Object.entries(machine.engineSuspensions ?? {}).filter(([engine]) => active(machine, engine, now))
-    .map(([engine, s]) => [engine, suspensionReason(engine, s.fine)]))
+    .map(([engine, s]) => [engine, suspensionReason(engine, s)]))
 }
 
 /** Why a new start of [engine] on the machine is refused, or null: signed out in its reading, or suspended. Quota is
@@ -96,5 +111,5 @@ export function engineUnusable(machine: ContributedMachine, engine: string, now:
   const reading = machine.observation
   if (reading?.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return `${named(engine)} is not signed in to a subscription on this machine.`
   const suspension = active(machine, engine, now)
-  return suspension ? suspensionReason(engine, suspension.fine) : null
+  return suspension ? suspensionReason(engine, suspension) : null
 }

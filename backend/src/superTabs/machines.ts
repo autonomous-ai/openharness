@@ -75,8 +75,11 @@ export interface ContributedMachine {
   access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
-  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
-  engineSuspensions?: Record<string, { at: number; fine: boolean }>
+  /** Bounded repeat level (0–6) and cause of the current failure streak. Kept across expiry, removed by success/resume
+   *  or with the machine. A launch failure anywhere in the streak prevents sign-in-only recovery. */
+  engineBackoff?: Record<string, { level: number; cause: 'engine' | 'sign-in' }>
+  /** `fine` keeps the old reader's contract. Records before 11-05 lack duration/cause and retain their six-hour policy. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean; durationMs?: number; cause?: 'engine' | 'sign-in' }>
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
