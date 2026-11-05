@@ -338,6 +338,122 @@ describe('instructions.save', () => {
   })
 })
 
+// Task #3151 (Ken, 11-05, from lamp): a PM's tidy dropped Leo's rule, judging it impossible without asking him, and the
+// "(0xken15, 4 Nov)" of a rule it kept; nothing checked the save, and with instruction-change posts leaving the chat nobody
+// would have seen it.
+describe('an instructions save keeps the rules people gave', () => {
+  const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Tidied the instructions', ...extra })
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (peer, 2026-11-04).'
+  const tony = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const base = doc(leo, tony, quiet)
+  const stored = (text = base, revision = 1) => ({ instructions: { revision, text } })
+  /** A tab with the peer invited and the project's coordinator, whose saves carry askedBy. */
+  function pm() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    return { f, lead }
+  }
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { dropped: unknown[] } } }
+    throw new Error('the save went through')
+  }
+  const approval = (id: string, author: { kind: 'person' | 'agent'; id: string }, source = false) =>
+    ({ id, author: { ...author, name: author.id, membershipGeneration: 'tab' }, source })
+
+  it('refuses a save that drops an attributed rule, listing it and its person', () => {
+    const { f, lead } = pm()
+    const refused = refusal(() => f.run(save(1, doc(tony, quiet), { askedBy: 'owner' }), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', status: 409,
+      details: { dropped: [{ rule: leo, people: ['peer'], why: 'removed' }] } })
+    expect(refused.message).toContain(leo)
+    expect(refused.message).toContain('peer')
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses a save that keeps a rule but drops its (person, date)', () => {
+    const { f, lead } = pm()
+    const unattributed = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both.'
+    const refused = refusal(() => f.run(save(1, doc(leo, unattributed, quiet), { askedBy: 'owner' }), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: tony, people: ['owner'], why: 'unattributed' }] } })
+    // Another person's save is held to the same: only the rule's own person drops it.
+    expect(refusal(() => f.run(save(1, doc(leo, unattributed, quiet)), peer, stored()))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+  })
+
+  it('accepts merging two attributed rules that keep both attributions, and a rewording by the same person', () => {
+    const { f, lead } = pm()
+    const merged = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and '
+      + 'its Tester both (owner, 2026-11-02; owner, 4 Nov).'
+    expect(f.run(save(1, doc(leo, merged), { askedBy: 'owner' }), as(lead), stored()).result.revision).toBe(2)
+    const reworded = 'A bug that reaches stable: the previous build is promoted back within the hour, and the fix ships the same day (peer, 4 Nov).'
+    expect(f.run(save(2, doc(reworded, merged), { askedBy: 'owner' }), as(lead), stored(doc(leo, merged), 2)).result.revision).toBe(3)
+  })
+
+  it('lets a drop approved by the rule\'s person go through, and tells that person in one private line', () => {
+    const { f, lead } = pm()
+    const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(lead),
+      { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
+    expect(effects.result.revision).toBe(2)
+    const notices = effects.messages.filter(m => m.conversationId !== 'lead')
+    expect(notices.length).toBeGreaterThan(0)
+    for (const notice of notices) {
+      expect(notice.recipients).toEqual([])
+      expect(notice.text.split('\n')).toHaveLength(1)
+      expect(notice.text).toContain('A bug that reaches stable')
+      const chat = f.state.conversations.find(c => c.id === notice.conversationId)!
+      expect(chat.audience).toMatchObject({ people: [{ id: 'peer' }] })
+    }
+    // The project chat gets its one line about the save, nothing about the person.
+    expect(effects.messages.filter(m => m.conversationId === 'lead')).toHaveLength(1)
+  })
+
+  it('lets the rule\'s person drop it themselves with no approval and no notice', () => {
+    const { f } = pm()
+    const effects = f.run(save(1, doc(tony, quiet)), peer, stored())
+    expect(effects.result.revision).toBe(2)
+    expect(effects.messages.map(m => m.conversationId)).toEqual(['lead'])
+  })
+
+  it('takes only the person\'s own message as approval: never askedBy, another person\'s, an agent\'s or a relayed one', () => {
+    const { f, lead } = pm()
+    const drop = (approvals: ReturnType<typeof approval>[], askedBy = 'owner') =>
+      refusal(() => f.run(save(1, doc(tony, quiet), { askedBy, approvals: approvals.map(a => a.id) }), as(lead), { ...stored(), approvals }))
+    expect(drop([], 'peer')).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('owner-said', { kind: 'person', id: 'owner' })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('pm-said', { kind: 'agent', id: lead })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('buddy-said', { kind: 'person', id: 'peer' }, true)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    // A message the save names but the store did not find approves nothing.
+    expect(refusal(() => f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['missing'] }), as(lead), stored())))
+      .toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+  })
+
+  it('knows a person by their username, shown name or email, and several people each approve their own rule', () => {
+    const { f, lead } = pm()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Leo Tran'
+    const both = 'Phone builds go to Tony\'s Mac (Leo and owner, 2026-11-03).'
+    const text = doc(leo.replace('(peer,', '(Leo,'), both)
+    // Leo is the peer by their shown name: the peer's own save drops their rule.
+    expect(f.run(save(1, doc(both)), peer, stored(text)).result.revision).toBe(2)
+    // A rule of two people needs both.
+    const two = stored(doc(both), 2)
+    expect(refusal(() => f.run(save(2, doc(), { askedBy: 'owner' }), as(lead), { ...two, approvals: [approval('p', { kind: 'person', id: 'peer' })] })))
+      .toMatchObject({ details: { dropped: [{ people: ['Leo', 'owner'] }] } })
+    expect(f.run(save(2, doc(), { askedBy: 'owner', approvals: ['p', 'o'] }), as(lead), { ...two,
+      approvals: [approval('p', { kind: 'person', id: 'peer' }), approval('o', { kind: 'person', id: 'owner' })] }).result.revision).toBe(3)
+  })
+
+  it('leaves a rule whose person is no member to the project\'s owner', () => {
+    const { f, lead } = pm()
+    const ghost = doc('Ship on Fridays (Ghost, 2026-11-01).')
+    expect(refusal(() => f.run(save(1, doc(), { askedBy: 'owner' }), as(lead), stored(ghost)))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(refusal(() => f.run(save(1, doc()), peer, stored(ghost)))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(f.run(save(1, doc()), owner, stored(ghost)).result.revision).toBe(2)
+  })
+})
+
 describe('PM notes', () => {
   const note = (text: string, extra: Partial<Extract<Command, { type: 'note.add' }>> = {}): Command =>
     ({ type: 'note.add', projectId: 'lead', text, askedBy: 'owner', ...extra })
