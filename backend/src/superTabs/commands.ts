@@ -1,4 +1,4 @@
-import { recordPulse, owe, settleReaction, settleReply, settleRequest } from './pulse.js'
+import { recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
@@ -3338,6 +3338,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'message.delete':
       Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
+      settleDeleted(open(state, command.conversationId), command.messageId)
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)

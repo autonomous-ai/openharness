@@ -72,6 +72,11 @@ export function settleReaction(state: SuperTabState, group: Conversation, agentI
   settle(group, ask => ask.id === messageId)
 }
 
+/** [messageId], deleted by its author: nothing is left to answer, and its link would open a message that is gone. */
+export function settleDeleted(group: Conversation, messageId: string): void {
+  settle(group, ask => ask.id === messageId)
+}
+
 /** A task the PM opens from the person's request [messageId] in [project]'s chat settles it (commands.ts requestOf); one anyone
  *  else opens leaves the PM's answer owed (River's ruling on the review of #3209). */
 export function settleRequest(state: SuperTabState, project: SwarmProject, agentId: string | null, messageId: string): void {
@@ -164,6 +169,9 @@ export const PULSE_LIST_MAX = 50
  * while work waits is kept in it (`idleSince`) from one run to the next.
  */
 export function recordPulse(state: SuperTabState, now: number): void {
+  // The asks of a person who left the Swarm are owed to nobody, however they left.
+  const people = new Set(state.people.map(p => p.id))
+  for (const group of state.conversations) if (group.owed?.some(ask => !people.has(ask.personId))) settle(group, ask => !people.has(ask.personId))
   const projectOfAgent = agentProjects(state)
   for (const project of state.projects ?? []) {
     const chat = state.conversations.find(c => c.id === project.leadConversationId)
