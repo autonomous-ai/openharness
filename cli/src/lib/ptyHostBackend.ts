@@ -693,8 +693,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     try {
       // A guest's panes are in the guest host's table, which is the only one that can see them (the owner's host
       // cannot, by design: the profiles are private). The owner's own panes keep the machine-wide table.
-      found = await lookupPaneEngineProcess(this, runtime, expected.engine,
-        this.guestHost && this.client ? () => windowsProcessRows(this.client) : undefined)
+      found = this.guestHost && this.client
+        ? await lookupPaneEngineProcess(this, runtime, expected.engine, () => windowsProcessRows(this.client!))
+        : await lookupPaneEngineProcess(this, runtime, expected.engine)
     } catch {
       return { state: 'unknown', reason: 'pty host runtime probe failed' }
     }
