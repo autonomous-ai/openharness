@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/decisions_page.dart';
+import 'package:harness/super_tabs/prompt_lines.dart';
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
@@ -183,6 +184,40 @@ void main() {
       wrenAtPrompt(server, screen: false);
       await _show(tester, await _loaded(tester, server));
       expect(find.text('Its last lines could not be read.'), findsOneWidget);
+    });
+  });
+
+  // The web calls the backend straight, and its transport refuses terminal
+  // reads (backend_transport.dart): there the row reads no screen at all.
+  testWidgets('on the web the row reads no terminal and points to it', (
+    tester,
+  ) async {
+    await withClock(Clock.fixed(_now), () async {
+      final server = swarm()..followedThreads = null;
+      wrenAtPrompt(server);
+      final activity = await _loaded(tester, server);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabPromptLines(
+              controller: activity.controller,
+              agentId: 'wren',
+              web: true,
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 80)),
+      );
+      await tester.pumpAndSettle();
+      expect(server.screenRequests, isEmpty);
+      expect(_key('super-prompt-lines:wren'), findsNothing);
+      expect(
+        find.text('Open its terminal to see what it asks.'),
+        findsOneWidget,
+      );
     });
   });
 
