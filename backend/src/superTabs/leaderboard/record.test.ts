@@ -6,6 +6,8 @@ import { MAX_UNBLOCKS } from './record.js'
 import { leaderboard } from './stats.js'
 import { DAY_MS, WEEK_MS, weekStart } from './week.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -41,7 +43,7 @@ function fixture() {
     return { worker, assignmentId: group(id).assignment!.id }
   }
   const status = (id: string, assignmentId: string, worker: string, next: 'working' | 'needs_human' | 'review' | 'done', result: string | null = null) =>
-    run({ type: 'work.status', conversationId: id, assignmentId, status: next, result }, asAgent(worker))
+    run({ type: 'work.status', conversationId: id, assignmentId, status: next, result, ...(next === 'needs_human' ? { hold: HOLD } : {}) }, asAgent(worker))
   const passChecks = (id: string, assignmentId: string) => {
     for (const check of group(id).checks) run({ type: 'work.check', conversationId: id, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
   }

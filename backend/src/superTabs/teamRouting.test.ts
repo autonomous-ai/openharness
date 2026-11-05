@@ -4,6 +4,8 @@ import { admitMachineStart, availableSlots, machineObservationSchema, machineTea
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 // Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3): a start or an
 // assignment for a project whose owner did not contribute the machine needs a Harness Team account whose privacy check
 // passed, or a machine used only for agents. A person's own projects on their own machine are unchanged.
@@ -349,7 +351,7 @@ describe('agents already working on a personal machine', () => {
     work.assignment = { id: 'before-release', agentId: old, status: 'working', configuration: config,
       execution: { machineId: 'mate-mac', harnessId: 'harness-old', machineOwnerId: 'mate' }, result: null }
     const oldActor: Actor = { kind: 'agent', agentId: old, machineOwnerId: 'mate' }
-    f.run({ type: 'work.status', conversationId: group, assignmentId: 'before-release', status: 'blocked', result: 'Needs a token.' }, oldActor)
+    f.run({ type: 'work.status', conversationId: group, assignmentId: 'before-release', status: 'blocked', hold: HOLD, result: 'Needs a token.' }, oldActor)
     expect(f.run({ type: 'message.send', conversationId: group, text: 'Here it is.', replyTo: null, recipientIds: [old] }).messages[0]!.recipients).toEqual([old])
     expect(f.state.agents.find(a => a.id === old)).not.toHaveProperty('workDecision')
     expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ id: 'before-release', status: 'blocked' })

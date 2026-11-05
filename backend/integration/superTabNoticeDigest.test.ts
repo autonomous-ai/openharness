@@ -775,7 +775,7 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
       reviewOf: orphan })).result.conversationId)
     const reviewer = await f.add(step, 'test-host', 'Reviewer')
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
-    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', result: 'Needs the owner\'s account' }, host, reviewer)
+    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Needs the owner\'s account' }, host, reviewer)
     const row = await statusRow(f.tab, step, 'Stuck')
     expect(row.recipientIds).toEqual([f.lead])
     expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')

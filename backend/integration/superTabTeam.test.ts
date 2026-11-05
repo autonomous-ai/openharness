@@ -684,7 +684,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
     expect((await rosterRows(store, person, 'personal-mac')).find(r => r.tabId === f.tab && r.agent.id === old)).toMatchObject({ stopRequested: false })
     expect(await assignmentRows(store, person, 'personal-mac')).toContainEqual({ tabId: f.tab, assignmentId: 'assigned-before', harnessId: 'before-release' })
-    await run(f.tab, { type: 'work.status', conversationId: f.teamGroup, assignmentId: 'assigned-before', status: 'blocked', result: 'Needs a token.' }, person, old)
+    await run(f.tab, { type: 'work.status', conversationId: f.teamGroup, assignmentId: 'assigned-before', status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Needs a token.' }, person, old)
     await run(f.tab, { type: 'message.send', conversationId: f.teamGroup, text: 'Here it is.', replyTo: null, recipientIds: [old] })
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: old } })).toBeGreaterThan(0)
     await run(f.tab, { type: 'work.cancel', conversationId: f.teamGroup, assignmentId: 'assigned-before', reason: 'Moving it to the Team machine.' })

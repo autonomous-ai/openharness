@@ -66,7 +66,7 @@ async function scene(before?: (state: SuperTabState) => void) {
   const worker = s.add('worker-harness', waiting)
   s.run({ type: 'work.assign', conversationId: waiting, agentId: worker })
   s.run({ type: 'work.status', conversationId: waiting, assignmentId: s.state.conversations.find(c => c.id === waiting)!.assignment!.id,
-    status: 'needs_human', result: 'Flag?' }, { kind: 'agent', agentId: worker, machineOwnerId: `${owner.sub}-machine` })
+    status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Flag?' }, { kind: 'agent', agentId: worker, machineOwnerId: `${owner.sub}-machine` })
   s.edit(state => {
     const done = { id: 'done', agentId: worker, status: 'done' as const, result: PR, configuration: state.agents[0]!.configuration,
       execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub } }

@@ -258,6 +258,8 @@ export interface Assignment {
   progressAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
+  /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
+  hold?: import('./heldReason.js').HeldReason
   /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
    *  for its review (liveness.ts waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
@@ -408,6 +410,8 @@ export interface Conversation {
   queueRank?: number
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
+  /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
+  hold?: import('./heldReason.js').HeldReason
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority

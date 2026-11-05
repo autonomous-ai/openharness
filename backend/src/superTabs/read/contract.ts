@@ -39,6 +39,8 @@ export interface Audience { people: Array<{ id: string; generation: string }> }
 export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
+  /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
+  held?: import('../heldReason.js').HeldView
 }
   & { messageSeq: number; dormant?: true; audience?: Audience
     /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */

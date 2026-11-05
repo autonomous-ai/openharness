@@ -6,6 +6,8 @@ import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -68,15 +70,15 @@ describe('asking a person for decisions', () => {
 
   it('opens a decision for the named person when a worker needs one on its own task, and still tells the Lead', () => {
     const s = swarm()
-    const needs = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Ship to everyone, or behind a flag?',
+    const needs = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD, result: 'Ship to everyone, or behind a flag?',
       ask: { personId: 'peer', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning the feature on' } }, asAgent(s.worker))
     expect(needs.decisions).toEqual([expect.objectContaining({ personId: 'peer', askerAgentId: s.worker, assignmentId: s.assignmentId,
       question: 'Ship to everyone, or behind a flag?', recommended: 0, unblocks: 'Turning the feature on' })])
     expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer.', recipients: [s.lead] })
     // Without a person and options it reaches the Lead as before, who asks.
-    const plain = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(s.worker))
+    const plain = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD, result: 'Which database?' }, asAgent(s.worker))
     expect(plain.decisions ?? []).toEqual([])
-    expect(() => s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'blocked', result: 'Stuck',
+    expect(() => s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'blocked', hold: HOLD, result: 'Stuck',
       ask: { personId: 'peer', options: ['A', 'B'], recommended: 0, unblocks: 'X' } }, asAgent(s.worker))).toThrow('needs a human')
   })
 
