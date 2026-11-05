@@ -1170,15 +1170,15 @@ describe('Super Tabs on a real Mongo replica set', () => {
     for (let i = 0; i < 2; i++) {
       const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
       await hostRun({ type: 'agent.startDispatch', startId })
-      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex sign-in failed.' })
     }
     expect((await pool()).suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
     const notices = (await store.messages(owner, tab, task, {})).messages.filter(m => m.text.includes('Codex is suspended'))
     expect(notices.map(m => m.mentions)).toEqual([[host.sub]])
     await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
-    // Signed in, with quota left: the reading offers it again.
+    // Signed in, even with unknown quota: a sign-in suspension ends.
     await store.observeMachine(team.session, tab, 'health-host', { ...observation, quotaReasons: undefined,
-      quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }],
+      quotas: [{ engine: 'codex', known: false, windows: [] }],
       readiness: { engines: [{ engine: 'codex', installed: true, signedIn: true }] } })
     expect((await pool()).suspendedEngines).toBeUndefined()
     // Suspended again, and resumed by its owner.
