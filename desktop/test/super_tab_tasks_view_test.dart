@@ -176,6 +176,7 @@ Future<SuperTabController> _show(
           needsHuman: (task) => asking.contains(task.id) ? 1 : 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (id) => openedProposals?.add(id),
+          onOpenMessage: (_, _) {},
           selectedId: selectedId,
           now: () => _now,
         ),

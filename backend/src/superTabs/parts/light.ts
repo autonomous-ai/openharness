@@ -26,9 +26,9 @@ const running = { $and: [{ $ne: [{ $type: '$data.assignment.status' }, 'missing'
  */
 export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
-    'assignment.lost', 'reviewOf'],
+    'assignment.lost', 'reviewOf', 'pulse'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'teamWritten', 'teamWrittenBy', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'hold', 'priority',
+  unread: ['number', 'brief', 'teamWritten', 'teamWrittenBy', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'hold', 'priority', 'owed',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.hold', 'assignment.reviewFoundAt', 'assignment.changesRequestedAt', 'assignment.toldEngineerAt',
     'assignment.reopened', 'assignment.handoffs', 'assignment.verdicts'],
 } as const
