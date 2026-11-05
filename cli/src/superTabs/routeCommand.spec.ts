@@ -1697,6 +1697,18 @@ describe('routing contributed capacity', () => {
         expect(newOn(candidates)).not.toContain('m1')
       })
 
+      it('reads a task from before the mark, assigned to an agent in a Team account, as Team-written, as the backend does', async () => {
+        const assigned = conversations({ agentId: 'tw', status: 'working' })
+        const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', conversations: assigned, machines: [ownAccountMac(), team()],
+          agents: [{ id: 'tw', name: 'Writer', machineId: 'm9', harnessId: 'htw', teamAccount: true, configuration: { engine: 'claude', model: 'opus', effort: 'high' } }],
+          projects: [{ id: 'lead', ownerId: 'owner', repository: { repositoryUrl: 'https://github.com/example/project' } }] } },
+          policy: { policy, warnings: [] }, machines: [] } } })
+        await routeTask(input, s, where, opener())
+        const candidates = (recorded(s).command.decision.candidates ?? []) as Array<{ machineId: string; kind: string }>
+        expect(newOn(candidates)).toContain('m1-team')
+        expect(newOn(candidates)).not.toContain('m1')
+      })
+
       it('keeps the Mac\'s owner\'s own project on the Mac', async () => {
         const { candidates } = await route('mate', [ownAccountMac(), team()])
         expect(newOn(candidates)).toContain('m1')
