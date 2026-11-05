@@ -2416,7 +2416,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
       if (moved.machineId !== named.machineId) {
         const mac = state.machines?.find(m => m.machineId === named.machineId)
-        if (mac) result.moved = movedToTeamAccount(mac)
+        if (mac) result.moved = movedToTeamAccount(mac, written)
       }
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.

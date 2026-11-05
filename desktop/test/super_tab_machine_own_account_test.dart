@@ -147,8 +147,8 @@ void main() {
       );
       expect(
         find.text(
-          "Teammates' agents will run as you on Gray's Mac. They can read your files, your keychain and your "
-          'signed-in apps. Agents already running are not moved.',
+          "Teammates' agents in this Swarm will run as you on Gray's Mac. They can read your files, your keychain "
+          'and your signed-in apps. Agents already running are not moved. Your other Swarms keep their own choice.',
         ),
         findsOneWidget,
       );
