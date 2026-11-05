@@ -40,6 +40,21 @@ export interface LeadContext {
   slots?: (pool: ContributedMachine) => number
 }
 
+/** Efforts a Product Manager never runs at (task #3022, Ken 11-05): it keeps what people teach it only when it thinks hard
+ *  enough to. Claude's and Codex's names below high. */
+const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
+/** The effort a Product Manager gets when its start or switch names a model and no effort. */
+export const LEAD_EFFORT = 'high'
+
+/** [request] for a Product Manager at high effort or above: an effort named below it is refused, and a model named with no
+ *  effort gets high. With no model it keeps its engine's own model and effort, which its host sets only together. */
+export function leadEffort<T extends { model?: string; effort?: string }>(request: T, name: string): T {
+  if (request.effort && BELOW_LEAD_EFFORT.has(request.effort.toLowerCase())) {
+    fail('EFFORT_TOO_LOW', `A ${name} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
+  }
+  return request.model && !request.effort ? { ...request, effort: LEAD_EFFORT } : request
+}
+
 /** The engines a Product Manager runs on, as people read them. */
 const LEAD_ENGINES = { claude: 'Claude Code', codex: 'Codex' } as const
 
