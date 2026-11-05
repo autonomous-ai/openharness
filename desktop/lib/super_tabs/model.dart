@@ -543,7 +543,10 @@ class SuperTabProject {
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
-          : null;
+          : null,
+      repositoryCreation = SuperTabRepositoryCreation.read(
+        row['repositoryCreation'],
+      );
   final String id, name, ownerId, leadConversationId;
 
   /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
@@ -572,6 +575,73 @@ class SuperTabProject {
   /// before the first report.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+
+  /// Its owner's last New Repository from New Project and what GitHub's
+  /// sign-in made of it (task #3374); null when none was asked, and from a
+  /// backend before it.
+  final SuperTabRepositoryCreation? repositoryCreation;
+}
+
+/// A new repository asked for a project (backend projects.ts
+/// `RepositoryCreation`, task #1788): [at] names the ask an outcome answers.
+class SuperTabRepositoryCreation {
+  const SuperTabRepositoryCreation({
+    required this.owner,
+    required this.name,
+    required this.private,
+    required this.at,
+    required this.state,
+    this.repositoryUrl,
+    this.reachable,
+    this.reason,
+  });
+
+  /// Null for anything but a whole ask: the apps then show no outcome.
+  static SuperTabRepositoryCreation? read(Object? value) {
+    if (value is! Map) return null;
+    final owner = value['owner'], name = value['name'];
+    final at = value['at'], state = value['state'];
+    if (owner is! String || name is! String || at is! num || state is! String) {
+      return null;
+    }
+    return SuperTabRepositoryCreation(
+      owner: owner,
+      name: name,
+      private: value['private'] != false,
+      at: at.toInt(),
+      state: state,
+      repositoryUrl: switch (value['repositoryUrl']) {
+        final String url => url,
+        _ => null,
+      },
+      reachable: switch (value['reachable']) {
+        final bool reachable => reachable,
+        _ => null,
+      },
+      reason: switch (value['reason']) {
+        final String reason => reason,
+        _ => null,
+      },
+    );
+  }
+
+  final String owner, name;
+  final bool private;
+
+  /// When it was asked (ms since the epoch, the server's clock).
+  final int at;
+
+  /// `waiting`, `creating`, `created`, `taken`, `refused`, `failed` or
+  /// `cancelled`.
+  final String state;
+  final String? repositoryUrl;
+
+  /// Whether teammates' agents can reach it through the Harness GitHub App,
+  /// once `created`.
+  final bool? reachable;
+
+  /// GitHub's reason, once `refused`.
+  final String? reason;
 }
 
 /// A project's status card text: one per project, replaced by each report
