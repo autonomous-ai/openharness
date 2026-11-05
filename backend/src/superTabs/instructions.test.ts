@@ -34,10 +34,12 @@ function fixture() {
 
 describe('the built-in template', () => {
   // Task #3392 (River, 11-05): a new project's PM must be able to add its routing lines, and a member a line to the PM's
-  // section, so the template keeps 800 B of room in its core and 200 B in its PM section, every role within its budget.
+  // section, so the template keeps room in its core and 200 B in its PM section, every role within its budget. The core's
+  // room went from 800 B to 300 B when #3227's rule that the server opens review steps came in word for word (River, 11-06):
+  // rules leaving for code free room again.
   it('keeps to the size budget, with room in its core and its PM section', () => {
     const parts = budgetParts(INSTRUCTIONS_TEMPLATE)
-    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 800)
+    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 300)
     expect(parts.find(p => p.part === 'role PM')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role - 200)
     for (const role of parts.filter(p => p.part.startsWith('role '))) expect(role.bytes, role.part).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role)
     expect(parts.filter(p => p.part.startsWith('role ')).map(p => p.part)).toEqual(['role PM', 'role Engineer', 'role Reviewer', 'role Tester'])
