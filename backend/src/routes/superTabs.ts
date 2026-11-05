@@ -17,7 +17,8 @@ import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
-import { machineObservationSchema } from '../superTabs/machines.js'
+import { machineObservationSchema, teamAccountRequired } from '../superTabs/machines.js'
+import { repositoryReachOf } from '../superTabs/repositoryReach.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
@@ -246,7 +247,7 @@ export const HOT_BODY_LIMIT = 128 * 1024
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
-async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
+async function productionStore(github: GitHubTokens | null, approvals: Approvals): Promise<SuperTabStore> {
   const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers },
     { VoiceQuotaExceededError, voiceQuotaService }, { pickWavLang, transcribeWavWithDeepgram }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
@@ -263,6 +264,11 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
+      // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
+      // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
+      ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>
+        repositoryReachOf(await projectGitHubAccess(github.app, repositoryUrl, { canApprove: false,
+          approved: async repository => !teamAccountRequired() || approvals.approved(autonomousEnv, tabId, projectId, repository) })) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
@@ -311,7 +317,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
       + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
   }
-  const store = options.store ?? await productionStore(github)
+  const store = options.store ?? await productionStore(github, approvals)
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
   // Another account's sign-in on a computer moves the computer's Swarm entries to it (computerMoves.ts).
