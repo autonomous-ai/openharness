@@ -3,11 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/model.dart';
-import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/pulse_model.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
@@ -87,6 +86,9 @@ void main() {
   /// [pulse] null: a server from before the pulse.
   FakeSwarm backend(Map<String, dynamic>? pulse) {
     final fake = FakeSwarm();
+    final derived = <String, dynamic>{
+      if (pulse != null) 'pulse': {project: pulse},
+    };
     Map<String, dynamic> task(
       String id,
       String title,
@@ -121,16 +123,16 @@ void main() {
           task('g-held', 'Billing', 9, status: 'needs_human'),
           task('g-later', 'Later', 10),
         ],
-        derived: {
-          if (pulse != null) 'pulse': {project: pulse},
-        },
+        derived: derived,
       ),
       'members': [
         part(me, 1, person(me)),
         part(huy, 1, {...person(huy, role: 'member'), 'name': 'Huy'}),
       ],
     };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    // Each read, a change read too, sends the whole of `derived`.
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+        changes(cursor: 'c2', derived: derived);
     fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
       'decisions': <Object>[],
     };
@@ -192,9 +194,10 @@ void main() {
   }
 
   /// The words of the strip's segment [name].
-  String words(WidgetTester tester, String name) =>
-      tester.widget<Text>(key('swarm-pulse-$name-text')).textSpan!
-          .toPlainText();
+  String words(WidgetTester tester, String name) => tester
+      .widget<Text>(key('swarm-pulse-$name-text'))
+      .textSpan!
+      .toPlainText();
 
   bool red(WidgetTester tester, String name) {
     final shown = key('swarm-pulse-$name-red').evaluate().isNotEmpty;
@@ -210,21 +213,42 @@ void main() {
   const segments = ['asks', 'working', 'next-up', 'lost', 'held'];
 
   group('derived.pulse', () {
-    test('is read into each project of the snapshot', () {
-      final now = DateTime.utc(2026, 11, 5, 12);
-      final parts = SuperTabParts.firstLoad(
-        firstLoad(
-          derived: {
-            'pulse': {
-              project: pulseData(
-                now,
-                redAt: {'asks': now.millisecondsSinceEpoch + 60000},
-              ),
-            },
-          },
-        ),
+    /// A reader of the Swarm whose reads send [derived], then [next].
+    Future<SwarmReader> read(
+      Map<String, dynamic> derived, {
+      Map<String, dynamic>? next,
+    }) async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(derived: derived);
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2', derived: next ?? derived);
+      final reader = SwarmReader(
+        tabId: tab,
+        accountId: me,
+        request: swarm.request,
       );
-      final pulse = SuperTabSnapshot.fromJson(parts.state).pulseOf(project)!;
+      addTearDown(reader.dispose);
+      await reader.refresh();
+      return reader;
+    }
+
+    test('is read into each project of the snapshot', () async {
+      final now = DateTime.utc(2026, 11, 5, 12);
+      final reader = await read(
+        {
+          'pulse': {
+            project: pulseData(
+              now,
+              redAt: {'asks': now.millisecondsSinceEpoch + 60000},
+            ),
+          },
+        },
+        next: {
+          'pulse': {project: pulseData(now, asks: 0)},
+        },
+      );
+      final pulse = reader.snapshot!.pulseOf(project)!;
       expect(pulse.pmId, 'agent-lead');
       expect(pulse.asks.count, 2);
       expect(pulse.asks.oldestAt, now.subtract(minute * 14));
@@ -253,40 +277,18 @@ void main() {
       expect(pulse.nextRedAfter(now.add(minute)), isNull);
 
       // A change read moves it.
-      parts.apply(
-        changes(
-          cursor: 'c2',
-          derived: {
-            'pulse': {project: pulseData(now, asks: 0)},
-          },
-        ),
-      );
-      expect(
-        SuperTabSnapshot.fromJson(parts.state).pulseOf(project)!.asks.count,
-        0,
-      );
+      await reader.refresh();
+      expect(reader.snapshot!.pulseOf(project)!.asks.count, 0);
     });
 
-    test('none from an older server, and none for a pulse it cannot read', () {
-      expect(
-        SuperTabSnapshot.fromJson(
-          SuperTabParts.firstLoad(firstLoad()).state,
-        ).pulseOf(project),
-        isNull,
-      );
-      for (final odd in <Object?>['soon', 3, null]) {
-        final parts = SuperTabParts.firstLoad(
-          firstLoad(
-            derived: {
-              'pulse': {project: odd},
-            },
-          ),
-        );
-        expect(
-          SuperTabSnapshot.fromJson(parts.state).pulseOf(project),
-          isNull,
-          reason: '$odd',
-        );
+    test('none from an older server, and none for a pulse it cannot '
+        'read', () async {
+      expect((await read(const {})).snapshot!.pulseOf(project), isNull);
+      for (final odd in <Object?>['soon', 3, null, <String, Object?>{}]) {
+        final reader = await read({
+          'pulse': {project: odd},
+        });
+        expect(reader.snapshot!.pulseOf(project), isNull, reason: '$odd');
       }
     });
   });
@@ -444,10 +446,7 @@ void main() {
       );
       // With the task it holds, which a tap opens.
       expect(
-        find.descendant(
-          of: row,
-          matching: find.textContaining('Search page'),
-        ),
+        find.descendant(of: row, matching: find.textContaining('Search page')),
         findsOneWidget,
       );
       await tester.tap(row);
