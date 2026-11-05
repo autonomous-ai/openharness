@@ -69,8 +69,9 @@ function identifier(state: SuperTabState): (name: string) => string {
   return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
 }
 
-/** Words spaced as one line, for a cheap first look across wrapped lines. */
-const spaced = (text: string) => text.replace(/\s+/g, ' ').trim()
+/** Letters and digits only, lower case, spaced as one line: a cheap first look that a capital, emphasis or a wrapped line does
+ *  not defeat (review 2 of #3273). */
+const plain = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 
 /**
  * The project's code tasks a save from [before] to [after] would move a person's rule into, as the guard itself reads a move
@@ -82,8 +83,8 @@ export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, b
   const identify = identifier(state)
   const lost = droppedRules(before, after, identify)
   if (!lost.length) return []
-  const openings = lost.map(rule => spaced(rule.text).split(' ').slice(0, 4).join(' '))
-  return codeTasks(state, project).filter(task => openings.some(words => spaced(task.brief).includes(words))
+  const openings = lost.map(rule => plain(rule.text).split(' ').slice(0, 4).join(' '))
+  return codeTasks(state, project).filter(task => openings.some(words => plain(task.brief).includes(words))
     && droppedRules(before, after, identify, [{ text: task.brief, people: [], where: task.id, open: true }]).some(rule => rule.movedTo === task.id))
 }
 
@@ -99,8 +100,7 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   const told = new Map<string, DroppedRule[]>()
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
-  // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
-  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`, rulePlaces(state, project, merges))
+  const dropped = droppedRules(before, after, identifier(state), rulePlaces(state, project, merges))
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review

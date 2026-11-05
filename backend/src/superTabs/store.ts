@@ -1663,7 +1663,8 @@ export class SuperTabStore {
         const { state } = await this.load(tx, user, tabId, namedFor(asked))
         const project = projectsOf(state).find(p => p.id === asked.projectId)
         const repositoryUrl = project?.repository?.repositoryUrl
-        if (!project || !repositoryUrl) return []
+        // Only a project on GitHub has GitHub merges of its own: any other frees nothing by a GitHub link (review 2 of #3273).
+        if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return []
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, project.id) }, select: { text: true } })
         // The tasks the guard itself would read a dropped rule in (review 1 of #3273): wrapped lines and one rule of several.
         const holding = stored ? tasksHoldingMoves(state, project, stored.text, asked.text) : []

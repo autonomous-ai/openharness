@@ -51,9 +51,10 @@ export function appPullRequestMerges(app: GitHubApp): (urls: readonly string[]) 
         return granted ? app.get(`/repos/${repository.fullName}/pulls/${number}`, granted).catch(() => ({ status: 0, body: null })) : { status: 0, body: null }
       })
     } finally {
-      for (const granted of tokens.values()) {
+      for (const [repository, granted] of tokens) {
         const value = await granted
-        if (value) await app.revoke(value).catch(() => {})
+        // Never the token: which repository's, and that it lives on until GitHub expires it (ENGINEERING.md 6).
+        if (value) await app.revoke(value).catch(() => logger.warn('[swarm-instructions] GitHub token not revoked; it expires by itself within the hour', { repository }))
       }
     }
   }
