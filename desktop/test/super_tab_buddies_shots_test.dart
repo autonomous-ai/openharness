@@ -185,6 +185,60 @@ void main() {
       }
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
+    // Task #3256: after a switch the Buddy guard held, the bar offers Start
+    // again (Scholes approved the mockup, 11-05).
+    testWidgets('Buddy Start again after a held switch in ${brightness.name}', (
+      tester,
+    ) async {
+      if (shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2400, 1400);
+      addTearDown(tester.view.reset);
+      final server = sharedModels();
+      server.append(
+        "Couldn't switch your Buddy: Start your Buddy again to switch its "
+        'model. It is still on your subscription.',
+        conversationId: 'swarm-buddy-peer',
+      );
+      server.messages.last
+        ..['author'] = {'kind': 'agent', 'id': 'wren', 'name': 'Wren'}
+        ..['source'] = {'kind': 'system'};
+      final c = server.controller(account: 'peer');
+      await c.refresh();
+      await c.select('swarm-buddy-peer');
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Start your Buddy again to switch its model.'),
+        findsOneWidget,
+      );
+      await captureWindow(
+        tester,
+        shots,
+        'buddy-start-again-${brightness.name}',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
     testWidgets('Buddies in ${brightness.name}', (tester) async {
       if (shots == null) return;
       final previous = grid.AppTheme.brightness.value;
