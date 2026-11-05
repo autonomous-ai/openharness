@@ -153,6 +153,47 @@ describe('message.edit', () => {
 })
 
 describe('message.delete', () => {
+  it.each([false, true])('lets only the owner delete their Buddy proposal, removing its content with replies: %s', async hasReplies => {
+    const f = await swarm()
+    const { chat, agentId } = await f.buddy()
+    const line = 'Fix my login'
+    const ask = await f.send(chat, line)
+    const command: Command = { type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId,
+      text: line, goal: line, scope: 'Private detail copied into the scope', priority: 'normal' }
+    const id = String((await f.execute(command, peer, agentId)).result.messageId)
+    const answer = hasReplies ? await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id }) : undefined
+    for (const person of [owner, other]) await expect(f.remove(f.web.conversationId, id, person)).rejects.toThrow(refused('FORBIDDEN'))
+    await expect(f.remove(f.web.conversationId, id, owner, f.pm)).rejects.toThrow(expect.objectContaining({ status: 403 }))
+    await expect(f.remove(f.web.conversationId, id, peer, agentId)).rejects.toThrow(expect.objectContaining({ status: 403 }))
+    await expect(f.edit(f.web.conversationId, id, 'Rewritten')).rejects.toThrow(refused('FORBIDDEN'))
+    expect((await f.remove(f.web.conversationId, id)).result).toMatchObject({ changed: true, kept: hasReplies })
+    const row = await db.superTabMessage.findUnique({ where: { id } })
+    if (hasReplies) {
+      expect(row).toMatchObject({ text: DELETED_TEXT, deletedAt: expect.any(Date) })
+      expect(row?.source ?? null).toBeNull()
+      const thread = await f.page(f.web.conversationId, other, { thread: id })
+      expect(thread.messages.map(m => m.id)).toEqual([id, answer])
+      expect(JSON.stringify(thread)).not.toContain(line)
+      expect(JSON.stringify(thread)).not.toContain(command.scope)
+      await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('MESSAGE_DELETED'))
+    } else {
+      expect(row).toBeNull()
+      expect((await f.page(f.web.conversationId)).messages.some(m => m.id === id)).toBe(false)
+    }
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: id, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
+    // Deleting the post does not grant the Buddy permission to post the same ask again.
+    await expect(f.execute(command, peer, agentId)).rejects.toThrow(refused('PROPOSAL_SENT'))
+  })
+
+  it('never treats a non-proposal source or a mismatched source owner as permission to delete', async () => {
+    const f = await swarm()
+    const id = await f.send(f.web.conversationId, 'Own message')
+    for (const source of [{ kind: 'buddy-proposal', personId: other.sub }, { kind: 'task-request', personId: peer.sub }, { kind: 'buddy-proposal' }]) {
+      await db.superTabMessage.update({ where: { id }, data: { source } })
+      await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('FORBIDDEN'))
+    }
+  })
+
   it('removes a message with no replies: its row, reactions, Activity, open deliveries and files', async () => {
     const f = await swarm()
     const root = await f.send(f.web.conversationId, 'Owner root', owner)
