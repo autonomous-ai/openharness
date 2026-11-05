@@ -24,6 +24,19 @@ describe('projectPullRequestFiles', () => {
     expect(app.revoke).toHaveBeenCalledWith('read-token')
   })
 
+  it('reads the files at the head the watch read', async () => {
+    const app = fakeApp({ 7: ['a.ts'] }, { 7: 'abc1234' })
+    await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`])
+    expect(app.pullRequestFiles).toHaveBeenCalledWith(expect.anything(), 7, 'read-token', 'abc1234')
+  })
+
+  it('reads nothing from an app without the files read, so no step opens', async () => {
+    const app = fakeApp({ 7: ['a.ts'] }, { 7: 'abc1234' })
+    delete app.pullRequestFiles
+    expect(await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`])).toBeNull()
+    expect(app.resolve).not.toHaveBeenCalled()
+  })
+
   it('has nothing to read with no pull request of the project\'s repository', async () => {
     const app = fakeApp({})
     expect(await projectPullRequestFiles(app)(REPO, ['https://github.com/other/repo/pull/9'])).toBeNull()
