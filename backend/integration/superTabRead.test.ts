@@ -144,8 +144,11 @@ describe('first load (design 4.3)', () => {
 
     const { state } = await new SuperTabStore(db, () => NOW).read(peer, s.tabId)
     const stateWithoutQuietGroups = { ...state, conversations: state.conversations.filter(group => !quiet.includes(group.id)) }
+    const match = { tabId: s.tabId, deleted: false, key: { $in: quiet } }
+    const fullPipeline = [{ $match: match }, { $project: { _id: 0, key: 1, data: 1 } }]
     await db.$runCommandRaw({ profile: 2 })
     try {
+      await db.swarmGroup.aggregateRaw({ pipeline: fullPipeline, options: { batchSize: 200, hint: { tabId: 1, key: 1 } } })
       const count = await waitingMentions(db as never, s.tabId, stateWithoutQuietGroups, { kind: 'person', userId: peer.sub, email: peer.email }, NOW)
       expect(count.count).toBe(quiet.length)
     } finally { await db.$runCommandRaw({ profile: 0 }) }
@@ -156,17 +159,23 @@ describe('first load (design 4.3)', () => {
         nreturned?: number; docsExamined?: number; planSummary?: string }> } }
     const rows = profile.cursor.firstBatch.filter(row => row.command?.pipeline?.some(stage =>
       (stage.$match as { key?: { $in?: string[] } } | undefined)?.key?.$in?.includes(quiet[0]!)))
-    expect(rows).toHaveLength(1)
-    const [groupRead] = rows
-    expect(groupRead!.nreturned).toBe(quiet.length)
-    expect(groupRead!.planSummary).toMatch(/IXSCAN/)
-    expect(groupRead!.responseLength, `fetched ${groupRead!.nreturned} group documents, examined ${groupRead!.docsExamined}, returned ${groupRead!.responseLength} bytes`)
-      .toBeLessThan(20_000)
-    const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline: groupRead!.command!.pipeline!, cursor: {},
-      ...(groupRead!.command!.hint ? { hint: groupRead!.command!.hint } : {}) }, verbosity: 'executionStats' }) as unknown as
-      { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
-    expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
-    expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
+    expect(rows).toHaveLength(2)
+    const baseline = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: unknown } | undefined)?.data === 1))!
+    const projected = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: { kind?: number } } | undefined)?.data?.kind === 1))!
+    expect(baseline.nreturned).toBe(quiet.length)
+    expect(projected.nreturned).toBe(quiet.length)
+    expect(baseline.planSummary).toMatch(/IXSCAN/)
+    expect(projected.planSummary).toMatch(/IXSCAN/)
+    expect(baseline.docsExamined).toBeLessThanOrEqual(baseline.nreturned!)
+    expect(projected.docsExamined).toBeLessThanOrEqual(projected.nreturned!)
+    expect(projected.responseLength, `full=${baseline.responseLength} bytes; projected=${projected.responseLength} bytes for ${projected.nreturned} groups`)
+      .toBeLessThan(baseline.responseLength! / 10)
+    for (const pipeline of [fullPipeline, projected.command!.pipeline!]) {
+      const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline, cursor: {}, hint: { tabId: 1, key: 1 } },
+        verbosity: 'executionStats' }) as unknown as { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
+      expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
+      expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
+    }
   })
 
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
