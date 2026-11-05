@@ -22,6 +22,7 @@ class SuperTabChatScroll extends ScrollController {
     ScrollPosition? oldPosition,
   ) => _AnchoredPosition(
     rows: rows,
+    holdsEnd: () => _holdingFor != null,
     physics: physics,
     context: context,
     initialPixels: initialScrollOffset,
@@ -37,11 +38,35 @@ class SuperTabChatScroll extends ScrollController {
       if (position is _AnchoredPosition) position._moveContent(by);
     }
   }
+
+  /// The list was rebuilt around a new dividing row: the view starts at it
+  /// and keeps nothing of where it was. Set before the list is laid out, so
+  /// no row between the old place and the new one is laid out on the way.
+  void restart() {
+    for (final position in positions) {
+      if (position is _AnchoredPosition) position._restart();
+    }
+  }
+
+  /// A jump to the end, named by [jump], is under way: a view left past the
+  /// end, as an end estimated from rows not yet laid out leaves it, is put
+  /// at the end before anything is painted. Without it a Mac's bouncing
+  /// scroll shows no row until the view springs back (Huy, #3049). Null
+  /// ends any jump, as the reader taking the list does.
+  void holdEnd(int? jump) => _holdingFor = jump;
+
+  /// Ends the hold of [jump], unless a later jump holds the end now.
+  void releaseEnd(int jump) {
+    if (_holdingFor == jump) _holdingFor = null;
+  }
+
+  int? _holdingFor;
 }
 
 class _AnchoredPosition extends ScrollPositionWithSingleContext {
   _AnchoredPosition({
     required this.rows,
+    required this.holdsEnd,
     required super.physics,
     required super.context,
     super.initialPixels,
@@ -56,6 +81,10 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
   ({String messageId, double top})? _anchor;
   // Where the last finished layout left the view.
   double? _settledPixels, _settledMax;
+
+  /// Whether a jump to the end is under way ([SuperTabChatScroll.holdEnd]):
+  /// asked of the controller, which may be told before this is attached.
+  final bool Function() holdsEnd;
 
   bool get _wasAtEnd =>
       _settledPixels != null && _settledPixels! >= _settledMax! - .5;
@@ -80,8 +109,22 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
     if (_settledMax != null) _settledMax = _settledMax! + by;
   }
 
+  void _restart() {
+    goIdle();
+    correctPixels(0);
+    _anchor = null;
+    _settledPixels = _settledMax = null;
+  }
+
   @override
   bool applyContentDimensions(double minScrollExtent, double maxScrollExtent) {
+    if (holdsEnd() && pixels > maxScrollExtent + .5) {
+      // Past the end only because the end was estimated: laid out there,
+      // the list knows its end exactly.
+      goIdle();
+      correctPixels(maxScrollExtent);
+      return false;
+    }
     final target = _keptPixels(maxScrollExtent);
     if (target != null && (target - pixels).abs() > .5) {
       correctPixels(target);

@@ -235,6 +235,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _anchors = <String, ({String messageId, double top})>{};
   // Each list's dividing row: see [_splitAt].
   final _split = <String, SuperTabMessage>{};
+  // Each list's rebuilds around a new dividing row ([_restartAtEnd]): its
+  // rows' slivers are keyed by it, so a restart lays out no old row.
+  final _restarts = <String, int>{};
   final _newerRows = UniqueKey();
   // The composer's completions are drawn by builders of their own, so typing
   // and choosing among them never rebuild the transcript.
@@ -435,6 +438,7 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _scroll.clear();
       _split.clear();
+      _restarts.clear();
       _latest.clear();
       _following.clear();
       _newAfter.clear();
@@ -548,6 +552,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final request = ++_scrollRequest;
     final sequence = _latest[id] ?? 0;
     _jumpingToEnd = true;
+    _scroll[id]?.holdEnd(request);
     void advance(int attempt) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final scroll = _scroll[id];
@@ -556,6 +561,7 @@ class _SuperTabViewState extends State<SuperTabView>
             c.selectedId != id ||
             scroll == null ||
             !scroll.hasClients) {
+          scroll?.releaseEnd(request);
           return;
         }
         scroll.jumpTo(scroll.position.maxScrollExtent);
@@ -566,12 +572,20 @@ class _SuperTabViewState extends State<SuperTabView>
               request != _scrollRequest ||
               c.selectedId != id ||
               !scroll.hasClients) {
+            scroll.releaseEnd(request);
             return;
           }
-          if (scroll.position.extentAfter > 1 && attempt < 12) {
+          // Short of the end, or past it: an end estimated from rows not yet
+          // laid out moves once they are, and on a Mac's bouncing scroll a
+          // view left past it shows no row until it springs back.
+          final position = scroll.position;
+          if ((position.extentAfter > 1 ||
+                  position.pixels > position.maxScrollExtent + 1) &&
+              attempt < 12) {
             advance(attempt + 1);
           } else {
             _jumpingToEnd = false;
+            scroll.releaseEnd(request);
             if (scroll.position.extentAfter < 40) {
               _readToEnd(id, sequence);
             }
@@ -991,13 +1005,53 @@ class _SuperTabViewState extends State<SuperTabView>
   void _jumpToLatest() {
     final id = c.selectedId;
     _focus.requestFocus();
-    if (!c.hasNewer(id)) return _followEnd(id);
+    if (!c.hasNewer(id)) {
+      if (_farFromEnd(id)) _restartAtEnd(id);
+      return _followEnd(id);
+    }
     // More are waiting than were read: the latest page first, then its end.
     unawaited(
       c.showLatest(id).then((_) {
-        if (mounted && c.selectedId == id) _followEnd(id);
+        if (!mounted || c.selectedId != id) return;
+        _restartAtEnd(id);
+        _followEnd(id);
       }),
     );
+  }
+
+  /// At most this many rows lie below a list's dividing row after a
+  /// restart: all a jump to the end lays out.
+  static const _restartRows = 40;
+
+  /// Whether more rows lie below the top of [id]'s view than a restart
+  /// keeps below its dividing row. A list reaches a row of unknown height
+  /// only by laying out every row on the way, so a jump across thousands
+  /// of them took seconds, and an end estimated from rows of very different
+  /// heights left the view past the last row, showing none (Huy, #3049).
+  bool _farFromEnd(String id) {
+    final top = _rowAtTop();
+    final own = _ownShown(id);
+    final at = top == null ? -1 : own.indexWhere((m) => m.id == top);
+    return at < 0 ? own.length > _restartRows : own.length - at > _restartRows;
+  }
+
+  /// Rebuilds [id]'s list around its newest rows instead of travelling to
+  /// them: the dividing row moves to the newest [_restartRows], both of its
+  /// slivers start empty, and the view starts at the dividing row. The rows
+  /// above it read back as the reader scrolls up, as from a first open.
+  void _restartAtEnd(String id) {
+    final entries = superTabTranscriptEntries(_ownShown(id));
+    if (entries.isEmpty) return;
+    final first =
+        entries[(entries.length - _restartRows).clamp(0, entries.length - 1)]
+            .message;
+    _split[id] = first;
+    c.keepFrom(id, first);
+    _restarts[id] = (_restarts[id] ?? 0) + 1;
+    _anchors.remove(id);
+    _scrollRequest++;
+    _scroll[id]?.restart();
+    setState(() {});
   }
 
   void _noticesLeave(SuperTabController controller) {
@@ -4709,6 +4763,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                     event.dragDetails != null) {
                                   _scrollRequest++;
                                   _jumpingToEnd = false;
+                                  _scroll[c.selectedId]?.holdEnd(null);
                                 }
                                 if (_jumpingToEnd) return false;
                                 final id = c.selectedId;
@@ -4762,6 +4817,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ),
                                     ),
                                     LaidOutSliverList(
+                                      key: ValueKey(
+                                        'super-older-rows-${_restarts[c.selectedId] ?? 0}',
+                                      ),
                                       delegate: SliverChildBuilderDelegate(
                                         (context, index) =>
                                             row(split - 1 - index),
@@ -4780,6 +4838,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                         bottom: grid.AppDesktop.controlGap,
                                       ),
                                       sliver: LaidOutSliverList(
+                                        key: ValueKey(
+                                          'super-newer-rows-${_restarts[c.selectedId] ?? 0}',
+                                        ),
                                         delegate: SliverChildBuilderDelegate(
                                           // Messages on their way end the list.
                                           (context, index) =>
