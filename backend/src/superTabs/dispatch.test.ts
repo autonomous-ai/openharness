@@ -84,7 +84,7 @@ describe('what a free crew member gets', () => {
     const tasks = { api: s.task('Api', ['backend/src/a.ts']), store: s.task('Store', ['backend/src/b.ts']),
       board: s.task('Board', ['desktop/lib/c.dart']), hosts: s.task('Hosts', ['cli/src/d.ts']) }
     const picks = (now = NOW) => dispatchPlan(s.state, 'lead', DISPATCH_RULES, now).map(p => [nameOf(s, p.agentId), titleOf(s, p.conversationId), p.why])
-    return { ...s, tasks, picks }
+    return { ...s, tasks, picks, get state() { return s.state } }
   }
   const nameOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.state.agents.find(a => a.id === id)!.name
   const titleOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.group(id).title
@@ -121,19 +121,31 @@ describe('what a free crew member gets', () => {
     expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
   })
 
-  it('counts a member free with fewer than 3 handed tasks and nothing in its hands', () => {
+  it('counts a member busy while work.assign does: a task in its hands or, until #3399 frees it, a handed one', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
+    expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
+    // work.assign refuses an agent with a task in review today (AGENT_BUSY): a pick for it would be refused every sweep.
     holding(s, s.ids.Ash!, s.tasks.api, 'review')
-    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
-    holding(s, s.ids.Ash!, s.tasks.board, 'review')
-    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Ash'])
-    holding(s, s.ids.Ash!, s.tasks.hosts, 'review')
-    expect(s.picks()).toEqual([])
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
     // A finished one counts no more; one in its hands keeps it busy.
-    holding(s, s.ids.Ash!, s.tasks.hosts, 'done')
+    holding(s, s.ids.Ash!, s.tasks.api, 'done')
     expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
     holding(s, s.ids.Ash!, s.task('Cache', ['backend/src/e.ts']))
     expect(s.picks()).toEqual([])
+  })
+
+  it('leaves out a pick its caller says to skip (one work.assign refused this round)', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    const skip = (groupId: string, agentId: string) => groupId === s.tasks.api && agentId === s.ids.Ash
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW, skip).map(p => titleOf(s, p.conversationId))).toEqual(['Store'])
+  })
+
+  it('reads not-before as a day in the project\'s time zone, Vietnam\'s without one', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    const late = Date.parse('2026-11-05T18:00:00Z') // 01:00 on 11-06 in Vietnam
+    s.run({ type: 'work.queue', conversationId: s.tasks.api, notBefore: '2026-11-06' })
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, late).map(p => titleOf(s, p.conversationId))).toEqual(['Api'])
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, late - 2 * 3_600_000).map(p => titleOf(s, p.conversationId))).toEqual(['Store'])
   })
 
   it('leaves out the PM, a Buddy, a stopping member, a moving one and an agent not in the crew; an asleep one is free', () => {
@@ -195,7 +207,7 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
       return sweepLiveness(s.state, now)
     }
     const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
-    return { ...s, api, sweep, lines }
+    return { ...s, api, sweep, lines, get state() { return s.state } }
   }
 
   it('tells the member once at 2 hours, and again only after a new spell of quiet', () => {
@@ -220,6 +232,13 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     expect(group.assignment!.status).toBe('lost')
     expect(group.assignment!.lost!.reason).toBe('no progress for 3 hours: back in the backend lane')
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, AT + 3 * HOUR).map(p => [p.agentId, p.conversationId])).toEqual([[s.ids.Birch!, s.api]])
+  })
+
+  it('does not tell a member that waits on its own task\'s open step', () => {
+    const s = working()
+    const step = s.run({ type: 'conversation.create', title: 'Test', brief: 'Test it.', reviewOf: s.api, step: 'Test', checks: [] }).result.conversationId as string
+    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Birch! }, s.as(s.pm))
+    expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([])
   })
 
   it('never ticks while it waits on a person or a review, nor for a worker not in the crew', () => {
@@ -291,7 +310,7 @@ describe('pins: a task without active work waits for its builder after findings,
     const build = s.group(api), assignment = build.assignment!
     assignment.status = 'lost'
     build.lostAttempt = { id: assignment.id, agentId: s.ids.Ash!, machineId: 'host', engine: 'claude' }
-    return { ...s, api, step }
+    return { ...s, api, step, get state() { return s.state } }
   }
 
   it('pins its builder when a step\'s agent fails the step, and not while the build is in someone\'s hands', () => {
@@ -305,6 +324,14 @@ describe('pins: a task without active work waits for its builder after findings,
     expect(s.group(s.api)).not.toHaveProperty('pin')
     s.run({ type: 'work.check', conversationId: s.step, assignmentId, checkId: check, passed: false, evidence: 'Still wrong.' }, s.as(s.ids.Birch!), { now: 6000 })
     expect(s.group(s.api)).not.toHaveProperty('pin')
+  })
+
+  it('pins the agent of its last round, not an older one, when that round was stopped', () => {
+    const s = lostBuild()
+    const build = s.group(s.api)
+    build.assignment = { ...build.assignment!, agentId: s.ids.Birch!, status: 'stopped' }
+    pinBuilder(build, 'ci', 7000)
+    expect(build.pin).toEqual({ agentId: s.ids.Birch!, why: 'ci', at: 7000 })
   })
 
   it('pins as pinBuilder says: to the last attempt\'s agent, never over active work', () => {

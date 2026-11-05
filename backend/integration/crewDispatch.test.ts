@@ -132,12 +132,71 @@ describe('the crew dispatch pass', () => {
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
     await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 200 })
 
+    // A progress note frees nobody: no pass. Handing over for review does start one.
+    const pass = vi.spyOn(s.store, 'dispatchCrew')
+    const assignmentId = (await readGroup(s.tab, id)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'working', result: 'Halfway.' }, s.crew.Ash)
+    await new Promise(resolve => setTimeout(resolve, 1_500))
+    expect(pass).not.toHaveBeenCalled()
+    await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    await vi.waitFor(() => expect(pass).toHaveBeenCalled(), { timeout: 5_000, interval: 200 })
+
     const plain = await swarm({}, {}, true)
-    const pass = vi.spyOn(plain.store, 'dispatchCrew')
+    const plainPass = vi.spyOn(plain.store, 'dispatchCrew')
     await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
     await new Promise(resolve => setTimeout(resolve, 1_500))
-    expect(pass).not.toHaveBeenCalled()
+    expect(plainPass).not.toHaveBeenCalled()
+  })
+
+  it('assigns nothing as a PM whose grant no longer holds, and does not try those picks again', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    // The PM's machine row is gone (removed, or billing ended): the agent path refuses it (store.ts grantHolds).
+    const row = await db.machine.findFirstOrThrow({ where: { machineId: 'owner-mac', userId: owner.sub } })
+    await db.machine.delete({ where: { id: row.id } })
+    try {
+      const first = await s.store.dispatchCrew(s.tab)
+      expect(first.assigned).toBe(0)
+      expect(Object.keys(first.skipped)).toEqual(['HOST_UNAVAILABLE'])
+      expect(await s.holders()).toEqual({ Api: null })
+      // The same pick this round is not sent again, by this pass or the sweep's check.
+      expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
+    } finally {
+      await db.machine.create({ data: { machineId: 'owner-mac', userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    }
+  })
+
+  it('never has a Team-account PM assign a member outside a Team account', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    // The PM runs in a Harness Team account (its record says so); Ash runs in the main account.
+    await editAgent(s.tab, s.pm, agent => ({ ...agent, teamAccount: true }))
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    expect(await s.holders()).toEqual({ Api: null })
+  })
+
+  it('does not assign a task postponed while the pass read GitHub', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    // Between the pass's read and its write: a person moves the task to tomorrow.
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await s.execute({ type: 'work.queue', conversationId: s.tasks.Api!, notBefore: '2026-11-07' })
+      return undefined
+    })
+    await s.store.dispatchCrew(s.tab)
+    expect(await s.holders()).toEqual({ Api: null })
+  })
+
+  it('assigns a task again after it was redefined, not the first round\'s receipt', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    const first = (await readGroup(s.tab, s.tasks.Api!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.Api!, assignmentId: first, status: 'done', result: 'Shipped at abc1234.' }, s.crew.Ash)
+    await s.execute({ type: 'work.define', conversationId: s.tasks.Api!, checks: [],
+      task: { goal: 'Api, second round.', changes: 'More.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    const second = (await readGroup(s.tab, s.tasks.Api!)).assignment!
+    expect(second.id).not.toBe(first)
+    expect(second.status).toBe('working')
   })
 
   it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
