@@ -171,6 +171,39 @@ void main() {
     }
   });
 
+  // Task #3212: a reinstall added a Mac back to a Swarm its person had taken
+  // it out of. The Swarm tells each reader their own removed computers.
+  test(
+    'leaves out a computer its person took out of the Swarm, and only that one',
+    () async {
+      server.state['removedMachines'] = ['MATE-MAC'];
+      final c = server.controller(account: 'mate');
+      await c.refresh();
+      final note = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+      );
+      expect(note, isNull);
+      expect(contributions(), isEmpty);
+      expect(daemon.asked, isEmpty);
+
+      // Another of their computers, taken out: this one is still added.
+      server.state['removedMachines'] = ['mate-old-laptop'];
+      await c.refresh();
+      final added = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+      );
+      expect(added?.added, isTrue);
+      expect(contributions(), hasLength(1));
+      c.dispose();
+    },
+  );
+
   test('says why it could not add it: no Claude Code or Codex, Harness too old, or refused', () async {
     Future<SwarmJoinedMachine?> attempt() async {
       final c = server.controller(account: 'mate');

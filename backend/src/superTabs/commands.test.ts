@@ -3461,6 +3461,25 @@ describe('machine.remove', () => {
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
   }
 
+  // Task #3212: Desktop's join add leaves out a computer its person took out of the Swarm, reading this record; Add machine
+  // brings it back. The record is per Swarm, person and computer, and only that person reads it.
+  it('remembers a machine its person took out, only for them, until they add it again', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer', 'peer-mac', null)
+    f.run({ type: 'machine.remove', machineId: 'peer-mac' }, peer)
+    expect(f.state.removedMachines).toEqual([{ machineId: 'peer-mac', contributorId: 'peer' }])
+    expect(visibleState(f.state, peer).removedMachines).toEqual(['peer-mac'])
+    expect(visibleState(f.state, owner).removedMachines).toBeUndefined()
+
+    for (const cleanup of f.state.machineCleanups ?? []) cleanup.requestedAt = new Date(-60 * 60_000).toISOString()
+    f.run({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      teamAccountOnly: true }, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null } })
+    expect(f.state.machines!.some(m => m.machineId === 'peer-mac' && !m.removal)).toBe(true)
+    expect(f.state.removedMachines).toBeUndefined()
+    expect(visibleState(f.state, peer).removedMachines).toBeUndefined()
+  })
+
   // The phone and the web offer Pause/Resume only to the person who lent the machine; the server holds the same line.
   it('lets only the contributor pause or resume a machine', () => {
     const f = fixture()
