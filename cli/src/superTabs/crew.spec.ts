@@ -46,10 +46,10 @@ describe('a frozen crew session', () => {
   it('is closed once the engine has been working with an unchanged screen for 30 minutes, so its keep-alive reopens it', async () => {
     const t = setup()
     await t.keeper.tick([row()])
-    t.wait(CREW_FROZEN_MS - 1)
-    await t.keeper.tick([row()])
+    // Looked at once a minute: still 29 minutes in, frozen at 30.
+    for (let i = 1; i < CREW_FROZEN_MS / CREW_LOOK_MS; i++) { t.wait(CREW_LOOK_MS); await t.keeper.tick([row()]) }
     expect(t.closeMember).not.toHaveBeenCalled()
-    t.wait(1)
+    t.wait(CREW_LOOK_MS)
     await t.keeper.tick([row()])
     expect(t.steps).toEqual(['close h1'])
     expect(t.log).toHaveBeenCalledWith(expect.stringContaining('froze'))
@@ -97,8 +97,8 @@ describe('a frozen crew session', () => {
 
 describe('a reopened crew session', () => {
   it('is told once to continue its task, only after no prompt waits on its screen', async () => {
-    let hold: SuperTabScreen['hold'] = 'permission' as SuperTabScreen['hold']
-    const t = setup({ working: () => false, screen: () => ({ ok: true, text: 'Allow?', hold } as SuperTabScreen) })
+    let hold: 'permission_open' | null = 'permission_open'
+    const t = setup({ working: () => false, screen: () => ({ ok: true, text: 'Allow?', hold }) })
     t.keeper.reopened('h1')
     await t.keeper.tick([row()])
     expect(t.steps).toEqual([])
