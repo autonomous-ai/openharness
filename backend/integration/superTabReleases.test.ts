@@ -51,7 +51,9 @@ async function swarm() {
   const add = async (name: string, conversationId: string, extra: Record<string, unknown> = {}) => String((await run({ type: 'agent.add', conversationId,
     machineId: 'test-host', harnessId: randomUUID(), name, configuration: config, lead: false, ...extra } as Command)).result.agentId)
   const lead = await add('Coordinator', 'lead', { lead: true })
-  const task = async (title: string) => String((await run({ type: 'conversation.create', title, brief: 'Build it.', checks: [] }, host, lead)).result.conversationId)
+  // The task contract (#3389): an agent's task says a check, its priority and who asked.
+  const task = async (title: string) => String((await run({ type: 'conversation.create', title, brief: 'Build it.', priority: 'P2', requesterId: owner.sub,
+    checks: [{ description: 'It works.', independent: false }] }, host, lead)).result.conversationId)
   const group = async (id: string) => (await db.swarmGroup.findUnique({ where: { tabId_key: { tabId: tab, key: id } } }))!.data as unknown as Conversation
   const ledger = async () => {
     const head = (await db.swarmHead.findUnique({ where: { id: `${tab}:head` } }))!.data as { projects: Array<{ releases?: { pending: unknown[]; steps?: Record<string, { groupId: string }> } }> }

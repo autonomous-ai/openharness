@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Conversation, SuperTabState } from './model.js'
 import type { SwarmProject } from './projects.js'
+import { missingContract } from './taskContract.js'
 import { backendPaused, compareTags, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
   pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
@@ -190,6 +191,9 @@ describe('settleReleases', () => {
     expect(step.checks).toEqual([expect.objectContaining({ description: expect.stringContaining('verified'), independent: false, evidence: null, passedBy: null })])
     expect(step.ledger).toEqual({ askedAt: T, noRequesterReason: 'scheduled release' })
     expect(outcome.messages[0]!.text).toContain('No requester: scheduled release')
+    // The guard's own test of an agent's create, on what the Swarm wrote: nothing missing.
+    expect(missingContract({ goal: step.brief, checks: step.checks.length, priority: !!step.priority,
+      requester: !!(step.requesterId || step.ledger?.noRequesterReason) })).toEqual([])
     expect(ledgerOf(state).steps).toEqual({ desktop: { groupId: step.id, at: T }, web: { groupId: step.id, at: T } })
     expect(outcome.messages).toEqual([expect.objectContaining({ conversationId: step.id, recipients: ['ship'], source: { kind: 'release' } })])
     expect(settleReleases(state, 'p1', noFacts, T + 5 * MINUTE).opened).toBeNull()
