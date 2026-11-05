@@ -15,6 +15,10 @@ import { agentProjectId, canReadProject, ledProject, projectOf } from './project
 export const CREW_REOPEN_GRACE_MS = 5 * 60_000
 /** The longest role a crew entry names, in characters. */
 export const CREW_ROLE_MAX = 40
+/** The lanes a crew member may work in: automatic assignment gives it its lane's top task, and one with no lane the
+ *  project's (River for Budget, 11-05). */
+export const CREW_LANES = ['backend', 'cli', 'desktop', 'mobile', 'docs'] as const
+export type CrewLane = typeof CREW_LANES[number]
 
 export const isCrew = (target: Pick<Agent, 'crew'>): boolean => !!target.crew
 
@@ -27,12 +31,13 @@ function mayManageCrew(state: SuperTabState, actor: Actor, target: Agent): void 
   if (!allowed) fail('FORBIDDEN', 'Only the project\'s PM or a person of the project can change its crew.', 403)
 }
 
-/** `crew.add`: marks [target] as crew, with [role] or the role it goes by. Never the PM (kept alive already) nor a Buddy. */
-export function addCrew(state: SuperTabState, actor: Actor, target: Agent, role: string | undefined, now: number): void {
+/** `crew.add`: marks [target] as crew, with [role] or the role it goes by, and its [lane] if any. Again on crew replaces it.
+ *  Never the PM (kept alive already) nor a Buddy. */
+export function addCrew(state: SuperTabState, actor: Actor, target: Agent, role: string | undefined, lane: CrewLane | undefined, now: number): void {
   mayManageCrew(state, actor, target)
   if (isBuddy(target)) fail('CREW_BUDDY', 'A Buddy waits for its person; it is never crew.')
   if (ledProject(state, target.id)) fail('CREW_LEAD', 'The PM is already kept alive; it needs no crew mark.')
-  target.crew = { role: role ?? roleNameOf(state, target).slice(0, CREW_ROLE_MAX), at: now, by: actor.kind === 'agent' ? actor.agentId : actor.userId }
+  target.crew = { role: role ?? roleNameOf(state, target).slice(0, CREW_ROLE_MAX), ...lane ? { lane } : {}, at: now, by: actor.kind === 'agent' ? actor.agentId : actor.userId }
 }
 
 /** `crew.remove`: [target] goes back to the ordinary idle handling. */

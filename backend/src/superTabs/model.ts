@@ -75,7 +75,7 @@ export interface Agent {
   releaseId?: string
   /** Set while it is one of its project's crew (crew.ts): its host keeps it alive, and no idle path closes or removes it.
    *  `by` is the person's or PM agent's id that marked it. */
-  crew?: { role: string; at: number; by: string }
+  crew?: { role: string; lane?: 'backend' | 'cli' | 'desktop' | 'mobile' | 'docs'; at: number; by: string }
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
