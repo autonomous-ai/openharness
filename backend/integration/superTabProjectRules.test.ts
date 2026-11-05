@@ -32,7 +32,9 @@ async function swarm() {
     name: 'Lead', configuration: config, lead: true })).result.agentId as string
   return { tab, lead }
 }
-const rules = (start: string): ProjectRules => ({ ...structuredClone(SEED_RULES), releaseWindow: { ...SEED_RULES.releaseWindow, start } })
+// No backend pause, so any start keeps the record valid (the pause must fall inside the window).
+const rules = (start: string): ProjectRules => ({ ...structuredClone(SEED_RULES), releaseWindow: { ...SEED_RULES.releaseWindow, start },
+  releasePace: { ...SEED_RULES.releasePace, backendPause: null } })
 const set = (baseRevision: number, value: ProjectRules, extra: Partial<Extract<Command, { type: 'rules.set' }>> = {}): Command =>
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules: value, summary: 'Releases start later', ...extra })
 const get = (user: AuthUser, tab: string, asAgentId?: string) => app.inject({ method: 'GET',
@@ -73,7 +75,8 @@ describe('a project\'s rules record', () => {
     const read = (await get(peer, tab)).json().data
     expect(read).toMatchObject({ revision: 1, rules: rules('10:00'), seeded: false })
     expect(read.history).toEqual([{ revision: 1, rules: rules('10:00'), summary: 'Releases start later',
-      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '10:00' }], writtenBy: { kind: 'person', id: owner.sub },
+      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '10:00' },
+        { path: 'releasePace.backendPause', before: { start: '09:00', end: '10:00' }, after: null }], writtenBy: { kind: 'person', id: owner.sub },
       askedBy: owner.sub, askedIn: null, at: expect.any(String) }])
     // A stale save is refused with the newest record, to merge.
     expect(await refusal(run(tab, set(0, rules('11:00')), peer))).toMatchObject({ code: 'RULES_STALE', status: 409, details: { revision: 1, rules: rules('10:00') } })

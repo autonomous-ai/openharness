@@ -1714,7 +1714,7 @@ model SuperTabInstructionsRevision {
 
 // A project's rules record (superTabs/policy.ts), one row per saved revision: the newest is the record, the rest its history.
 // Removed: the save that writes revision N deletes revisions <= N - 50 of its project (policyStore.ts writeRules, MAX_RULES_REVISIONS);
-// a deleted project takes its rows; the Swarm purge takes the tab's (purge.ts). A row is at most 8 KB of rules plus its diff.
+// a deleted project takes its rows; the Swarm purge takes the tab's (purge.ts). A row is at most 16 KB of rules plus its diff.
 // `writtenBy` is a person's or the project's PM's id (`writtenByKind`), `askedBy` the person whose words it carries, `askedIn`
 // the chat message the PM passed on (null when a person saved). id = stableId(tabId, projectId, revision): two saves of one
 // revision collide on it, and one retries into RULES_STALE.

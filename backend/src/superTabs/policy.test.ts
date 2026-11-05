@@ -52,7 +52,7 @@ describe('the project rules record', () => {
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: Array.from({ length: 51 }, (_, i) => `a${i}/**`) }] } })).toBe(true)
     // Security review of #3216: at most 4 wildcards a pattern, a double star counting as one, and no run of three stars.
     const pattern = (glob: string) => refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })
-    for (const glob of ['*a*a*a*a*a', '**/'.repeat(5) + 'z', '**/**/**/**/*.ts', 'a???b?', '***.ts', '*'.repeat(200)]) {
+    for (const glob of ['*a*a*a*a*a', '**/'.repeat(5) + 'z', '**/**/**/**/*.ts', 'a???b??', '***.ts', '*'.repeat(200)]) {
       expect(pattern(glob), glob).toBe(true)
     }
     for (const glob of ['**/*buddy_guard*', '**/*.test.*', 'a/**/b/*.ts', '**/?x*']) expect(pattern(glob), glob).toBe(false)
@@ -114,7 +114,8 @@ function fixture() {
   return { run, invite, add, group, get state() { return state } }
 }
 
-const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '10:00' } })
+// An earlier start keeps the seed's 09:00-10:00 backend pause inside the window.
+const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '08:00' } })
 const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<Command, { type: 'rules.set' }>> = {}): Command =>
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
@@ -172,7 +173,7 @@ describe('rules.set', () => {
     const effects = f.run(set(0, later()), owner, { projectRules: null })
     expect(effects.result).toMatchObject({ projectId: 'lead', revision: 1 })
     expect(effects.projectRules).toEqual({ projectId: 'lead', revision: 1, rules: later(), summary: 'Releases start at 10',
-      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '10:00' }],
+      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '08:00' }],
       writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', askedIn: null, at: NOW })
     expect(effects.messages).toEqual([])
     expect(f.state.projects).toEqual(before)

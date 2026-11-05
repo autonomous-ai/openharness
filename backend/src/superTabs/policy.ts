@@ -12,6 +12,8 @@ export const MAX_RULES_BYTES = 16_384
 /** Revisions kept per project, the current one included; the save that writes the 51st deletes the oldest. */
 export const MAX_RULES_REVISIONS = 50
 const MAX_LIST = 50
+/** Wildcards a path pattern may hold, a double star counting as one. */
+export const MAX_WILDCARDS = 4
 
 const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'A time of day as HH:MM, 00:00 to 23:59.')
 const timeZone = z.string().min(1).max(64).refine(zone => {
@@ -24,6 +26,10 @@ const reads = z.number().int().min(1).max(5)
 /** A path pattern relative to the repository (globMatch): never absolute, never climbing out of it. */
 const glob = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_.*?\/@+ -]+$/, 'A path pattern: letters, digits and _ . * ? / @ + - only.')
   .refine(g => !g.startsWith('/') && !g.split('/').includes('..'), 'A path pattern relative to the repository, without "..".')
+  // At most MAX_WILDCARDS a pattern, a double star counting as one, and no run of three stars (security review of #3216).
+  // globMatch is linear whatever the pattern; this keeps patterns readable and the matcher's work small.
+  .refine(g => !g.includes('***') && (g.match(/\*\*|\*|\?/g)?.length ?? 0) <= MAX_WILDCARDS,
+    'A path pattern has at most 4 wildcards (* ? or **).')
 const globs = z.array(glob).max(MAX_LIST)
 /** A list whose entries' [key] differ, ignoring case: two rows for one area would leave the table saying two things. */
 const distinct = <T extends z.ZodTypeAny>(item: T, key: (entry: z.infer<T>) => string, what: string) =>
@@ -58,6 +64,11 @@ export const projectRulesSchema = z.object({
   lanes: distinct(z.object({ name: line(80), owns: z.array(line(400)).max(MAX_LIST) }).strict(), lane => lane.name, 'lane'),
 }).strict().refine(rules => Buffer.byteLength(JSON.stringify(rules)) <= MAX_RULES_BYTES,
   `Project rules are at most ${MAX_RULES_BYTES / 1024} KB.`)
+  // The backend pause is a part of the release window (review of #3216): outside it, there is no release to pause.
+  .refine(rules => {
+    const pause = rules.releasePace.backendPause
+    return !pause || (pause.start >= rules.releaseWindow.start && pause.end <= rules.releaseWindow.end)
+  }, 'The backend pause falls inside the release window.')
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
 
@@ -142,27 +153,63 @@ export interface RulesWrite {
   at: number
 }
 
-const compiled = new Map<string, RegExp>()
-/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
- *  itself. The review steps' matcher (#3401 reviewTable.ts globMatch), the same rules, so both read a row alike. */
-export function globMatch(glob: string, path: string): boolean {
-  let pattern = compiled.get(glob)
-  if (!pattern) {
-    let source = ''
-    for (let i = 0; i < glob.length; i++) {
-      const c = glob[i]!
-      if (c === '*' && glob[i + 1] === '*') {
-        if (glob[i + 2] === '/') { source += '(?:.*/)?'; i += 2 } else { source += '.*'; i += 1 }
-      } else if (c === '*') source += '[^/]*'
-      else if (c === '?') source += '[^/]'
-      else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    }
-    pattern = new RegExp(`^${source}$`, 'i')
-    // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves recompiling them.
-    if (compiled.size > 10_000) compiled.clear()
-    compiled.set(glob, pattern)
+type GlobToken = { kind: 'char'; c: string } | { kind: 'one' } | { kind: 'name' } | { kind: 'any' } | { kind: 'dirs' }
+const tokenCache = new Map<string, GlobToken[]>()
+/** [glob] as tokens: `**` then a slash, any folders or none (`dirs`); `**` anything (`any`); `*` within one name (`name`); `?` one
+ *  character of a name (`one`); anything else itself, lower-cased. */
+function globTokens(glob: string): GlobToken[] {
+  let tokens = tokenCache.get(glob)
+  if (tokens) return tokens
+  tokens = []
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!
+    if (c === '*' && glob[i + 1] === '*') {
+      if (glob[i + 2] === '/') { tokens.push({ kind: 'dirs' }); i += 2 } else { tokens.push({ kind: 'any' }); i += 1 }
+    } else if (c === '*') tokens.push({ kind: 'name' })
+    else if (c === '?') tokens.push({ kind: 'one' })
+    else tokens.push({ kind: 'char', c: c.toLowerCase() })
   }
-  return pattern.test(path)
+  // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves tokenizing them again.
+  if (tokenCache.size > 10_000) tokenCache.clear()
+  tokenCache.set(glob, tokens)
+  return tokens
+}
+
+/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
+ *  itself. The review steps' rules (#3401 reviewTable.ts globMatch), so both read a row alike. It walks the pattern as a
+ *  set of positions, one step per character of the path: time grows with the path times the pattern and never backtracks,
+ *  whatever a project saves (security review of #3216: the regex it replaced took 19 s on `*a` ten times). */
+export function globMatch(glob: string, path: string): boolean {
+  const tokens = globTokens(glob), end = tokens.length
+  // Every position reachable from [from] without reading a character: a wildcard may match nothing.
+  const close = (from: Iterable<number>): Set<number> => {
+    const seen = new Set<number>(), stack = [...from]
+    while (stack.length) {
+      const i = stack.pop()!
+      if (seen.has(i)) continue
+      seen.add(i)
+      const t = tokens[i]
+      if (t && (t.kind === 'name' || t.kind === 'any' || t.kind === 'dirs')) stack.push(i + 1)
+    }
+    return seen
+  }
+  let states = close([0])
+  for (const raw of path) {
+    const c = raw.toLowerCase(), next: number[] = []
+    for (const i of states) {
+      const t = tokens[i]
+      if (!t) continue
+      if (t.kind === 'char') { if (t.c === c) next.push(i + 1) }
+      else if (t.kind === 'one') { if (c !== '/') next.push(i + 1) }
+      else if (t.kind === 'name') { if (c !== '/') next.push(i) }
+      else if (t.kind === 'any') next.push(i)
+      // A double star and a slash: any characters, leaving after a slash.
+      else { next.push(i); if (c === '/') next.push(i + 1) }
+    }
+    if (!next.length) return false
+    states = close(next)
+  }
+  return states.has(end)
 }
 
 const matchesAny = (patterns: readonly string[], file: string) => patterns.some(g => globMatch(g, file))
