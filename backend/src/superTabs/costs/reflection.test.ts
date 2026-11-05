@@ -89,7 +89,7 @@ describe('the nightly routing reflection', () => {
         saving: 'about $12.00 a week at API prices of attempts that failed their first review', dollars: 12, hours: 0, strong: false },
       { title: PARSER, why: 'Its first review passed 4 of 5 (80%) against 4 of 5 (80%), at $2.00 instead of $4.00 per shipped change at API prices. '
         + 'Small samples (5 and 5 first reviews): the difference may be chance.', saving: 'about $10.00 a week at API prices', dollars: 10, hours: 0, strong: false },
-      { title: DOCS, why: '3 of 3 docs tasks started on the grid stepped up after their grid attempt failed. Only 3 tasks.',
+      { title: DOCS, why: '3 of 3 docs tasks needed another model after their grid attempt failed. Only 3 tasks.',
         saving: 'about 3 hours to ship a week', dollars: 0, hours: 3, strong: false },
     ])
     expect(report.text).toContain('Proposed changes (advice: no rule or setting changes by itself):')
@@ -104,7 +104,7 @@ describe('the nightly routing reflection', () => {
     expect(routingLine(docs!)).toBe('Docs work starts on a subscription model, not on the grid.')
     const asked = proposalQuestion(ui!)
     expect(asked.options[0]!.startsWith('Yes: the coordinator writes this into the Routing section of the instructions')).toBe(true)
-    expect(asked).toEqual({ question: `${UI}? Expected saving: ${ui!.saving}. ${ui!.why}`,
+    expect(asked).toEqual({ question: `${UI}?\nWhy: ${ui!.why} This could save ${ui!.saving}.`,
       options: [asked.options[0], 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
       recommended: 2, unblocks: expect.stringContaining(routingLine(ui!)) })
     expect(asked.unblocks).not.toMatch(/reminded|30 days/)
