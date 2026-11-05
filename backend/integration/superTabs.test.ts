@@ -4577,7 +4577,7 @@ describe('Lead mentions', () => {
     const earlierAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'earlier')).mentions
     const as = (minutes: number, user: AuthUser, tab: string, command: Command, agent?: string) =>
       after(minutes).execute(user, tab, { operationId: randomUUID(), command }, agent)
-    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it.', replyTo: null, recipientIds: [] })
+    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it, rebasing now.', replyTo: null, recipientIds: [] })
 
     it('keeps a tag the Lead acted on out of Waiting and Earlier, also when a worker is assigned or the requester replies later', async () => {
       const { tab, lead, group } = await held()
