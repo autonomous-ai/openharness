@@ -152,6 +152,10 @@ class NewProjectSwarm {
   String? ownerState;
   String? installUrl;
 
+  /// The organization check answers 429, as the server does past 30 checks
+  /// a minute per person (`RATE_LIMITED`).
+  bool ownerRateLimited = false;
+
   /// Answers New repository's request in place of the server when set:
   /// throws to refuse it.
   FutureOr<Object?> Function(Map<String, dynamic> body)? refuseRepository;
@@ -250,10 +254,14 @@ class NewProjectSwarm {
       'next': null,
     };
     if (ownerState case final state?) {
-      fake.routes['/api/super-tabs/$id/github/owners/'] = (_) => {
-        'state': state,
-        'installUrl': ?installUrl,
-      };
+      fake.routes['/api/super-tabs/$id/github/owners/'] = (_) =>
+          ownerRateLimited
+          ? throw const SuperTabFailure(
+              'RATE_LIMITED',
+              'Too many requests.',
+              statusCode: 429,
+            )
+          : {'state': state, 'installUrl': ?installUrl};
     }
     // New repository's request (backend Task 6): the sign-in to go to, and
     // the time that names this attempt; the project waits from then on.

@@ -2889,6 +2889,68 @@ void main() {
         expect(find.byType(BottomSheet), findsNothing);
       });
 
+      // Heron, from #3201's security reviews: the callback is making it.
+      testWidgets('creating, while the callback makes it, still waits; made '
+          'after it, the Product Manager starts', (tester) async {
+        final swarm = NewProjectSwarm()..ownerState = 'ready';
+        final host = await pump(tester, [swarm]);
+        final made = await createNew(tester, host, swarm);
+        swarm.finishCreation(made, 'creating');
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+        expect(find.text('Creating $owner/notes-app…'), findsOneWidget);
+        expect(key('swarm-new-project-error'), findsNothing);
+        expect(swarm.commands('lead.start'), isEmpty);
+        swarm.finishCreation(
+          made,
+          'created',
+          repositoryUrl: 'https://github.com/$owner/notes-app',
+          reachable: true,
+        );
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+        expect(swarm.commands('lead.start'), hasLength(1));
+      });
+
+      testWidgets('too many organization checks: the choice stays, and it '
+          'says to try again in a minute', (tester) async {
+        final swarm = NewProjectSwarm()
+          ..ownerState = 'ready'
+          ..ownerRateLimited = true;
+        await pump(tester, [swarm]);
+        await openNewProject(tester);
+        await toNewRepository(tester);
+        await name(tester, 'notes-app');
+        expect(find.text(swarmRepositoryRateLimited), findsOneWidget);
+        expect(on(tester, 'swarm-new-repo-use'), isFalse);
+      });
+
+      testWidgets('too many requests at Create says so, and Try again asks '
+          'again with the same choice', (tester) async {
+        final swarm = NewProjectSwarm()..ownerState = 'ready';
+        swarm.refuseRepository = (_) => throw const SuperTabFailure(
+          'RATE_LIMITED',
+          'Too many requests.',
+          statusCode: 429,
+        );
+        final host = await pump(tester, [swarm]);
+        await createNew(tester, host, swarm);
+        expect(find.text(swarmRepositoryRateLimited), findsOneWidget);
+        expect(find.text('Try again'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: key('swarm-new-project-repository'),
+            matching: find.text('$owner/notes-app'),
+          ),
+          findsOneWidget,
+        );
+        swarm.refuseRepository = null;
+        await tester.tap(key('swarm-new-project-create'));
+        await pumpFor(tester);
+        expect(swarm.repositoryRequests, hasLength(1));
+        expect(find.text('Creating $owner/notes-app…'), findsOneWidget);
+      });
+
       for (final (state, line) in [
         ('taken', swarmRepositoryTaken(owner, 'notes-app')),
         (
