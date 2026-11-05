@@ -528,7 +528,7 @@ describe('a rule moved into a code task', () => {
   const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
   /** A Swarm whose project's repository is acme/app, tidying off, its instructions keeping peer's rule; a store whose GitHub
    *  says what [merges] holds; and a code task carrying the rule, linking PR. */
-  async function moved() {
+  async function moved(carried = leo) {
     const merges: Record<string, number | null> = {}, read: string[][] = []
     const github = new SuperTabStore(db, () => now, null, { pullRequestMerges: async (_env, _tab, _project, urls) => {
       read.push(urls)
@@ -545,7 +545,7 @@ describe('a rule moved into a code task', () => {
     })
     await run(tab, { type: 'tab.tidy', enabled: false })
     await run(tab, save(1, doc(leo, 'Tests run first.')))
-    const task = (await run(tab, { type: 'conversation.create', title: 'Stable fixes', brief: `Goal:\nSame-day fixes.\n\nChanges:\n- ${leo}`,
+    const task = (await run(tab, { type: 'conversation.create', title: 'Stable fixes', brief: `Goal:\nSame-day fixes.\n\nChanges:\n- ${carried}`,
       checks: [] })).result.conversationId as string
     // The PM records the merge with a link: its word alone frees nothing (River, review of #3220).
     await run(tab, { type: 'conversation.merged', conversationId: task, pullRequestUrl: PR }, host, lead)
@@ -568,6 +568,14 @@ describe('a rule moved into a code task', () => {
     // Merged after: the person's save drops the line, though no archive pass ever ran.
     m.merges[PR] = m.briefAt + 60_000
     expect((await m.drop()).result).toMatchObject({ revision: 3 })
+  })
+
+  // Review 1 of #3273: the brief wraps the rule as the instructions wrap theirs, at 120 columns.
+  it('reads the merge of a task that carries the rule across wrapped lines', async () => {
+    const m = await moved('A bug that reaches stable ships its fix\n  the same day (peer, 2026-11-04).')
+    m.merges[PR] = m.briefAt + 60_000
+    expect((await m.drop()).result).toMatchObject({ revision: 3 })
+    expect(m.read.at(-1)).toEqual([PR])
   })
 
   it('counts a merged task that went quiet once the save names it', async () => {

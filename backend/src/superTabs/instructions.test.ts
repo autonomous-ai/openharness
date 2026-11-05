@@ -5,6 +5,8 @@ import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
 import { budgetParts, INSTRUCTIONS_BUDGET } from './instructionsDiff.js'
+import { tasksHoldingMoves } from './ruleGuard.js'
+import { projectsOf } from './projects.js'
 import { hostTab } from './read/hostRows.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 
@@ -825,6 +827,22 @@ describe('an instructions save may move a person\'s rule', () => {
     expect(f.state.conversations.find(c => c.id === task.id)!.briefAt).toBe(2000)
     expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(1500) }))).toMatchObject({ details: { dropped: [{ why: 'waiting' }] } })
     expect(f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(2500) }).result.revision).toBe(2)
+  })
+
+  // Review 1 of #3273: the save reads the merges of the tasks the guard's own matcher finds a dropped rule in, not only those
+  // whose brief holds the line's text as written.
+  it('names the tasks a dropped rule moved into as the guard reads them: across wrapped lines, and one rule of a line of two', () => {
+    const { f } = pm()
+    const wrapped = codeTask(f, 'No releases between 18:00 and 09:00\n  Vietnam time (owner, 2026-11-02).')
+    const other = codeTask(f, 'Something else entirely (owner, 2026-11-01).')
+    const project = projectsOf(f.state)[0]!
+    expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id)).toEqual([wrapped.id])
+    // A line of two people's rules, of which only peer's moves into the task.
+    const pair = `${quiet} ${leo}`
+    const moved = codeTask(f, leo)
+    expect(tasksHoldingMoves(f.state, project, doc(pair), doc(quiet)).map(t => t.id)).toEqual([moved.id])
+    expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo, quiet))).toEqual([])
+    expect(other.id).toBeDefined()
   })
 
   // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
