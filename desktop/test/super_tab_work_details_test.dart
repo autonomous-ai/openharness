@@ -374,6 +374,36 @@ void main() {
       );
     });
 
+    testWidgets('Stale when the PR now merges into another branch', (
+      tester,
+    ) async {
+      await open(tester, {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': null,
+        'passedBy': null,
+        'verdicts': [
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+            'pullRequest': 'https://github.com/acme/app/pull/7',
+            'head': a,
+            'base': 'evil',
+            'stale': a,
+          },
+        ],
+      });
+      expect(
+        find.text(
+          'Stale: read aaaaaaa against evil, PR targets another branch',
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('Verified as before for a verdict with no head', (
       tester,
     ) async {
