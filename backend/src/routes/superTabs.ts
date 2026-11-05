@@ -25,6 +25,7 @@ import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectCiLoad } from '../github/ciLoad.js'
 import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
+import { projectPullRequestFiles } from '../superTabs/pullRequestFiles.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -268,6 +269,8 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
+      // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
+      ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
       // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
       // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
       ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>
