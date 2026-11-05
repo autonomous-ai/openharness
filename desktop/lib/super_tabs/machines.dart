@@ -1574,6 +1574,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
     }
     final line = _teammatesLine(shared, team, contributor);
+    // Sorted once, for both the row's line and its details (task #3412).
+    final crew = superTabMachineCrew(agents);
     final restartTeam =
         team != null &&
         (team['teamWork'] as Map?)?['code'] == 'MACHINE_OFFLINE' &&
@@ -1620,9 +1622,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       name: name,
       problem: problem,
       history: superTabMachineHistory(shared, snapshot.people),
-      crew: superTabMachineCrew(agents),
+      crew: crew,
       crewLine: superTabMachineCrewLine(
-        agents,
+        crew,
         diskFree: dim ? null : diskFree?.toDouble(),
       ),
       // Set up would ask for the password again while one setup runs.
@@ -3117,13 +3119,10 @@ List<SuperTabAgent> superTabMachineCrew(List<SuperTabAgent> agents) {
   });
 }
 
-/// A machine row's line about its crew: "3 crew · 1 asleep · 42 GB free" (task #3412, anh Dee 11-05). Null without
-/// crew. [diskFree] is the row's current reading; null while its readings are old, and the line then leaves it out.
-String? superTabMachineCrewLine(
-  List<SuperTabAgent> agents, {
-  double? diskFree,
-}) {
-  final crew = superTabMachineCrew(agents);
+/// A machine row's line about its [crew] ([superTabMachineCrew]): "3 crew · 1 asleep · 42 GB free" (task #3412, anh
+/// Dee 11-05). Null without crew. [diskFree] is the row's current reading; null while its readings are old, and the
+/// line then leaves it out.
+String? superTabMachineCrewLine(List<SuperTabAgent> crew, {double? diskFree}) {
   if (crew.isEmpty) return null;
   final asleep = crew.where((a) => a.crewAsleep).length;
   return [
@@ -3756,7 +3755,8 @@ class _MachineReadings extends StatelessWidget {
     );
   }
 
-  /// One line per crew member: its name, then awake, moving, or asleep with its idle hours; an asleep one muted.
+  /// One line per crew member: its name (in full on hover), then awake, moving, or asleep with its idle hours in
+  /// tabular figures; an asleep one muted. Named roles only: the row's control text, its metadata, its list gaps.
   static Widget _crew(_MachineView view) {
     final now = DateTime.now();
     return Column(
@@ -3765,36 +3765,36 @@ class _MachineReadings extends StatelessWidget {
       children: [
         for (final (index, member) in view.crew.indexed)
           Padding(
-            padding: EdgeInsets.only(top: index == 0 ? 0 : 4),
+            padding: EdgeInsets.only(
+              top: index == 0 ? 0 : grid.AppDesktop.listRowGap,
+            ),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    member.displayName?.trim().isNotEmpty == true
-                        ? member.displayName!.trim()
-                        : member.name,
-                    key: ValueKey(
-                      'super-machine-crew-member-${view.id}-$index',
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.text(
-                      size: 12,
-                      height: 1.3,
-                      color: member.crewAsleep
-                          ? DesktopChrome.muted
-                          : DesktopChrome.foreground,
+                  child: Tooltip(
+                    message: _crewName(member),
+                    excludeFromSemantics: true,
+                    child: Text(
+                      _crewName(member),
+                      key: ValueKey(
+                        'super-machine-crew-member-${view.id}-$index',
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(
+                        color: member.crewAsleep
+                            ? DesktopChrome.muted
+                            : DesktopChrome.foreground,
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: DesktopChrome.controlGap),
                 Text(
                   superTabCrewMemberState(member, now: now),
                   key: ValueKey('super-machine-crew-state-${view.id}-$index'),
-                  style: DesktopChrome.text(
-                    size: 11,
-                    height: 1.3,
-                    color: DesktopChrome.muted,
+                  style: DesktopChrome.metadata().copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
               ],
@@ -3803,6 +3803,12 @@ class _MachineReadings extends StatelessWidget {
       ],
     );
   }
+
+  /// A crew member as people know it: its display name, else its name.
+  static String _crewName(SuperTabAgent member) =>
+      member.displayName?.trim().isNotEmpty == true
+      ? member.displayName!.trim()
+      : member.name;
 
   /// [children] in [columns] equal columns, wrapping into rows.
   static Widget _grid(double width, int columns, List<Widget> children) =>
