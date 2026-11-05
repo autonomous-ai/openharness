@@ -316,9 +316,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
   // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
   // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
-  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts); a step reads its task's mark.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts teamWrittenTask): a step reads its task's mark,
+  // an unknown task counts as written, and so does a task from before the mark whose assignee runs in a Team account.
   const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
-  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true
+  const assignee = task ? agents.find(a => a.id === object(task.assignment).agentId) : undefined
+  const onTeam = (agent: Json) => agent.teamAccount === true || list(state.machines).some(m => m.machineId === agent.machineId
+    && (typeof m.hostMachineId === 'string' || object(m.observation).sessionKind === 'team'))
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true || (!!assignee && onTeam(assignee))
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
