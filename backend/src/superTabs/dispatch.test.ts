@@ -93,8 +93,8 @@ describe('what a free crew member gets', () => {
   }
   const nameOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.state.agents.find(a => a.id === id)!.name
   const titleOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.group(id).title
-  /** Gives [agentId] [conversationId] in [status], as work.assign and then work.status leave it (written directly: before
-   *  #3399 work.assign still counts a handed task as busy). */
+  /** Gives [agentId] [conversationId] in [status], as work.assign and then work.status leave it (written directly, so a test
+   *  sets any number of tasks in any status at once). */
   const holding = (s: ReturnType<typeof crewSwarm>, agentId: string, conversationId: string, status: 'working' | 'review' | 'done' = 'working') => {
     s.group(conversationId).assignment = { id: `held-${conversationId}`, agentId, status, configuration: config,
       execution: { machineId: 'host', harnessId: agentId, machineOwnerId: 'host-owner' }, result: null }
@@ -126,16 +126,28 @@ describe('what a free crew member gets', () => {
     expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
   })
 
-  it('counts a member busy while work.assign does: a task in its hands or, until #3399 frees it, a handed one', () => {
+  // Merge check of #3230 (ReviewPulse2): main's #3399 frees an Engineer whose task is handed (handed.ts); the dispatch read a
+  // stand-in that counted it busy, so a member with a handed task never got the next one though work.assign would take it.
+  it('counts a member busy while work.assign does: a task in its hands, not a handed one under the limit', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
     expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
-    // work.assign refuses an agent with a task in review today (AGENT_BUSY): a pick for it would be refused every sweep.
+    // One handed task, under the limit of three: Ash is free and gets the lane's next task, which work.assign takes.
     holding(s, s.ids.Ash!, s.tasks.api, 'review')
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.id)).toEqual([s.ids.Ash])
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
+    expect(() => s.run({ type: 'work.assign', conversationId: s.tasks.store, agentId: s.ids.Ash! })).not.toThrow()
+    expect(s.group(s.tasks.store).assignment).toMatchObject({ agentId: s.ids.Ash, status: 'working' })
+  })
+
+  it('gives a member with as many handed tasks as the limit nothing new, and one with a task in its hands nothing', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    const more = [s.task('Cache', ['backend/src/e.ts']), s.task('Queue', ['backend/src/f.ts'])]
+    for (const id of [s.tasks.api, ...more].slice(0, DISPATCH_RULES.maxHanded)) holding(s, s.ids.Ash!, id, 'review')
     expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
     // A finished one counts no more; one in its hands keeps it busy.
     holding(s, s.ids.Ash!, s.tasks.api, 'done')
     expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
-    holding(s, s.ids.Ash!, s.task('Cache', ['backend/src/e.ts']))
+    holding(s, s.ids.Ash!, s.tasks.api, 'working')
     expect(s.picks()).toEqual([])
   })
 
