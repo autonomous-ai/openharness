@@ -255,8 +255,11 @@ enum HarnessPalette {
       _sidebarOnSelected ?? sidebarInk ?? text ?? foreground;
   bool get isDark => brightness == Brightness.dark;
 
-  static HarnessPalette fromId(String? id) =>
-      values.where((palette) => palette.name == id).firstOrNull ?? graphite;
+  static HarnessPalette fromId(String? id) => byId(id) ?? graphite;
+
+  /// The palette saved under [id], or null for an unknown or missing one.
+  static HarnessPalette? byId(String? id) =>
+      values.where((palette) => palette.name == id).firstOrNull;
 
   Map<String, int> get nativeColors => {
     'tabBar': tabBar.toARGB32(),
