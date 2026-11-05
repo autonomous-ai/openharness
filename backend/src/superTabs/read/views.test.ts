@@ -209,3 +209,24 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
       .toBe('Lead engineer')
   })
 })
+
+// Task #3384: the board's pulse is cross-part and timed, so it goes in `derived`, for each project the reader sees; what it is
+// counted from (a conversation's owed asks, a project's idle mark) is bookkeeping no reader gets.
+describe('the pulse on the read', () => {
+  it('is derived for each project the reader sees, never from a part', () => {
+    const { s } = scene()
+    s.edit(state => {
+      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
+      state.projects![0]!.idleSince = NOW - MINUTE
+    })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const view = readerView(parts, peer, NOW, { teamMachines: [] })
+    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
+    expect(view.derived.pulse?.[pilot.id]?.asks).toMatchObject({ count: 1, oldestAt: NOW - MINUTE, personId: peer.userId })
+    expect(Object.keys(view.derived.pulse ?? {})).toEqual(view.parts.head.data.projects!.map(p => p.id))
+    expect(pilot).not.toHaveProperty('idleSince')
+    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('owed')
+    const owners = readerView(parts, owner, NOW, { teamMachines: [] })
+    expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
+  })
+})
