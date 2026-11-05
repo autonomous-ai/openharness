@@ -10,7 +10,7 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
@@ -475,6 +475,8 @@ export interface SuperTabState {
   overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
+  /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
+  ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
   workspaceId?: string
@@ -922,6 +924,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   assignAgentDisplayNames(visible.agents)
   const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
   if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
+  const ownerless = ownerlessProjects(state, actor)
+  if (ownerless) visible.ownerlessProjects = ownerless
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
     if (since) target.downSince = since

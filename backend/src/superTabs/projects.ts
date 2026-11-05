@@ -538,6 +538,29 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
   return projectOf(state, projectId)
 }
 
+/** The project [actor] may delete: one they manage, or, for the Swarm's owner, one that is nobody's (settleOwners), which they
+ *  may delete but never read (task #3073). */
+export function deletableProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
+  author(state, actor)
+  const project = projectsOf(state).find(p => p.id === projectId)
+  if (!project || !isOwnerless(project) || actor.kind !== 'person' || actor.userId !== state.ownerId) return manageProject(state, actor, projectId)
+  author(state, actor, true)
+  mutableProjects(state)
+  return projectOf(state, projectId)
+}
+
+/** A project nobody owns: its owner left with no member left to take it (settleOwners). */
+export const isOwnerless = (project: SwarmProject): boolean => !project.ownerId
+
+/** What the Swarm's owner reads of each project nobody owns (task #3073): that it exists, its name and its size (its chats in
+ *  this read), never what is in it. Anyone else reads nothing of them. */
+export function ownerlessProjects(state: SuperTabState, actor: Actor): Array<{ id: string; name: string; conversations: number }> | undefined {
+  if (actor.kind !== 'person' || actor.userId !== state.ownerId) return undefined
+  const ownerless = projectsOf(state).filter(isOwnerless)
+  return ownerless.length ? ownerless.map(p => ({ id: p.id, name: p.name,
+    conversations: state.conversations.filter(c => c.projectId === p.id).length })) : undefined
+}
+
 /** How long a start may stay pending before a project delete treats it as stuck: well past the 15 minutes the sweep gives a
  *  dispatched start to prepare (liveness.ts START_PREPARE_MS). */
 export const STUCK_START_MS = 60 * 60_000
@@ -548,7 +571,10 @@ export const STUCK_START_MS = 60 * 60_000
  * and it closed that agent's session when it was removed, so none of them ever settles (2026-11-04: 17 such starts on four
  * Macs, from agents stopped while a project was cleaned up, kept its owner from deleting it). */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string, orphaned: ReadonlySet<string> = new Set(), now?: number): void {
-  const project = manageProject(state, actor, projectId)
+  const project = deletableProject(state, actor, projectId)
+  // A project nobody owns is deleted by the Swarm's owner, who reads nothing of it: no refusal names what is in it, and its
+  // work, which nobody can resolve, goes with it.
+  const ownerless = isOwnerless(project)
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
@@ -565,11 +591,12 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
     (!s.harnessId || s.poolGeneration && !s.poolSettled && !orphaned.has(s.id)))
   // Each refusal names what holds it, so its owner can act on it: the ones before named nothing, and no read showed them.
   const titled = (id: string) => groups.find(c => c.id === id)?.title || 'the project chat'
+  if (pending.length && ownerless) fail('STARTS_PENDING', 'Agents of this project are still starting. Delete it once they have started or failed, within the hour.')
   if (pending.length) {
     fail('STARTS_PENDING', `Resolve this project’s pending agent starts before deleting it: ${pending.slice(0, 3)
       .map(s => `${s.request.name} in “${titled(s.request.conversationId)}”`).join(', ')}${pending.length > 3 ? ` and ${pending.length - 3} more` : ''}.`)
   }
-  const active = groups.filter(activeWork)
+  const active = ownerless ? [] : groups.filter(activeWork)
   if (active.length) {
     fail('WORK_ACTIVE', `Resolve this project’s active work before deleting it: ${active.slice(0, 3).map(c => `“${titled(c.id)}”`).join(', ')}${
       active.length > 3 ? ` and ${active.length - 3} more` : ''}.`)
