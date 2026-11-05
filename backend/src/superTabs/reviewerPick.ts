@@ -11,6 +11,7 @@ import { roleNameOf } from './instructions.js'
 import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
+import { canStart, standing } from './reviewSeats.js'
 import { stepsOf } from './steps.js'
 import type { StepKind } from './reviewTable.js'
 
@@ -22,24 +23,29 @@ export function builtBy(task: Conversation): Set<string> {
   return ids
 }
 
-/** The catalog's strength of what [agent] runs (catalog.ts), or null: a grid model (never a reviewer), or a model the catalog
- *  does not list. An agent on its engine's own model is rated by the engine's named default. */
-export function strengthOf(state: SuperTabState, agent: Agent): number | null {
-  if (agent.gridModel) return null
+/** The catalog's row for what [agent] runs (catalog.ts), or undefined: a grid model (never a reviewer), or a model the
+ *  catalog does not list. An agent on its engine's own model is rated by the engine's named default. */
+function catalogRow(state: SuperTabState, agent: Agent) {
+  if (agent.gridModel) return undefined
   const target = agentTarget(state, agent)
   const named = target.launchedDefault && !target.model ? namedDefault(target.engine) : null
   const model = named?.model ?? target.model, effort = named?.effort ?? target.effort
-  if (!model) return null
+  if (!model) return undefined
   const rows = MODEL_CATALOG.models.filter(row => row.engine === target.engine && modelMatches(row.model, model))
-  if (!rows.length) return null
-  return (rows.find(row => row.effort === effort) ?? rows.reduce((a, b) => a.strength >= b.strength ? a : b)).strength
+  return rows.find(row => row.effort === effort) ?? rows.reduce<typeof rows[number] | undefined>((a, b) => a && a.strength >= b.strength ? a : b, undefined)
 }
+
+/** The catalog's strength of what [agent] runs, or null where catalogRow has none. */
+export const strengthOf = (state: SuperTabState, agent: Agent): number | null => catalogRow(state, agent)?.strength ?? null
 
 /** The strongest the catalog rates: what an engineer of unknown strength is taken to be, so its reviewer is never weaker. */
 const TOP_STRENGTH = Math.max(...MODEL_CATALOG.models.map(row => row.strength))
 
-/** Roles with work of their own that never take a step (project instructions, Roles): the PM, its Guide and Integrator, a Buddy. */
+/** Roles with work of their own that never take a step (project instructions, Roles): the PM, its Guide and Integrator, a Buddy.
+ *  By role name, and by the agent's own name too: on the live Swarm the Guides carry the role Reviewer and the Integrator none
+ *  (review of #3227), so "Guide", "Guide2" or "Integrator" is never picked whatever role it was started in. */
 const NEVER = /^(pm|guide|integrator|buddy)$/i
+const NEVER_NAMED = /^(guide|integrator)\d*$/i
 const ROLE: Record<StepKind, RegExp> = { review: /review/i, security: /review/i, test: /test/i }
 
 /** Whether [verdict] was given at [head]: it names that whole head (#3394: heads are whole 40-character ids, and a verdict
@@ -52,7 +58,7 @@ const atHead = (verdict: CheckVerdict & { head?: string }, head: string | null) 
  * unknown model or one weaker than the engineer; anyone busy, coordinating a conversation, a Buddy, stopping, or of another
  * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps.
  */
-export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null): Agent[] {
+export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number): Agent[] {
   const projectId = groupProject(state, task).id
   const index = workerIndex(state)
   const built = builtBy(task)
@@ -67,11 +73,14 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     if (isBuddy(agent) || agent.workDecision === 'stop' || agentProjectId(state, agent) !== projectId) return []
     if (judged.has(`agent:${agent.id}`)) return []
     const role = roleNameOf(state, agent)
-    if (NEVER.test(role)) return []
-    const strength = strengthOf(state, agent)
-    if (strength === null || strength < bar) return []
-    const cost = MODEL_CATALOG.models.find(row => row.engine === agent.configuration.engine && modelMatches(row.model, agent.configuration.model))?.cost ?? Infinity
-    return [{ agent, rank: ROLE[kind].test(role) ? 0 : 1, cost }]
+    if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
+    // Its machine can start work within the review's wait (reviewSeats.ts): not offline, paused, signed out, suspended or
+    // out of quota. A machine the state does not list is not judged here; work.assign's checks still hold it.
+    const pool = state.machines?.find(m => m.machineId === agent.machineId && m.contributorId === agent.contributorId)
+    if (pool && !canStart(standing(state, pool, agent.configuration.engine, now))) return []
+    const row = catalogRow(state, agent)
+    if (!row || row.strength < bar) return []
+    return [{ agent, rank: ROLE[kind].test(role) ? 0 : 1, cost: row.cost }]
   })
   return ranked.sort((a, b) => a.rank - b.rank || a.cost - b.cost || a.agent.id.localeCompare(b.agent.id)).map(entry => entry.agent)
 }

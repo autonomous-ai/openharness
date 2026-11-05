@@ -1695,9 +1695,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
       if (step) taken.add(step.id)
       if (step && activeWork(step)) continue
+      // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.
+      if (step && read.head && step.checks.length && step.checks.every(check => check.passedBy
+        && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
       step ??= openStep(task, planned, read)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
