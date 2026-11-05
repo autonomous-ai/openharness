@@ -22,7 +22,7 @@
 - Registration races the still-running preparation of the quiet channel.
 - Permission requests and checks overlap eager startup, creating channels repeatedly.
 - The loud channel metadata diverges from local notices or the backend channel IDs.
-- A platform channel error prevents otherwise working local notices or permission checks.
+- A platform channel error or stall prevents otherwise working local notices or permission checks.
 - iOS accidentally invokes Android channel setup.
 
 ## Design
@@ -34,7 +34,7 @@
 - Compatibility: existing channel IDs and the person's OS settings are preserved.
 - Migration and rollback: no migration; reverting removes the ordering guarantee.
 - Audience and identity: N/A; no change to registration authorization or account selection.
-- Failure: preserve best-effort logged failures and working local notifications.
+- Failure: preserve best-effort logged failures and working local notifications; bound preparation to 10 seconds.
 - Platforms: Android channels; iOS remains a no-op.
 
 ## Task 1: Reconcile the upstream channels and await them
@@ -43,9 +43,9 @@
 
 **Interfaces:** Consume existing `Future<void> preparePush()`, `enabled()` and `requestPermission()`. Preserve those signatures and the existing `swarm-needs-you` / `swarm-quiet` channels.
 
-- [ ] Merge current main, retaining #3154's channel implementation as the baseline rather than the superseded single-channel helper.
-- [ ] Commit tests for delayed quiet-channel creation: concurrent startup and permission checks cannot finish before it; both channels are created once. Check loud metadata against the posted notice, quiet sound/vibration off, iOS no-op, and logged failure recovery.
-- [ ] Run `flutter test --no-pub test/notify/local_system_notices_test.dart`; record the expected ordering/duplicate-preparation failures.
-- [ ] Share the preparation future and await it during notification initialization. Update the design's channel description.
-- [ ] Run the notification tests plus push-token and announcement consumer tests; record red/green evidence in the PR comment.
+- [x] Merge current main, retaining #3154's channel implementation as the baseline rather than the superseded single-channel helper.
+- [x] Commit tests for delayed quiet-channel creation: concurrent startup and permission checks cannot finish before it; both channels are created once. Check loud metadata against the posted notice, quiet sound/vibration off, iOS no-op, logged failure recovery, and a 10-second stall timeout.
+- [x] Run `flutter test --no-pub test/notify/local_system_notices_test.dart`; record the expected ordering/duplicate-preparation failures.
+- [x] Share the preparation future and await it during notification initialization. Update the design's channel description.
+- [x] Run the notification tests plus push-token and announcement consumer tests; record red/green evidence in the PR comment.
 - [ ] Commit, push, mark ready, and hand the stable head to independent review/test while automatic CI runs.
