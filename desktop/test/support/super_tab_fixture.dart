@@ -104,6 +104,7 @@ class SwarmPartsBackend {
           'decisionsWaiting',
           'decisionsDigest',
           'otherProjectsWork',
+          'lanes',
           'githubApp',
           'readMarks',
           'unreadMarks',
@@ -190,6 +191,9 @@ class SwarmPartsBackend {
       'decisionsDigest': state['decisionsDigest'],
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
+    // Each crew project's lanes and their hand-out order (backend
+    // read/views.ts `derived.lanes`, task #3400).
+    if (state['lanes'] != null) 'lanes': state['lanes'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
     // Only where the server does not try Team accounts (backend read/views.ts).
     if (state['teamAccounts'] == false) 'teamAccounts': false,

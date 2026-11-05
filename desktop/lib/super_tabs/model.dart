@@ -200,8 +200,14 @@ class SuperTabAgent {
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = row['workDecision'] as String?,
       confidential = row['confidential'] == true,
+      crew = SuperTabCrew.fromJson(row['crew']),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// Set on a crew member (backend model.ts `Agent.crew`, tasks #3397 and
+  /// #3400): the server hands it work in its lane. Null on every other agent
+  /// and from an older server.
+  final SuperTabCrew? crew;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
@@ -282,6 +288,89 @@ class SuperTabAgent {
   final bool buddyNarrow;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
+}
+
+/// What makes an agent a crew member (backend model.ts `Agent.crew`): the
+/// role it fills, the lane it takes work in, if any, and when and by whom it
+/// joined.
+class SuperTabCrew {
+  const SuperTabCrew({
+    required this.role,
+    required this.at,
+    required this.by,
+    this.lane,
+  });
+  final String role, by;
+  final String? lane;
+  final DateTime at;
+
+  /// Null for anything but a crew record with a role.
+  static SuperTabCrew? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final role = value['role'];
+    if (role is! String) return null;
+    final lane = value['lane'];
+    return SuperTabCrew(
+      role: role,
+      lane: lane is String && lane.trim().isNotEmpty ? lane : null,
+      at: DateTime.fromMillisecondsSinceEpoch(
+        (value['at'] is num ? value['at'] as num : 0).toInt(),
+      ),
+      by: value['by'] is String ? value['by'] as String : '',
+    );
+  }
+}
+
+/// One lane of a crew project as the server counts it (backend read/views.ts
+/// `derived.lanes`, task #3400): its tasks waiting and in hand, when the
+/// oldest waiting one opened, and the waiting ones in the order it hands
+/// them out.
+class SuperTabLaneCapacity {
+  const SuperTabLaneCapacity({
+    required this.lane,
+    required this.waiting,
+    required this.busy,
+    required this.oldestAt,
+    required this.taskIds,
+  });
+  final String lane;
+  final int waiting, busy;
+  final DateTime? oldestAt;
+  final List<String> taskIds;
+
+  /// Null for anything that is not a lane with a name.
+  static SuperTabLaneCapacity? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final lane = value['lane'];
+    if (lane is! String || lane.isEmpty) return null;
+    int count(Object? n) => n is num ? n.toInt() : 0;
+    final oldest = value['oldestAt'];
+    return SuperTabLaneCapacity(
+      lane: lane,
+      waiting: count(value['waiting']),
+      busy: count(value['busy']),
+      oldestAt: oldest is num
+          ? DateTime.fromMillisecondsSinceEpoch(oldest.toInt())
+          : null,
+      taskIds: List.unmodifiable(
+        value['taskIds'] is List
+            ? (value['taskIds'] as List).whereType<String>()
+            : const <String>[],
+      ),
+    );
+  }
+
+  /// Each project's lanes in [value] (`derived.lanes`), by project id; empty
+  /// from a server before lanes.
+  static Map<String, List<SuperTabLaneCapacity>> byProject(Object? value) =>
+      Map.unmodifiable({
+        if (value is Map)
+          for (final MapEntry(:key, value: lanes) in value.entries)
+            if (key is String && lanes is List)
+              key: List<SuperTabLaneCapacity>.unmodifiable(
+                lanes.map(fromJson).nonNulls,
+              ),
+      });
 }
 
 /// What makes an agent a thread session: its thread's root and the sequence
@@ -664,6 +753,7 @@ class SuperTabSnapshot {
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
+      lanes = SuperTabLaneCapacity.byProject(row['lanes']),
       remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
@@ -802,6 +892,10 @@ class SuperTabSnapshot {
   /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
   /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
   final String? activityDigest;
+
+  /// Each crew project's lanes, by project id (backend `derived.lanes`, task
+  /// #3400); empty from an older server and for a project with no crew.
+  final Map<String, List<SuperTabLaneCapacity>> lanes;
 
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
   /// cleared; null from a backend before reminders (superTabs/reminders.ts).
