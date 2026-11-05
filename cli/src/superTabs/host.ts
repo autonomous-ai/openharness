@@ -25,6 +25,7 @@ import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost, type TerminalRelay } from './terminal.js'
 import { realRelayRecovery } from './relayRecovery.js'
 import { LimitResume } from './limitResume.js'
+import { CrewKeeper, isCrewRow } from './crew.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 import { openDaemon } from '../agentClient/daemon.js'
@@ -608,6 +609,8 @@ export class SuperTabHost {
   private readonly terminal: TerminalHost
   /** Gives a task lost to a usage limit back to its session once the limit has reset. */
   private readonly limitResume: LimitResume
+  /** Restarts a frozen crew session and continues a reopened one (crew.ts); the keep-alive below reopens it. */
+  private readonly crew: CrewKeeper
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -633,6 +636,8 @@ export class SuperTabHost {
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
+    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log,
+      owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
     this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
     // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
@@ -1104,7 +1109,7 @@ export class SuperTabHost {
     this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data) }
+    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data); void this.crew.tick(data) }
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
@@ -1165,6 +1170,10 @@ export class SuperTabHost {
         if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
+      } else if (isCrewRow(row)) {
+        // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
+        leads.add(target.agent.harnessId)
+        this.keepAlive(target.agent.harnessId, true)
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1321,7 +1330,7 @@ export class SuperTabHost {
   /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
    *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
    *  off, so an engine that cannot start never spins. */
-  private keepAlive(harnessId: string): void {
+  private keepAlive(harnessId: string, crew = false): void {
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return
     const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
@@ -1345,7 +1354,7 @@ export class SuperTabHost {
     state.running = true
     const failed = (reason: string) => {
       state.retryAt = this.now() + Math.min(LEAD_RETRY_MAX_MS, LEAD_RETRY_MS * 2 ** state.failures++)
-      if (reason !== state.reason) this.log(`Could not reopen the Product Manager ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
+      if (reason !== state.reason) this.log(`Could not reopen the ${crew ? 'crew member' : 'Product Manager'} ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
       state.reason = reason
     }
     void (async () => {
@@ -1360,6 +1369,7 @@ export class SuperTabHost {
       }
       const result = await reopen(harnessId)
       if (!result.ok) return failed(result.detail ?? result.error)
+      if (crew) this.crew.reopened(harnessId)
       state.failures = 0
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
