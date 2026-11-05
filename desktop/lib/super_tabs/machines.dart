@@ -3028,7 +3028,7 @@ String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
       ? failure
       : join.hostRunning
       ? null
-      : 'this Mac is not adding it';
+      : 'this computer is not adding it';
   return why == null
       ? null
       : "Teammates' agents paused: Harness Team could not join: $why";

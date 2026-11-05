@@ -302,7 +302,7 @@ void main() {
     );
     expect(
       _text(tester, 'super-machine-problem-m'),
-      "Teammates' agents paused: Harness Team could not join: this Mac is not adding it",
+      "Teammates' agents paused: Harness Team could not join: this computer is not adding it",
     );
     await tester.tap(find.byKey(const ValueKey('super-machine-team-setup-m')));
     await tester.pumpAndSettle();

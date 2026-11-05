@@ -461,7 +461,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
         // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
         // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
-        // row (Amon, #3215: "joining" for good, the reason only in the log). This Mac's own Desktop alone; never starts the host.
+        // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks, as for teamSetup.
+        // The status starts nothing; Retry starts the host if it never ran, which then reads its roster as any start does.
         if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // Retry starts a host that never ran (Amon, #3215): it then reads its Swarms in full, the Team account's join among them.
