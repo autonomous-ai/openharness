@@ -17,8 +17,9 @@ function taskPerson(state: SuperTabState, group: Conversation, target: Agent, pe
   // A step's person is its task's: whoever opened the step only asked for its review.
   const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) ?? group : group
   if (task.requesterId === personId) return true
-  // Someone's hands on a device plugged into this machine: its owner's, when the task names no other machine.
-  const requires = group.task?.requires
+  // Someone's hands on a device plugged into this machine: its owner's, when the task names no other machine. A step is
+  // opened without its task's requirements, so a Tester's step on a device task reads its task's.
+  const requires = group.task?.requires?.devices?.length ? group.task.requires : task.task?.requires
   return target.machineOwnerId === personId && !!requires?.devices?.length && (!requires.machines?.length || requires.machines.includes(target.machineId))
 }
 
