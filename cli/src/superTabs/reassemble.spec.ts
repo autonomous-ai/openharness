@@ -76,4 +76,15 @@ describe('the old Swarm state, rebuilt from parts', () => {
     first.derived.pmAccounts = accounts
     expect(reassemble(storeOf(first)).pmAccounts).toEqual(accounts)
   })
+
+  // Task #3384: the status read shows each project's pulse (asks the PM owes, who works), on the project, and none from an
+  // older server.
+  it('lays each project\'s pulse on that project, and none when the read sends none', () => {
+    const first = readFixture<FirstLoad>('parts-lead')
+    const projects = (state: Json) => list(state.projects)
+    expect(projects(reassemble(storeOf(first)))[0]).not.toHaveProperty('pulse')
+    const pulse = { pmId: 'pm', asks: { count: 1, oldestAt: 1, personId: 'p', list: [] } }
+    first.derived.pulse = { '5000000000000000000000aa': pulse }
+    expect(projects(reassemble(storeOf(first)))[0]!.pulse).toEqual(pulse)
+  })
 })
