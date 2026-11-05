@@ -1312,7 +1312,9 @@ class AppNotifier extends ChangeNotifier {
     KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
-  }) : _paneLayout = paneLayoutStore,
+    bool phonePush = false,
+  }) : _phonePush = phonePush,
+       _paneLayout = paneLayoutStore,
        // On the machine cache's terms, below: a real app keeps screens (in memory), a test only
        // when it hands over a store of its own.
        _keptScreenStore =
@@ -3453,9 +3455,12 @@ class AppNotifier extends ChangeNotifier {
   ViewerDeviceLog? _deviceLog;
   int? _deviceLogRegistered;
 
-  /// This phone's push token on the server (task #2905). None in a test, which never reaches the
-  /// OS notification centre ([_paneLayout] null, as [agentNotices]).
-  late final PushRegistration? _push = _paneLayout == null
+  /// Whether this is the app itself, which registers this phone for push ([appStateProvider]); a
+  /// test never reaches the OS or its push token.
+  final bool _phonePush;
+
+  /// This phone's push token on the server (task #2905).
+  late final PushRegistration? _push = !_phonePush
       ? null
       : PushRegistration(
           register: (platform, token) => api.registerPushToken(platform, token),
@@ -11811,6 +11816,7 @@ final appStateProvider = Provider<AppNotifier>((ref) {
     authSession: AuthSession(),
     configStore: ConfigStore(),
     paneLayoutStore: PaneLayoutStore(),
+    phonePush: true,
   );
   // The app icon's Swarm count: a launch that starts signed out has no
   // Swarm session to take the last account's number off.
