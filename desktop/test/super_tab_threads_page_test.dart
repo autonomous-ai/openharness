@@ -201,7 +201,9 @@ void main() {
       final card = _key('super-thread-card:lead/$id');
       Finder inCard(Finder f) => find.descendant(of: card, matching: f);
       expect(
-        inCard(find.text('# web-project · Proposal words check')),
+        inCard(
+          find.text('# web-project · Proposal words check: three tightenings'),
+        ),
         findsOneWidget,
       );
       expect(inCard(find.text('Darren, Kestrel and Larch')), findsOneWidget);
@@ -294,12 +296,7 @@ void main() {
       // The box is free for the next one; the open thread stays open.
       expect(
         tester
-            .widget<TextField>(
-              find.descendant(
-                of: _key('super-thread-card-field:$key'),
-                matching: find.byType(TextField),
-              ),
-            )
+            .widget<TextField>(_key('super-thread-card-field:$key'))
             .controller!
             .text,
         isEmpty,
@@ -483,10 +480,13 @@ void main() {
         ),
     ];
     server.followedThreads = {'unread': [], 'read': fifty, 'more': true};
-    final list = find.descendant(
-      of: _key('super-threads-list'),
-      matching: find.byType(Scrollable),
-    );
+    // The list's own; each card's reply box has one too.
+    final list = find
+        .descendant(
+          of: _key('super-threads-list'),
+          matching: find.byType(Scrollable),
+        )
+        .first;
     await withClock(Clock.fixed(_now), () async {
       await _show(tester, await _loaded(tester, server), height: 900);
       expect(
