@@ -199,19 +199,32 @@ describe('the pulse', () => {
     expect(pulseOf(f).lost).toEqual({ count: 1, since: lostAt, conversationIds: [f.task] })
   })
 
-  it('counts Held: blocked or needs a person with its reason, an empty one as no reason, and a task set for a later day', () => {
+  // ReviewPulse2's review of the merge with #3390: a hold's reason is the one main records (heldReason.ts heldView), never the
+  // agent's result text; a hold with none recorded is "no reason", as the board shows it.
+  it('counts Held with the reason recorded for it: blocked or needs a person, and a task set for a later day', () => {
     const { f } = setup()
-    status(f, f.task, f.dev, 'blocked', 'Waiting for the Apple signing key.')
+    const later = '2099-01-01T00:00:00.000Z'
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'blocked', result: null,
+      hold: { kind: 'reset', what: 'quota', at: later } } as Command, f.as(f.dev))
     const other = open(f, 'Second')
     const builder = f.add('builder', other)
     f.run({ type: 'work.assign', conversationId: other, agentId: builder }, f.as(f.lead))
-    status(f, other, builder, 'needs_human', null)
-    const later = open(f, 'Later', { notBefore: '2099-01-01' })
+    status(f, other, builder, 'needs_human', 'Which bucket should the logs go to?')
+    const dated = open(f, 'Later', { notBefore: '2099-01-01' })
     const held = pulseOf(f).held
     expect(held.count).toBe(3)
     expect(held.withoutReason).toBe(1)
-    expect(held.list).toEqual([{ conversationId: f.task, reason: 'Waiting for the Apple signing key.' },
-      { conversationId: other, reason: null }, { conversationId: later, reason: 'not before 2099-01-01' }])
+    expect(held.list).toEqual([{ conversationId: f.task, reason: 'waits for a quota reset' },
+      { conversationId: other, reason: null }, { conversationId: dated, reason: 'the requester asked for later, not before 2099-01-01' }])
+  })
+
+  it('turns red for a hold with no reason recorded, not for one with a reason and no words', () => {
+    const { f } = setup()
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'blocked', result: null,
+      hold: { kind: 'requester' } } as Command, f.as(f.dev))
+    expect(pulseOf(f).redAt.held).toBeNull()
+    status(f, f.task, f.dev, 'blocked', 'Stuck on the key, says why in words only.')
+    expect(pulseOf(f).redAt.held).toBe(0)
   })
 
   it('counts a blocked task whose agent is gone as Lost, not Held: it waits for an agent first', () => {

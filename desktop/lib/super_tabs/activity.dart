@@ -11,8 +11,9 @@ import 'model.dart';
 import 'notifications.dart';
 import 'reminders.dart';
 
-/// What one row of Needs you is.
-enum SuperTabNeedKind { decision, agent }
+/// What one row of Needs you is: a decision, an agent that asked the reader,
+/// or an agent of their task waiting at a prompt in its terminal (#3029).
+enum SuperTabNeedKind { decision, agent, prompt }
 
 /// One row of Needs you: a decision asked of the reader, or an agent waiting
 /// on them.
@@ -29,7 +30,7 @@ class SuperTabNeed {
   });
   final SuperTabNeedKind kind;
 
-  /// Stable across reads: `decision:<id>`, `agent:<group>`.
+  /// Stable across reads: `decision:<id>`, `agent:<group>`, `prompt:<agent>`.
   final String id;
 
   /// What the row says: the question, or `<agent> is waiting on you`.
@@ -178,6 +179,15 @@ class SuperTabActivity extends ChangeNotifier {
           question: _askedBy(group),
           agentId: group.assignment!['agentId'] as String,
         ),
+      for (final wait in snapshot.promptsWaiting)
+        SuperTabNeed(
+          kind: SuperTabNeedKind.prompt,
+          id: 'prompt:${wait.agentId}',
+          title: '${wait.agentName} is waiting at a prompt in its terminal',
+          conversationId: wait.conversationId,
+          question: wait.conversationTitle,
+          agentId: wait.agentId,
+        ),
     ];
   }
 
@@ -296,6 +306,7 @@ class SuperTabActivity extends ChangeNotifier {
             ? decisions.open.length
             : snapshot.decisionsWaiting) +
         _asking(snapshot).length +
+        snapshot.promptsWaiting.length +
         reminders.due.length;
   }
 

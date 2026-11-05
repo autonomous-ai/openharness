@@ -8,6 +8,7 @@
  * Nothing here refuses anything: a settle that finds nothing does nothing.
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
+import { heldView, type HeldReason } from './heldReason.js'
 import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
 
@@ -108,16 +109,30 @@ const MINUTE = 60_000
 /** The day [now] falls on, as a task's `notBefore` is written. */
 const dayOf = (now: number): string => new Date(now).toISOString().slice(0, 10)
 
+/** A recorded hold reason in a few words, as the strip's Held list shows it. */
+export function heldWords(reason: HeldReason): string {
+  switch (reason.kind) {
+    case 'task': return `waits on #${reason.taskNumber}`
+    case 'person': return 'waits on a person\'s answer'
+    case 'reset': return `waits for a ${reason.what} reset`
+    case 'requester': return 'the requester asked for later'
+  }
+}
+
 /**
- * Whether [group] is held, and why (River's ruling, 11-05): its agent set blocked or needs a person, its result the reason (an
- * empty one is none), or nobody is assigned and it is set for a later day, the date its reason. The one place a hold is
- * decided: the task that gives holds a reason of their own changes it here.
+ * Whether [group] is held, and why (River's ruling, 11-05): its agent set blocked or needs a person, or nobody is assigned and
+ * it is set for a later day. Its reason is the one recorded for the hold (#3390, heldReason.ts heldView, the one place that
+ * reads it), in words; none recorded is no reason, as the board shows it. A date also says the day. ReviewPulse2 on the merge
+ * with #3390: the agent's result text decided it before, a second way to decide one thing.
  */
 export function holdOf(group: Conversation, today: string): { reason: string | null } | null {
   const assignment = group.assignment
-  if (!assignment) return group.notBefore && group.notBefore > today ? { reason: `not before ${group.notBefore}` } : null
-  if (assignment.status !== 'blocked' && assignment.status !== 'needs_human') return null
-  return { reason: assignment.result?.trim() || null }
+  const dated = !assignment && !!group.notBefore && group.notBefore > today
+  const stated = !!assignment && (assignment.status === 'blocked' || assignment.status === 'needs_human')
+  if (!dated && !stated) return null
+  const view = heldView(group)
+  const words = view && view.kind !== 'none' ? heldWords(view) : null
+  return { reason: words && dated ? `${words}, not before ${group.notBefore}` : words }
 }
 
 /** Whether [group] lost its agent: lost, or nobody holds it (liveness.ts `orphaned`), and since when. */

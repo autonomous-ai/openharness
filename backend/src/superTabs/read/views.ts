@@ -4,6 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
+import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
 import { heldView } from '../heldReason.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
@@ -12,6 +13,7 @@ import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine }
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
@@ -73,8 +75,11 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
     ...(held ? { held } : {}), ...readers }
+  // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
+  if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
+  return view
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
@@ -100,8 +105,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
-  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress, and so is the release list (releases.ts):
+  // no reader shows them.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -199,6 +205,8 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
+    // Its agents waiting at a prompt in their tasks, under Decisions (promptWaits.ts): from the live state, every read.
+    ...(actor.kind === 'person' ? { promptsWaiting: promptWaits(state, actor) } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
     ...(actor.kind === 'person' && extras.remindersDigest !== undefined ? { remindersDigest: extras.remindersDigest } : {}),
     threadSessions: true as const,

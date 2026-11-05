@@ -155,6 +155,10 @@ export interface Agent {
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
+  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
+   *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
+   *  only by the server. */
+  crewWaking?: { at: number; conversationId: string; runningAt?: number }
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -277,6 +281,8 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
+  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
   /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
@@ -427,6 +433,9 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
+   *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
+  released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
@@ -444,6 +453,15 @@ export interface Conversation {
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
+  /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
+   *  owned paths choose. */
+  lane?: string
+  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
+   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
+  handOutLane?: string | null
+  /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
+   *  merge conflict. The next assignment clears it. */
+  pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]
@@ -679,6 +697,8 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
@@ -689,8 +709,12 @@ export const NOTICE_READERS = {
   'tidy-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
+  // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
+  'crew-need': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
@@ -714,6 +738,8 @@ export const NOTICE_READERS = {
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
+  // A release step the Swarm opened for the Integrator, and its verified release's line (releases.ts, task #3405).
+  release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
   // No new agent can start, or soon none will, told to the coordinator; with none in the chat, people read it, tagging who can
@@ -802,6 +828,9 @@ export interface CommandEffects {
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
+  /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
+   *  attempt row as a builder's own done does. */
+  closedAssignment?: { assignmentId: string; outcome: 'done' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */

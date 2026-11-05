@@ -175,3 +175,50 @@ describe('the whole readings on demand', () => {
     await expect(f.reads.machineReadings(outsider, f.tab)).rejects.toThrow()
   })
 })
+
+// Task #3462: a crew member's wake is timed from the work that woke it to the first machine reading that shows its session
+// running again, and the timing row is stored in its project chat for the daily scorecard.
+describe('a crew wake timed by the machine report that shows it back (#3462)', () => {
+  it('stores one timing row in the project chat, from the assignment to that reading', async () => {
+    const sweeping: ReportMemory = { get: async () => undefined, set: async () => {}, sweepDue: async () => true }
+    const store = new SuperTabStore(db, () => clock.now, null, { reports: sweeping })
+    const tab = (await store.create(owner, randomUUID(), 'Crew', 'public')).id
+    const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+    const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    const generation = (await poolRows(store, host, 'mac')).find(p => p.tabId === tab)!.machine.generation
+    const beat = (running: string[]) => store.observeMachine(host, tab, 'mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9,
+      memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS',
+      gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: [] })
+    const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+    // Its machine's owner's own session: a member on another person's machine runs in its Team account, which the keeper keeps awake.
+    const ada = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
+      lead: false }, host)).result.agentId)
+    await execute({ type: 'crew.add', agentId: ada, role: 'Engineer' })
+    await beat(['h-ada'])
+    // Asleep, as the keeper leaves it after an idle hour (crewKeep.ts, its own tests): its record says so, and its host closed
+    // the session. Written straight to its stored record, as only the keeper's sweep sets it.
+    const stored = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: ada } })
+    await db.swarmAgent.update({ where: { id: stored.id }, data: { data: { ...(stored.data as object), asleep: { since: clock.now } } } })
+    clock.now += 60_000
+    await beat([])
+    // New work wakes it; its host reopens the session in place, and the next reading shows it running.
+    const task = String((await execute({ type: 'conversation.create', title: 'Fix login', brief: 'Fix it', checks: [] })).result.conversationId)
+    clock.now += 1_000
+    const wokeAt = clock.now
+    await execute({ type: 'work.assign', conversationId: task, agentId: ada })
+    clock.now += 7_000
+    await beat([])
+    clock.now += 11_000
+    const backAt = clock.now
+    await beat(['h-ada'])
+    clock.now += 30_000
+    await beat(['h-ada'])
+    const rows = (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'crew-timing')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.source).toMatchObject({ what: 'wake', agentId: ada, startedAt: wokeAt, runningAt: backAt })
+    expect(rows[0]!.recipientIds).toEqual([])
+  })
+})

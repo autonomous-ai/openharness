@@ -185,8 +185,33 @@ describe('ordinary task messages and progress replies', () => {
       .toEqual(['Stuck: The build machine is offline. Next: the PM is looking at it.'])
   })
 
-  it('tags the person a decision waits on, with its default', () => {
+  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): a builder's question is the PM's crew need.
+  it('says the PM is on a builder\'s question, and tags nobody', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
+      unblocks: 'how long drafts are kept' } })
+    expect(thread(asked, root)).toEqual([expect.stringMatching(/^Needs a decision: Keep drafts for a week\? Next: .+ is on it\.$/)])
+  })
+
+  // Review of #3223, Minor 1: the line follows the decision, so the PM's own question on a builder's task still tags.
+  it('tags the person the PM asks on a builder\'s task, with its default', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    const asked = f.status(id, f.pm, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
+      unblocks: 'how long drafts are kept' } })
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+  })
+
+  it('tags the person a decision waits on, with its default, in a project with no PM', () => {
+    const f = fixture()
+    const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
+    const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
+    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: 'quiet-ask' } as Command,
+      owner, { request: f.request('quiet-ask', chat) } as Partial<CommandContext>).result.conversationId as string
+    const root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,

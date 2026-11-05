@@ -10,6 +10,7 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
@@ -31,12 +32,14 @@ describe('built-in Swarm skills', () => {
       const workspace = fixture(), saved = { role, key: `${role}-${mode}`, mode }
       const prepared = prepareSwarmSkill(workspace, saved)
       const tools = join(dirname(dirname(prepared.file)), 'swarm-tools', 'SKILL.md')
-      expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+      // Task #3448: the coordinator is launched with the PM sheet, an agent with the Engineer sheet, a fallback Reviewer with the Reviewer's.
+      const sheet = swarmToolsSheet(({ lead: 'pm', dev: 'engineer', review: 'reviewer' } as Record<string, ToolsRole>)[role]!)
+      expect(readFileSync(tools, 'utf8')).toBe(sheet)
       expect(skillFile(workspace, saved, 'swarm-tools', false)).toBe(tools)
       expect(readFileSync(prepared.file, 'utf8')).toContain(`name: swarm-${role}`)
       expect(prepared.instructions).toBe(`Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the swarm-${role} skill instead: read ${JSON.stringify(prepared.file)}.`)
       const record = JSON.parse(readFileSync(join(dirname(tools), 'version.json'), 'utf8'))
-      expect(record).toEqual({ text: sha256(SWARM_TOOLS_SKILL), notified: sha256(SWARM_TOOLS_SKILL), change: 0, toldChange: 0 })
+      expect(record).toEqual({ text: sha256(sheet), notified: sha256(sheet), change: 0, toldChange: 0 })
       // A relaunch keeps both files' bytes, even after the agent's edits.
       writeFileSync(prepared.file, 'edited role\n')
       writeFileSync(tools, 'edited tools\n')
@@ -246,7 +249,9 @@ describe('built-in Swarm skills', () => {
   // Task #2963 (Ken, 2026-11-04): a post that names no one no longer reaches the Lead.
   const reaches = '- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.\n'
   const status = '- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.\n'
-  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? '- Agents report to you through their status; their posts reach you only when they name you.\n'
+  // Task #3029 (Gray, 2026-11-05): an agent that needed a person ("press Connect on the iPhone") wrote it only in its terminal.
+  const askPerson = '- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task\'s conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.\n'
+  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${askPerson}${role === 'lead' ? '- Agents report to you through their status; their posts reach you only when they name you.\n'
     : `${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}${status}`}\n`
   // The Builder's 👀 replaces its "say that you took it" line, in both modes.
   const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
@@ -267,6 +272,13 @@ describe('built-in Swarm skills', () => {
     }
   })
   // Project instructions, phase 1: agents talk to each other by name; since #2963 an unnamed post never goes to the Lead.
+  it('tells every role to post an ask for a person in the task, tagged, never only in its terminal (task #3029)', () => {
+    for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+      expect(text.split(askPerson), `${mode} ${role}`).toHaveLength(2)
+      expect(askPerson).toMatch(/never ask only in your terminal.*Post the ask in the task.*tag the person.*needs_human/)
+    }
+  })
   it('tells every role who a post reaches, the Builder to answer its Reviewer and the Reviewer its Builder by name', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
@@ -1071,7 +1083,8 @@ describe('a Buddy\'s folder', () => {
 // built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
 describe('role kinds keep their role files', () => {
   /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds (its post rules as of #3057). */
-  const REVIEW = { orchestration: '9238d7fd7a516bee7b5d64d4145e2a1fa9cb4e96c5d9a4cdddb5751cd346db98', default: 'd8cab4c0afa83e57a2975caeda63341ed839ba94c4ab56b35c138275e3ad22c2' }
+  // Task #3029's ask-a-person line changed both; the byte-for-byte tests above show it is the only change.
+  const REVIEW = { orchestration: 'a308926d41b60cdbe3405d25b9c89a2c8924cfe3b65a1d6a0ab3106165279316', default: '9a010ed13a8b1c1019a8aee156baa94c0cfe9c657d2a614ff24fc746a454663e' }
   const folder = (workspace: string, key: string, name: string) =>
     join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
   it('keeps each session\'s role file', () => {

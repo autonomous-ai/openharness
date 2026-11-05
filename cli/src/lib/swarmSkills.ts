@@ -5,7 +5,7 @@ import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
-import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet, toolsRoleFor } from './swarmToolSheets.js'
 import { fallbackSkillName, isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole, type SavedSwarmSkill, type SwarmRole, type SwarmSkill,
   type SwarmSkillGrant, type SwarmSkillMode, type WireRole } from './savedSkill.js'
 
@@ -164,6 +164,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Agents report to you through their status; their posts reach you only when they name you.
 
 ## Reactions
@@ -315,6 +316,7 @@ Record each acceptance check with the exact command, revision and observed resul
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
 - The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
@@ -393,6 +395,7 @@ Mark your review assignment done with the verdict and revision. Print little.
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Send your verdict and findings to the Builder with --to its agent id.
 - The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
@@ -503,6 +506,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Agents report to you through their status; their posts reach you only when they name you.
 
 ## Reactions
@@ -584,6 +588,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
 - The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
@@ -635,6 +640,7 @@ Mark your review done with the verdict and revision.
 
 ## Who a post reaches
 - A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- When you need a person to do something (press a button, plug in or unlock a device, sign in, decide), never ask only in your terminal: nobody reads it there. Post the ask in the task's conversation, tag the person by @username, and set needs_human on your task with that one question; with no task of your own, ask it as a decision.
 - Send your verdict and findings to the Builder with --to its agent id.
 - The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
@@ -772,8 +778,11 @@ export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill): { 
   const tools = skillFile(root, skill, 'swarm-tools', true)!
   if (existsSync(tools)) plainFile(tools)
   else {
-    const version = textVersion(SWARM_TOOLS_SKILL)
-    writeFileSync(tools, SWARM_TOOLS_SKILL, { flag: 'wx', mode: 0o600 })
+    // The sheet of the role the launch knows (task #3448): the coordinator's is the PM's, an agent's the Engineer's until the
+    // host reads its project role (swarmInstructionsSkill.ts).
+    const sheet = swarmToolsSheet(toolsRoleFor({ coordinator: skill.role === 'coordinator', fallback: skill.fallback }))
+    const version = textVersion(sheet)
+    writeFileSync(tools, sheet, { flag: 'wx', mode: 0o600 })
     writeRecord(dirname(tools), { text: version, notified: version, change: 0, toldChange: 0 })
   }
   return { file, instructions: `Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the ${fallbackSkillName(skill)} skill instead: read ${JSON.stringify(file)}.` }

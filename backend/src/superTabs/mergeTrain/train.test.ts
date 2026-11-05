@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { Check, Conversation } from '../model.js'
 import { fakeTrainGitHub, type FakePull } from './fakeTrainGitHub.js'
 import type { TrainTask } from './plan.js'
-import { newTrainMemory, trainPass, type TrainSwarm, type TrainTaskPull } from './train.js'
+import { newTrainMemory, trainPass, type TrainRules, type TrainSwarm, type TrainTaskPull } from './train.js'
+import { SEED_RULES } from '../policy.js'
 
 const MINUTE = 60_000
-const ON = { enabled: true }
+const ON: TrainRules = { enabled: true, rules: SEED_RULES }
 
 /** A task whose one review step passed at [head] of [url]. */
 function approvedTask(url: string, head: string, reviewers = ['agent:reviewer']): TrainTask {
@@ -37,7 +38,7 @@ function fakeSwarm() {
 const setup = () => {
   const repo = fakeTrainGitHub(), swarm = fakeSwarm(), memory = newTrainMemory()
   let now = Date.UTC(2026, 10, 5, 15)
-  const pass = (rules: { enabled: boolean } = ON) => trainPass({ projectId: 'p1', github: repo.github, swarm: swarm.swarm, memory, now: (now += 10 * MINUTE), rules })
+  const pass = (rules: TrainRules = ON) => trainPass({ projectId: 'p1', github: repo.github, swarm: swarm.swarm, memory, now: (now += 10 * MINUTE), rules })
   return { repo, swarm, memory, pass }
 }
 
@@ -377,7 +378,7 @@ describe('the merge train finishes batches', () => {
     const batch = repo.batches()[0]!
     repo.state.ci.set(batch.head, 'success')
     const before = { reads: repo.state.reads.length, writes: repo.state.writes.length }
-    expect(await pass({ enabled: false })).toEqual({ off: true })
+    expect(await pass({ enabled: false, rules: SEED_RULES })).toEqual({ off: true })
     expect({ reads: repo.state.reads.length, writes: repo.state.writes.length }).toEqual(before)
     expect(repo.batches()).toEqual([batch])
   })

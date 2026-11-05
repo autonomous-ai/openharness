@@ -18,6 +18,7 @@ import type { ProcessRow } from '../lib/processTable.js'
 export { buddyRefusal } from './buddyPane.js'
 import { paneBuddy } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
+import { SWARM_TOOLS_SKILL } from '../lib/swarmTools.js'
 
 type PaneFrame = Frame
 /** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
@@ -29,7 +30,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON [--full-instructions] [--instructions-read REVISION] | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON [--full-instructions] [--instructions-read REVISION] | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help [tools]'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
@@ -309,6 +310,9 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text && !keys.length) throw usageError()
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
+  } else if (action === 'help' && first === 'tools' && positional.length === 2) {
+    // The full tools manual, which the role sheets point to (swarmToolSheets.ts): printed by this CLI, no daemon asked.
+    payload.topic = 'tools'
   } else if (!['status', 'help'].includes(action) || positional.length !== 1) {
     throw new UsageError(buddy => jsonShapeError(positional, buddy) ?? (buddy ? BUDDY_USAGE : USAGE))
   }
@@ -351,6 +355,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
         throw error
       })
     operationId = request.payload.operationId
+    if (request.payload.action === 'help' && request.payload.topic === 'tools') { print(SWARM_TOOLS_SKILL); return 0 }
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
     const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId

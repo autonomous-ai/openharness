@@ -7,7 +7,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fallbackSkillName, parseSwarmSkill, type SavedSwarmSkill, type SwarmSkill } from './savedSkill.js'
 import { replaceSkillFile, skillFile } from './swarmSkills.js'
-import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet, toolsRoleFor } from './swarmToolSheets.js'
 
 /** The document at one revision as the host read it, the newest revision's summary (null when it is not that revision, or
  *  for a Buddy) and the session's place in the project. `saved.role` tells a Buddy apart. `savedAt`: when that revision was
@@ -59,10 +59,13 @@ export function refreshProjectSkills(workspace: string, saved: SavedSwarmSkill, 
   // The launch's tools record says this release launched the session, whose launch line sent it to the instructions command.
   const launch = old || !tools ? null : readLaunch(dirname(tools))
   const text = instructionsSkillText(doc)
-  const now = { tools: tools ? textVersion(SWARM_TOOLS_SKILL) : '', doc: textVersion(text), revision: doc.revision, roleName: doc.roleName }
+  // The sheet of this session's role (task #3448): the project role's name is known here, where the launch knew only "agent".
+  const role = toolsRoleFor({ coordinator: doc.coordinator, roleName: doc.roleName, fallback: skill.fallback })
+  const sheet = swarmToolsSheet(role)
+  const now = { tools: tools ? textVersion(sheet) : '', doc: textVersion(text), revision: doc.revision, roleName: doc.roleName }
   if (!old || old.doc !== now.doc || !hasInstructions) replaceSkillFile(instructions, text)
   // A tools file the agent edited is kept until the release changes its text, as role files are.
-  if (tools && (!hasTools || (old ? old.tools : launch?.text) !== now.tools)) replaceSkillFile(tools, SWARM_TOOLS_SKILL)
+  if (tools && (!hasTools || (old ? old.tools : launch?.text) !== now.tools)) replaceSkillFile(tools, sheet)
   let record: ProjectRecord
   if (!old) {
     // The first install. After this release's launch the agent has read the tools skill, unless its text changed since, and
@@ -71,7 +74,10 @@ export function refreshProjectSkills(workspace: string, saved: SavedSwarmSkill, 
     // left it on its role file or an earlier revision (task 3 review): that is the first rewrite, told as a change. A
     // session launched before this release, or a Buddy, has been told nothing yet.
     const read = doc.revision === 0 || (launch !== null && typeof doc.savedAt === 'number' && doc.savedAt <= launch.at)
-    const told = launch ? { ...now, tools: launch.notified, ...(read ? {} : { doc: '', revision: 0 }), change: 0 } : null
+    // The Engineer sheet an agent launches with holds every line of the Reviewer's, Tester's and Guide's: the swap to the
+    // role's own sheet takes nothing from what the agent read, so it is not a change to tell.
+    const within = launch?.notified === textVersion(swarmToolsSheet('engineer')) && (role === 'reviewer' || role === 'tester' || role === 'guide')
+    const told = launch ? { ...now, tools: within ? now.tools : launch.notified, ...(read ? {} : { doc: '', revision: 0 }), change: 0 } : null
     record = { ...now, change: told?.tools === now.tools && told.doc === now.doc ? 0 : 1, told }
     writeRecord(dirname(instructions), record)
   } else if (old.tools !== now.tools || old.doc !== now.doc || old.revision !== now.revision || old.roleName !== now.roleName) {

@@ -11,6 +11,8 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/scorecard.dart';
 import 'package:harness/super_tabs/scorecard_view.dart';
 
+import 'package:harness/widgets/desktop_chrome.dart';
+
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
 
@@ -66,6 +68,35 @@ void main() {
         '31 (3)',
       );
       expect(scorecardRows.first.cell(null), '–');
+    });
+
+    // Task #3462: crew wake and move times, as median · slowest.
+    test('crew wake and move times as median and slowest', () {
+      expect(scorecardSeconds(null), '–');
+      expect(scorecardSeconds(12), '12s');
+      expect(scorecardSeconds(210), '3m30');
+      expect(scorecardSeconds(300), '5m');
+      String cell(String label, Map<String, dynamic> figures) => scorecardRows
+          .firstWhere((r) => r.label == label)
+          .cell(SuperTabScorecardDay.fromJson(_day('2026-11-05', figures)));
+      final day = {
+        'crewWake': {'count': 3, 'medianSeconds': 12, 'slowestSeconds': 30},
+        'crewMove': {'count': 2, 'medianSeconds': 210, 'slowestSeconds': 300},
+      };
+      expect(cell('Crew wake time', day), '12s · 30s');
+      expect(cell('Crew move time', day), '3m30 · 5m');
+      // None that day, or a day stored before the figure existed.
+      expect(
+        cell('Crew wake time', {
+          'crewWake': {
+            'count': 0,
+            'medianSeconds': null,
+            'slowestSeconds': null,
+          },
+        }),
+        '–',
+      );
+      expect(cell('Crew move time', {}), '–');
     });
 
     test('columns are the 7 days back from the newest row', () {
@@ -211,6 +242,57 @@ void main() {
     reader.dispose();
   });
 
+  // Task #3462: a crew time's median · slowest is the widest cell; it stays on one line in its row.
+  testWidgets('keeps a crew move time on one line', (tester) async {
+    await loadPreviewFonts();
+    // Width is a property of a real face: without one (Linux CI has neither the system face nor Roboto), Flutter's test font
+    // draws every glyph an em wide, so "i" and "W" measure the same and nothing here means anything. Roboto at the table's
+    // 13 px puts "9m59 · 9m59" at 76 px, inside the 96 px cell.
+    double width(String text) => (TextPainter(
+      text: TextSpan(text: text, style: DesktopChrome.control()),
+      textDirection: TextDirection.ltr,
+    )..layout()).width;
+    if (width('i') == width('W')) {
+      markTestSkipped(
+        'needs a real text face to measure; the test font is one em per glyph',
+      );
+      return;
+    }
+    final reader = SuperTabScorecardReader(
+      tabId: 'tab',
+      request: (method, path, {body}) async => {
+        'days': [
+          _day('2026-11-05', {
+            'asksShipped': 9,
+            'crewMove': {
+              'count': 2,
+              'medianSeconds': 186,
+              'slowestSeconds': 599,
+            },
+          }),
+        ],
+      },
+    );
+    await tester.binding.setSurfaceSize(const Size(1100, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabScorecardView(
+            projects: _projects,
+            projectId: 'p0',
+            reader: reader,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final move = tester.getSize(find.text('3m06 · 9m59'));
+    final count = tester.getSize(find.text('9'));
+    expect(move.height, count.height);
+    reader.dispose();
+  });
+
   group('screenshots', () {
     setUpAll(() async {
       if (shots != null) await loadPreviewFonts();
@@ -220,7 +302,7 @@ void main() {
         final picture = GlobalKey();
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        await tester.binding.setSurfaceSize(const Size(1100, 560));
+        await tester.binding.setSurfaceSize(const Size(1100, 640));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final reader = SuperTabScorecardReader(
           tabId: 'tab',
@@ -244,6 +326,19 @@ void main() {
                   'routeDecisions': f[9],
                   'typedIntoPm': f[10],
                   'ackPosts': f[11],
+                  // Crew times start with #3462: older days show "–".
+                  if (on == '2026-11-05') ...{
+                    'crewWake': {
+                      'count': 4,
+                      'medianSeconds': 14,
+                      'slowestSeconds': 41,
+                    },
+                    'crewMove': {
+                      'count': 1,
+                      'medianSeconds': 186,
+                      'slowestSeconds': 186,
+                    },
+                  },
                 }),
             ],
           },
