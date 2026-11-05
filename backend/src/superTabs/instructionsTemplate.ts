@@ -105,7 +105,7 @@ export const TEMPLATE_ROUTING = `## Routing
   2. The PM's own account (the engine it runs on, on its machine) keeps the PM running for the whole week. It takes
      other work only while ahead of its week: weekly quota left above the share of its week left (with 5 of 7 days
      to go, above 71%). At or below that line it takes no new work and idle agents there are not reused, except work the
-     account's owner asks for, which runs on it at once.
+     account's owner asks for, which may use it at once.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
@@ -117,8 +117,8 @@ export const TEMPLATE_ROUTING = `## Routing
   applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
   urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
   reason.
-- An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line,
-  hands its pushed branch to an agent on another account.
+- An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line (except
+  work that account's owner asked for), hands its pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`
 
 /** The title and the opening words, which say what the document is for. */
