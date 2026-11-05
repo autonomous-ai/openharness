@@ -10,6 +10,7 @@ import 'support/super_tab_fixture.dart';
 /// up, Jump to latest still shows the newest messages.
 void main() {
   const jump = ValueKey('super-jump-latest');
+  const peer = {'kind': 'person', 'id': 'peer', 'name': 'peer@example.com'};
   const newMessages = ValueKey('super-new-messages');
 
   Future<SuperTabController> show(
@@ -162,7 +163,7 @@ void main() {
     final drag = await tester.startGesture(tester.getCenter(view));
     // A steady drag down the list, as a trackpad scrolls up: never let go.
     for (var step = 0; step < 400 && older.isEmpty; step++) {
-      await drag.moveBy(const Offset(0, 40));
+      await drag.moveBy(const Offset(0, 100));
       await tester.pump(const Duration(milliseconds: 16));
     }
     expect(older, isNotEmpty);
@@ -179,10 +180,12 @@ void main() {
     final server = ConversationServer()
       ..threads = true
       ..messagePage = 20;
-    for (var i = 1; i <= 400; i++) {
+    for (var i = 1; i <= 2000; i++) {
       server.append(text(i));
       // Nine of every ten are replies in a thread, as in a busy project chat.
       if (i % 10 != 0) server.messages.last['thread'] = 'message-10';
+      // Rows from different people, so none folds into the one before.
+      if ((i ~/ 10).isEven) server.messages.last['author'] = peer;
     }
     final reads = <String>[];
     server.onRead = (path) {
@@ -193,11 +196,10 @@ void main() {
     scroll.jumpTo(scroll.position.minScrollExtent);
     await tester.pumpAndSettle();
 
-    expect(reads.length, greaterThan(1));
-    expect(
-      chatScroll(tester).position.extentBefore,
-      greaterThan(chatScroll(tester).position.viewportDimension),
-    );
+    // Read on while few rows stand above the view, not the whole history:
+    // two of each page's twenty rows show.
+    expect(reads.length, inInclusiveRange(10, 30));
+    expect(c.hasOlder('lead'), isTrue);
     await tester.pumpWidget(const SizedBox());
     await c.flush();
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
