@@ -21,6 +21,10 @@ const fakes = vi.hoisted(() => {
       if (failRedis) throw new Error('redis down')
       return redis.get(key) ?? null
     }),
+    mget: vi.fn(async (...keys: string[]) => {
+      if (failRedis) throw new Error('redis down')
+      return keys.map((key) => redis.get(key) ?? null)
+    }),
     // GET then DEL, in one transaction — how a redeem spends a code.
     multi: vi.fn(() => {
       const ops: Array<() => unknown> = []
@@ -88,7 +92,8 @@ vi.mock('../services/UserService.js', () => ({
 vi.mock('../services/index.js', () => ({ userService: { get: fakes.get, toPublic: (u: unknown) => u } }))
 
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
-import { HANDOFF_TTL_SEC, redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from './harnessSession.js'
+import { HANDOFF_TTL_SEC, redeemHandoff, refreshHarnessSession, revokeHarnessSession, revokeHarnessSessionById, startHandoff } from './harnessSession.js'
+import { harnessAuthCache } from './harnessAuthCache.js'
 import { HARNESS_ACCESS_PREFIX, harnessTokenHash, newHarnessToken } from './harnessTokenFormat.js'
 import { teamConversionMessage } from './teamSession.js'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -102,6 +107,7 @@ beforeEach(() => {
   fakes.redis.clear(); fakes.ttls.clear(); fakes.sessions.length = 0; fakes.users.clear(); fakes.machines.length = 0
   fakes.users.set(USER.id, USER)
   fakes.setFailRedis(false)
+  harnessAuthCache.clear()
   vi.clearAllMocks()
 })
 
@@ -161,6 +167,99 @@ describe('scan to sign in — the handoff', () => {
 
   it('an access token nobody issued is simply invalid', async () => {
     await expect(authenticateAccessToken(`hna_${'B'.repeat(43)}`)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+})
+
+describe('a sign-in remembered for 30 seconds per pod (#3041)', () => {
+  const signIn = async () => (await redeemHandoff((await startHandoff(USER.id)).code, 'phone'))!
+
+  it('a second request in the window reads neither the session nor the user from Mongo, and answers the same', async () => {
+    const { token } = await signIn()
+    const first = await authenticateAccessToken(token)
+    fakes.harnessSession.findUnique.mockClear(); fakes.get.mockClear()
+    const second = await authenticateAccessToken(token)
+    expect(second).toEqual(first)
+    expect(fakes.harnessSession.findUnique).not.toHaveBeenCalled()
+    expect(fakes.get).not.toHaveBeenCalled()
+  })
+
+  it('every request still checks its token in Redis: an access token gone from Redis stops at once', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    for (const key of [...fakes.redis.keys()]) if (key.startsWith('hnauth:access:')) fakes.redis.delete(key)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('signing out ends a remembered sign-in at once', async () => {
+    const { token, refreshToken } = await signIn()
+    await authenticateAccessToken(token)
+    await revokeHarnessSession(refreshToken!)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('revoking a device by id ends its remembered sign-in at once', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    await revokeHarnessSessionById('s1', USER.id)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a pod that remembers nothing of the sign-out still learns it from Redis: the change is not kept in this pod alone', async () => {
+    const { token, refreshToken } = await signIn()
+    await authenticateAccessToken(token)
+    // The sign-out ran on another pod: only Redis and Mongo saw it.
+    const remembered = harnessAuthCache.get(harnessTokenHash(token))
+    await revokeHarnessSession(refreshToken!)
+    expect(harnessAuthCache.get(harnessTokenHash(token))).toBe(remembered)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a sign-out that lands between reading the session and remembering it is not missed', async () => {
+    const { token } = await signIn()
+    const read = fakes.harnessSession.findUnique.getMockImplementation()!
+    fakes.harnessSession.findUnique.mockImplementationOnce(async (args: { where: Record<string, unknown> }) => {
+      const live = { ...(await read(args))! }
+      await revokeHarnessSessionById('s1', USER.id)
+      return live
+    })
+    // This request read the session while it was live.
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ harnessSessionId: 's1' })
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a sign-in is read again after 30 seconds', async () => {
+    const { token } = await signIn()
+    const now = vi.spyOn(Date, 'now')
+    const start = Date.now()
+    now.mockReturnValue(start)
+    await authenticateAccessToken(token)
+    fakes.harnessSession.findUnique.mockClear()
+    now.mockReturnValue(start + 30_000)
+    await authenticateAccessToken(token)
+    expect(fakes.harnessSession.findUnique).toHaveBeenCalledTimes(1)
+    now.mockRestore()
+  })
+
+  it('Redis down on a remembered sign-in is still an outage, not a sign-in', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    fakes.setFailRedis(true)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' })
+  })
+
+  it('remembers no refusal: a token refused once is read again next time', async () => {
+    const { token } = await signIn()
+    fakes.users.delete(USER.id)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    fakes.users.set(USER.id, USER)
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ sub: USER.id })
+  })
+
+  it('a caller changing what it was handed changes nothing for the next request', async () => {
+    const { token } = await signIn()
+    const first = await authenticateAccessToken(token) as unknown as Record<string, unknown>
+    first.role = 'admin'
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ role: 'user' })
   })
 })
 

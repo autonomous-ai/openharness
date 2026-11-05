@@ -22,7 +22,8 @@ import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { RebindSender, replacementObservations } from './replacements.js'
-import { TerminalHost } from './terminal.js'
+import { TerminalHost, type TerminalRelay } from './terminal.js'
+import { realRelayRecovery } from './relayRecovery.js'
 import { LimitResume } from './limitResume.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
@@ -175,6 +176,8 @@ interface HostAgent { tabId: string; agent: { id: string; harnessId: string; mac
   leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
+  /** What restarts a Team agent stranded on an old relay grant (relayRecovery.ts), for a spec. */
+  relayRecovery?: TerminalRelay
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
@@ -618,7 +621,9 @@ export class SuperTabHost {
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
-    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil })
+    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil,
+      // Only a Team daemon reads a relay grant: on any other the recovery sees no grant and does nothing.
+      relay: options.relayRecovery ?? realRelayRecovery(core, machineId, { now: this.now, log: this.log }) })
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })

@@ -73,6 +73,8 @@ export interface Derived {
     lead?: Record<string, { machineId: string } | { refused: string }> }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
+  /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
+  ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   /** A person only. */
   mentionsWaiting?: number
   /** A person only: a digest of which tags wait, moving when they change though the count may not. */

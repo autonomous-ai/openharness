@@ -59,11 +59,11 @@ export function sameData(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Who sees what changed (design section 4.2): a project's visibility or members, a person removed or rejoined, the set of
+ * Who sees what changed (design section 4.2): a project's visibility, owner or members, a person removed or rejoined, the set of
  * Leads (the Leads conversation's members), a conversation's audience, or a project removed. Readers reload in full.
  */
 export function visibilityChanged(before: SuperTabState, after: SuperTabState): boolean {
-  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.members]))
+  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.ownerId, p.members]))
   const people = (state: SuperTabState) => canonical(state.people.map(p => [p.id, p.generation, p.role]))
   const leads = (state: SuperTabState) => canonical(state.conversations.filter(isLeads).map(c => c.agentIds))
   const audiences = (state: SuperTabState) => new Map(state.conversations.map(c => [c.id, canonical(c.audience ?? null)]))

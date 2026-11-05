@@ -46,7 +46,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -703,7 +703,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
       fail('BUDDY_CHAT_EARLIER', 'This is an earlier chat, kept to read. Talk to your Buddy in # buddy.', 403)
     }
   }
-  if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
+  // A project nobody owns is the Swarm owner's to delete though they read nothing of it: its delete checks that (deletableProject).
+  if ('projectId' in command && command.projectId && command.type !== 'project.delete') readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
@@ -885,7 +886,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const lost = new Set((context.workspaceLost ?? []).filter(id => id !== state.ownerId))
     if (lost.size) {
       const emails = new Set(state.people.filter(p => lost.has(p.id)).map(p => p.email))
-      state.people = state.people.filter(p => !lost.has(p.id))
+      dismissPeople(state, lost)
       state.invitations = state.invitations.filter(i => !emails.has(i.email))
     }
     result.restored = true
@@ -900,7 +901,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (invite.expiresAt <= context.now) fail('EXPIRED', 'This invitation expired.', 410)
     const existing = state.people.find(p => p.id === actor.userId)
     if (!existing) {
-      state.people.push({ id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
+      // A project from before ownerGeneration whose owner left is settled before they come back, never matched to them again.
+      admitPerson(state, { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     // Back on purpose: auto-join may add them again if they leave and the owner invites them once more (spec, Leaving is final).
@@ -1603,7 +1605,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = readProject(state, actor, command.projectId)
       author(state, actor, true)
       const group = conversation(state, project.leadConversationId)
-      if (!(actor.kind === 'person' && actor.userId === project.ownerId) && !(actor.kind === 'agent' && group.leadId === actor.agentId)) {
+      if (!(actor.kind === 'person' && ownsProject(state, actor.userId, project)) && !(actor.kind === 'agent' && group.leadId === actor.agentId)) {
         fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or its lead can share its repository.', 403)
       }
       // On a tab from before projects this is `state.project` itself (projectsOf).
@@ -1621,7 +1623,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
-      projects.push({ id: operationId, name: command.name, ownerId: actor.userId, leadConversationId,
+      projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
         visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
       effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
@@ -1681,7 +1683,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // On its machine: the project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent
       // machine's borrower). To another machine: only the project's owner, as a new PM start (security reviews of #2705).
       const moving = command.machineId !== undefined && command.machineId !== pm?.machineId
-      if (!moving && pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
+      if (!moving && pm?.machineOwnerId === actor.userId && !ownsProject(state, actor.userId, project)) author(state, actor, true)
       else manageProject(state, actor, project.id)
       const name = coordinatorNameOf(project)
       if (!pm || !pool) fail('NO_LEAD', `This project has no running ${name}.`)
@@ -1743,8 +1745,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.delete': {
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
-      // hosts close their sessions.
-      const project = manageProject(state, actor, command.projectId)
+      // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
+      const project = deletableProject(state, actor, command.projectId)
       // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
       const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
         && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
@@ -2272,7 +2274,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its requester may close it once it is lost or stopped (work.cancel), so among people only an owner names who asked;
       // anyone else could name themselves and cancel a task they never asked for (security review 2 of #2907). Agents name
       // the person they opened it for, as before.
-      if (actor.kind === 'person' && ![state.ownerId, groupProject(state, group).ownerId].includes(actor.userId)) {
+      if (actor.kind === 'person' && actor.userId !== state.ownerId && !ownsProject(state, actor.userId, groupProject(state, group))) {
         fail('FORBIDDEN', 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.', 403)
       }
       if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
@@ -2303,8 +2305,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = conversation(state, command.conversationId)
       // It awards points, so among people only an owner records it; reading the group is not enough. Any agent of the
       // project may (project instructions, phase 4), on any task, a linked one included.
-      const owners = [state.ownerId, groupProject(state, group).ownerId]
-      if (actor.kind === 'person' && !owners.includes(actor.userId)) fail('FORBIDDEN', 'Among people, only an owner records a merge.', 403)
+      if (actor.kind === 'person' && actor.userId !== state.ownerId && !ownsProject(state, actor.userId, groupProject(state, group))) fail('FORBIDDEN', 'Among people, only an owner records a merge.', 403)
       const mergedAt = command.mergedAt === undefined ? context.now : Date.parse(command.mergedAt)
       if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {
         fail('MERGE_TIME', 'Record a merge from the last four weeks, not one still to come.', 400)
@@ -3251,7 +3252,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       for (const target of state.agents.filter(a => a.contributorId === member.id || a.buddyOf?.personId === member.id)) {
         if (state.agents.some(a => a.id === target.id)) removeAgent(target)
       }
-      state.people = state.people.filter(p => p.id !== member.id)
+      // Their projects pass to a remaining member, or are nobody's: rejoining gives none of them back (task #3073).
+      dismissPeople(state, new Set([member.id]))
       state.invitations = state.invitations.filter(i => i.email !== member.email)
       // Leaving, or being removed, is final for auto-join: only an invitation or a link brings them back (spec 2026-11-03).
       state.autoJoinDeclined = declinedWith(state, member.id)
@@ -3711,7 +3713,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // good where most people are not the Swarm owner (Diego, 2026-11-04, #2639). Live work stays the project's agents' and
       // the Swarm owner's.
       const ended = lost || stopped || assignment.status === 'cancelled'
-      const closes = ended && actor.kind === 'person' && [group.requesterId, project.ownerId].includes(actor.userId)
+      const closes = ended && actor.kind === 'person' && (actor.userId === group.requesterId || ownsProject(state, actor.userId, project))
       if (!allowed && !closes) fail('FORBIDDEN', ended ? WHO_CANCELS_ENDED : WHO_CANCELS_LIVE, 403)
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
@@ -3771,7 +3773,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // now, not the task's lead: a replaced PM's removal clears its lead on every task it led (review of #2916).
       const project = groupProject(state, group)
       const accountable = actor.kind === 'agent' ? ledProject(state, actor.agentId)?.id === project.id
-        : [state.ownerId, project.ownerId].includes(actor.userId)
+        : actor.userId === state.ownerId || ownsProject(state, actor.userId, project)
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
