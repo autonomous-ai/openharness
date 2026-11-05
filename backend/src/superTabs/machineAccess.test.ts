@@ -307,7 +307,7 @@ describe('requires.access and the start check (design section 3)', () => {
     const f = swarm()
     const work = f.group('lead', owner, { access: ['Lamp', '  Fusion 360 '] })
     expect(f.state.conversations.find(c => c.id === work)!.task!.requires).toEqual({ access: ['Lamp', 'Fusion 360'] })
-    expect(refusal(() => f.group('lead', owner, { access: ['x'.repeat(61)] }))?.code).toBe('INVALID_REQUEST')
+    expect(() => f.group('lead', owner, { access: ['x'.repeat(61)] })).toThrow('expected string to have <=60 characters')
   })
 
   it('refuses a start that names no access (an older CLI) where the task\'s access is missing', () => {
@@ -380,8 +380,11 @@ describe('requires.access and the start check (design section 3)', () => {
   it('leaves a machine without the access out of a recorded route, and refuses it as the only choice', () => {
     const f = swarm()
     const work = f.group('lead', owner, { access: ['Lamp'] })
-    f.add('Lamp', { account: 'team' }, owner, {}, )
+    f.add('Lamp', { account: 'team' })
     expect(refusal(() => f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac')]) } as Command, owner)))
       .toMatchObject({ code: 'ACCESS_MISSING', message: 'No Lamp here. Route again.' })
+    const routed = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'gray-mac')]) } as Command, owner)
+    expect(routed.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c1' }],
+      excluded: [{ title: 'c0 on owner-mac', reason: 'No Lamp here.' }] } })
   })
 })

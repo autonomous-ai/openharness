@@ -18,7 +18,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
-import { changeAccess, expireAccess } from './machineAccess.js'
+import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -144,20 +144,21 @@ const check = z.object({ description: z.string().trim().min(1).max(1000), indepe
 /** A task's checks as stored, none passed; `independent` false when a newer client leaves it out, as older readers expect it. */
 const storedChecks = (checks: ReadonlyArray<z.infer<typeof check>>, operationId: string): Check[] =>
   checks.map((c, i) => ({ description: c.description, independent: c.independent ?? false, id: stableId(operationId, String(i)), evidence: null, passedBy: null }))
+/** An access entry's name and its note or check (machineAccess.ts). */
+const accessName = z.string().trim().min(1).max(60).regex(/^[^\n\r\t]+$/)
+const accessText = z.string().trim().min(1).max(200).regex(/^[^\n\r\t]+$/)
+
 const task = z.object({
   goal: z.string().trim().min(1).max(8000), changes: z.string().trim().min(1).max(8000),
   constraints: z.string().trim().min(1).max(8000), owns: z.array(z.string().trim().min(1).max(4096)).min(1).max(40),
   /** model.ts TaskRequirement; `unseenMachines` is only ever read back, never set. */
-  requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional() }).strict()
-    .refine(r => r.machines || r.devices, 'Require at least one machine or device.').optional(),
+  requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional(),
+    access: z.array(accessName).min(1).max(20).optional() }).strict()
+    .refine(r => r.machines || r.devices || r.access, 'Require at least one machine, device or access.').optional(),
   /** model.ts ReviewPlan: what its reviews check first, and 2 for two independent reviews, said in its brief (#2382). */
   review: z.object({ focus: z.string().trim().min(1).max(2000).optional(), reviews: z.union([z.literal(1), z.literal(2)]).optional() }).strict()
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
-
-/** An access entry's name and its note or check (machineAccess.ts). */
-const accessName = z.string().trim().min(1).max(60).regex(/^[^\n\r\t]+$/)
-const accessText = z.string().trim().min(1).max(200).regex(/^[^\n\r\t]+$/)
 
 /** The machines a Swarm remembers its people took out. */
 const MAX_REMOVED_MACHINES = 64
@@ -1207,13 +1208,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
     if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
-    const group = conversation(state, conversationId), written = teamWrittenTask(state, group)
-    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines, written)
+    const group = conversation(state, conversationId), written = teamWrittenTask(state, group), needed = taskAccess(group)
+    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines, written, needed)
     // Team-written code takes a Team account only (audit H2). Its own check below says nothing for the owner's own account.
     if (written && !(member ? onTeamAccount(state, member) : teamAccountPool(state.machines?.find(m => m.machineId === machineId)))
       && !(member && ledProject(state, member.id)?.id === project.id)) return { code: 'TEAM_WRITTEN_WORK' as const, reason: TEAM_WRITTEN_REASON }
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
-    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
+    // Then what the task needs to reach, in the account it would run in (machineAccess.ts, task #3047).
+    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines, needed)
+      ?? accessRefusal(state, machineId, project, needed)
   }
   /**
    * Routes a `message.send` in Buddy chat [chat] (buddySessions.ts): whether it is in a session thread (`inSession`, its reply
@@ -2442,7 +2445,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const startGroup = conversation(state, command.request.conversationId)
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
-      const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
+      const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
       if (moved.machineId !== named.machineId) {
         const mac = state.machines?.find(m => m.machineId === named.machineId)
@@ -3499,7 +3502,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       sameProject(state, group, worker)
       const home = groupProject(state, group)
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
-      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
+      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines, taskAccess(group))
+      // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
+      const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
+      if (unreached) failTeamWork(unreached)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
       pushedRefusal(group, worker)
       requireTeamWrittenAccount(state, group, worker)

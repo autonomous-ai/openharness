@@ -299,7 +299,8 @@ export const reviewsWanted = (task: WorkTask | undefined): number => task?.revie
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
-export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+/** `access`: what the work needs to reach, by the names machines list it under (machineAccess.ts, task #3047). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; access?: string[]; unseenMachines?: number }
 
 /** The machines a reader sees: listed in their visible state, or running an agent they see. */
 export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>

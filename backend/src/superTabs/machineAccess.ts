@@ -1,8 +1,9 @@
 import type { Command, CommandContext } from './commands.js'
 import { findCredentials } from './credentials.js'
-import { machineContribution, teamPoolsOf, type ContributedMachine } from './machines.js'
-import { fail, stableId, type Actor, type SuperTabState } from './model.js'
-import { ledProject } from './projects.js'
+import { machineContribution, ownAccountWork, teamPoolsOf, type ContributedMachine, type TeamWorkRefusal } from './machines.js'
+import { fail, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
+import { shownNameOf } from './personNames.js'
+import { ledProject, type SwarmProject } from './projects.js'
 
 /**
  * What a machine can reach, by macOS account (task #3047, docs/design/2026-11-05-machine-access.md): short names people
@@ -187,4 +188,49 @@ export function visibleAccess(state: Pick<SuperTabState, 'machines' | 'agents'>,
     const { check: _check, note, ...rest } = entry
     return note !== undefined && runsIn(entry) ? { ...rest, note } : rest
   })
+}
+
+/** What a task needs to reach (`task.requires.access`), or none. */
+export const taskAccess = (group: Pick<Conversation, 'task'> | undefined): string[] => group?.task?.requires?.access ?? []
+
+const entryFor = (mac: ContributedMachine, name: string, account: AccessEntry['account']): AccessEntry | undefined =>
+  mac.access?.find(e => e.account === account && sameAccessName(e.name, name))
+
+/**
+ * Whether every name in [needed] is an own-account entry of [pool] its owner shared with teammates (`teammates`), ok: a
+ * teammate's task that needs them runs in the owner's own account on that Mac, as with own-account work (design section 4).
+ * Never for a Harness Team account's pool, which keeps no list, and never for a task that needs nothing.
+ */
+export function sharedOwnAccess(pool: ContributedMachine | undefined, needed: readonly string[]): boolean {
+  if (!pool || pool.hostMachineId || pool.buddyOnly || !needed.length) return false
+  return needed.every(name => { const e = entryFor(pool, name, 'own'); return !!e && e.state === 'ok' && e.teammates === true })
+}
+
+/**
+ * Why work for [project] that needs [needed] cannot run on [machineId], the pool it would run in (after teamMachineFor), or
+ * null. It reads the entries of that account only: the Mac's own for the Mac, its Team account's for the Team pool. An entry
+ * counts when it is ok, and an own-account one for a teammate's project only when its owner shared it or lets teammates'
+ * work run in their account (design section 4). The sentence names the first name missing.
+ */
+export function accessRefusal(state: SuperTabState, machineId: string, project: Pick<SwarmProject, 'ownerId'>, needed: readonly string[]): TeamWorkRefusal | null {
+  if (!needed.length) return null
+  const pool = state.machines?.find(m => m.machineId === machineId)
+  const mac = pool && macOf(state, pool)
+  const account: AccessEntry['account'] = pool?.hostMachineId ? 'team' : 'own'
+  const refuse = (reason: string): TeamWorkRefusal => ({ code: 'ACCESS_MISSING', reason })
+  for (const name of needed) {
+    if (!pool || !mac) return refuse(`No ${name} here.`)
+    const owner = shownNameOf(state as SuperTabState, mac.contributorId) ?? 'its owner'
+    const teammate = project.ownerId !== mac.contributorId
+    const entry = entryFor(mac, name, account)
+    const other = entryFor(mac, name, account === 'own' ? 'team' : 'own')
+    if (!entry) {
+      if (other && account === 'own') return refuse(`${other.name} is in the Harness Team account on ${mac.name}, which runs only teammates' work.`)
+      if (other && account === 'team' && teammate) return refuse(`${other.name} is in ${owner}'s own account, not shared with teammates.`)
+      return refuse(`No ${name} here.`)
+    }
+    if (entry.state !== 'ok') return refuse(`${entry.name} on ${mac.name} is waiting for ${owner} to confirm.`)
+    if (account === 'own' && teammate && !entry.teammates && !ownAccountWork(mac)) return refuse(`${entry.name} is in ${owner}'s own account, not shared with teammates.`)
+  }
+  return null
 }
