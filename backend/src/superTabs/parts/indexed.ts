@@ -18,6 +18,8 @@ export const GROUP_INDEX = {
   agents: { tabId: 1, agentIds: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
+  /** A command's awake conversations by the columns a held part is compared by (parts/held.ts): the listing reads no document. */
+  held: { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 },
   changes: { tabId: 1, changedAt: 1 },
   /** A host's changed conversations: led by the host, so the wake check reads no other host's. */
   wake: { hostMachineIds: 1, tabId: 1, changedAt: 1 },
@@ -98,7 +100,8 @@ export const NAMED_INDEX = {
   /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
   SuperTabThread: { id: { _id: 1 } },
   /** `age`: Activity rows past their expiry (activity.ts sweepActivity). */
-  SuperTabActivity: { age: { createdAt: 1 } },
+  /** `unread`: a person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). */
+  SuperTabActivity: { age: { createdAt: 1 }, unread: { tabId: 1, personId: 1, readAt: 1, createdAt: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
   /** A person's reminders (reminders.ts): `person`, the due list, the next one, the digest and the cap's count; `due`, the
