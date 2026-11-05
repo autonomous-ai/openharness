@@ -1621,7 +1621,7 @@ void _reviewTests() {
       async.elapse(const Duration(seconds: 20));
       store.writes.clear();
       c!.markRead('lead');
-      c!.toggleProjectsGroup();
+      c!.toggleBuddiesGroup();
       async.elapse(const Duration(seconds: 20));
       expect(store.writes.where((k) => k == _viewKey), isEmpty);
       client.dispose();

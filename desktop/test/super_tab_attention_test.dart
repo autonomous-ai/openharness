@@ -15,6 +15,7 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 
 /// A message from the Lead agent, never the reader's own.
