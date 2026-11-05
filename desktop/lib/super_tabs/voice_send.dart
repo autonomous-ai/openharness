@@ -82,20 +82,21 @@ extension SuperTabVoiceSend on SuperTabController {
       return (sent: false, notice: superTabVoiceBusy);
     }
     // Answered or not, the message is now the chat's: a lost answer or a
-    // refusal shows it there with Retry, under the same receipt.
-    final sending = command({
-      'type': 'message.send',
-      'conversationId': conversationId,
-      'text': '',
-      'replyTo': root,
-      'recipientIds': const <String>[],
-      'attachmentIds': ids,
-      if (oneBuddy) 'oneBuddy': true,
-    });
-    for (final file in attached) {
-      owner.remove(file);
-    }
-    await sending;
+    // refusal shows it there with Retry, under the same receipt. The attached
+    // files stay in the composer until the server takes it, as a typed
+    // message's do.
+    await sendWithUploads(
+      {
+        'type': 'message.send',
+        'conversationId': conversationId,
+        'text': '',
+        'replyTo': root,
+        'recipientIds': const <String>[],
+        'attachmentIds': ids,
+        if (oneBuddy) 'oneBuddy': true,
+      },
+      {for (final (i, file) in attached.indexed) file: ids[i]},
+    );
     // Nothing to say once sent: a voice message plays only, and never has
     // words to go without (anh Dee, 2026-11-04).
     return (sent: true, notice: null);
