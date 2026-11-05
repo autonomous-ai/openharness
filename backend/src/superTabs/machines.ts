@@ -6,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -382,8 +382,8 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   const pool = state.machines?.find(m => m.machineId === machineId)
   // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's,
   // whatever the Team account switches say (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
-  if (pool?.buddyOnly) return project.ownerId === pool.contributorId ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
-  if (project.ownerId === contributorId) return null
+  if (pool?.buddyOnly) return ownsProject(state, pool.contributorId, project) ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
+  if (ownsProject(state, contributorId, project)) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
     if (!teamAccountRequired()) return null
@@ -514,7 +514,7 @@ export function teamMachineFor(state: SuperTabState, machineId: string, project:
   if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
-  if (!pool || (!teamWritten && project.ownerId === pool.contributorId)) return machineId
+  if (!pool || (!teamWritten && ownsProject(state, pool.contributorId, project))) return machineId
   if (!teamWritten && (ownAccountWork(pool) || sharedOwnAccess(pool, access))) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }

@@ -3,7 +3,7 @@ import { findCredentials } from './credentials.js'
 import { machineContribution, ownAccountWork, teamPoolsOf, type ContributedMachine, type TeamWorkRefusal } from './machines.js'
 import { fail, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { shownNameOf } from './personNames.js'
-import { ledProject, type SwarmProject } from './projects.js'
+import { ledProject, ownsProject, type SwarmProject } from './projects.js'
 
 /**
  * What a machine can reach, by macOS account (task #3047, docs/design/2026-11-05-machine-access.md): short names people
@@ -215,7 +215,7 @@ export function sharedOwnAccess(pool: ContributedMachine | undefined, needed: re
  * counts when it is ok, and an own-account one for a teammate's project only when its owner shared it or lets teammates'
  * work run in their account (design section 4). The sentence names the first name missing.
  */
-export function accessRefusal(state: SuperTabState, machineId: string, project: Pick<SwarmProject, 'ownerId'>, needed: readonly string[]): TeamWorkRefusal | null {
+export function accessRefusal(state: SuperTabState, machineId: string, project: SwarmProject, needed: readonly string[]): TeamWorkRefusal | null {
   if (!needed.length) return null
   const pool = state.machines?.find(m => m.machineId === machineId)
   const mac = pool && macOf(state, pool)
@@ -224,7 +224,8 @@ export function accessRefusal(state: SuperTabState, machineId: string, project: 
   for (const name of needed) {
     if (!pool || !mac) return refuse(`No ${name} here.`)
     const owner = shownNameOf(state as SuperTabState, mac.contributorId) ?? 'its owner'
-    const teammate = project.ownerId !== mac.contributorId
+    // Its owner's own project only while they own it (projects.ts ownsProject): one who left is a teammate like any other.
+    const teammate = !ownsProject(state, mac.contributorId, project)
     const entry = entryFor(mac, name, account)
     const other = entryFor(mac, name, account === 'own' ? 'team' : 'own')
     if (!entry) {

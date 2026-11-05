@@ -417,6 +417,15 @@ describe('requires.access and the start check (design section 3)', () => {
     expect(lastStart(f).machineId).toBe('gray-mac')
   })
 
+  it('takes a project\'s former owner for a teammate: their own-account entry needs sharing (with #3073\'s ownsProject)', () => {
+    const f = swarm()
+    f.add('Lamp')
+    const work = f.group(f.grays, gray, { access: ['Lamp'] })
+    // Gray left and came back: the project is no longer theirs to run in their own account.
+    f.state.projects!.find(p => p.id === f.grays)!.ownerGeneration = 'an-earlier-membership'
+    expect(refusal(() => f.start(work, gray, f.grays))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp is in gray\'s own account, not shared with teammates.' })
+  })
+
   it('matches names without case or spacing, and leaves a start with no requirement as it was', () => {
     const f = swarm()
     f.add('Lamp', { account: 'team' })

@@ -41,7 +41,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -86,7 +86,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -1139,7 +1139,7 @@ export class SuperTabStore {
         if (await removedFromWorkspace(tx, state.workspaceId, user.sub)) return 'revoked' as const
         await addMember(tx, state.workspaceId, { id: user.sub, email }, 'guest', state.ownerId, generation)
       }
-      state.people.push({ id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
+      admitPerson(state, { id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
       await this.save(tx, loaded, state, stamp, [{ kind: 'head', key: 'head' }])
       // People per Swarm is what warns first at scale (spec, Design 4).
       logger.info('[super-tab] auto-join', { tabId, userId: user.sub, people: state.people.length })
@@ -1188,7 +1188,7 @@ export class SuperTabStore {
       const existing = state.people.find(p => p.id === user.sub)
       if (existing) return { id: tabId, role: existing.role, alreadyMember: true }
       const member = { id: user.sub, email: authenticatedEmail(user.email)!, role: 'collaborator' as const, generation: stableId('workspace-join', tabId, user.sub, operationId) }
-      state.people.push(member)
+      admitPerson(state, member)
       // As a link join does: the open visibility it relied on lives on the head, so closing it at once conflicts.
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       return { id: tabId, role: member.role, alreadyMember: false }
@@ -1290,7 +1290,7 @@ export class SuperTabStore {
       }
       if (!member) {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
-        state.people.push(member)
+        admitPerson(state, member)
       }
       // A join by link or domain link is coming back on purpose: it clears a decline (spec 2026-11-03, Leaving is final).
       if (state.autoJoinDeclined?.includes(user.sub)) state.autoJoinDeclined = declinedWithout(state, user.sub)
@@ -2115,7 +2115,7 @@ export class SuperTabStore {
         && c.assignment.execution.machineId === target.machineId && c.assignment.execution.machineOwnerId === target.machineOwnerId)
         ?? fail('NO_ASSIGNMENT', 'This agent has no task in progress. A GitHub token is only for an agent working on a task.')
       const project = groupProject(state, group)
-      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
+      const owner = await ownerAccount(tx.user, project)
       const requester = owner ?? { name: null, email: state.people.find(p => p.id === project.ownerId)?.email ?? '' }
       if (!requester.email) fail('NOT_FOUND', 'This project\'s owner is unavailable.', 404)
       const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
@@ -2149,10 +2149,10 @@ export class SuperTabStore {
       }
       // A Swarm-wide Buddy's folder is made of checkouts already on its machine: there is no repository to fetch for it.
       const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
-      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
+      const owner = await ownerAccount(tx.user, project)
       const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
       return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
-        startId, own: project.ownerId === start.machineOwnerId,
+        startId, own: ownsProject(state, start.machineOwnerId, project),
         requester: { name: owner?.name?.trim() || null, email } }
     })
   }
@@ -2589,7 +2589,7 @@ export class SuperTabStore {
       } else if (team !== null) {
         // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
         if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
-      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub) && await hasWorkspaceAccess(tx, state, user.sub))
+      } else if (!(ownsProject(state, user.sub, project) && await hasWorkspaceAccess(tx, state, user.sub))
         && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
@@ -3893,7 +3893,7 @@ export class SuperTabStore {
         // Every row of the page refused: no digest, and still seen.
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: 0, cancelled: refused }))
       }
-      // The built-in schedule (pmSchedule.ts), only when the sweep has something to do: its slot is recorded in this same write,
+      // The built-in schedule (pmSchedule.ts), only when one of its jobs is due: its slot is recorded in this same write,
       // woken or held back, so two racing polls wake the coordinator once. Its lines go into the update request, else the notice
       // digest, so the PM gets one turn; none while its last wake is still unread, so a PM deep in a long turn finds one, not one
       // per slot.
@@ -3918,8 +3918,9 @@ export class SuperTabStore {
           placed = 'own'
           wakeId = scheduled.draft.id
         }
-        project.schedule = { lastSlot: scheduled.slot, ...wakeId ? { wakeId } : {} }
-        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed }))
+        // Held back, only its slot: the people and tidy jobs stay due for the next one (pmSchedule.ts recordWake).
+        recordWake(project, scheduled, this.now(), open ? null : wakeId!)
+        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
