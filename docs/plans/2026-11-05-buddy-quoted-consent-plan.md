@@ -20,9 +20,9 @@
 
 ## Design
 
-- Growth: no new records. Owner deletion removes a reply-free proposal; a root with replies becomes the existing tombstone. Remove its proposal source as well so goal/scope cannot retain deleted content.
+- Growth: no new records. Owner deletion removes a reply-free proposal; a root with replies becomes the existing tombstone. Remove its proposal source as well so goal/scope cannot retain deleted content. Expire only uploads owned by the deleted message; forwarded files keep their original owner-chat message and lose only this proposal's forwarding claim.
 - Concurrency: existing command transaction and group revision guard authorization and deletion; operation receipts retain retry idempotency. Keep the original ask consumed after deletion.
-- Read cost: use the already selected source/author fields; existing indexed message/thread/counter reads only. No new query or scan.
+- Read cost: use the already selected source/author fields; existing indexed message/thread/counter reads only. Attachment cleanup uses two updates in one existing database call, both bounded by the message's attachment IDs and tab, guarded respectively by `usedBy` and `proposedBy`. The focused regression profiles them and rejects collection scans.
 - Scale: parser work stays linear in the bounded messages already loaded; deletion uses the existing bounded lookbacks. Compare consent timing before/after at normal and maximum message sizes; command latency is the first warning metric.
 - Compatibility: no wire/schema change. Older unquoted Buddy summaries fail visibly and must be shown again with quotes; direct owner words keep working. Backend ships before the refreshed skill.
 - Migration + rollback: no migration. Reverting code restores the defect and should be avoided; deletion is intentionally irreversible and existing thread replies remain.
