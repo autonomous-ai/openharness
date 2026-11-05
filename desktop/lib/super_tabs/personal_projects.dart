@@ -185,8 +185,14 @@ typedef PersonalPane = ({Swarm tab, TerminalPane pane, String repo});
 
 /// The person's own panes in their tabs, in tab order then each tab's reading
 /// order, each once. Swarm tabs, viewers and panes on another person's or a
-/// shared machine, or on a Harness Team account, are left out.
-List<PersonalPane> personalPanes(AppNotifier app) {
+/// shared machine, or on a Harness Team account, are left out. A pane in the
+/// own tab of a project Personal lists ([projectTabs], their first tabs' ids)
+/// is that project's whatever its repo: it was started there (Reed's review
+/// of #3090).
+List<PersonalPane> personalPanes(
+  AppNotifier app, {
+  Set<String> projectTabs = const {},
+}) {
   final seen = <(String, String)>{};
   final out = <PersonalPane>[];
   for (final tab in app.swarms) {
@@ -210,10 +216,11 @@ List<PersonalPane> personalPanes(AppNotifier app) {
         pane: pane,
         // The repo an SSH alias stands for first, so a clone through
         // `Host gh-work` and one straight from GitHub are one (task #2476).
-        repo:
-            normalizedRemote(project?.repository) ??
-            normalizedRemote(project?.remote) ??
-            personalTabKey(tab.id),
+        repo: projectTabs.contains(personalProjectTabParts(tab.id)?.base)
+            ? personalTabKey(tab.id)
+            : normalizedRemote(project?.repository) ??
+                  normalizedRemote(project?.remote) ??
+                  personalTabKey(tab.id),
       ));
     }
   }
@@ -301,7 +308,7 @@ class PersonalProjects extends ChangeNotifier {
     final repos = _reposOf(c.accountId, c.tabId, project.id);
     final ownTab = personalProjectTabId(project.id);
     return [
-      for (final entry in personalPanes(app))
+      for (final entry in personalPanes(app, projectTabs: _projectTabs(c)))
         if (repos.contains(entry.repo) ||
             (_isProjectTab(entry.repo) &&
                 personalProjectTabParts(entry.repo.substring(4))?.base ==
@@ -309,6 +316,12 @@ class PersonalProjects extends ChangeNotifier {
           entry.pane,
     ];
   }
+
+  /// The first-tab ids of the projects [c] lists ([personalProjectTabId]).
+  Set<String> _projectTabs(SuperTabController c) => {
+    for (final p in c.snapshot?.projects ?? const <SuperTabProject>[])
+      personalProjectTabId(p.id),
+  };
 
   /// The project of Personal whose own tab [tabId] is ([personalProjectTabId]),
   /// or null: another kind of tab, or a project Personal does not list.
@@ -434,7 +447,7 @@ class PersonalProjects extends ChangeNotifier {
     final before = order.length;
     order.removeWhere((id) => !listed.contains(id));
     var changed = order.length != before;
-    for (final entry in personalPanes(app)) {
+    for (final entry in personalPanes(app, projectTabs: _projectTabs(c))) {
       final id = _isProjectTab(entry.repo)
           ? projectOfTab(c, entry.repo.substring(4))?.id
           : projects[entry.repo];
@@ -656,7 +669,7 @@ class PersonalProjects extends ChangeNotifier {
         // A project tab's no-repo panes are its project's (panesFor): no
         // project is made for that tab, on any computer.
         final wanted = <String, String>{
-          for (final p in personalPanes(app))
+          for (final p in personalPanes(app, projectTabs: _projectTabs(c)))
             if (!_isProjectTab(p.repo))
               p.repo: _isTab(p.repo)
                   ? tabProjectName(p.tab.name)
