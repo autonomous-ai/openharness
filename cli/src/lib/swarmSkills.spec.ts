@@ -217,9 +217,12 @@ describe('built-in Swarm skills', () => {
   // right before the shared-machine rules, or before Requests and Done for each Lead; only the Lead adds 🚀 at a merge. A
   // handoff such as "Ready for review" stays a post (Lead, 10-29): it opens the review.
   const react = '- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.\n'
-  const substance = '- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").\n'
+  // Task #3057 (Ken, 11-05): acknowledgements and status from an assignee in its own task still reached the PM. Never post an
+  // acknowledgement, react; status goes through work.status; name the PM only when you need it to act.
+  const post = '- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.'
+  const substance = (role: 'lead' | 'dev' | 'review') => `${post}${role === 'lead' ? '' : ' Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.'}\n`
   const rocket = '- When a group\'s pull request merges, react 🚀 to the message that assigned its work.\n'
-  const reactions = (role: 'lead' | 'dev' | 'review') => `## Reactions\n${react}${substance}${role === 'lead' ? rocket : ''}\n`
+  const reactions = (role: 'lead' | 'dev' | 'review') => `## Reactions\n${react}${substance(role)}${role === 'lead' ? rocket : ''}\n`
   // Before a section that is last: after a blank line, without its own.
   const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
   // Who a post reaches (project instructions, phase 1): every role, in both modes, in a section of its own right before Reactions.
