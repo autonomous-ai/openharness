@@ -35,6 +35,9 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(CONFIG["releaseWindow"], {"start": "09:00", "end": "18:00", "timeZone": "Asia/Ho_Chi_Minh"})
         self.assertEqual(CONFIG["releasePace"], {"backendEveryMinutes": 120, "backendPause": {"start": "09:00", "end": "10:00"}})
 
+    def test_grace_for_a_queued_workflow_is_data(self):
+        self.assertEqual(CONFIG["tagGraceMinutes"], 30)
+
     def test_inside_the_window_is_allowed_for_every_kind(self):
         for kind in ["cli", "desktop", "web"]:
             for hour, minute in [(9, 0), (12, 30), (17, 59)]:
@@ -137,6 +140,11 @@ class PaceTests(unittest.TestCase):
     def test_unknown_kind_is_an_error_not_a_pass(self):
         with self.assertRaises(ValueError):
             check("firmware", at(5, 12, 0))
+
+    def test_pace_past_closing_names_the_last_release(self):
+        text = check("backend", at(5, 17, 30), last=at(5, 17, 0)).message
+        self.assertIn("the last backend release was at 2026-11-05 17:00", text)
+        self.assertNotIn("the pace ends outside", text)
 
     def test_message_names_guard_next_time_and_next_step(self):
         text = check("backend", at(5, 12, 0), last=at(5, 11, 0)).message
@@ -246,6 +254,39 @@ class GitAndCliTests(unittest.TestCase):
                                     "--from-tag", "v1.0.3_backend", "--exclude-tag", "v1.0.3_backend")
         self.assertEqual(code, 2)
         self.assertIn("RELEASE_WINDOW", err)
+
+    def test_a_release_queued_past_closing_is_judged_when_it_was_tagged(self):
+        # The script tagged at 17:55 inside the window; the workflow started at 18:04 after a CI queue.
+        self.tag("v1.0.1_cli", at(5, 17, 55))
+        code, _, err = self.run_cli("--kind", "cli", "--now", at(5, 18, 4).isoformat(),
+                                    "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+        self.assertEqual(code, 0, err)
+
+    def test_a_tag_made_outside_the_window_is_still_refused_when_the_workflow_starts_late(self):
+        self.tag("v1.0.1_cli", at(5, 18, 2))
+        code, _, err = self.run_cli("--kind", "cli", "--now", at(5, 18, 4).isoformat(),
+                                    "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+        self.assertEqual(code, 2)
+        self.assertIn("RELEASE_WINDOW", err)
+
+    def test_a_workflow_queued_longer_than_the_grace_is_judged_now(self):
+        self.tag("v1.0.1_cli", at(5, 17, 55))
+        code, _, _ = self.run_cli("--kind", "cli", "--now", at(5, 18, 40).isoformat(),
+                                  "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+        self.assertEqual(code, 2)
+
+    def test_a_lightweight_tag_has_no_tagging_time_to_trust(self):
+        # Its date is the commit's, which anyone can set: a hand-made tag is judged by the clock.
+        git(self.repo, "tag", "v1.0.1_cli")
+        code, _, _ = self.run_cli("--kind", "cli", "--now", at(5, 18, 4).isoformat(),
+                                  "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+        self.assertEqual(code, 2)
+
+    def test_a_tag_dated_after_now_is_judged_now(self):
+        self.tag("v1.0.1_cli", at(5, 17, 55))
+        code, _, _ = self.run_cli("--kind", "cli", "--now", at(5, 17, 50).isoformat(),
+                                  "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+        self.assertEqual(code, 0)
 
     def test_advisory_reports_but_does_not_fail(self):
         code, _, err = self.run_cli("--kind", "cli", "--now", at(5, 23, 0).isoformat(), "--advisory")

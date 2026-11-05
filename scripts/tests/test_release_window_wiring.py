@@ -64,6 +64,21 @@ class WorkflowTests(unittest.TestCase):
             step = text[max(0, end - 700):end]
             self.assertRegex(step, r"github\.event_name == 'push'|github\.ref_type == 'tag'", path)
 
+    def test_a_manual_run_of_a_real_release_is_guarded_too(self):
+        # "Actions > Run workflow" publishes to users like a tag does, so it takes the same guard, with a reason input.
+        for kind, path, real in [("cli", WORKFLOW_OF["cli"], "harness/cli/metadata.json"),
+                                 ("desktop", WORKFLOW_OF["desktop"], "harness/desktop/metadata.json")]:
+            text = (ROOT / path).read_text()
+            self.assertRegex(text, r"urgent_reason:\n\s+description:", path)
+            marker = text.index("- name: Release window")
+            step = text[marker:text.index("run: |", marker)]
+            self.assertIn("workflow_dispatch", step, path)
+            self.assertIn(real, step, path)
+            self.assertIn("urgent_reason", text[marker:marker + 2500], path)
+            if kind == "desktop":
+                for skip in ("prepare_only", "test_candidate_reuse"):
+                    self.assertIn(skip, step, path)
+
     def test_release_notes_do_not_publish_the_urgent_line(self):
         for path in [WORKFLOW_OF["cli"], WORKFLOW_OF["desktop"]]:
             text = (ROOT / path).read_text()
