@@ -22,7 +22,7 @@ import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
 import { teamModelSet } from './model.js'
 import type { TeamModelHandoff } from './modelHandoff.js'
-import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
+import { handedTeamSignInEpoch, mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
   TEAM_USER, TeamInputError, carriedBackendEnv, checkSid, pathCheck, teamLayout, teamPaths, userCheck, type TeamLayout, type TeamPlatform,
@@ -812,7 +812,8 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
       try {
         const computerId = deps.computerId()
         const tokens = await redeemTeamHandoff(code, label, computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
-        deps.writeSession(teamSession(tokens, computerId, deps.autonomousEnv, deps.now()))
+        // The owner's setup run handed it over: a sign-in by hand, so the device key log may start over for its account (#3262).
+        deps.writeSession(teamSession(tokens, computerId, deps.autonomousEnv, deps.now(), { signInEpoch: handedTeamSignInEpoch(deps.now()) }))
         if (previous) await revokeHarnessRefresh(deps.post, previous.refreshToken)
         log(previous ? 'signed in for team work again; the previous sign-in was ended' : 'signed in for team work')
         report({ signIn: { state: 'signed-in', at: deps.now() } })

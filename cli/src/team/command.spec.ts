@@ -2,7 +2,7 @@
  * `harness team` against fake deps: no administrator prompt, account, launchd, daemon or backend is touched.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { AuthSession } from '../lib/authSession.js'
+import { signInOf, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, signOutAsked } from '../lib/signOut.js'
 import { NO_PROMPT_MESSAGE, type AdminScript, type RunAdmin } from './admin.js'
 import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
@@ -656,6 +656,19 @@ describe('internal verbs', () => {
     const broken = inTeam({ engines: vi.fn(async () => { throw new Error('no home') }) })
     expect(await teamCommand(['__start'], broken.deps)).toBe(0)
     expect(broken.out.join('\n')).toContain('could not check the engines: no home')
+  })
+
+  // Task #3262 (Amon, 11-05): Repair handed his Harness Team account to him, but the sign-in it made was adopted, so its device
+  // key log stayed kelvin's and froze, and it refused his daemon. A sign-in from the handoff file is the owner's own setup run,
+  // behind the macOS password: made by hand, at this run, so the log may start over for the account it was handed to.
+  it('__start gives a handed-over sign-in an epoch made by hand at this run, never an adopted one', async () => {
+    const f = inTeam()
+    expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)).toBe(0)
+    expect(signInOf(f.session()!.signInEpoch)).toMatchObject({ adopted: false, at: f.deps.now() })
+    // `harness team on` at this computer's own terminal hands nothing over: its sign-in stays adopted, as it always was.
+    const on = fake({ interactive: true })
+    expect(await teamCommand(['on'], on.deps)).toBe(0)
+    expect(signInOf(on.session()!.signInEpoch)).toMatchObject({ adopted: true })
   })
 
   it('__start stores nothing when the backend makes a session that is not a team one', async () => {

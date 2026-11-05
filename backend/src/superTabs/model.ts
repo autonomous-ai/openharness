@@ -641,6 +641,8 @@ export const NOTICE_READERS = {
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
   // The coordinator's wake for its built-in schedule (pmSchedule.ts).
   'schedule-request': 'recipients',
+  // The daily tidy, the coordinator's alone like its wake (pmSchedule.ts tidyRequest).
+  'tidy-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
