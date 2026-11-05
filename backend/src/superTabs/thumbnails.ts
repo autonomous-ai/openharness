@@ -50,12 +50,24 @@ export interface ThumbnailerOptions { atOnce?: number; maxWaiting?: number; give
 export function createThumbnailer(options: ThumbnailerOptions = {}) {
   const atOnce = options.atOnce ?? AT_ONCE, maxWaiting = options.maxWaiting ?? MAX_WAITING, giveUpMs = options.giveUpMs ?? THUMB_GIVES_UP_MS
   const decode = options.decode ?? thumbnailOf
-  let running = 0
+  let running = 0, reserved = 0
   const waiting: Array<() => void> = []
-  const busy = () => running >= atOnce && waiting.length >= maxWaiting
+  const queueFull = () => running >= atOnce && waiting.length >= maxWaiting
+  /** Pictures that may be held whole for a thumbnail at once: as many as it could be working on or have waiting. */
+  const capacity = atOnce + maxWaiting
+  const busy = () => queueFull() || reserved >= capacity
+
+  /** A place to hold one picture in memory until its thumbnail is made or given up, or null when every place is taken: the
+   *  caller then does not hold it. Given back by calling the function it returns (once; more calls do nothing). */
+  function reserve(): (() => void) | null {
+    if (reserved >= capacity) return null
+    reserved++
+    let given = false
+    return () => { if (!given) { given = true; reserved-- } }
+  }
 
   async function make(bytes: Buffer): Promise<ImageFacts | null> {
-    if (!bytes.byteLength || busy()) return null
+    if (!bytes.byteLength || queueFull()) return null
     let abandoned = false
     const work = (async () => {
       // A place passed on by a decode that ended is ours without `running` changing.
@@ -73,15 +85,16 @@ export function createThumbnailer(options: ThumbnailerOptions = {}) {
     const gaveUp = new Promise<null>(resolve => { timer = setTimeout(() => { abandoned = true; resolve(null) }, giveUpMs); timer.unref() })
     try { return await Promise.race([work, gaveUp]) } finally { clearTimeout(timer) }
   }
-  return { make, busy }
+  return { make, busy, reserve }
 }
 
 const shared = createThumbnailer()
 /** The picture's size and thumbnail, or null when [bytes] are not a PNG, JPEG or WebP this can read within its limits, or when
  *  thumbnails are backed up. Never throws. */
 export const makeThumbnail = (bytes: Buffer): Promise<ImageFacts | null> => shared.make(bytes)
-/** Whether the next picture would get no thumbnail for want of a place: a caller then skips holding it. */
-export const thumbnailsBusy = (): boolean => shared.busy()
+/** A place to hold one picture for its thumbnail, or null when none is free (the picture is then not held, and gets no thumbnail).
+ *  The caller gives it back, whatever happens. Without this, every upload under way would hold its whole body. */
+export const thumbnailsReserve = (): (() => void) | null => shared.reserve()
 
 async function thumbnailOf(bytes: Buffer): Promise<ImageFacts | null> {
   const input = () => sharp(bytes, { limitInputPixels: MAX_THUMB_PIXELS, failOn: 'error' })

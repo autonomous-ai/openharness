@@ -32,7 +32,7 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
-import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsBusy, type StoredImage } from './thumbnails.js'
+import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
@@ -2285,10 +2285,11 @@ export class SuperTabStore {
     const mime = typeFromHead(row.mime, head!)
     // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.
     let image: StoredImage | null = null
-    if (THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES && !thumbnailsBusy()) {
+    const place = THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES ? thumbnailsReserve() : null
+    if (place) {
       try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
         logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
-      }
+      } finally { place() }
     }
     const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE },
       data: { purpose: { unset: true }, mime, ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
@@ -2440,16 +2441,20 @@ export class SuperTabStore {
     const objectKey = objectKeyFor(prefix, tabId, file.name)
     let size: number, mime: string
     const held: Buffer[] = []
+    // A place to hold the picture whole for its thumbnail, given back when its thumbnail is made or the upload fails.
+    let place: (() => void) | null = null
     try {
       const checked = await typed()
       mime = checked.mime
-      // A picture is held whole for its thumbnail only when there is room to make one soon (thumbnails.ts).
-      const tee = thumbnail && THUMBNAILED_TYPES.has(mime) && !thumbnailsBusy()
+      if (thumbnail && THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
+      const tee = place !== null
       const body = !tee ? checked.body : Readable.from((async function* () {
         for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
       })())
       size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
     } catch (error) {
+      place?.()
+      held.length = 0
       if (error instanceof SuperTabError) throw error
       if (error instanceof AttachmentTooLarge) {
         if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
@@ -2464,7 +2469,8 @@ export class SuperTabStore {
     // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
     const whole = thumbnail && held.length ? Buffer.concat(held) : null
     held.length = 0
-    const image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null
+    let image: StoredImage | null = null
+    try { image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null } finally { place?.() }
     try {
       return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
         actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
