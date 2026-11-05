@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -27,8 +27,8 @@ afterAll(async () => {
 })
 
 /** A Swarm with a PM and the crew [lanes] (name -> lane), and the tasks [owns] (title -> one owned path), in that order. */
-async function swarm(lanes: Record<string, string | null>, owns: Record<string, string>) {
-  const store = new SuperTabStore(db, () => NOW)
+async function swarm(lanes: Record<string, string | null>, owns: Record<string, string>, dispatch = false) {
+  const store = new SuperTabStore(db, () => NOW, null, { dispatch })
   const tab = (await store.create(owner, randomUUID(), 'Crew', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   const add = async (name: string, lead = false) => String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac',
@@ -124,6 +124,20 @@ describe('the crew dispatch pass', () => {
     } finally {
       await db.machine.updateMany({ where: { machineId: 'owner-mac', userId: owner.sub }, data: { sessionKind: null } })
     }
+  })
+
+  it('runs by itself a second after a write that opens a task, only in a Swarm with a crew', async () => {
+    const s = await swarm({ Ash: 'backend' }, {}, true)
+    const id = String((await s.execute({ type: 'conversation.create', title: 'Api', checks: [],
+      task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
+    await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 200 })
+
+    const plain = await swarm({}, {}, true)
+    const pass = vi.spyOn(plain.store, 'dispatchCrew')
+    await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
+      task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
+    await new Promise(resolve => setTimeout(resolve, 1_500))
+    expect(pass).not.toHaveBeenCalled()
   })
 
   it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
