@@ -5099,8 +5099,9 @@ class _BackToSwarm extends StatelessWidget {
 
   final VoidCallback onBack;
 
-  /// Room the title leaves for it.
-  static const inset = 36.0;
+  /// Room the title leaves for it: what its box takes, less the gutter the title keeps anyway,
+  /// so the name starts where the box ends and no letter is under it.
+  static const inset = TtyBackButton.width - Tty.origin;
 
   /// The width of the iOS edge swipe's strip ([_EdgeBack]).
   static const edge = 20.0;
