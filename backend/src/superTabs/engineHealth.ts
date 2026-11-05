@@ -4,7 +4,6 @@
  *  machine from before these readings keeps today's behaviour. */
 import type { ContributedMachine } from './machines.js'
 import type { AgentStart, SuperTabState } from './model.js'
-import { ABANDONED, MACHINE_REMOVED } from './startFailure.js'
 
 /** Failed starts in a row that suspend an engine on a machine. */
 export const SUSPEND_AFTER = 2
@@ -12,19 +11,22 @@ export const SUSPEND_AFTER = 2
 export const SUSPENSION_MS = 6 * 3_600_000
 const NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const named = (engine: string) => NAME[engine] ?? engine
-/** Failures that say nothing of the engine: the machine was removed, the start was dropped, it lacked memory, or it could not clone the project. Read at
- *  call time: machines.ts imports this file, and startFailure.ts reaches machines.ts, so its constants may not exist yet
- *  while this file loads. */
-const notTheEngine = (error: string) => error === MACHINE_REMOVED || error === ABANDONED || error === 'Removed by its owner before it started.'
-  || MEMORY_SHORT.test(error) || CLONE_FAILED.test(error)
-const MEMORY_SHORT = /^Not enough free memory: /
-/** A first start whose machine could not clone the project (cli superTabs/projectFolder.ts): the network or GitHub, not the engine.
- *  Six starts on four machines failed this way on 2026-11-05, and each pair suspended an engine there for hours. */
-const CLONE_FAILED = /could not (?:clone|access) the (?:project )?repository/i
+/** Match the host's engine summaries, never arbitrary preparation errors. On 11-05, clone/token/tool/request failures
+ *  took six machines' Claude subscriptions out of routing. An unfamiliar failure still fails the start, but cannot prove
+ *  its engine is broken. Keep these aligned with CLI startScreen.ts, start.ts and native launch summaries. */
+function engineFailure(error: string): 'sign-in' | 'engine' | null {
+  const reason = error.replace(/^This machine held the agent's launch for \d+ minutes and stopped it: /, '')
+  if (/^(?:Codex|Claude(?: Code)?|(?:Its|The) engine) (?:sign-in failed\.|could not sign in\.|is not signed in\b)/i.test(reason)
+    || reason === 'Its engine stopped on a sign-in screen that nobody here can answer.') return 'sign-in'
+  if (/^(?:Codex|Claude(?: Code)?|(?:Its|The) engine) (?:could not launch\.|failed to launch\.|exited\b|is installed but cannot run: )/i.test(reason)
+    || /^Its engine stopped on .+ that nobody here can answer\.$/.test(reason)
+    || reason === 'The agent was created and has since stopped. Create a new start request to continue.') return 'engine'
+  return null
+}
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
 /** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
-const counts = (start: AgentStart) => !!start.error && !start.request.gridModel && !start.request.leadFor && !start.request.buddyOf && !notTheEngine(start.error)
+const counts = (start: AgentStart) => !!start.error && !start.request.gridModel && !start.request.leadFor && !start.request.buddyOf && !!engineFailure(start.error)
 
 /** Signed in, with every usage window below its limit (or metered, with none), in the machine's latest reading. */
 function readsFine(machine: ContributedMachine, engine: string): boolean {
