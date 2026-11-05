@@ -540,7 +540,10 @@ class SwarmMessageRow extends StatelessWidget {
                         label: inThread ? 'Reply in thread' : 'Reply',
                         onTap: reply,
                       ),
-                    SwarmCopyButton(text: message.text),
+                    // A voice message's text is its words, never handed
+                    // over: it plays only (anh Dee, 2026-11-04).
+                    if (!message.attachments.any((file) => file.voice != null))
+                      SwarmCopyButton(text: message.text),
                   ],
                 ),
               ),
