@@ -65,6 +65,21 @@ const swarmRepositoryRateLimited = 'Too many checks. Try again in a minute.';
 bool swarmRateLimited(SuperTabFailure failure) =>
     failure.code == 'RATE_LIMITED' || failure.statusCode == 429;
 
+/// How long a repository may read as `creating` before it counts as stuck:
+/// a server that died mid-create leaves it so (Heron, #3201's security
+/// review). Try again then asks afresh, and a repository made meanwhile
+/// reads as made.
+const swarmRepositoryStuckAfter = Duration(minutes: 5);
+
+/// What a create stuck in `creating` says, with Try again.
+String swarmRepositoryStuck(String owner, String name) =>
+    'Creating $owner/$name is taking too long. Try again.';
+
+/// Whether a repository asked at [at] (milliseconds) and still creating at
+/// [now] is stuck.
+bool swarmRepositoryStuckAt(int at, DateTime now) =>
+    now.millisecondsSinceEpoch - at > swarmRepositoryStuckAfter.inMilliseconds;
+
 /// F11: the project was deleted while the person was in GitHub.
 String swarmRepositoryProjectGone(String owner, String name) =>
     'The project was deleted meanwhile. $owner/$name was still made on '

@@ -773,6 +773,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
+    DateTime Function() now = DateTime.now,
   }) async {
     assert(repositoryUrl != null || newRepository != null);
     for (var running = _running; running != null; running = _running) {
@@ -791,6 +792,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
         files: files,
         live: live,
         machinesOf: machinesOf,
+        now: now,
       );
     } finally {
       _running = null;
@@ -809,6 +811,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
+    required DateTime Function() now,
   }) async {
     void check() {
       if (!live()) throw const SwarmNewProjectGone();
@@ -898,7 +901,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     // keeps the repository it was sent with.
     var url = repositoryUrl;
     if (!_started && _start == null && newRepository != null) {
-      url = await _newRepository(projectId, newRepository, check);
+      url = await _newRepository(projectId, newRepository, check, now);
       read = true;
     }
     if (!_started) {
@@ -1007,6 +1010,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     String projectId,
     SwarmNewRepository asked,
     void Function() check,
+    DateTime Function() now,
   ) async {
     if (_creation case final sent?) {
       await reader.refresh();
@@ -1031,7 +1035,11 @@ class SwarmNewProjectSteps with ChangeNotifier {
           }
           unreachable = outcome['reachable'] == false;
           return made;
-        // Making it now, in the callback (Heron, #3201): as waiting.
+        // Making it now, in the callback (Heron, #3201): as waiting, until
+        // it has been so too long for a live server.
+        case 'creating' when swarmRepositoryStuckAt(sent.at, now()):
+          _creation = null;
+          throw SwarmRepositoryFailure(swarmRepositoryStuck(owner, name));
         case 'waiting' || 'creating':
           throw const SwarmRepositoryWaiting();
         case 'taken':
@@ -2394,10 +2402,13 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     if (_busy || _error != null || steps!.running != null) return;
     final outcome = snapshot.projectById(projectId)?.repositoryCreation;
     final state = outcome?['state'];
+    // Creating goes on by itself only once it is stuck: Try again then.
+    final stuck =
+        state == 'creating' && swarmRepositoryStuckAt(at, widget.now());
     if (outcome?['at'] != at ||
         state is! String ||
         state == 'waiting' ||
-        state == 'creating') {
+        (state == 'creating' && !stuck)) {
       return;
     }
     final key = '$at/$state';
@@ -2471,6 +2482,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         files: _files.files,
         live: () => _live(swarmId, reader),
         machinesOf: (snapshot) => _machinesOf(swarmId, snapshot),
+        now: widget.now,
       );
       if (!mounted || !_live(swarmId, reader)) return;
       // Made, but Harness can't reach it yet (F7): the Product Manager was
