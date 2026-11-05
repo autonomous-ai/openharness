@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/join_machine.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
@@ -121,4 +122,45 @@ void main() {
       expect(_teamOffers(f), hasLength(1));
     },
   );
+
+  group('a failed step shows the person a note', () {
+    test(
+      'a Team account this Mac could not be offered says where to set it up',
+      () async {
+        final f = _computer();
+        // A daemon that cannot say whether the account is wanted.
+        f.connection.teamCheck = null;
+        final notes = <SwarmJoinedMachine>[];
+        final listening = f.app.joinedMachines.listen(notes.add);
+        await _discover(f);
+        expect(notes.map((n) => (n.added, n.teamProblem)), [
+          (true, null),
+          (true, 'Set it up from Machines.'),
+        ]);
+        await listening.cancel();
+      },
+    );
+
+    test('a Swarm joined here that cannot be read says to add this Mac from Machines', () async {
+      final f = _computer();
+      f.connection.backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'UNAVAILABLE',
+        detail: 'The Swarm service is unavailable.',
+        payload: {'status': 503},
+      );
+      final notes = <SwarmJoinedMachine>[];
+      final listening = f.app.joinedMachines.listen(notes.add);
+      await f.app.addMachineOnJoin(tabId, role: 'collaborator');
+      await pumpEventQueue();
+      expect(notes.map((n) => (n.tabId, n.added, n.problem)), [
+        (
+          tabId,
+          false,
+          'Could not reach the Swarm. Add this computer from Machines.',
+        ),
+      ]);
+      await listening.cancel();
+    });
+  });
 }
