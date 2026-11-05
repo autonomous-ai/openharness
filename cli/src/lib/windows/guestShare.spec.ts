@@ -32,8 +32,10 @@ describe('a folder the owner may share', () => {
   it('refuses a root, a system folder, Harness\'s own ProgramData, and another user\'s profile', () => {
     for (const path of [
       'C:\\', 'C:\\Windows', 'C:\\Windows\\System32', 'C:\\Program Files\\App', 'C:\\Program Files (x86)\\App',
-      'C:\\ProgramData\\Harness', 'C:\\ProgramData\\Harness\\Guests', 'C:\\Users\\other\\work', 'C:\\Users\\Public',
-      'C:\\$Recycle.Bin', 'C:\\System Volume Information',
+      'C:\\ProgramData', 'C:\\ProgramData\\Harness', 'C:\\ProgramData\\Harness\\Guests', 'C:\\ProgramData\\HarnessGuests',
+      // The profile-holding folder itself would inherit an ACE into every profile; the guests' own tree is never shared.
+      'C:\\Users', 'C:\\Users\\other\\work', 'C:\\Users\\Public',
+      'C:\\$Recycle.Bin', 'C:\\System Volume Information', 'C:\\Recovery', 'C:\\Boot', 'C:\\PerfLogs',
     ]) {
       expect(code(() => checkGuestSharePath(path, { ownerHome: OWNER })), path).toBe('INVALID_PATH')
     }

@@ -53,6 +53,21 @@ describe('the guest install script', () => {
     expect(install()).toContain("$NODE_SRC = ''")
   })
 
+  it('rewrites the wrapper of every guest set up before this version, so none keeps the old host or PATH', () => {
+    const script = install()
+    expect(script).toContain("Get-ChildItem -LiteralPath $HOSTS -Directory -Filter 'hg_*'")
+    expect(script).toContain("$wrapper = Join-Path $_.FullName 'host.cmd'")
+    expect(script).toContain("$tag = 'gu' + $_.Name.Substring(3)")
+    expect(script).toContain('[IO.File]::WriteAllText($wrapper, $text)')
+  })
+
+  it('writes the version last, so a tree that failed to stage never reads as ready', () => {
+    const script = install()
+    const versionAt = script.indexOf('[IO.File]::WriteAllText($VERSION_FILE')
+    const taskAt = script.indexOf('RegisterTask($TASK_NAME')
+    expect(versionAt).toBeGreaterThan(taskAt)
+  })
+
   it('stops every guest host before a re-run, and stages the new host beside the old one it must not overwrite', () => {
     const script = install()
     expect(script).toContain(`$PTYBIN = Join-Path $BIN ('pty-' + $VERSION)`)
@@ -113,6 +128,10 @@ describe('the guest processor', () => {
     expect(text).toContain('the $op request is not valid')
     expect(text).toContain('the share request is not valid')
     expect(text).toContain('the guest account $user is not here')
+    // The path policy refuses the profile-holding folder and every system root the daemon's own check refuses.
+    expect(text).toContain('the folder that holds every profile cannot be shared')
+    expect(text).toContain('"c:\\programdata"')
+    expect(text).toContain('"c:\\recovery"')
     // A leftover folder from an earlier account of the same name would suffix the new profile; it is cleared first.
     expect(text).toContain('Windows still holds an earlier guest')
     expect(text).toContain('restart this PC, then share with them again')
@@ -131,6 +150,9 @@ describe('the guest processor', () => {
     expect(text).toContain('$PTY_BIN = \'C:\\ProgramData\\HarnessGuests\\bin\\pty-3\\harness-pty.exe\'')
     // Owner: start/stop only; the guest's task cannot be changed by the guest.
     expect(text).toContain('(A;;FRFX;;;" + $OWNER_SID + ")"')
+    // A laptop on battery keeps the guest's host, and a start on battery is allowed (the schema defaults stop it).
+    expect(text).toContain('<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>')
+    expect(text).toContain('<Priority>4</Priority>')
     // A re-run stops the instance still running the old wrapper (old tag, old PATH) before registering the new one.
     expect(text).toContain('if ($running.State -eq 4) { $running.Stop() }')
   })

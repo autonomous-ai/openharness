@@ -488,7 +488,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       await _chooseFolder();
       return;
     }
-    final path = typed.length > 1 && typed.endsWith('/')
+    // The folder itself, whichever separator this machine writes (`/` on macOS and Linux, `\` on Windows).
+    final path = typed.length > 1 && (typed.endsWith('/') || typed.endsWith('\\'))
         ? typed.substring(0, typed.length - 1)
         : typed;
     String? problem;

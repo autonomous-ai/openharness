@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { guestHostHome, guestHostTask, waitForGuestHost } from './guestHostBackend.js'
+import { createGuestHostBackend, guestHostHome, guestHostTask, waitForGuestHost } from './guestHostBackend.js'
 
 const discovery = (instance: string, version: string, protocol: number, pid: number) => JSON.stringify({
   protocol, instance, endpoint: `\\\\.\\pipe\\harness-pty-${instance}`, pid, version,
@@ -34,6 +34,14 @@ describe('a guest host', () => {
     const liveness = { alive: (pid: number) => pid === 22 }
     expect((await waitForGuestHost(home, { user: 'hg_x', waitMs: 0, liveness }))?.instance).toBe('p3-0.5.55-gu0123456789ab')
     expect(await waitForGuestHost(home, { user: 'hg_x', waitMs: 0, liveness: { alive: () => false } })).toBeNull()
+  })
+
+  it('answers an unavailable host, never a throw, when its task cannot start', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'guest-host-task-'))
+    const backend = createGuestHostBackend({ user: 'hg_x', home, startTask: async () => { throw new Error('the task is gone') },
+      list: () => [], waitMs: 0, sleep: async () => {} })
+    expect(await backend.prepare({ ownedPanes: new Map() })).toMatchObject({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE' })
+    backend.dispose()
   })
 
   it('returns null when nothing is published in the window', async () => {

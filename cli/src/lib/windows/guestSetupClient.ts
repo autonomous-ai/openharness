@@ -154,7 +154,8 @@ export function createGuestSetupClient(options: GuestSetupClientOptions): GuestS
       if (known) return known
       const pending = (async () => {
         const request = parseGuestSetupRequest(JSON.stringify({ id: newGuestRequestId(), op: 'ensure', email: address }), parseOptions)
-        const answer = await send(request, timeoutMs)
+        // A first profile may take the one-shot task minutes (lib/windows/guestScript.ts Run-As): wait as a share does.
+        const answer = await send(request, Math.max(timeoutMs, 10 * 60_000))
         expectOk(answer)
         if (!answer.ok) throw new GuestSetupError('REQUEST_FAILED', answer.detail)
         return { user: answer.user, home: answer.home, workspace: answer.workspace }

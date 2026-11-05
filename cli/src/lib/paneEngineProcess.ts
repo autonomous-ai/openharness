@@ -4,7 +4,7 @@
  */
 import type { AgentEngine } from '../engines/types.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
-import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess } from './processTable.js'
+import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
@@ -26,6 +26,8 @@ export async function lookupPaneEngineProcess(
   backend: PaneRootSource,
   runtime: TerminalRuntimeRef,
   engine: AgentEngine,
+  /** The table to read; the machine's own unless a backend holds its own (a guest's host). */
+  readRows: () => Promise<ProcessRow[] | null> = processRows,
 ): Promise<PaneProcessLookup> {
   const label = terminalRuntimeLabel(runtime)
   const rootPid = await backend.rootProcess(runtime)
@@ -34,7 +36,7 @@ export async function lookupPaneEngineProcess(
   // pane was killed counted as active for good. A failed call is still no evidence either way.
   if (rootPid === 'missing') return { ok: false, unknown: false, reason: `${label} has no pane` }
   if (!rootPid) return { ok: false, unknown: true, reason: `${label} could not be resolved` }
-  const rows = await processRows()
+  const rows = await readRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, [rootPid]))
   const process = selectEngineProcess(enrichedRows, rootPid, engine)

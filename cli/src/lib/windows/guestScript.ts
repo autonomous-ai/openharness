@@ -26,7 +26,7 @@ export const WINDOWS_GUEST_SENTINEL = '.harness-guest-privacy'
 export const GUEST_SDDL = {
   root: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x20;;;$guestSid)(A;OICI;0x1200a9;;;$OWNER_SID)"',
   requests: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;$OWNER_SID)"',
-  answers: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;$OWNER_SID)"',
+  answers: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;$OWNER_SID)"',
   records: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;$OWNER_SID)"',
   runtime: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;$OWNER_SID)(A;OICI;0x1200a9;;;$guestSid)"',
 } as const
@@ -131,7 +131,7 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     // SDDL must be built at run time: a single-quoted string would pass "$guestSid" to the ACL parser literally.
     'Set-Folder $ROOT ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x20;;;" + $guestSid + ")(A;OICI;0x1200a9;;;" + $OWNER_SID + ")")',
     'Set-Folder $REQ ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;" + $OWNER_SID + ")")',
-    'Set-Folder $ANS ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")")',
+    'Set-Folder $ANS ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;" + $OWNER_SID + ")")',
     'Set-Folder $REC ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")")',
     // The hosts root is listable by guests, as the macOS guests' home root is: npm stats its way up from a guest's own
     // engines folder (`hosts\<user>\engines`), and a list of `hg_<hex>` names is all it may see — each home inside keeps
@@ -151,7 +151,6 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     `$probeText = "try { [IO.File]::ReadAllText('$SENTINEL') | Out-Null; exit 9 } catch { exit 0 }"`,
     '[IO.File]::WriteAllText($probeNext, $probeText)',
     'Move-Item -LiteralPath $probeNext -Destination $probe -Force',
-    '[IO.File]::WriteAllText($VERSION_FILE, "$VERSION`r`n")',
     "if ($PTY_SRC) {",
     "  Set-Folder $BIN (\"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;\" + $OWNER_SID + \")(A;OICI;0x1200a9;;;\" + $guestSid + \")\")",
     // A setup re-run after an update stages the new host beside the old one (a running host keeps its file open) and
@@ -176,6 +175,16 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     "    try { Copy-Item -LiteralPath $NODE_SRC -Destination $NODEBIN -Recurse -Force } catch { die \"could not stage the Node runtime for guests: $($_.Exception.Message)\" 7 }",
     "    [IO.File]::WriteAllText($nodeMark, \"ok`r`n\")",
     '  }',
+    '}',
+    // Guests that were here before this setup version: their task still runs the wrapper written for the old host and
+    // Node. The task path and its password do not change, and their hosts were stopped above, so the wrapper is rewritten
+    // in place with this version's binary and PATH.
+    "Get-ChildItem -LiteralPath $HOSTS -Directory -Filter 'hg_*' -ErrorAction SilentlyContinue | ForEach-Object {",
+    "  $wrapper = Join-Path $_.FullName 'host.cmd'",
+    '  if (-not (Test-Path -LiteralPath $wrapper)) { return }',
+    "  $tag = 'gu' + $_.Name.Substring(3)",
+    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$tag`"`r`nset `"PATH=$($_.FullName)\\engines;%USERPROFILE%\\.local;$NODEBIN;%PATH%`"`r`n`"$PTYBIN\\harness-pty.exe`" serve --home `"$($_.FullName)`"`r`n"',
+    '  [IO.File]::WriteAllText($wrapper, $text)',
     '}',
     '',
     '# 4. The privacy sentinel: inherited ACL, owned by the owner, checked as a guest on every ensure.',
@@ -210,6 +219,8 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     "try { $folder = $scheduler.GetFolder(\"\\$folderName\") } catch { $folder = $scheduler.GetFolder('\\').CreateFolder($folderName) }",
     "try { [void]$folder.RegisterTask($TASK_NAME, $taskXml, 6, 'SYSTEM', $null, 5, $sddl) }",
     'catch { die "Task Scheduler would not take the guest setup task ($($_.Exception.Message))" 8 }',
+    // Last: a tree that failed to stage must read as "not set up", never as ready.
+    '[IO.File]::WriteAllText($VERSION_FILE, "$VERSION`r`n")',
     'say "the guest setup task $TASK runs as SYSTEM; $OWNER can start it without elevation"',
     'exit 0',
     '',
@@ -267,9 +278,10 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     '  $parts = $path.Substring(3).Split("\\")',
     '  if ($parts.Count -eq 0 -or ($parts | Where-Object { $_ -eq "" -or $_ -eq "." -or $_ -eq ".." -or $_ -match \'[. ]$\' -or $_ -match \'^(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(\\.|$)\' })) { throw "not a plain folder name" }',
     '  $lower = $path.ToLowerInvariant()',
-    '  foreach ($root in @("c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\programdata\\harness", "c:\\`$recycle.bin", "c:\\system volume information")) {',
+    '  foreach ($root in @("c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\programdata", "c:\\`$recycle.bin", "c:\\system volume information", "c:\\recovery", "c:\\boot", "c:\\perflogs")) {',
     '    if ($lower -eq $root -or $lower.StartsWith($root + "\\")) { throw "$path cannot be shared" }',
     '  }',
+    '  if ($parts.Count -eq 1 -and $parts[0] -ieq "Users") { throw "the folder that holds every profile cannot be shared" }',
     '  if ($parts[0] -ieq "Users" -and $parts.Count -ge 2 -and $parts[1] -ine $OWNER -and $parts[1] -notin @("Public", "Default", "Default User", "All Users")) { throw "another user profile cannot be shared" }',
     '  $at = $path',
     '  while ($at -and $at.Length -gt 3) {',
@@ -405,7 +417,8 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     '  <Principals><Principal id="Guest"><LogonType>Password</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>',
-    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>',
+    // A laptop on battery must keep the guest's host, and a start on battery must be allowed: the defaults stop it.
+    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><AllowStartOnDemand>true</AllowStartOnDemand><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority></Settings>',
     '  <Actions Context="Guest"><Exec><Command>cmd.exe</Command><Arguments>__ARGS__</Arguments></Exec></Actions>',
     '</Task>',
     "'@",

@@ -67,7 +67,7 @@ const SYSTEM_ROOTS = [
   'C:\\Windows',
   'C:\\Program Files',
   'C:\\Program Files (x86)',
-  'C:\\ProgramData\\Harness',
+  'C:\\ProgramData',
   'C:\\$Recycle.Bin',
   'C:\\System Volume Information',
   'C:\\Recovery',
@@ -135,6 +135,8 @@ export function checkGuestSharePath(path: string, options: GuestSharePathOptions
   for (const root of SYSTEM_ROOTS) if (within(path, root)) fail('INVALID_PATH', `${root} cannot be shared`)
 
   const relative = path.slice(3).split('\\')
+  // The folder that holds every profile: an ACE there would be inherited by profiles no guest may enter.
+  if (relative.length === 1 && lower(relative[0]!) === 'users') fail('INVALID_PATH', 'the folder that holds every profile cannot be shared')
   if (lower(relative[0]!) === 'users' && relative.length >= 2) {
     const profile = relative[1]!
     if (lower(profile) !== lower(owner)) {

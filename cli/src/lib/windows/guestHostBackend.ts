@@ -75,10 +75,19 @@ export function createGuestHostBackend(options: GuestHostBackendOptions): PtyHos
     home,
     platform: 'win32',
     target: null,
+    // A guest's host is not the daemon's own: its table validates its panes, and it never replaces the machine-wide
+    // process table and signaller the owner's agents rely on.
+    guestHost: true,
     launch: async (hostHome: string) => {
-      await startTask(guestHostTask(options.user))
+      try {
+        await startTask(guestHostTask(options.user))
+      } catch (error) {
+        // A task that is gone (the guest was removed, or sharing is off) is an unavailable host, never a throw out of
+        // a create: the person is told to turn sharing on again.
+        return { unavailable: (error as Error).message || 'the guest host task could not be started', code: 'PTY_HOST_UNAVAILABLE' }
+      }
       const discovery = await waitForGuestHost(hostHome, options)
-      if (!discovery) return { incompatible: 'the guest host did not publish a discovery file' }
+      if (!discovery) return { unavailable: 'the guest host did not publish a discovery file', code: 'PTY_HOST_UNAVAILABLE' }
       return reachPtyHost(hostHome, discovery.instance)
     },
   })
