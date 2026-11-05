@@ -176,6 +176,14 @@ describe('the pulse', () => {
       { conversationId: other, reason: null }, { conversationId: later, reason: 'not before 2099-01-01' }])
   })
 
+  it('counts a blocked task whose agent is gone as Lost, not Held: it waits for an agent first', () => {
+    const { f } = setup()
+    status(f, f.task, f.dev, 'blocked', 'Waiting for the key.')
+    f.group(f.task).liveness = { state: 'orphaned', why: 'removed', since: f.now }
+    expect(pulseOf(f).lost.conversationIds).toEqual([f.task])
+    expect(pulseOf(f).held.count).toBe(0)
+  })
+
   it('gives no hold to a task set for a day already here', () => {
     const { f } = setup()
     const today = open(f, 'Today', { notBefore: new Date(f.now).toISOString().slice(0, 10) })
