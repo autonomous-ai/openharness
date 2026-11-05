@@ -92,13 +92,18 @@ describe('assigning a step', () => {
       f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
       return { f, id, rev }
     }
+    /** The Engineer waits on its review: a post to it then holds the step (#3394: whatever the post says). */
+    const waitsOnReview = (f: ReturnType<typeof stepsFixture>) =>
+      f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.as(f.dev))
 
     it('from the step\'s own agent is kept, in the step\'s chat or the task\'s', () => {
       const a = reviewing()
+      waitsOnReview(a.f)
       post(a.f, a.id, [a.f.dev], a.rev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
       // A reply to the Engineer's message reaches it, so it counts too; a plain post reaches no one since #2963.
       const b = reviewing()
+      waitsOnReview(b.f)
       post(b.f, b.id, [], b.rev)
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
       const asked = b.f.run({ type: 'message.send', conversationId: b.id, text: 'Ready for review.', replyTo: null, recipientIds: [b.rev] } as Command, b.f.as(b.f.dev)).messages[0]!
@@ -107,6 +112,7 @@ describe('assigning a step', () => {
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
       // Named from the task's own chat, once the Reviewer is in it.
       const c = reviewing()
+      waitsOnReview(c.f)
       c.f.run({ type: 'conversation.agent', conversationId: c.f.task, agentId: c.rev, present: true, lead: false })
       post(c.f, c.f.task, [c.f.dev], c.rev)
       expect(c.f.group(c.id).assignment!.toldEngineerAt).toBe(c.f.now)
@@ -122,15 +128,20 @@ describe('assigning a step', () => {
     })
 
     // An existing rule (integration/superTabLiveness.test.ts): a Reviewer's note to a working Engineer keeps no hung Reviewer.
-    it('holds nothing when it\'s a note to an Engineer already working, but a verdict does', () => {
+    // Dee, #3394: its words are not read for a verdict either; a failed check, recorded at the head it read, is the verdict.
+    it('holds nothing when it\'s a note to an Engineer already working, whatever it says; a failed check does', () => {
       const f = reviewing()
       const note = (text: string) => f.f.run({ type: 'message.send', conversationId: f.id, text, replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
       note('Still reading the parser changes.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       note('Ready to merge: Yes, once CI is green.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       note('**Ready to merge: With fixes.** One Important finding.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+      note('Ready to merge: No.')
+      expect(f.f.group(f.id).assignment).not.toHaveProperty('toldEngineerAt')
+      expect(f.f.group(f.id).assignment).not.toHaveProperty('changesRequestedAt')
+      f.f.run({ type: 'conversation.agent', conversationId: f.f.task, agentId: f.rev, present: true, lead: false })
+      f.f.run({ type: 'work.check', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, checkId: f.f.group(f.f.task).checks[0]!.id,
+        passed: false, evidence: 'One Important finding' } as Command, f.f.as(f.rev))
+      expect(f.f.group(f.id).assignment!.changesRequestedAt).toBe(f.f.now)
     })
 
     it('counts whatever it says when the Engineer was waiting on this review, as a Tester\'s verdict has no set form', () => {
@@ -143,12 +154,14 @@ describe('assigning a step', () => {
     // Review of #2659: Engineers often ask by post, "fixed at abc, please re-check", so a hung Reviewer must not stay held.
     it('ends with the Engineer\'s post to it, in the step\'s chat or the task\'s, and its 30 minutes restart', () => {
       const a = reviewing()
+      waitsOnReview(a.f)
       post(a.f, a.id, [a.f.dev], a.rev)
       a.f.tick(60_000)
       post(a.f, a.id, [a.rev], a.f.dev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBeUndefined()
       expect(a.f.group(a.id).assignment).toMatchObject({ status: 'working', progressAt: a.f.now })
       const b = reviewing()
+      waitsOnReview(b.f)
       post(b.f, b.id, [b.f.dev], b.rev)
       b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, present: true, lead: false })
       b.f.tick(60_000)
@@ -766,24 +779,19 @@ describe('an Engineer waiting on its own steps', () => {
 
   // Review of #2744 (Wren2): a Reviewer stays working through the fix round its verdict asked for, waiting on the Engineer's
   // new revision; counting that step held the two on each other, so a hung Engineer was never found.
-  for (const via of ['a post', 'a failed check'] as const) {
-    it(`gets its 30 minutes from a verdict asking for changes by ${via}, while its Reviewer waits on it`, () => {
-      const { f, id, rev, reviewFor, task } = reviewing()
-      reviewFor(8)
-      if (via === 'a post') {
-        f.run({ type: 'message.send', conversationId: id, text: 'Ready to merge: With fixes. One Important.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(rev))
-      } else {
-        f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
-          evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
-      }
-      f.tick(QUIET_RUNNING_MS - MIN)
-      sweepLiveness(f.state, f.now)
-      expect(task()).toMatchObject({ status: 'working' })
-      f.tick(2 * MIN)
-      sweepLiveness(f.state, f.now)
-      expect(task()).toMatchObject({ status: 'lost' })
-    })
-  }
+  // A verdict asking for changes is a failed check (#3394: a post's words are not read).
+  it('gets its 30 minutes from a verdict asking for changes, while its Reviewer waits on it', () => {
+    const { f, rev, reviewFor, task } = reviewing()
+    reviewFor(8)
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
+      evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
+    f.tick(QUIET_RUNNING_MS - MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
 
   // Diego, 2026-11-04 (#2578): a step lost inside the PM's poll left its task recorded as waiting on it, so the same poll woke
   // the PM with a false stall and the Engineer lost its task 30 seconds later instead of after its 30 minutes.
@@ -813,5 +821,172 @@ describe('an Engineer waiting on its own steps', () => {
     const rows = sweepForLead(f.state, f.now)
     expect(rows.filter(r => r.source?.kind === 'work-stalled')).toEqual([])
     expect(f.group(id).liveness).toMatchObject({ state: 'waiting', why: 'review' })
+  })
+})
+
+// Dee, #3394: a verdict records the pull request head it read, and counts only at that head or one with the same patch.
+describe('a verdict at a pull request head', () => {
+  const PR = 'https://github.com/acme/app/pull/7'
+  const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+  const watched = () => {
+    const f = stepsFixture()
+    const reviewer = f.add('reviewer', f.task)
+    // What the task's PR watch read last (store.ts pullRequestSeen).
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p1', at: 1 } } })
+    const check = (group: string, passed: boolean, head?: string) => f.run({ type: 'work.check', conversationId: group,
+      assignmentId: f.group(group).assignment!.id, checkId: f.group(group).checks[0]!.id, passed, evidence: 'Read it', ...head ? { head } : {} } as Command,
+    f.as(reviewer))
+    return { f, reviewer, check }
+  }
+
+  it('records the head the checker read, with its patch, and counts at it', () => {
+    const { f, check } = watched()
+    check(f.task, true, A.toUpperCase())
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+    expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+  })
+
+  it('on a step, records its task\'s pull request', () => {
+    const { f, reviewer, check } = watched()
+    const step = f.step('Review', f.as(f.dev), f.task, [{ description: 'Diff reads right', independent: true }])
+    f.run({ type: 'conversation.agent', conversationId: step, agentId: reviewer, present: true, lead: false })
+    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    check(step, true, A)
+    expect(f.group(step).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+  })
+
+  it('records the head the checker names; an older one does not count', () => {
+    const { f, check } = watched()
+    check(f.task, true, B)
+    const read = f.group(f.task).checks[0]!
+    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: B, stale: A })
+    expect(read.verdicts!.at(-1)).not.toHaveProperty('patch')
+    expect(read).toMatchObject({ passedBy: null, evidence: null })
+  })
+
+  // Security review of #3218 (Warden2), Important 3: the head the watch read last may be a push nobody reviewed. An agent's
+  // verdict naming no head is recorded and said not to count; nothing is refused.
+  it('an agent\'s verdict naming no head is not given the watched head, does not count, and says what to send', () => {
+    const { f, check } = watched()
+    const effects = check(f.task, true)
+    const read = f.group(f.task).checks[0]!
+    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, stale: A })
+    expect(read.verdicts!.at(-1)).not.toHaveProperty('head')
+    expect(read.passedBy).toBeNull()
+    expect(effects.result).toMatchObject({ counts: false })
+    expect(String(effects.result.next)).toContain('head')
+  })
+
+  it('a person\'s verdict naming no head is given the head the watch read last, as the screen showed it', () => {
+    const { f } = watched()
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence: 'Looked at it' } as Command)
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+    expect(f.group(f.task).checks[0]!.passedBy).toBe('person:owner')
+  })
+
+  // Security review of #3218 (Warden2), Important 2: a short head could match a commit ground to share its characters.
+  it('takes a head only as a whole commit id', () => {
+    const { f, check } = watched()
+    for (const head of ['abc', A.slice(0, 7), A.slice(0, 39), 'not-a-sha!', 'g'.repeat(40), 'a'.repeat(41)]) expect(() => check(f.task, true, head)).toThrow()
+  })
+})
+
+// Review of #3218 (Ledger), Important 4: a failure for a head the pull request has moved past asks for no changes.
+describe('a failure at an old head', () => {
+  it('does not hold its Reviewer\'s step waiting for a revision', () => {
+    const f = stepsFixture()
+    const PR = 'https://github.com/acme/app/pull/7'
+    const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'conversation.agent', conversationId: f.task, agentId: rev, present: true, lead: false })
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
+    fail(A)
+    expect(f.group(id).assignment).not.toHaveProperty('changesRequestedAt')
+    fail(B)
+    expect(f.group(id).assignment!.changesRequestedAt).toBe(f.now)
+  })
+})
+
+// Review of #3218 (Ledger, round 3), Important 1: a task from before steps were listed keeps listing none until its PR watch
+// looks its dormant steps up, so a step opened meanwhile never hides the ones before it.
+describe('a step on a task from before step lists', () => {
+  it('leaves its task unlisted; a listed task lists it', () => {
+    const f = stepsFixture()
+    expect(f.group(f.task).stepIds).toEqual([])
+    const first = f.step('Review')
+    expect(f.group(f.task).stepIds).toEqual([first])
+    delete f.group(f.task).stepIds
+    f.step('Test')
+    expect(f.group(f.task)).not.toHaveProperty('stepIds')
+  })
+})
+
+// Review of #3218 (Ledger, round 4), Important 1: with #3399, a failure by someone other than the Engineer brings a handed task
+// back to it. A failure for a head the pull request moved past is no verdict on what is in review: it reopens nothing.
+describe('a failure at an old head on a handed task', () => {
+  it('leaves it handed and tells nobody; a failure at its head brings it back', () => {
+    const f = stepsFixture()
+    const PR = 'https://github.com/acme/app/pull/7'
+    const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+    const rev = f.add('rev', f.task)
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `${B} ${PR}` } as Command, f.as(f.dev))
+    const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
+    const stale = fail(A)
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'review' })
+    expect(f.group(f.task).assignment).not.toHaveProperty('reopened')
+    expect(stale.messages.filter(m => m.recipients.includes(f.dev))).toEqual([])
+    fail(B)
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'working', reopened: expect.objectContaining({ why: expect.any(String) }) })
+  })
+})
+
+// Security review of #3218 (Warden2, round 5) and review round 7 (Ledger): a checker names the base branch it read against, as it
+// names the head: any branch name GitHub takes, never one with a space or a control character.
+describe('a verdict naming its base', () => {
+  const PR = 'https://github.com/acme/app/pull/7', A = 'aaaaaaa1111111111111111111111111111111aa'
+  const watched = (base: string) => {
+    const f = stepsFixture()
+    const rev = f.add('rev', f.task)
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base } } })
+    const check = (fields: Record<string, string>) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: true, evidence: 'Read it', ...fields } as Command, f.as(rev))
+    return { f, check }
+  }
+
+  it('is recorded with it, for any branch name', () => {
+    for (const base of ['release/1.2', 'release+hotfix', 'feature/修正', 'user@{x}']) {
+      const { f, check } = watched(base)
+      check({ head: A, base })
+      expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base, patch: 'p' })
+      expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+    }
+  })
+
+  it('is refused only as no branch name at all', () => {
+    const { check } = watched('main')
+    for (const base of ['', 'a b', 'x\ny', 'tab\there', 'z'.repeat(256)]) expect(() => check({ head: A, base })).toThrow()
+  })
+
+  it('naming none, does not count, and the result asks for the base', () => {
+    const { f, check } = watched('main')
+    const effects = check({ head: A })
+    expect(f.group(f.task).checks[0]!.passedBy).toBeNull()
+    expect(effects.result).toMatchObject({ counts: false })
+    expect(String(effects.result.next)).toContain('base')
+  })
+
+  it('from a person naming neither, gets the head and base the watch read last', () => {
+    const { f } = watched('main')
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence: 'Looked at it' } as Command)
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base: 'main', patch: 'p' })
+    expect(f.group(f.task).checks[0]!.passedBy).toBe('person:owner')
   })
 })

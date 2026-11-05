@@ -71,7 +71,7 @@ Future<void> _showWork(
                   ),
                   if (check['evidence'] is String)
                     SuperTabMessageText(check['evidence'] as String),
-                  Text(check['passedBy'] == null ? 'Not verified' : 'Verified'),
+                  Text(superTabCheckLabel(check)),
                   if (c.canWrite && assignment != null)
                     TextButton(
                       onPressed: c.saving || c.hasPendingAction
@@ -184,4 +184,49 @@ Future<void> _record(
       ),
     ),
   );
+}
+
+/// A check's line (Dee, #3394): a verdict counts only at the pull request
+/// head it read, so a pass names that head, and a check whose verdicts all
+/// stopped counting says why: a newer head, no head named, or its pull
+/// request's head not read yet. Verdicts on a task with no watched head read
+/// as they did (backend checkVerdicts.ts).
+String superTabCheckLabel(Map<String, dynamic> check) {
+  final verdicts = (check['verdicts'] as List? ?? const [])
+      .whereType<Map>()
+      .toList();
+  String short(Object? head) =>
+      head is String && head.length > 7 ? head.substring(0, 7) : '$head';
+  final passedBy = check['passedBy'];
+  if (passedBy != null) {
+    final pass = verdicts.lastWhere(
+      (v) => v['by'] == passedBy && v['passed'] == true && v['stale'] == null,
+      orElse: () => const {},
+    );
+    return pass['head'] is String
+        ? 'Yes at ${short(pass['head'])}'
+        : 'Verified';
+  }
+  if (verdicts.any((v) => v['stale'] == null)) return 'Not verified';
+  final stale = verdicts.lastWhere(
+    (v) => v['stale'] is String,
+    orElse: () => const {},
+  );
+  if (stale.isEmpty) return 'Not verified';
+  // Same head, another target branch (security review of #3218): the diff it
+  // read was against the branch it names.
+  if (stale['head'] is String && stale['head'] == stale['stale']) {
+    if (stale['base'] is! String) {
+      return 'Stale: read ${short(stale['head'])}, no base named';
+    }
+    return 'Stale: read ${short(stale['head'])} against ${stale['base']}, '
+        'PR targets another branch';
+  }
+  final read = stale['head'] is String
+      ? 'read ${short(stale['head'])}'
+      : 'no head named';
+  final now = (stale['stale'] as String).isEmpty
+      ? 'PR head not read yet'
+      : 'PR is at ${short(stale['stale'])}';
+  return 'Stale: $read, $now';
 }
