@@ -92,7 +92,8 @@ typedef enum {
     STOP,
     MODELS,
     MESSAGE,
-    OTA
+    OTA,
+    SWARM_PICK
 } view_t;
 typedef enum {
     A_NONE,
@@ -107,6 +108,7 @@ typedef enum {
     A_TAB_LIST,
     A_INBOX,
     A_SIDE_PM, A_SIDE_BUDDY,
+    A_PICK_PERSONAL, A_PICK_TEAM,
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
@@ -249,6 +251,7 @@ static EXT_RAM_BSS_ATTR struct {
     unsigned bell_unread;     // the bell's count at the last home render, to see a notice arrive
     uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (the pet's alert bubble)
     ht_focus_working_pick_t working_pick;   // which working scene the shown agent's pet plays (Claude: chef or builder)
+    uint32_t pick_until;    // when the Personal | Team picker (SWARM_PICK) returns to the face for want of a touch (clock_ms), 0 = never
     uint32_t timer_at;      // when the working line's elapsed text next changes (ms() clock), 0 = never (elapsed.h)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
@@ -596,6 +599,7 @@ enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERT
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
 static EXT_RAM_BSS_ATTR struct {
     char tab[ID_MAX], lead[ID_MAX];   // the Swarm the dial is in ("" in a desk tab) and the Lead on its face
+    char last_team[ID_MAX];           // the last non-Personal card on the face: where Team goes (spec 2026-11-05)
     char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
@@ -734,6 +738,7 @@ static void swarm_show(const ht_supertab_t *t, int i, bool select)
         return;
     }
     COPY(sw.lead, t->leads[i].id); sw.at = i; sw.retried = false;
+    if (!t->personal) COPY(sw.last_team, t->id);
     ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
     if (select) {
         swarm_send(SUPERTAB_SELECT, t->id, sw.lead);
@@ -794,6 +799,46 @@ static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
     if (i < 0) i = swarm_lead_index(t, swarm_remembered(t->id));
     swarm_show(t, i < 0 ? 0 : i, select);
     view(HOME);
+}
+/*
+ * PERSONAL | TEAM (spec 2026-11-05): the picker opens from the project name only when the dial holds the reader's Personal
+ * card and at least one other. Team is the last non-Personal card on the face, else the first in list order.
+ */
+static bool swarm_pick_ok(void)
+{
+    bool personal = false, team = false;
+    if (!swarm_mode()) return false;
+    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
+        if (ht_supertabs_at(&swarm, i)->personal) personal = true; else team = true;
+    }
+    return personal && team;
+}
+static bool swarm_pick_open(void)
+{
+    if (s.view != HOME || !swarm_pick_ok()) return false;
+    s.pick_until = ms() + 5000; if (!s.pick_until) s.pick_until = 1;
+    view(SWARM_PICK);
+    return true;
+}
+static const ht_supertab_t *swarm_pick_target(bool team)
+{
+    const ht_supertab_t *first = NULL;
+    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
+        const ht_supertab_t *t = ht_supertabs_at(&swarm, i);
+        if (t->personal != !team) continue;
+        if (!team) return t;
+        if (!first) first = t;
+        if (!strcmp(t->id, sw.last_team)) return t;
+    }
+    return first;
+}
+// A half tapped: the other Swarm opens as a tab pick does (swarm_enter, the desktop follows); the filled half only returns.
+static void swarm_pick(bool team)
+{
+    const ht_supertab_t *t = swarm_pick_target(team), *here = swarm_here();
+    s.pick_until = 0;
+    if (!t || t == here) { view(HOME); return; }
+    swarm_enter(t, NULL, true);
 }
 /*
  * TABS lists exactly the desk tabs, as the desktop shows them (Diego, 2026-10-27). A desk tab linked to a Swarm keeps
@@ -1277,6 +1322,7 @@ static void surface_tick(uint32_t now)
     if (s.pet_next_ms && (((s.view == HOME || s.view == AGENT) && !s.touch_down) || s.view == VOICE) &&
         (int32_t)(now - s.pet_next_ms) >= 0) { s.pet_next_ms = 0; change(); }
     if (s.timer_at && (s.view == HOME || s.view == AGENT) && (int32_t)(now - s.timer_at) >= 0) { s.timer_at = 0; change(); }
+    if (s.view == SWARM_PICK && s.pick_until && !s.touch_down && (int32_t)(now - s.pick_until) >= 0) { s.pick_until = 0; view(HOME); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !display_is_asleep() &&
         ((main && s.connected && !s.loading) || s.view == VOICE);
@@ -1409,20 +1455,37 @@ static void face_buddy_ring(ht_scene_t *f)
  * THE PM | BUDDY PAIR (spec 2026-11-05): a dark pill 180 x 44 px at y 388 with two equal halves, the current side's filled.
  * A tap on the other half shows that side. Four runs always (pill, current half, two labels), and the two hits.
  */
-static void swarm_pair(ht_scene_t *f, bool buddy)
+// One dark pill of two equal halves, the `right_on` one filled: a pill, the filled half, two labels (four runs).
+static void pill2(ht_scene_t *f, int x, int y, int w, int h, const char *left, const char *right, bool right_on)
 {
-    enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2, INSET = 3 };
+    enum { INSET = 3 };
     const ht_font_t *font = &ht_lv_inter_20.base;
     uint16_t pill = color(0x141518), edge = color(0x2e3035), on = color(0x2b2d33), white = color(0xffffff), grey = color(0x9a9ca3);
-    ht_box(f, X, Y, W, H, H / 2, pill, edge);
-    ht_box(f, X + (buddy ? HALF : 0) + INSET, Y + INSET, HALF - 2 * INSET, H - 2 * INSET, (H - 2 * INSET) / 2, on, on);
-    const char *names[2] = {"PM", "Buddy"};
+    int half = w / 2;
+    ht_box(f, x, y, w, h, h / 2, pill, edge);
+    ht_box(f, x + (right_on ? half : 0) + INSET, y + INSET, half - 2 * INSET, h - 2 * INSET, (h - 2 * INSET) / 2, on, on);
+    const char *names[2] = {left, right};
     for (int k = 0; k < 2; k++) {
-        int w = ht_measure(font, names[k]), cur = (k == 1) == buddy;
-        ht_text(f, X + k * HALF + (HALF - w) / 2, Y + (H - font->height) / 2, w, font, cur ? white : grey, cur ? on : pill, names[k]);
+        int tw = ht_measure(font, names[k]), cur = (k == 1) == right_on;
+        ht_text(f, x + k * half + (half - tw) / 2, y + (h - font->height) / 2, tw, font, cur ? white : grey, cur ? on : pill, names[k]);
     }
+}
+static void swarm_pair(ht_scene_t *f, bool buddy)
+{
+    enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2 };
+    pill2(f, X, Y, W, H, "PM", "Buddy", buddy);
     s.hits[s.hit_count++] = (hit_t){{X, Y, HALF, H}, A_SIDE_PM, 0, true};
     s.hits[s.hit_count++] = (hit_t){{X + HALF, Y, HALF, H}, A_SIDE_BUDDY, 0, true};
+}
+// The Personal | Team picker: "Swarm" on the top arc and one 200 x 44 pill at y 211, the half of the Swarm on the face filled.
+static void render_swarm_pick(ht_scene_t *f)
+{
+    enum { X = 133, Y = 211, W = 200, H = 44, HALF = W / 2 };
+    const ht_supertab_t *t = swarm_here();
+    ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
+    pill2(f, X, Y, W, H, "Personal", "Team", !(t && t->personal));
+    s.hits[s.hit_count++] = (hit_t){{X, Y, HALF, H}, A_PICK_PERSONAL, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y, HALF, H}, A_PICK_TEAM, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -2697,6 +2760,9 @@ bool habitat_scene_take(ht_scene_t *f)
     case HOME:
         render_home(f);
         break;
+    case SWARM_PICK:
+        render_swarm_pick(f);
+        break;
     case AGENTS:
         render_agents(f);
         break;
@@ -3019,6 +3085,7 @@ static void dispatch(action_t a)
         view(HOME);
         break;
     case A_AGENTS: {
+        if (swarm_pick_open()) break;   // a Swarm face with a Personal and a Team card: the picker, else PANES
         view(AGENTS);
         if (swarm_here()) { ht_tab_carousel_reset(&pane_carousel, swarm_here()->lead_n, sw.at); break; }
         ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
@@ -3079,6 +3146,10 @@ static void dispatch(action_t a)
         break;
     case A_INBOX:
         notice_open();
+        break;
+    case A_PICK_PERSONAL:
+    case A_PICK_TEAM:
+        if (s.view == SWARM_PICK) swarm_pick(a.kind == A_PICK_TEAM);
         break;
     case A_SIDE_PM:
     case A_SIDE_BUDDY:
@@ -3652,6 +3723,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         s.start_x = x;
         s.start_y = y;
         s.touch_started = now;
+        if (s.view == SWARM_PICK) { s.pick_until = now + 5000; if (!s.pick_until) s.pick_until = 1; }
         if (question_view(s.view)) s.q.drag=0;
         s.draft_drag = 0;
         s.tab_drag = 0;
@@ -3989,7 +4061,7 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
+    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.view == SWARM_PICK ? s.pick_until : 0,
                             s.voice_retry_until};
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
