@@ -63,6 +63,33 @@ These change the plan above where they differ.
   - idle hours: `now - asleep.since` while asleep;
   - free disk: `machines[].observation.resources.projectDiskFreeBytes ?? diskFreeBytes`.
 
+### After the security reviews (Curlew3, SecKeep)
+
+- **A move stays within its account kind.** A member in a Team account, or one in Team-written work, moves only to a Team
+  account. A main-account member moves only to a main account. With no such machine, it stays put and says so once. A
+  take-over never joins a conversation the new session is barred from, and marks what a Team session joins
+  (`barredFromTeamWritten`, `markTeamWritten`).
+- **A member in a Team account doesn't sleep.** There, the core's only member close deletes the session's own data
+  (`inCore/agents.ts ended`, `teamPurge.ts`), so a wake couldn't resume in place. Such a member stays awake under the
+  crew keep-alive. **Follow-up for the PM:** a member close that keeps the session needs a `cli/src/core` change,
+  outside this task's owned paths.
+- **A machine whose move start failed** (no token, no room) isn't picked for that member again for an hour
+  (`crewMoveRefused`). The move's start skips agent.start's repository-reach and push-origin checks; this wait keeps a
+  machine that can't reach the repository from being retried every sweep.
+- **Branch pruning covers only branches this member's own folder was on** (its HEAD's history). A person's own branches
+  and other agents' in the shared clone are never touched.
+- **A dropped folder is remembered on disk**, so a wake after a host restart still brings it back.
+- **Accepted as is:**
+  - A move's start is recorded as asked by the target machine's contributor, as the PM's own start is (leadStart.ts).
+    No system actor exists for starts, and their grant check at `agent.started` uses it.
+  - Server moves follow the server's rules (Team accounts, room, engines, project scope). They don't read the project's
+    free-text routing instructions, such as "no Codex on this Mac", which the server enforces nowhere. A machine kept
+    from a project (`machine.projects`) is enforced by `admitMachineStart`.
+  - Waking clears `asleep` whatever closed the session meanwhile. For crew, any closed session is reopened by the
+    keep-alive anyway, and removing an agent removes its record.
+  - The old agent removed by a take-over is not brought back when its machine returns, because `removeAgent` drops its
+    restore record.
+
 ## Global Constraints
 
 - **Owns:** `backend/src/superTabs/`, `backend/src/worker.ts` (unchanged by this plan) and `cli/src/superTabs/`.
