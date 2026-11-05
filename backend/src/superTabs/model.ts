@@ -264,7 +264,10 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
 export interface PullRequestHead { head: string; patch: string | null; at: number
   /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
    *  (security review of #3218, round 3). Absent on a head recorded before. */
-  base?: string }
+  base?: string
+  /** The branch this head was first seen merging into, while it was retargeted since and the head stayed the same: what a
+   *  verdict naming no base learns (security review of #3218, round 5). Absent while it was not retargeted. */
+  firstBase?: string }
 export interface Assignment {
   id: string
   agentId: string

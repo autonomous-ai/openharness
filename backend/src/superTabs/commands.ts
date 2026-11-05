@@ -423,7 +423,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
   // `head`: the whole commit id of the pull request head the checker read (#3394; never shortened, security review of #3218).
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text,
-    head: z.string().regex(/^[0-9A-Fa-f]{40}$/).transform(head => head.toLowerCase()).optional() }).strict(),
+    head: z.string().regex(/^[0-9A-Fa-f]{40}$/).transform(head => head.toLowerCase()).optional(),
+    // `base`: the branch the checker read the pull request's diff against, when it was retargeted since its head was first seen
+    // (security review of #3218, round 5). Without it, the base that head was first seen at.
+    base: z.string().regex(/^[A-Za-z0-9._\/-]{1,255}$/).optional() }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -4002,12 +4005,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const watched = pullRequest ? heads?.[pullRequest]?.head : undefined
       const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
       const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
-        ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {} }, accountable ? departed : undefined, heads)
+        ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {}, ...head && command.base ? { base: command.base } : {} }, accountable ? departed : undefined, heads)
       const recorded = check.verdicts!.at(-1)!, counts = recorded.stale === undefined
       result.counts = counts
       if (!counts) {
         const now = recorded.stale ? `It is at ${recorded.stale.slice(0, 7)}.` : 'Its head is not read yet.'
-        result.next = head ? `This verdict is for ${head.slice(0, 7)}, not the pull request's head. ${now} Check its head and send it as head.`
+        const current = pullRequest ? heads?.[pullRequest] : undefined
+        result.next = head && current?.head === head && recorded.base !== current.base
+          ? `This head was read against ${recorded.base}, and the pull request now merges into ${current.base}: it counts on ${recorded.base} only. If you read it against ${current.base}, send base ${current.base}.`
+          : head ? `This verdict is for ${head.slice(0, 7)}, not the pull request's head. ${now} Check its head and send it as head.`
           : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. ${now}`
       }
       const first = !earlier

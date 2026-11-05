@@ -62,7 +62,9 @@ export function keepHead(heads: PullRequestHeads | undefined, url: string, entry
  *  so a later base (a retarget) never replaces the one its head was first seen at. */
 function learnPatch(verdict: CheckVerdict, known: PullRequestHead | undefined): void {
   if (!verdict.head || !known || !sameHead(known.head, verdict.head)) return
-  if (verdict.base === undefined && known.base !== undefined) verdict.base = known.base
+  // The base its head was first seen at (security review of #3218, round 5): a retarget while the review ran is not what it read.
+  const first = known.firstBase ?? known.base
+  if (verdict.base === undefined && first !== undefined) verdict.base = first
   // Only a patch read against its own base: the id names the base, so another base's is another diff.
   if (verdict.base !== undefined && known.base !== undefined && verdict.base !== known.base) return
   if (!verdict.patch && known.patch) verdict.patch = known.patch

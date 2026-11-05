@@ -4717,8 +4717,10 @@ export class SuperTabStore {
           group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
         }
         // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
+        // A retarget at the same head keeps the base that head was first seen at (security review of #3218, round 5).
+        const firstBase = known?.head === watch.head ? known.firstBase ?? known.base : undefined
         group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
-          at: patch === undefined ? 0 : now }, group.pullRequestUrls)
+          at: patch === undefined ? 0 : now, ...firstBase !== undefined && firstBase !== watch.base ? { firstBase } : {} }, group.pullRequestUrls)
         for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }
