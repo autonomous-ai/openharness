@@ -1259,7 +1259,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
   // Amon, 11-05 (#3215): his Mac's entry was moved into the Swarm by the server (backend computerMoves.ts), so this daemon kept
   // no host record and never started its host: the Team account it should add sat "joining" for good, and nothing was sent.
   it('allows Team restart only from its local owner and only for a manual setup request', async () => {
-    const offer = vi.fn(async () => ({ state: 'started' }))
+    const offer = vi.fn(async () => ({ state: 'started' as const }))
     const service = superTabService(fakeCore(), { teamSetup: vi.fn(async () => ({ offer, decline: vi.fn() })) })
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual', restart: true }, owner)
     expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false, restart: true })

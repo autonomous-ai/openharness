@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
 
 import 'support/capture.dart';
@@ -121,6 +122,7 @@ String? _problemText(WidgetTester tester, String id) =>
     tester.widget<Text>(_problem(id)).data;
 
 void main() {
+  setUpAll(() => loadCaptureFonts(Platform.environment['TEAM_RESTART_SHOTS']));
   testWidgets(
     'a Mac and its Harness Team account are one row, with every agent of both under it',
     (tester) async {
@@ -330,50 +332,89 @@ void main() {
     },
   );
 
-  testWidgets('an offline Team account offers its local owner Restart through the standard setup flow', (tester) async {
-    final shots = Platform.environment['TEAM_RESTART_SHOTS'];
-    await loadCaptureFonts(shots);
-    final daemon = _TeamDaemon()..status = {'ok': true, 'state': 'exists'};
-    final app = createApp(connectionForTest: (_) => daemon, connected: true)..teamAccountHereForTest = true;
-    app.machineStates['m']!.localOnly = true;
-    Future<void> mount({String account = 'owner', String id = 'm', bool hostOffline = false, Brightness brightness = Brightness.light}) async {
-      final server = _swarm();
-      server.state['machines'] = [
-        _pool(id, contributor: 'owner', age: hostOffline ? _offlineAge : 0),
-        _pool('$id-team', contributor: 'owner', host: id, age: _offlineAge, teamWork: _refused('MACHINE_OFFLINE')),
-      ];
-      final c = server.controller(account: account);
-      await c.refresh();
-      await tester.pumpWidget(MaterialApp(theme: ThemeData(brightness: brightness), home: Scaffold(body:
-        SuperTabMachines(controller: c, app: app, onAddAgent: (_) {}))));
-      await tester.pumpAndSettle();
-      final button = find.byKey(ValueKey('super-machine-team-setup-$id'));
-      if (account == 'owner' && id == 'm' && !hostOffline) {
-        expect(_problemText(tester, id), "Teammates' agents paused: Harness Team account offline");
-        expect(find.descendant(of: button, matching: find.text('Restart')), findsOneWidget);
-        expect(tester.widget(button), isA<OutlinedButton>());
-        await captureWindow(tester, shots, 'team-offline-${brightness.name}');
-        await tester.tap(button);
+  testWidgets(
+    'an offline Team account offers its local owner Restart through the standard setup flow',
+    (tester) async {
+      final shots = Platform.environment['TEAM_RESTART_SHOTS'];
+      final previousBrightness = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = previousBrightness);
+      final daemon = _TeamDaemon()..status = {'ok': true, 'state': 'exists'};
+      final app = createApp(connectionForTest: (_) => daemon, connected: true)
+        ..teamAccountHereForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      Future<void> mount({
+        String account = 'owner',
+        String id = 'm',
+        bool hostOffline = false,
+        Brightness brightness = Brightness.light,
+      }) async {
+        grid.AppTheme.brightness.value = brightness;
+        final server = _swarm();
+        server.state['machines'] = [
+          _pool(id, contributor: 'owner', age: hostOffline ? _offlineAge : 0),
+          _pool(
+            '$id-team',
+            contributor: 'owner',
+            host: id,
+            age: _offlineAge,
+            teamWork: _refused('MACHINE_OFFLINE'),
+          ),
+        ];
+        final c = server.controller(account: account);
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        );
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('team-account-setup-continue')));
-        await tester.pumpAndSettle();
-        expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {
-          'action': 'teamSetup', 'reason': 'manual', 'restart': true,
-        });
-        await tester.tap(find.byKey(const Key('team-account-setup-done')));
-        await tester.pumpAndSettle();
-      } else {
-        expect(button, findsNothing);
+        final button = find.byKey(ValueKey('super-machine-team-setup-$id'));
+        if (account == 'owner' && id == 'm' && !hostOffline) {
+          expect(
+            _problemText(tester, id),
+            "Teammates' agents paused: Harness Team account offline",
+          );
+          expect(
+            find.descendant(of: button, matching: find.text('Restart')),
+            findsOneWidget,
+          );
+          expect(tester.widget(button), isA<OutlinedButton>());
+          await captureWindow(tester, shots, 'team-offline-${brightness.name}');
+          await tester.tap(button);
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const Key('team-account-setup-continue')),
+          );
+          await tester.pumpAndSettle();
+          expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {
+            'action': 'teamSetup',
+            'reason': 'manual',
+            'restart': true,
+          });
+          await tester.tap(find.byKey(const Key('team-account-setup-done')));
+          await tester.pumpAndSettle();
+        } else {
+          expect(button, findsNothing);
+        }
+        await _unmount(tester, c);
       }
-      await _unmount(tester, c);
-    }
-    await mount();
-    await mount(brightness: Brightness.dark);
-    await mount(account: 'peer');
-    await mount(id: 'remote');
-    await mount(hostOffline: true);
-    app.dispose();
-  });
+
+      await mount();
+      await mount(brightness: Brightness.dark);
+      await mount(account: 'peer');
+      await mount(id: 'remote');
+      await mount(hostOffline: true);
+      app.dispose();
+    },
+  );
 
   // Scholes, 2026-10-29: a Mac whose person cancelled the password prompt, or whose setup failed, said only "not set up".
   testWidgets(

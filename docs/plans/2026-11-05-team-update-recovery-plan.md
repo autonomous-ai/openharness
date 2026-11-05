@@ -45,29 +45,33 @@
 **Files:** `cli/src/team/script.ts`, `cli/src/team/script.spec.ts`, `cli/src/team/refresh.ts`, `cli/src/team/refresh.spec.ts`; update command integration only if the traced cause requires it.
 **Interfaces:** existing `teamLaunchdPlist`, `TEAM_JOB_WRAPPER`, `teamUpdateArgv`; no new public command.
 
-- [ ] Trace stop, stage, relaunch and launchd exit handling; record the exact failing path.
-- [ ] Commit a regression simulating that update through isolated fake processes and temporary files; prove daemon availability afterward and intentional-stop behavior. Watch it fail.
-- [ ] Commit the smallest lifecycle correction; run affected Team lifecycle tests and typecheck.
+- [x] Trace stop, stage, relaunch and launchd exit handling. The owner refresh runs update in a shell hosted by the Team daemon that update stops; closing that process group reproduces the interrupted update. Keep the updater independent before acknowledging its launch; preserve intentional-stop semantics and failure-only launchd policy.
+- [x] Commit a regression simulating that update through isolated fake processes and temporary files; prove daemon availability afterward and intentional-stop behavior. Watch it fail.
+- [x] Commit the smallest lifecycle correction; run affected Team lifecycle tests and typecheck.
 
 ## Task 2: Finish handed sign-in isolation
 
 **Files:** `cli/src/team/command.ts`, `cli/src/team/command.spec.ts`, `cli/src/team/handoff.ts`; `cli/src/lib/e2ee/accountTrust.ts` and its spec, `cli/src/gateway/start.ts` for the departing-stash policy.
 **Interfaces:** existing `TeamCommandDeps.get/updateSession`, `teamSession`, `switchAccountTrust`; integrate prerequisite #3159 before changing its handed epoch.
 
-- [ ] Commit failing cases for account pin after redemption, failed lookup, and epoch replacement during lookup; observe failures.
-- [ ] Pin auth/me's account using the redeemed token and exact sign-in epoch; preserve sign-in on lookup failure. Commit green code.
-- [ ] Commit failing temporary-store cases for Team owner switch deleting the departing stash and preserving ordinary account stash/identity/device pairings; observe failures.
-- [ ] Implement the Team-specific discard policy outside core; commit green code and run affected trust and handoff specs.
+- [x] Commit failing cases for account pin after redemption, failed lookup, and epoch replacement during lookup; observe failures.
+- [x] Pin auth/me's account using the redeemed token and exact sign-in epoch; preserve sign-in on lookup failure. Commit green code.
+- [x] Commit failing temporary-store cases for Team owner switch deleting the departing stash and preserving ordinary account stash/identity/device pairings; observe failures.
+- [x] Implement the Team-specific discard policy outside core; commit green code and run affected trust and handoff specs.
 
 ## Task 3: Offline row Restart
 
 **Files:** `desktop/lib/super_tabs/machines.dart`, `desktop/test/super_tab_team_machine_test.dart`, relevant existing setup widget fixtures.
-**Interfaces:** existing machine view setup action and AppNotifier setup flow; Restart invokes the same password-protected setup without replacing a valid sign-in.
+**Interfaces:** add an optional local-owner-only `restart` flag through `AppNotifier.setUpTeamAccount`, the existing setup dialog, `superTabs/service.ts`, and `TeamAutoSetup.offer`; Restart invokes the same password-protected setup without replacing a valid sign-in.
 
-- [ ] Post the ASCII mockup to Amon and notify his Buddy; record his yes.
-- [ ] Commit failing widget cases for local-owner offline reason + Restart, no action for remote/other-owner/offline-host cases, and standard button invoking setup; observe failures.
-- [ ] Implement approved copy/action with existing standard button; commit green code.
-- [ ] Run affected macOS Flutter tests and capture light/dark fixtures using memory state and fake sign-in.
+- [x] Post the ASCII mockup to Amon and notify his Buddy; Amon replied "ok" on 2026-11-05 before Desktop implementation.
+- [x] Commit failing widget cases for local-owner offline reason + Restart, no action for remote/other-owner/offline-host cases, and standard button invoking setup; observe failures.
+- [x] Implement approved copy/action with existing standard button; commit green code.
+- [x] Run affected macOS Flutter tests and capture light/dark fixtures using memory state and fake sign-in.
+
+## Added scope from the PM
+
+River requested that status reflect a Team sign-in that no longer works. Regressions cover a missing session at daemon startup and loss during observation, replacing historical success with signed-out.
 
 ## Completion
 

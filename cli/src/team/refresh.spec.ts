@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { validCreationId } from '../lib/agentCreationReceipt.js'
 import type { TeamConfig } from './config.js'
 import type { TeamStatus } from './privacy.js'
@@ -125,7 +126,7 @@ const watch = fs.watch(root, finish);
 fs.writeFileSync(root + '/ready', String(process.pid));
 finish();`)
   const argv = teamUpdateArgv({ node: process.execPath, cli, home: dir }, 'darwin')
-  const host = spawn(argv[0]!, argv.slice(1), { detached: true, stdio: 'ignore', env: { ...process.env, TEAM_TEST_ROOT: dir } })
+  const host = spawn(argv[0]!, argv.slice(1), { ...ownProcessGroup(), stdio: 'ignore', env: { ...process.env, TEAM_TEST_ROOT: dir } })
   let updater: number | null = null
   try {
     await vi.waitFor(() => expect(existsSync(join(dir, 'ready'))).toBe(true), { timeout: 5000 })
