@@ -1,4 +1,4 @@
-import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
@@ -605,6 +605,9 @@ export interface CommandContext {
 
 /** What an agent's post that reached no agent tells its sender, in the result every CLI prints (Egret6's review of #2963):
  *  since #2963 an unnamed post outside a task's assignee reaches no one, and a sender that meant someone to act would not know. */
+/** Said in a post's result when it went out without agents it named that may not join Team-written work (teamWritten.ts mayName). */
+export const notReachedLine = (names: string[]): string => `Your post was delivered, but not to ${names.join(', ')}: a Harness Team agent wrote this task's code, so an agent in the main account may not join it. `
+  + 'Nothing is wrong with your post or with you. Ask the PM to hand the work on, or name an agent in a Team account.'
 export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
@@ -3404,8 +3407,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const poster = actor.kind === 'agent' ? agent(state, actor.agentId) : null
       const textNamed = poster && !command.agentOnly
         ? agentsNamedIn(state, group, command.text, names).filter(id => mayName(state, group, poster, agent(state, id))) : []
-      const addressed = command.agentOnly || !poster ? command.recipientIds
+      const asked = command.agentOnly || !poster ? command.recipientIds
         : [...new Set([...command.recipientIds, ...textNamed])].filter(id => id !== poster.id)
+      // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2). An
+      // agent that may not join Team-written work is left out of the post, which goes out without it, and the result names it:
+      // refusing the whole post read as being about the sender (Heron21, #3245).
+      const barred = poster && !command.agentOnly ? asked.filter(id => !mayName(state, group, poster, agent(state, id))) : []
+      const addressed = asked.filter(id => !barred.includes(id))
       const assigned = activeWork(group) ? group.assignment!.agentId : null
       const toAssignee = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned && assigned !== actor.agentId
         && group.agentIds.includes(assigned) ? assigned : null
@@ -3439,8 +3447,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])]
       for (const id of recipients) {
         const target = agent(state, id)
-        // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
-        if (poster && addressed.includes(id)) requireNameable(state, group, poster, target)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
@@ -3463,6 +3469,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
+      if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
