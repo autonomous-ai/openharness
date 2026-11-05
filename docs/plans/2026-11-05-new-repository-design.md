@@ -182,7 +182,7 @@ covers it, with **Try again**.
 | F8 | Person cancels sign-in, or the link is over 10 minutes old | Callback | "Nothing was created." Back in the sheet: **Try again**. |
 | F9 | Network, or GitHub is down | Backend call | "GitHub didn't answer. Nothing was created." **Try again**. |
 | F10 | Create succeeded but Harness lost the answer (timeout, server restart) | Next try | Try again finds the name taken by a repository this person created through Harness in the last 10 minutes. That counts as created, not F2. |
-| F11 | Project deleted while they were in GitHub | Callback | "The project was deleted meanwhile. acme/notes was still made on GitHub." The repository is never deleted by Harness. |
+| F11 | Project deleted while they were in GitHub | Callback, before creating | "The project was deleted meanwhile. Nothing was created." The callback checks the ask is still current before it calls GitHub. A newer ask makes an older link read as expired, and nothing is created. |
 | F12 | Swarm paused, no machine for the PM | Sheet, before anything is created (existing checks) | The existing blocked notes. Nothing is created on GitHub. |
 
 ## Mockups

@@ -95,6 +95,43 @@ runs in CI with the repository's secrets, so a branch an agent pushes can run co
 with them; the default branch's pull request rule (below) still keeps such a change
 from reaching the default branch unreviewed.
 
+### New repositories from New Project
+
+New Project's **New repository** creates a project's repository in an organization
+(`docs/plans/2026-11-05-new-repository-design.md`). It needs one more repository
+permission on the app: **Repository creation: Read and write**. Never grant
+**Administration**: it also lets a token delete or transfer repositories.
+
+1. On the app's settings page (**Permissions & events**), set **Repository creation**
+   to **Read and write** and click **Save changes**. The server's sign-in settings
+   (`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`, step 4) must be set.
+2. An owner of each organization accepts it: **Settings → GitHub Apps → Configure →
+   Accept new permissions**. Until then, New Project says so for that organization.
+
+The repository is created with the person's own sign-in token through the app, never an
+installation token. So GitHub decides whether they may create repositories in that
+organization, and they become the repository's admin. Harness refuses to mint any
+installation token that asks for `administration`, `repository_creation` or
+`installation_repositories` (`NEVER_ON_INSTALLATION_TOKENS` in
+`backend/src/github/app.ts`). GitHub gives the app access to repositories it creates, on
+either kind of install. If an installation also grants **GitHub App installation
+repository access**, Harness adds a new repository that the installation doesn't cover
+yet. Otherwise the person is told that an owner of the organization adds it under
+**Configure**. The new repository is allowed for the project in the same step.
+
+The endpoints:
+
+- `GET /api/super-tabs/:tabId/github/owners/:owner` answers `ready`, `not-installed` (with
+  `installUrl`), `not-accepted` or `not-configured`.
+- `POST /api/super-tabs/:tabId/projects/:projectId/github/repository` takes
+  `{ owner, name, private }`. Only the project's owner may call it, while the project has
+  no repository. It answers `{ authorizeUrl, at }`.
+- GitHub sends the person back to `/api/github/callback`. The callback creates the
+  repository and writes the outcome on the project as `repositoryCreation`: `created`
+  (with `repositoryUrl` and `reachable`), `taken`, `refused` (with GitHub's `reason`),
+  `failed` or `cancelled`. The apps then start the Product Manager with today's
+  `lead.start`.
+
 ### 3. Require pull requests on the default branch
 
 A token that can write contents can push straight to any branch that nothing
