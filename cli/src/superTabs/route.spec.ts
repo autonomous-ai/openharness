@@ -467,7 +467,8 @@ describe('verdict and record', () => {
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: v.why }
     const { pick: _pick, ...unpicked } = v1
     expect(recordOf(c, v, a())).toEqual({ ...unpicked, via: 'instructions', assessment: { ...v1.assessment, size: 'medium' },
-      candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude' } })) })
+      candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude',
+        left: 50, resetsAt: 1000 } })) })
     // The server stamps the instructions' revision; the route sends none (phase 4, decision 12).
     expect(recordOf(c, v, a())).not.toHaveProperty('instructionsRevision')
     // For a backend from before sizes and fit.

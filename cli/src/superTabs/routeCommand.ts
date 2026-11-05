@@ -504,6 +504,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
     command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
+  // A backend from before task #3163 refuses each candidate's weekly % left and reset: the same decision without them.
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('unquoted')
   // A backend from before task #2901 takes a record only with a pick: c0 stands in for one, so its decision log and the starts
   // linked to it still work (route.ts recordOf).
   if (recorded.error === 'VALIDATION_ERROR') recorded = await record('picked')

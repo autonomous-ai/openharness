@@ -119,23 +119,24 @@ describe('a route decision of every engine on every machine, as stored (task #27
   })
 
   // Task #2901: with no pick, nobody knows which candidate runs until the start, and the route history needs that one's account
-  // and spend (cli service.ts routeHistory). So every candidate keeps those two of its fit, and nothing else of it.
+  // and spend (cli service.ts routeHistory). So every candidate keeps those of its fit, and its quota status (task #3163).
   const pickless = (): RouteRecord => {
     const { pick: _pick, ...rest } = routed()
     return { ...rest, via: 'instructions', why: 'No ranking: the project\'s Routing instructions choose.' } as RouteRecord
   }
 
-  // Measured 11-04: 14,568 bytes, of which the 42 slim fits are 5,376 (128 bytes a candidate, its 64-character account most of it).
-  it('stores a record that names no pick, 42 candidates each with its account and spend, in under 15 KB (measured 14,568 bytes)', () => {
-    expect(size(storedRecord(pickless()))).toBeLessThan(15_000)
+  // Measured 11-04: 14,568 bytes, of which the 42 slim fits are 5,376 (128 bytes a candidate, its 64-character account most of it);
+  // 15,282 bytes since each keeps its fit status too (task #3163), from a CLI that sends no % left or reset.
+  it('stores a record that names no pick, 42 candidates each with its account, spend and status, in under 16 KB (measured 15,282 bytes)', () => {
+    expect(size(storedRecord(pickless()))).toBeLessThan(16_000)
   })
 
-  it('keeps of every candidate of a record that names no pick who and where it is, its title and its account and spend', () => {
+  it('keeps of every candidate of a record that names no pick who and where it is, its title and its account, spend and status', () => {
     const r = pickless(), back = readRecord(storedRecord(r))
     for (const [i, c] of r.candidates.entries()) {
       const kept = back.candidates[i]!
       expect(kept).toEqual({ id: c.id, kind: c.kind, ...c.agentId ? { agentId: c.agentId } : {}, machineId: c.machineId, engine: c.engine, model: c.model,
-        effort: c.effort, title: c.title, fit: { account: c.fit!.account, spend: c.fit!.spend } })
+        effort: c.effort, title: c.title, fit: { account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status } })
     }
   })
 
@@ -171,7 +172,7 @@ describe('a route decision of every engine on every machine, as stored (task #27
     delete r.candidates[1]!.fit!.account
     const [first, second] = storedRecord(r).candidates
     expect(first).not.toHaveProperty('fit')
-    expect(second!.fit).toEqual({ spend: { '5-hour': 2.5, weekly: 1 } })
+    expect(second!.fit).toEqual({ spend: { '5-hour': 2.5, weekly: 1 }, status: r.candidates[1]!.fit!.status })
   })
 
   it('keeps a grid model on a candidate that runs one', () => {

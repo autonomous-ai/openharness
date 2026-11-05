@@ -731,9 +731,11 @@ describe('routeTask', () => {
     s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
       ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    // With no pick, then with c0 standing in for one (task #2901), then in the shape from before phase 1.
-    const [current, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    // With no pick, then without the candidates' quota (task #3163), then with c0 standing in for one (task #2901), then in the
+    // shape from before phase 1.
+    const [current, unquoted, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(phase1.command.decision).toMatchObject({ pick: 'c0', assessment: { size: 'medium' } })
     expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
     expect(v1.operationId).toBe(phase1.operationId)
@@ -758,15 +760,16 @@ describe('routeTask', () => {
     const beforeKinds = refusing(['kind":"docs'])
     expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const kind = ['difficulty', 'risk', 'why', 'size', 'kind']
-    // Each refusal of the record with no pick tries it once more with c0 as the pick, the shape a backend from before task #2901 takes.
-    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size']])
+    // Each refusal of the record with no pick tries it without the candidates' quota (task #3163), then with c0 as the pick, the
+    // shape a backend from before task #2901 takes.
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size']])
     const beforePhase1 = refusing(['kind":"docs', 'size'])
     expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
     // A task with no kind never needs the extra try.
     const plain = refusing(['size'])
     await routeTask(input, plain, where as never, opener(), () => 'op')
-    expect(commands(plain)).toHaveLength(3)
+    expect(commands(plain)).toHaveLength(4)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
@@ -915,11 +918,13 @@ describe('route answers with no pick (task #2901)', () => {
     s.mockImplementation(async payload => payload.action === 'command' && !('pick' in payload.command.decision)
       ? { error: 'VALIDATION_ERROR', detail: 'decision.pick: Required', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, both(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions' })
-    const [current, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    const [current, unquoted, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(picked.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
     expect(picked.operationId).toBe(current.operationId)
-    expect(picked.command.decision.candidates).toEqual(current.command.decision.candidates)
+    // The candidates as the record without their quota sent them (task #3163).
+    expect(picked.command.decision.candidates).toEqual(unquoted.command.decision.candidates)
   })
 })
 
@@ -1583,9 +1588,10 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s as never, where, opener())
     expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
-    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those. The task gives no
-    // size, so each machine's Claude keeps both Opus and Sonnet (task #3163): 8 machines, 3 rows each.
-    expect(sent).toEqual([24, 24, 12])
+    // With no pick, then without the candidates' quota, then with c0 as the pick (a backend from before task #2901), then the
+    // first 12 of those. The task gives no size, so each machine's Claude keeps both Opus and Sonnet (task #3163): 8 machines,
+    // 3 rows each.
+    expect(sent).toEqual([24, 24, 24, 12])
     const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
     for (const row of answer.candidates as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })

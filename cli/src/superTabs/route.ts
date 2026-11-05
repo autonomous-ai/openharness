@@ -564,15 +564,21 @@ export function machineBrief(room: MachineRoom): string {
   return [...slots, memory, ...disk].join(' · ')
 }
 
+/** A quota's weekly window, the one the project's order compares: its percent left and reset, or a reading with no windows
+ *  named as one; null left when it was not read. */
+function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
+  const week = q.windows?.find(w => w.name === 'weekly')
+  const left = !q.known ? null : week ? week.leftPercent : q.windows?.length ? null : q.leftPercent
+  return { left, resetsAt: week ? week.resetsAt : q.resetsAt }
+}
+
 /** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
 export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
   if (p.gridModel) return 'local model, no subscription'
   if (p.quota.metered) return 'metered'
-  const week = p.quota.windows?.find(w => w.name === 'weekly')
-  const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
-  const resetsAt = week ? week.resetsAt : p.quota.resetsAt
+  const { left, resetsAt } = weekly(p.quota)
   // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
-  if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
+  if (left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
   return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
@@ -660,23 +666,25 @@ export function decide(choice: Choice): Verdict {
     : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
-/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts)
- *  and no pick (task #2901); `picked` for a backend from before that, which takes a record only with a pick, so `c0` stands in
- *  for one by the old `order`; `unkinded` for a backend from before kinds too, and `v1` without size and fit as well, for one
- *  from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
+/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
+ *  no pick (task #2901) and each candidate's weekly % left and reset in its fit (task #3163: without them quota at route time
+ *  could not be measured); `unquoted` the same without them, for a backend from before them; `picked` for a backend from before
+ *  task #2901, which takes a record only with a pick, so `c0` stands in for one by the old `order`; `unkinded` for a backend
+ *  from before kinds too, and `v1` without size and fit as well, for one from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
  *  `belowFloor` and `notes` false. The server stamps the instructions' revision the decision relied on (phase 4, decision 12). */
-export type RecordShape = 'current' | 'picked' | 'unkinded' | 'v1'
+export type RecordShape = 'current' | 'unquoted' | 'picked' | 'unkinded' | 'v1'
 export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape: RecordShape = 'current'): Record<string, unknown> {
-  const v1 = shape === 'v1', kinded = shape === 'current' || shape === 'picked'
+  const v1 = shape === 'v1', kinded = shape !== 'unkinded' && !v1, pickless = shape === 'current' || shape === 'unquoted'
+  const fitOf = (s: Shown) => shape === 'current' ? { ...s.fit, ...weekly(s.quota) } : s.fit
   return {
     assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(kinded && a.kind ? { kind: a.kind } : {}),
       ...(kinded && a.local ? { local: true } : {}), ...(kinded && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
-      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
+      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: fitOf(s) }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: 1, notes: false,
-    ...(shape === 'current' ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    ...(pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
     p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }
