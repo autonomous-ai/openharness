@@ -22,7 +22,7 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
-import { teamRelayHealth, type RelayHealth } from './relayHealth.js'
+import { RELAY_REASONS, teamRelayHealth, type RelayHealth } from './relayHealth.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
 import { cleanupClosed } from './cleanupCloses.js'
@@ -303,23 +303,27 @@ export class ContributedMachines {
     const now = this.deps.now()
     // Ready on the relay only while it answers (task #3106: Kay's Mac read signed in while the relay refused every request).
     // Asked on its own minute, apart from the engines' ten.
-    const relayed = await this.relayAnswering()
+    const health = await this.relayHealthNow()
     const own = this.engineRead && now < this.engineRead.until ? this.engineRead.value : await this.ownEngines(local, now)
-    return own && own.map(e => ({ ...e, signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : e.signedIn }))
+    return own && own.map(e => ({ ...e,
+      signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || this.relayServes(e.engine, health) : e.signedIn }))
   }
-  /** Whether this Team account's engines may spend its owner's subscription now: the relay's grant is there, and the relay
-   *  answers or cannot be asked. */
-  private async relayAnswering(): Promise<boolean> {
+  /** Whether this Team account's [engine] may spend its owner's subscription now: the relay's grant is there, and the relay
+   *  answers it, or cannot be asked (no grant to ask with, as before). */
+  private relayServes(engine: string, health: RelayHealth | null): boolean {
     if (!(this.deps.relayed ?? teamRelayed)()) return false
-    return (await this.relayHealthNow())?.ok !== false
+    return !health || health.ok || (health.claudeOnly === true && engine !== 'claude')
   }
   /** The relay's answer, at most [RELAY_HEALTH_MS] old; null on a machine without a relay grant. */
   private async relayHealthNow(): Promise<RelayHealth | null> {
     if (!(this.deps.relayed ?? teamRelayed)()) return null
     const now = this.deps.now()
     if (this.relayRead && now < this.relayRead.until) return this.relayRead.value
-    const value = await (this.deps.relayHealth ?? teamRelayHealth)().catch(() => null)
-    this.relayRead = { value, until: now + RELAY_HEALTH_MS }
+    // A probe that failed outright is a relay that does not answer (review 1 of #3098: it read as answering).
+    const value = await (this.deps.relayHealth ?? teamRelayHealth)().catch((): RelayHealth => ({ ok: false, reason: RELAY_REASONS.down }))
+    // An owner sign-in the owner's daemon could not read is asked about less often: each probe has it read the owner's
+    // Keychain item, and while macOS refuses that it may ask on the owner's screen (security reviews of #3098).
+    this.relayRead = { value, until: now + (value && !value.ok && value.claudeOnly ? RELAY_SIGN_IN_RETRY_MS : RELAY_HEALTH_MS) }
     return value
   }
   /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
@@ -399,8 +403,8 @@ export class ContributedMachines {
     const kept = this.goodQuota.get(engine)
     if (kept && this.deps.now() - kept.at <= USAGE_KEEP_MS) return { engine, known: true, windows: kept.windows }
     // A relay that does not answer says why, in place of where the allowance is read (task #3106).
-    const relay = this.relayRead?.value
-    if (relay && !relay.ok && (this.deps.relayed ?? teamRelayed)()) return { engine, known: false, windows: [], reason: relay.reason }
+    const relay = this.relayRead?.value ?? null
+    if (relay && !relay.ok && !this.relayServes(engine, relay) && (this.deps.relayed ?? teamRelayed)()) return { engine, known: false, windows: [], reason: relay.reason }
     return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
@@ -1296,6 +1300,8 @@ const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
 /** How long the owner's relay's answer stands: a relay back after its owner's restart reads ready again within this. */
 const RELAY_HEALTH_MS = 60_000
+/** How long an owner Claude sign-in the relay could not read stands before it is asked about again. */
+const RELAY_SIGN_IN_RETRY_MS = 5 * 60_000
 /** How long an allowance reading stands. 2026-10-29: Anthropic answered 5 reads in a row, then refused them for 5 minutes
  *  (HTTP 429, retry-after 300); read on every 15-second report, Claude's allowance showed as unknown. */
 const USAGE_FRESH_MS = 3 * 60_000
