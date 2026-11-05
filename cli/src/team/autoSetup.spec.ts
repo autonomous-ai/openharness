@@ -322,6 +322,16 @@ describe('a half-finished setup is repaired, not taken for done (#2765, Darren-M
     expect(quiet.deps.setup).not.toHaveBeenCalled()
   })
 
+  it('restarts an existing account only on an explicit manual restart and preserves its sign-in', async () => {
+    const f = fake({ accountExists: vi.fn(async () => true) })
+    expect(await f.auto.offer('join', undefined, false, { restart: true })).toEqual({ state: 'exists' })
+    expect(await f.auto.offer('manual', undefined, true, { restart: true })).toEqual({ state: 'wanted' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+    expect(await f.auto.offer('manual', undefined, false, { restart: true })).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function), { signInAgain: false })
+  })
+
   it('with every part in place it is done: exists, and nothing runs', async () => {
     const f = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
     expect(await f.auto.offer('manual')).toEqual({ state: 'exists' })
