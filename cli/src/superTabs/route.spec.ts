@@ -1,7 +1,7 @@
 // cli/src/superTabs/route.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BUILDERS, CHOOSE_BY_INSTRUCTIONS, CODEX_DEFAULT_NOT_OFFERED, NONE_COVERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
-  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
+  tierOf, type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -1129,6 +1129,15 @@ describe('the model the task\'s size calls for', () => {
     }
     // An unsized task that is hard is still strong work.
     expect(models(choose(machines.flatMap(m => rows(m)), served, { ...unsized, difficulty: 'high' }, NOW))).toEqual(['claude opus high', 'codex gpt-6-astra xhigh'])
+  })
+  // Review of #3117: the Routing rules move small work to Sonnet or Sol after a failed review, and to Opus or Astra after a
+  // second. The route counts the task's ended attempts (routeCommand.ts); one it could not read keeps both models.
+  it('offers Opus high and Astra xhigh to small work on its third attempt, and both when its attempts could not be read', () => {
+    const small = (ended: number | null) => models(choose(machines.flatMap(m => rows(m)), served, a({ size: 'small', difficulty: 'low', ended }), NOW))
+    expect(small(1)).toEqual(['claude sonnet high', 'codex gpt-6.1-sol high'])
+    expect(small(2)).toEqual(['claude opus high', 'codex gpt-6-astra xhigh'])
+    expect(small(null)).toEqual(['claude opus high', 'claude sonnet high', 'codex gpt-6-astra xhigh', 'codex gpt-6.1-sol high'])
+    expect([tierOf(a({ size: 'small', ended: 0 })), tierOf(a({ size: 'small', ended: 3 })), tierOf(a({ size: 'small', ended: null }))]).toEqual(['standard', 'strong', null])
   })
   it('keeps a slot whose machine offers neither model of the tier, on its first row', () => {
     const only = served.models.filter(m => m.model === 'opus' && m.effort === 'xhigh')

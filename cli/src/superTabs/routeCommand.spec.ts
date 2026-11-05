@@ -726,6 +726,19 @@ describe('routeTask', () => {
     expect(unquoted.command.decision.candidates[0].fit).not.toHaveProperty('left')
     expect(unquoted.command.decision.candidates[0].fit).toHaveProperty('status')
   })
+  // Review of #3117: small work steps up to Opus or Astra after its second failed attempt (Routing, Models). The route counts
+  // the task's ended attempts from the history it reads; when that read fails it keeps both models.
+  it('offers Opus to a small task once two of its attempts ended, and both models when its attempts cannot be read', async () => {
+    const small = { ...input, assessment: { ...input.assessment, size: 'small' } }
+    const offered = async (history: Answer) => {
+      const answer = await routeTask(small, scoped({ history }), where as never, opener(), () => 'op')
+      return [...new Set((answer.candidates as Array<{ kind: string; engine: string; model: string }>).filter(c => c.kind === 'new' && c.engine === 'claude').map(c => c.model))].sort()
+    }
+    const ended = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `as-${i}`, agentId: `gone-${i}`, status: 'stopped', result: 'Review failed.' }))
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(1) } })).toEqual(['sonnet'])
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(2) } })).toEqual(['opus'])
+    expect(await offered({ error: 'BACKEND_UNAVAILABLE' })).toEqual(['opus', 'sonnet'])
+  })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
     s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
