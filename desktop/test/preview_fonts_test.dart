@@ -17,11 +17,10 @@ void main() {
     fontSize: 13,
   );
 
-  double width(String text, TextStyle style) =>
-      (TextPainter(
-        text: TextSpan(text: text, style: style),
-        textDirection: TextDirection.ltr,
-      )..layout()).width;
+  double width(String text, TextStyle style) => (TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout()).width;
 
   setUpAll(() async {
     await loadPreviewFonts(
@@ -35,7 +34,8 @@ void main() {
       expect(
         width('i', style),
         lessThan(width('W', style) / 2),
-        reason: '${style.fontFamily} still draws in the test font, one em per glyph',
+        reason:
+            '${style.fontFamily} still draws in the test font, one em per glyph',
       );
     }
   });
@@ -58,9 +58,20 @@ void main() {
     return tester.getSize(find.text('3m06 · 9m59'));
   }
 
-  testWidgets('a one-line check fails a too-narrow cell and passes the built one', (tester) async {
-    final line = (await cell(tester, 400)).height;
-    expect((await cell(tester, 40)).height, greaterThan(line), reason: 'a 40 px cell must wrap');
-    expect((await cell(tester, 96)).height, line, reason: 'the 96 px cell holds it on one line');
-  });
+  testWidgets(
+    'a one-line check fails a too-narrow cell and passes the built one',
+    (tester) async {
+      final line = (await cell(tester, 400)).height;
+      expect(
+        (await cell(tester, 40)).height,
+        greaterThan(line),
+        reason: 'a 40 px cell must wrap',
+      );
+      expect(
+        (await cell(tester, 96)).height,
+        line,
+        reason: 'the 96 px cell holds it on one line',
+      );
+    },
+  );
 }
