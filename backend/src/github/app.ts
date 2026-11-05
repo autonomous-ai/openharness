@@ -22,6 +22,10 @@ export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', ch
  * in CI with the repository's secrets, and Team-written branches are among the pushers.
  */
 export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' } as const
+/** What no installation token may ever ask for (task #1788): a new repository is created with the person's own sign-in
+ *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
+ *  repository, nor widen which repositories the installation covers. */
+export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creation', 'installation_repositories'] as const
 /** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
 /** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
@@ -48,6 +52,11 @@ export class GitHubAppError extends Error {
     this.name = 'GitHubAppError'
   }
 }
+
+/** Whether an organization lets Harness create a repository there (task #1788): the app is installed on it and its owner
+ *  accepted Repository creation; [canAdd] when it also accepted installation repository access, so a new repository the
+ *  installation does not cover yet can be added to it. */
+export type OwnerReadiness = { state: 'ready'; installation: number; canAdd: boolean } | { state: 'not-installed'; installUrl: string | null } | { state: 'not-accepted' }
 
 export interface GitHubAppConfig { appId: string; privateKey: KeyObject; slug: string | null }
 
@@ -150,6 +159,8 @@ export class GitHubApp {
   private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
+  /** The app's installation on each organization, by its login in lower case, for [ownerReadiness]; null when not installed. */
+  private readonly orgInstallations = new Map<string, { id: number | null; until: number }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
   /** The watch's last answer and its ETag, by path ([watchPullRequest]). */
@@ -322,6 +333,28 @@ export class GitHubApp {
     return null
   }
 
+  /** Whether [owner], an organization, lets Harness create a repository there (task #1788). Its installation is remembered
+   *  ten minutes (a missing one a minute), and what it granted as for agents' tokens ([granted]). A personal account reads
+   *  as not installed: v1 creates in organizations only. */
+  async ownerReadiness(owner: string): Promise<OwnerReadiness> {
+    const key = owner.toLowerCase()
+    let known = this.orgInstallations.get(key)
+    if (!known || known.until <= this.now()) {
+      const answer = await this.call('GET', `/orgs/${encodeURIComponent(owner)}/installation`, `Bearer ${this.jwt()}`)
+      if (answer.status === 401) throw this.misconfigured()
+      const id = (answer.body as Record<string, unknown>).id
+      if (answer.status === 200 && typeof id === 'number') known = { id, until: this.now() + INSTALLATION_TTL_MS }
+      else if (answer.status === 404) known = { id: null, until: this.now() + NOT_INSTALLED_TTL_MS }
+      else throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not look up the app on ${owner}.`, 502)
+      if (this.orgInstallations.size >= 1000) this.orgInstallations.delete(this.orgInstallations.keys().next().value!)
+      this.orgInstallations.set(key, known)
+    }
+    if (known.id === null) return { state: 'not-installed', installUrl: this.installUrl() }
+    const granted = await this.granted(known.id)
+    if (granted?.repository_creation !== 'write') return { state: 'not-accepted' }
+    return { state: 'ready', installation: known.id, canAdd: granted.installation_repositories === 'write' }
+  }
+
   /** Forgets that the app was not on [repository] (and its rename), so the next lookup asks GitHub: a person just
    *  installed it. At most once every REFRESH_MS per repository, so a refresh cannot become a stream of lookups. */
   forget(repository: GitHubRepository): void {
@@ -392,6 +425,8 @@ export class GitHubApp {
   }
 
   private async mint(installationId: number, repository: GitHubRepository, permissions: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
+    const forbidden = Object.keys(permissions).filter(name => (NEVER_ON_INSTALLATION_TOKENS as readonly string[]).includes(name))
+    if (forbidden.length) throw new GitHubAppError('GITHUB_APP_PERMISSIONS_FORBIDDEN', `An installation token never asks for ${forbidden.join(', ')}.`, 500)
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
       { repositories: [repository.name], permissions })
     const body = answer.body as Record<string, unknown>

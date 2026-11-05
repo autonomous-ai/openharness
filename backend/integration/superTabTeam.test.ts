@@ -282,6 +282,42 @@ describe('a task a Team agent worked on', () => {
   })
 })
 
+// Huy's groupme, 2026-11-05 (task #3266): a Team account start for a repository the Harness GitHub App is not on failed
+// twice on its machine and suspended Claude there. The store reads the project's GitHub access first and refuses it at once.
+describe('a start whose account cannot reach the project repository', () => {
+  const withRepository = async (tab: string) => {
+    const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await saveState(tab, state)
+  }
+  const startOn = (asked: SuperTabStore, tab: string, conversationId: string) => asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.start',
+    request: { conversationId, machineId: 'team-mac', engine: 'codex', name: 'Reviewer', cwd: '/team', worktree: false, requirements } } })
+  const starts = async (tab: string) => (await storedState(tab)).starts?.length ?? 0
+
+  it('is refused through the store before anything is queued, from the access it reads for that project', async () => {
+    const { tab, teamGroup } = await fixture()
+    await withRepository(tab)
+    const reach = vi.fn(async () => ({ state: 'not-installed' as const, repository: 'acme/app', installUrl: 'https://github.com/apps/harness/installations/new' }))
+    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
+    const before = await starts(tab)
+    await expect(startOn(asked, tab, teamGroup)).rejects.toMatchObject({ code: 'REPOSITORY_UNREACHABLE', status: 409,
+      message: expect.stringContaining('An owner of acme installs it (https://github.com/apps/harness/installations/new)') })
+    expect(reach).toHaveBeenCalledWith('prod', tab, 'lead', 'https://github.com/acme/app')
+    expect(await starts(tab)).toBe(before)
+  })
+
+  it('starts as before when the read fails, and reads nothing for a project with no GitHub repository', async () => {
+    const { tab, teamGroup } = await fixture()
+    const reach = vi.fn(async () => { throw new Error('GitHub did not answer') })
+    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
+    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
+    expect(reach).not.toHaveBeenCalled()
+    await withRepository(tab)
+    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
+    expect(reach).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('a team session speaking in a Swarm', () => {
   it('reads and posts as an agent on its own machine', async () => {
     const f = await fixture()

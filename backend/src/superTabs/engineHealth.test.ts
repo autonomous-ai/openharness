@@ -88,6 +88,22 @@ describe('an engine whose starts fail on a machine', () => {
     expect(noteStartFailed(state, start(), NOW)).not.toBeNull()
   })
 
+  // 11-05, Huy's groupme: two Team account starts could not get a token for a repository the app is not installed on, and
+  // Claude was suspended there for hours (task #3266).
+  it('is never suspended, Claude or Codex, by starts refused for want of access to the project repository', () => {
+    const reasons = ["This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: The Harness GitHub App is not installed on ngochuy13/groupme. Ask an owner of ngochuy13 to install it.",
+      "This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: Nobody who can push to ngochuy13/groupme has approved it for this project yet.",
+      'This Harness server has no GitHub App, and a Harness Team account has no git login of its own, so it cannot fetch the project. Ask the server\'s administrator to set up the Harness GitHub App (docs/swarm-github-app.md).',
+      "Share a GitHub repository for this project before starting agents on another machine. Its lead can share its checkout's GitHub origin with the project.repository command, then start again."]
+    for (const engine of ['claude', 'codex']) {
+      const pool = machine(), state = stateWith(pool)
+      for (const error of reasons) for (let i = 0; i < 3; i++) expect(noteStartFailed(state, start({ engine }, error), NOW)).toBeNull()
+      expect(pool.engineFailures).toBeUndefined()
+      expect(suspendedEngines(pool, NOW)).toEqual({})
+      expect(engineUnusable(pool, engine, NOW)).toBeNull()
+    }
+  })
+
   it('says so once per suspension, never on a later failed start or report', () => {
     const pool = machine(), state = stateWith(pool)
     noteStartFailed(state, start(), NOW)

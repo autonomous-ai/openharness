@@ -1,5 +1,6 @@
-import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
+import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -57,7 +58,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
-import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
@@ -593,6 +594,8 @@ export interface CommandContext {
   pushOrigin?: PushOrigin
   /** The pull requests [pushOrigin] read, as the store read them; none for a branch. A clean read clears only a mark it covered (teamWritten.ts). */
   pushOriginPulls?: string[]
+  /** Whether the Harness GitHub App reaches the project's repository, read before an agent.start or work.assign (store.ts repositoryReachFor). */
+  repositoryReach?: RepositoryReach
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
   workspaceRole?: WorkspaceRole
   /** invite.create: the Workspace removed the account of the invited email, and the inviter's role cannot invite to the
@@ -607,6 +610,9 @@ export interface CommandContext {
 
 /** What an agent's post that reached no agent tells its sender, in the result every CLI prints (Egret6's review of #2963):
  *  since #2963 an unnamed post outside a task's assignee reaches no one, and a sender that meant someone to act would not know. */
+/** Said in a post's result when it went out without agents it named that may not join Team-written work (teamWritten.ts mayName). */
+export const notReachedLine = (names: string[]): string => `Your post was delivered, but not to ${names.join(', ')}: a Harness Team agent wrote this task's code, so an agent in the main account may not join it. `
+  + 'Nothing is wrong with your post or with you. Ask the PM to hand the work on, or name an agent in a Team account.'
 export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
@@ -1040,7 +1046,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const pushedRefusal = (group: Conversation, worker: Agent) => {
     marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls))
     if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
-    if (context.pushOrigin === 'unknown') failPushUnknown()
+    if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
     if (context.pushOrigin === 'team') failTeamWritten({ pushed: true })
   }
   /** A session already in the Swarm that a person's agent.add names joins [group] as conversation.agent adds one (security
@@ -1834,6 +1840,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const onTemplate = !current || project.instructionsHash === instructionsHash(INSTRUCTIONS_TEMPLATE)
       const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
+      // A line the save adds that the document already has is refused with the existing line quoted (#3283).
+      refuseRepeats(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0)
@@ -2227,7 +2235,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      // The line is one more item: one the document already has is refused like a save's, quoting it (#3283, review of #3202).
+      const appended = appendRouting(stored, command.text)
+      refuseRepeats(stored, appended)
+      saveInstructions(project, current, appended, routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':
@@ -2576,9 +2587,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
-      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
+      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown(unknownPushReason(context.repositoryReach))
       const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
         written ? { ...moved, projectSettings: 'off' } : moved)
+      // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
+      requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -3401,10 +3414,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const poster = actor.kind === 'agent' ? agent(state, actor.agentId) : null
       const textNamed = poster && !command.agentOnly
         ? agentsNamedIn(state, group, command.text, names).filter(id => mayName(state, group, poster, agent(state, id))) : []
-      const addressed = command.agentOnly || !poster ? command.recipientIds
+      const asked = command.agentOnly || !poster ? command.recipientIds
         : [...new Set([...command.recipientIds, ...textNamed])].filter(id => id !== poster.id)
+      // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2). An
+      // agent that may not join Team-written work is left out of the post, which goes out without it, and the result names it:
+      // refusing the whole post read as being about the sender (Heron21, #3245).
+      const barred = poster && !command.agentOnly ? asked.filter(id => !mayName(state, group, poster, agent(state, id))) : []
+      const addressed = asked.filter(id => !barred.includes(id))
       const assigned = activeWork(group) ? group.assignment!.agentId : null
-      const toAssignee = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned && assigned !== actor.agentId
+      const toAssignee = actor.kind === 'agent' && !command.agentOnly && !asked.length && assigned && assigned !== actor.agentId
         && group.agentIds.includes(assigned) ? assigned : null
       // An agent with work in the project posts in its project chat without joining it (worksInProjectChat): an answer to its
       // line reaches it there too.
@@ -3433,11 +3451,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const doneWith = actor.kind === 'person' && !isBuddyChat(group) && automatic && automatic === replyAgent && automatic !== answered
         && group.assignment?.agentId === automatic && group.assignment.status === 'done' && group.leadId && group.leadId !== automatic
         && group.agentIds.includes(group.leadId) ? group.leadId : null
-      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])]
+      // An agent the post named and may not be named is no recipient by any route: not the assignee, nor the author it answers.
+      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])].filter(id => !barred.includes(id))
       for (const id of recipients) {
         const target = agent(state, id)
-        // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
-        if (poster && addressed.includes(id)) requireNameable(state, group, poster, target)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
@@ -3460,6 +3477,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
+      if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
@@ -3646,6 +3664,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
       const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
       if (unreached) failTeamWork(unreached)
+      requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
       pushedRefusal(group, worker)
       requireTeamWrittenAccount(state, group, worker)

@@ -5,7 +5,7 @@
  * dropped rule makes the save or wrote a message approving it that the save names. Who a person is comes from the sender or
  * the stored message's author, never the caller's word (askedBy). The approver is then told in one private line.
  */
-import { attributedRules, droppedRules, ITEM_CHARS, keptIn, personKey, removedItems, type DroppedRule } from './instructionsDiff.js'
+import { attributedRules, droppedRules, ITEM_CHARS, keptIn, MAX_REPEATS, personKey, removedItems, repeatedRules, type DroppedRule } from './instructionsDiff.js'
 import { fail, type Author, type SuperTabState } from './model.js'
 import { canReadProject, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
@@ -80,6 +80,23 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
     ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why })) })
   }
   return { told, rules: dropped }
+}
+
+/**
+ * Refuses a save that adds a line repeating one the document keeps (task #3283, Leo 11-05, from lamp: a PM saved a rule the
+ * instructions already had as if new, which hid that it had skipped it). Each repeat is listed with the existing line quoted;
+ * a change meant is made on that line. Conservative: only the same words (instructionsDiff.ts repeatedRules).
+ */
+export function refuseRepeats(before: string, after: string): void {
+  const repeats = repeatedRules(before, after)
+  if (!repeats.length) return
+  const shown = repeats.slice(0, MAX_REPEATS)
+  fail('INSTRUCTIONS_RULE_REPEATED', [
+    'Not saved: this adds a line the instructions already have, so it would be read twice. Check that rule before adding it: '
+      + 'it may be one you skipped. If you meant to change it, change that line in place instead of adding another.',
+    ...shown.map(repeat => `- Existing line: "${cut(repeat.existing)}" (added again as "${cut(repeat.added)}")`),
+    ...(repeats.length > shown.length ? [`- And ${repeats.length - shown.length} more.`] : []),
+  ].join('\n'), 409, { repeated: shown })
 }
 
 /** Lines one revision's History keeps (River, 11-05): a rewrite of the whole document lists its first 500. */

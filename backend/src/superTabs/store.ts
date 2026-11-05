@@ -16,11 +16,12 @@ import { wavDurationMs } from '../lib/wav.js'
 import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
+import type { RepositoryReach } from './repositoryReach.js'
 import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
@@ -43,7 +44,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -368,6 +369,9 @@ export interface SuperTabStoreHooks {
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
+  /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
+   *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
+  repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -1122,7 +1126,9 @@ export class SuperTabStore {
     const heads = await this.heads(rows.slice(0, 100))
     return { tabs: rows.slice(0, 100).flatMap(row => {
       const head = heads.get(row.id)
-      return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused }] : []
+      return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused,
+        // Only on the reader's own Personal Swarm: another person's is not theirs to be told apart.
+        ...(isPersonalSwarm(head) && head.ownerId === user.sub ? { personal: true as const } : {}) }] : []
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
@@ -1528,12 +1534,37 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * Whether the app reaches the repository of the project an agent.start or work.assign is for (repositoryReach.ts, task
+   * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
+   * would: undefined, refusing nothing, when there is nothing to read or the read fails.
+   */
+  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
+    const hook = this.hooks.repositoryReach
+    const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
+    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : asked?.type === 'work.assign' ? asked.conversationId : undefined
+    if (!hook || typeof conversationId !== 'string') return undefined
+    try {
+      const project = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const group = state.conversations.find(c => c.id === conversationId)
+        return group ? groupProject(state, group) : undefined
+      })
+      const repositoryUrl = project?.repository?.repositoryUrl
+      if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
+      return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
+    } catch (error) {
+      if (!(error instanceof SuperTabError)) logger.warn('[super-tab] repository access not read', { tabId, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string } } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const pushOrigin = await this.pushOriginFor(user, tabId, command)
+    const [pushOrigin, repositoryReach] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
@@ -1819,6 +1850,7 @@ export class SuperTabStore {
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls })
+      if (repositoryReach) context.repositoryReach = repositoryReach
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -3466,6 +3498,73 @@ export class SuperTabStore {
     if (!(GITHUB_SEEN as readonly string[]).includes(state)) return false
     const seen = state as GitHubSeen
     return this.moveGitHub(tabId, project => project.id === projectId && project.githubSeen !== seen, project => { project.githubSeen = seen })
+  }
+
+  /** Refuses anyone but a person of [tabId] who may write there (a viewer reads only), for New Project's organization check. */
+  async requireWriter(user: AuthUser, tabId: string): Promise<void> {
+    this.personOnly(user)
+    const { state } = await this.readLoad(user, tabId)
+    author(state, await this.actor(this.db, user, state), true)
+  }
+
+  /** Refuses [user] unless they may ask for a new repository for [projectId] now: a person, its owner, while it has no
+   *  repository address. Read only: the routes ask this before any GitHub call (security review 1 of #3201). */
+  async mayCreateRepository(user: AuthUser, tabId: string, projectId: string): Promise<void> {
+    this.personOnly(user)
+    const { state } = await this.readLoad(user, tabId)
+    repositoryCreator(state, await this.actor(this.db, user, state), projectId)
+  }
+
+  /** [user] asks for a new repository for their project (task #1788), checked as [mayCreateRepository] in its write.
+   *  Written on the project as `waiting`, replacing any earlier ask, so the apps show it. */
+  async startRepositoryCreation(user: AuthUser, tabId: string, projectId: string, ask: { owner: string; name: string; private: boolean }, at: number): Promise<void> {
+    this.personOnly(user)
+    await transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      const actor = await this.actor(tx, user, state)
+      repositoryCreator(state, actor, projectId)
+      const stored = (state.projects ?? []).find(p => p.id === projectId)!
+      stored.repositoryCreation = { owner: ask.owner, name: ask.name, private: ask.private, by: user.sub, at, state: 'waiting' }
+      stored.githubRevision = (stored.githubRevision ?? 0) + 1
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+    })
+  }
+
+  /** GitHub's callback claims the waiting ask by [by] at [at] before it uses the sign-in's code: `creating`, in one write, so
+   *  a replayed or doubled callback finds nothing to claim and changes nothing (security review 2 of #3201). Null when there
+   *  is no such waiting ask, 'gone' when the project or its Swarm is. */
+  async claimRepositoryAsk(tabId: string, projectId: string, by: string, at: number): Promise<RepositoryCreation | null | 'gone'> {
+    return this.repositoryAskWrite(tabId, projectId, by, at, 'waiting', asked => ({ ...asked, state: 'creating' }))
+  }
+
+  /** What GitHub's sign-in made of the ask by [by] at [at]: written only over that same ask while its callback holds it
+   *  (`creating`), so a late or repeated callback never overwrites a newer one ('stale'). 'gone' when the project or its
+   *  Swarm is: the callback then allows nothing for it. */
+  async finishRepositoryCreation(tabId: string, projectId: string, by: string, at: number,
+    outcome: Pick<RepositoryCreation, 'state' | 'repositoryUrl' | 'reachable' | 'reason'>): Promise<'recorded' | 'stale' | 'gone'> {
+    const written = await this.repositoryAskWrite(tabId, projectId, by, at, 'creating', asked => ({ owner: asked.owner, name: asked.name, private: asked.private,
+      by, at, state: outcome.state, ...(outcome.repositoryUrl ? { repositoryUrl: outcome.repositoryUrl } : {}),
+      ...(outcome.reachable === undefined ? {} : { reachable: outcome.reachable }), ...(outcome.reason ? { reason: outcome.reason } : {}) }))
+    return written === 'gone' ? 'gone' : written ? 'recorded' : 'stale'
+  }
+
+  /** One write of a project's repository ask, only while it is [by]'s ask at [at] in state [from]. */
+  private async repositoryAskWrite(tabId: string, projectId: string, by: string, at: number, from: RepositoryCreation['state'],
+    next: (asked: RepositoryCreation) => RepositoryCreation): Promise<RepositoryCreation | null | 'gone'> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return 'gone'
+      const loaded = await loadRow(tx, requireParts(row), {})
+      const state = cloneData(loaded.state)
+      const project = (state.projects ?? []).find(p => p.id === projectId)
+      if (!project) return 'gone'
+      const asked = project.repositoryCreation
+      if (!asked || asked.by !== by || asked.at !== at || asked.state !== from) return null
+      project.repositoryCreation = next(asked)
+      project.githubRevision = (project.githubRevision ?? 0) + 1
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return project.repositoryCreation
+    })
   }
 
   /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked

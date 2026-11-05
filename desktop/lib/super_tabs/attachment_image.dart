@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'attachment_upload.dart';
 import 'attachment_viewer.dart';
 import 'file_links.dart';
+import 'image_cache.dart';
 import 'message_more_menu.dart';
 import 'model.dart';
 
@@ -57,6 +59,30 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   void initState() {
     super.initState();
     _start();
+    _awaitShape();
+  }
+
+  /// A shape an earlier launch kept is known once the cache is listed: the
+  /// placeholder takes it then, if the picture has not arrived first.
+  void _awaitShape() {
+    if (_shapeOf(_ref.file) != null) return;
+    unawaited(
+      superTabImageCache.ready.then((_) {
+        if (mounted && _shapeOf(_ref.file) != null) setState(() {});
+      }),
+    );
+  }
+
+  /// [file]'s width and height: as a load here read them, else as the server
+  /// sent them, else its thumbnail's, which has the same shape.
+  static Size? _shapeOf(SuperTabAttachment file) {
+    final cache = superTabImageCache;
+    final width = file.width, height = file.height;
+    return cache.shapeOf(file.id) ??
+        (width != null && height != null
+            ? Size(width.toDouble(), height.toDouble())
+            : null) ??
+        cache.shapeOf(superTabThumbId(file.id));
   }
 
   @override
@@ -74,6 +100,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     _askAgain?.cancel();
     _waited = 0;
     _start();
+    _awaitShape();
   }
 
   void _start() {
@@ -169,7 +196,9 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     final url = _url;
     // No link at all: nothing to open either. A link that failed to draw
     // stays a click away, as the full-screen viewer may still read it.
-    if (url == null) return _failed ? _broken(file) : _loading();
+    if (url == null) return _failed ? _broken(file) : _loading(file);
+    // The thumbnail is kept apart from the original (image_cache.dart).
+    final cacheId = _thumb ? superTabThumbId(file.id) : file.id;
     final radius = BorderRadius.circular(DesktopChrome.controlRadius);
     return Semantics(
       button: true,
@@ -192,17 +221,22 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
               borderRadius: radius,
               child: ExcludeSemantics(
                 child: Image(
-                  // One state per address: a failed thumbnail's error must not
-                  // greet the original that takes its place.
-                  key: ValueKey(url.toString()),
-                  image: attachmentPicture(url),
+                  // One state per picture: a failed thumbnail's error must not
+                  // greet the original that takes its place. Not per link, so
+                  // a fresh link to the same picture keeps what is drawn.
+                  key: ValueKey(cacheId),
+                  image: attachmentPicture(
+                    url,
+                    fileId: cacheId,
+                    side: SuperTabInlineImage.maxSide,
+                  ),
                   fit: BoxFit.contain,
                   frameBuilder: (_, child, frame, synchronous) =>
-                      frame == null && !synchronous ? _loading() : child,
+                      frame == null && !synchronous ? _loading(file) : child,
                   errorBuilder: (_, _, _) {
                     if (_failed) return _broken(file);
                     _broke(url);
-                    return _loading();
+                    return _loading(file);
                   },
                 ),
               ),
@@ -213,12 +247,22 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     );
   }
 
-  /// Still, not pulsing: a picture's shape is unknown until it arrives.
-  static Widget _loading() => SizedBox(
-    width: SuperTabInlineImage.maxSide * 2 / 3,
-    height: SuperTabInlineImage.maxSide / 2,
-    child: ColoredBox(color: DesktopChrome.field),
-  );
+  /// Still, not pulsing, at the size the picture will take when its shape is
+  /// known (an earlier load kept it), so the chat does not jump when it
+  /// arrives; else a fixed one.
+  static Widget _loading(SuperTabAttachment file) {
+    final size =
+        superTabInlineSize(_shapeOf(file)) ??
+        const Size(
+          SuperTabInlineImage.maxSide * 2 / 3,
+          SuperTabInlineImage.maxSide / 2,
+        );
+    return SizedBox.fromSize(
+      key: ValueKey('super-attachment-placeholder:${file.id}'),
+      size: size,
+      child: ColoredBox(color: DesktopChrome.field),
+    );
+  }
 
   static Widget _broken(SuperTabAttachment file) => Container(
     color: DesktopChrome.field,
@@ -241,6 +285,19 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
       ],
     ),
   );
+}
+
+/// Where a picture of [shape] sits in a message: its own size, made smaller
+/// with its shape kept until it fits [SuperTabInlineImage.maxSide] each way,
+/// as `BoxFit.contain` draws it there. Null for an unknown or empty shape.
+Size? superTabInlineSize(Size? shape) {
+  if (shape == null || shape.isEmpty) return null;
+  const side = SuperTabInlineImage.maxSide;
+  final scale = math.min(
+    1.0,
+    math.min(side / shape.width, side / shape.height),
+  );
+  return Size(shape.width * scale, shape.height * scale);
 }
 
 /// The pictures of one chat or thread, oldest first, for the viewer to page
@@ -617,7 +674,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
       quarterTurns: _turns,
       child: Image(
         key: ValueKey('super-attachment-image:${file.id}'),
-        image: attachmentPicture(url),
+        image: attachmentPicture(url, fileId: file.id),
         fit: BoxFit.contain,
         loadingBuilder: (_, child, progress) => progress == null
             ? child

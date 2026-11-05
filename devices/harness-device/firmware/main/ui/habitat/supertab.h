@@ -38,6 +38,7 @@ typedef struct {
     char id[ID_MAX], tab[ID_MAX], name[HT_SUPERTAB_NAME];
     uint16_t count;             // the Swarm's real project count; at most 12 Leads come
     ht_side_t side;
+    bool personal;              // the reader's own Swarm (swarmNeedsYou daemon); false from an older one
     uint8_t lead_n;
     ht_lead_t leads[HT_SUPERTAB_LEADS_MAX];
 } ht_supertab_t;

@@ -76,14 +76,9 @@ export function failTeamWritten(details?: Record<string, unknown>): never {
 }
 
 /** Whether [sender] may name [named] in a post: not a main-account member of Team-written work, how a re-test or re-check is
- *  asked for, unless [sender] coordinates. */
+ *  asked for, unless [sender] coordinates. A post that names one it may not goes out without it (commands.ts message.send). */
 export const mayName = (state: SuperTabState, group: Conversation, sender: Agent, named: Agent): boolean =>
   coordinates(state, group, sender) || named.id === sender.id || !barredFromTeamWritten(state, group, named)
-
-/** Refuses an agent naming one it may not ([mayName]) with --to. */
-export function requireNameable(state: SuperTabState, group: Conversation, sender: Agent, named: Agent): void {
-  if (!mayName(state, group, sender, named)) failTeamWritten()
-}
 
 /** Everyone to tell when [group]'s task has just been marked, by the conversation that reaches them, each once: the main-account
  *  members of the task and of every step, finished steps included, as the workflow asks them again. Not the coordinator. */
@@ -127,6 +122,7 @@ export function applyPushOrigin(state: SuperTabState, group: Conversation, origi
   }
 }
 
-export function failPushUnknown(): never {
-  return fail(TEAM_WRITTEN_WORK, 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
+/** [reason]: why GitHub cannot show it, when that is known (repositoryReach.ts unknownPushReason). */
+export function failPushUnknown(reason?: string | null): never {
+  return fail(TEAM_WRITTEN_WORK, reason ?? 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
 }
