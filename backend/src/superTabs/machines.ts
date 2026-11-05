@@ -713,7 +713,7 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
         ...(task ? { task: task.title } : {}) }
     }),
     hiddenAgentCount: members.length - visibleAgents.length,
-    // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
+    // Their code is only on this machine: agents elsewhere start in an empty folder until someone shares a repository (#3211).
     soleSourceProjects: visibleSoleSourceProjects.map(p => ({ id: p.id, name: p.name })),
     hiddenSoleSourceProjectCount: soleSourceProjects.length - visibleSoleSourceProjects.length,
   }
