@@ -9,13 +9,15 @@ import 'agent_notice.dart';
 
 /// One notice about one agent, as the OS draws it: the agent's name, the
 /// machine it runs on, and the news — what the turn said, or what it is asking
-/// — the three lines of the dial's drawer row.
+/// — the three lines of the dial's drawer row. [quiet] posts it with no sound,
+/// no vibration and no banner ([AgentNotice.quiet]).
 typedef AgentNoticeMessage = ({
   AgentRef agent,
   NoticeKind kind,
   String title,
   String machine,
   String body,
+  bool quiet,
 });
 
 /// Where a Swarm notice leads: the Swarm, and the conversation it is about;
@@ -309,10 +311,19 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
             importance: Importance.high,
             priority: Priority.high,
             subText: message.machine,
+            // A quiet notice replaces or joins the list without a sound, a
+            // vibration or a heads-up, whatever its channel says.
+            silent: message.quiet,
           ),
           iOS: DarwinNotificationDetails(
             subtitle: message.machine,
             threadIdentifier: channel.id,
+            // Unset is the plugin's default, sound and banner. Without a sound
+            // here iOS plays none in the background either; passive neither
+            // lights the screen nor shows a banner, only the list.
+            presentSound: message.quiet ? false : null,
+            presentBanner: message.quiet ? false : null,
+            interruptionLevel: message.quiet ? InterruptionLevel.passive : null,
           ),
         ),
       );

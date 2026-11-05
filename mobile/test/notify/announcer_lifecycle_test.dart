@@ -65,6 +65,64 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
   });
+
+  testWidgets('a question waiting out its grace is told the moment the app is hidden', (
+    tester,
+  ) async {
+    final system = _Recording();
+    final announcer = AgentAnnouncer(system: system);
+    addTearDown(announcer.dispose);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    expect(
+      announcer.questionAsked(
+        agent,
+        requestId: 'q1',
+        prompt: 'Approve Bash command: npm test',
+        watching: () => false,
+      ),
+      AgentNotice.filed,
+    );
+    expect(system.shown, isEmpty, reason: 'in front, it waits out its grace');
+
+    // Locking the phone: iOS suspends the app within seconds, and the wait's
+    // timer with it — so it goes now, and loud.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    expect(system.shown, isEmpty, reason: 'inactive is not away');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    expect(system.shown, hasLength(1));
+    expect(system.shown.single.quiet, isFalse);
+    expect(system.shown.single.body, 'Approve Bash command: npm test');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(system.shown, hasLength(1), reason: 'told once');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
+  testWidgets('going away after the announcer is disposed tells nothing, and throws nothing', (
+    tester,
+  ) async {
+    final system = _Recording();
+    final announcer = AgentAnnouncer(system: system);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    announcer.questionAsked(
+      agent,
+      requestId: 'q1',
+      prompt: 'Approve Bash command: npm test',
+      watching: () => false,
+    );
+    announcer.dispose();
+    // Its wait went with it, and so did its ear: going away tells of nothing.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(system.shown, isEmpty);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
 }
 
 class _Recording extends SilentSystemNotices {

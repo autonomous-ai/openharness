@@ -16,12 +16,17 @@ import 'package:harness_mobile/notify/system_notices.dart';
 void main() {
   const ref = (machineId: 'machine-1', agentId: 'agent-7');
 
-  AgentNoticeMessage message(NoticeKind kind, {String body = 'Fixed it.'}) => (
+  AgentNoticeMessage message(
+    NoticeKind kind, {
+    String body = 'Fixed it.',
+    bool quiet = false,
+  }) => (
     agent: ref,
     kind: kind,
     title: 'Fix login',
     machine: 'MacBook',
     body: body,
+    quiet: quiet,
   );
 
   late _FakePlugin plugin;
@@ -199,6 +204,32 @@ void main() {
       expect(shown.body, 'Approve Bash command: rm -rf dist');
     },
   );
+
+  test('a loud notice keeps the channel\'s sound, vibration and banner', () async {
+    await notices.show(message(NoticeKind.question));
+    final shown = plugin.shown.single;
+    expect(shown.details!.android!.silent, isFalse);
+    final ios = shown.details!.iOS!;
+    expect(ios.presentSound, isNull, reason: 'the plugin default: sound');
+    expect(ios.presentBanner, isNull, reason: 'the plugin default: a banner');
+    expect(ios.interruptionLevel, isNull);
+  });
+
+  test('a quiet notice: no sound, no vibration, no banner — only the list', () async {
+    await notices.show(
+      message(NoticeKind.question, body: 'Approve Bash command: npm test', quiet: true),
+    );
+    final shown = plugin.shown.single;
+    expect(shown.id, noticeIdFor(ref), reason: 'it replaces the agent\'s notice');
+    expect(shown.body, 'Approve Bash command: npm test');
+    expect(shown.details!.android!.channelId, 'agent-question');
+    expect(shown.details!.android!.silent, isTrue);
+    final ios = shown.details!.iOS!;
+    expect(ios.presentSound, isFalse);
+    expect(ios.presentBanner, isFalse);
+    expect(ios.interruptionLevel, InterruptionLevel.passive);
+    expect(ios.threadIdentifier, 'agent-question');
+  });
 
   test('newer news about the same agent replaces its notice', () async {
     await notices.show(message(NoticeKind.done));
