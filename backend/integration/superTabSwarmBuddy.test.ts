@@ -197,6 +197,10 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
       await expect(propose(f, chat, firstOk, f.web.projectId, main, { text })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
     }
     expect(await texts(f, f.web.conversationId, owner)).not.toContain(privateText)
+    // A missing closing quote must not turn later private lines into the approved offer when a quote appears there.
+    await send(f, chat, `I'll post this as you: "${line}\n\n${privateText}"`, {}, peer, main)
+    const multilineOk = await ask(f, chat, 'ok')
+    await expect(propose(f, chat, multilineOk, f.web.projectId, main, { text: `${line}\n\n${privateText}` })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
     await send(f, chat, `I'll post this as you: "${line}"\n\n${privateText}`, {}, peer, main)
     const ok = await ask(f, chat, 'ok')
     await expect(propose(f, chat, ok, f.web.projectId, main, { text: `${line}\n\n${privateText}` })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })

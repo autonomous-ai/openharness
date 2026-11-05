@@ -702,6 +702,16 @@ describe('a Buddy\'s proposal to the PM', () => {
     if (after) expect(passes(after, [newer])).toBe(false)
   })
 
+  it.each(['\n', '\r\n', '\u0085', '\u2028', '\u2029'])('never lets a quote span a line break into private talk (%j)', lineBreak => {
+    const older = 'I\'ll post this as you: “Keep drafts offline”'
+    const words = `Fix the login${lineBreak}This sentence is only for you.`
+    for (const [open, close] of [['"', '"'], ['“', '”']]) {
+      const shown = `I'll post this as you: ${open}${words}${close}`
+      expect(passes(words, [shown])).toBe(false)
+      expect(passes('Keep drafts offline', [shown, older])).toBe(false)
+    }
+  })
+
   // Task #2989: the Buddy showed one line, then replaced it; the owner's ok is for the newest one only.
   it('counts as shown only the newest line its Buddy showed before the ok', () => {
     const older = 'I\'ll post this as you: “Also ship the phone app”', newer = 'I\'ll post this as you: “Keep drafts offline”'
