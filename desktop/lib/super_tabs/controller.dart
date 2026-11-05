@@ -1809,7 +1809,7 @@ class SuperTabController extends ChangeNotifier {
       for (final row in page['messages'] as List)
         if (SuperTabMessage.fromJson(superTabMap(row)) case final m
             when m.conversationId == open.conversationId &&
-                m.thread == open.root)
+                (m.thread == open.root || m.id == open.root))
           m,
     ];
     readingEarlierReplies = earlier;
