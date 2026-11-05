@@ -13,7 +13,7 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 /// This Mac's app, signed in, its Swarm list naming one Swarm the person is
 /// in as [role], joined on the server (a domain auto-join) with no client
 /// asking.
-SuperTabLaunchFixture _computer({String role = 'collaborator'}) {
+SuperTabLaunchFixture _computer({String role = 'collaborator', bool chooseTeam = true}) {
   final f = SuperTabLaunchFixture();
   f.app.status = AppStatus.authenticated;
   f.app.teamAccountHereForTest = true;
@@ -29,6 +29,9 @@ SuperTabLaunchFixture _computer({String role = 'collaborator'}) {
         'joinedVia': 'domain',
       },
     ];
+  if (chooseTeam) {
+    f.app.addListener(() => f.app.joinAccountRequest?.complete(false));
+  }
   return f;
 }
 
@@ -77,13 +80,15 @@ void main() {
   });
 
   test('discovery asks where agents run before adding the computer', () async {
-    final f = _computer();
+    final f = _computer(chooseTeam: false);
     var asked = 0;
-    f.app.chooseJoinAccount = (name) async {
+    f.app.addListener(() {
+      final request = f.app.joinAccountRequest;
+      if (request == null || request.answered) return;
       expect(_contributions(f), isEmpty);
       asked++;
-      return true;
-    };
+      request.complete(true);
+    });
     await _discover(f);
     expect(asked, 1);
     expect(_teamOffers(f), isEmpty);
@@ -91,19 +96,21 @@ void main() {
   });
 
   test('cancelled choice contributes nothing and starts no setup', () async {
-    final f = _computer();
-    f.app.chooseJoinAccount = (_) async => null;
+    final f = _computer(chooseTeam: false);
+    f.app.addListener(() => f.app.joinAccountRequest?.complete(null));
     await _discover(f);
     expect(_contributions(f), isEmpty);
     expect(_teamOffers(f), isEmpty);
   });
 
   test('account change while choosing never contributes or sends consent', () async {
-    final f = _computer();
-    f.app.chooseJoinAccount = (_) async {
+    final f = _computer(chooseTeam: false);
+    f.app.addListener(() {
+      final request = f.app.joinAccountRequest;
+      if (request == null || request.answered) return;
       f.app.currentUser = null;
-      return true;
-    };
+      request.complete(true);
+    });
     await _discover(f);
     expect(_contributions(f), isEmpty);
     expect(_teamOffers(f), isEmpty);
