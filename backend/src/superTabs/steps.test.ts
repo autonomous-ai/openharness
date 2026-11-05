@@ -909,3 +909,18 @@ describe('a failure at an old head', () => {
     expect(f.group(id).assignment!.changesRequestedAt).toBe(f.now)
   })
 })
+
+// Review of #3218 (Ledger, round 3), Important 1: a task from before steps were listed keeps listing none until its PR watch
+// looks its dormant steps up, so a step opened meanwhile never hides the ones before it.
+describe('a step on a task from before step lists', () => {
+  it('leaves its task unlisted; a listed task lists it', () => {
+    const f = stepsFixture()
+    expect(f.group(f.task).stepIds).toEqual([])
+    const first = f.step('Review')
+    expect(f.group(f.task).stepIds).toEqual([first])
+    delete f.group(f.task).stepIds
+    f.step('Test')
+    expect(f.group(f.task)).not.toHaveProperty('stepIds')
+  })
+})
+

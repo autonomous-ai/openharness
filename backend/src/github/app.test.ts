@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_PATCH_PERMISSIONS, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
@@ -638,49 +638,37 @@ describe('watching a pull request', () => {
     expect(github.calls.filter(c => c.path === '/repos/acme/app/pulls/12/files')).toHaveLength(2)
   })
 
-  // Review of #3394: a push between the watch's read and the files read would give a newer head's patch to the older head.
-  it('answers no files when the pull request\'s head is no longer the one asked about', async () => {
+  // Review of #3218 (Ledger, round 3), Important 3: listed files, removed ones above all, cannot be tied to a head (a push and a
+  // push back between reads). A head's patch is read from the comparison of the base and head commits the pull request named
+  // in one answer: two fixed commits, which no push changes.
+  it('reads a head\'s files from the comparison of the base and head it named, with a contents-read token', async () => {
     const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
-    seed(github)
-    github.files.set('acme/app#12', [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b',
-      contents_url: `https://api.github.com/repos/acme/app/contents/a.ts?ref=${HEAD}` }])
-    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toHaveLength(1)
-    expect(await app.pullRequestFiles(repo, 12, token, 'fffffff0000000')).toBeNull()
-  })
-
-  // Security review of #3218 (Warden2), Important 4: a push and a push back between pages, or a diff GitHub had not
-  // recomputed yet, listed another head's files under this head.
-  it('answers no files when any file listed is another head\'s', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
-    seed(github)
-    const file = (name: string, ref: string | null) => ({ filename: name, status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b',
-      ...ref === null ? {} : { contents_url: `https://api.github.com/repos/acme/app/contents/${name}?ref=${ref}` } })
-    github.files.set('acme/app#12', [file('a.ts', HEAD), file('b.ts', 'fffffff0000000')])
-    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toBeNull()
-    github.files.set('acme/app#12', [file('a.ts', HEAD), file('b.ts', null)])
-    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toBeNull()
-  })
-
-  // Review of #3218 (Ledger, round 2), Important 3: a removed file's contents link names the pull request's base, where the
-  // file still is, as GitHub answered for #3147 (head d7b66b01, base d908300e, its two pmFooting files removed).
-  it('takes a removed file at the pull request\'s base, and no other', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    expect(PULL_PATCH_PERMISSIONS).toEqual({ contents: 'read', pull_requests: 'read', metadata: 'read' })
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
     const head = 'd7b66b0167e16c82bd73fbc61645e691742fa10e', base = 'd908300eaf1e6f81a2ec6c8076acca81857954ae'
     github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: head }, base: { ref: 'main', sha: base }, mergeable: true,
       html_url: 'https://github.com/acme/app/pull/12' })
-    const removed = (ref: string) => ({ filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf',
-      patch: '@@ -1,2 +0,0 @@\n-export const a = 1\n-export const b = 2',
-      contents_url: `https://api.github.com/repos/acme/app/contents/backend%2Fsrc%2FsuperTabs%2FpmFooting.ts?ref=${ref}` })
-    const kept = { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b', contents_url: `https://api.github.com/repos/acme/app/contents/a.ts?ref=${head}` }
-    github.files.set('acme/app#12', [kept, removed(base)])
-    expect(await app.pullRequestFiles(repo, 12, token, head)).toHaveLength(2)
-    github.files.set('acme/app#12', [kept, removed(head)])
-    expect(await app.pullRequestFiles(repo, 12, token, head)).toBeNull()
-    github.files.set('acme/app#12', [kept, removed('fffffff0000000fffffff0000000fffffff00000')])
-    expect(await app.pullRequestFiles(repo, 12, token, head)).toBeNull()
+    github.compares.set(`acme/app@${base}...${head}`, [
+      { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
+      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }])
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toEqual([
+      { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
+      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }])
+    expect(github.calls.slice(-2).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/compare/${base}...${head}`])
+  })
+
+  it('reads no files for a head the pull request no longer names, a comparison GitHub cannot give, or one at its file cap', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
+    const head = 'a'.repeat(40), base = 'b'.repeat(40)
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: head }, base: { ref: 'main', sha: base }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
+    github.compares.set(`acme/app@${base}...${head}`, [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }])
+    expect(await app.pullRequestPatchFiles(repo, 12, token, 'c'.repeat(40))).toBeNull()
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toHaveLength(1)
+    github.compares.set(`acme/app@${base}...${head}`, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
   })
 
   it('answers no files when GitHub cannot list them, or lists as many as it ever lists (it may have left some out)', async () => {

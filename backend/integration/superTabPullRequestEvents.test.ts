@@ -266,15 +266,32 @@ describe('pull request events', () => {
       const { stepIds: _listed, ...legacy } = row.data as Record<string, unknown>
       await db.swarmGroup.update({ where: { id: row.id }, data: { data: legacy as object, lastActivityAt: new Date(f.clock.now - 9 * 24 * 60 * MINUTE) } })
       await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: step }, data: { dormant: true } })
+      // Round 3, Important 1: a step opened before the first watch leaves the old dormant one to be looked up.
+      const later = String((await f.execute({ type: 'conversation.create', title: 'Docs', reviewOf: f.task, step: 'Docs', brief: 'Docs',
+        checks: [] } as Command, host, f.worker)).result.conversationId)
       f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
       await f.pass()
       for (const check of await read()) {
         expect(check.passedBy).toBeNull()
         expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
       }
-      // The task lists its steps from now on.
+      // The task lists its steps from now on, the old dormant one and the new one.
       const listed = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { stepIds?: string[] }
-      expect(listed.stepIds).toContain(step)
+      expect(listed.stepIds).toEqual(expect.arrayContaining([step, later]))
+    })
+
+    // Review of #3218 (Ledger, round 3), Important 2: links added later can move a reviewed pull request out of the watch;
+    // its head is then no longer read, so its verdicts stop counting, on the task and its steps, though no head was left.
+    it('a verdict stops counting once its pull request leaves the links watched', async () => {
+      const { f, step, read } = await reviewed()
+      const later = Array.from({ length: 50 }, (_, i) => `https://github.com/acme/app/pull/${8000 + f.number * 100 + i}`)
+      for (const [i, url] of later.entries()) f.pulls.set(url, { ...f.pull({ state: 'closed' }), url, number: 8000 + i })
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: later.join(' ') }, host, f.worker)
+      await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: step }, data: { dormant: true } })
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+      const kept = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads?: object }).pullRequestHeads
+      expect(kept).toEqual({})
     })
 
     // Review of #3218 (Ledger, round 2), Important 2: past HEADS_KEPT open pull requests, unchanged heads keep their patches.

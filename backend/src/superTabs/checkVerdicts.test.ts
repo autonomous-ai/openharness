@@ -39,7 +39,13 @@ describe('a verdict at a head', () => {
   it('counts while the task has no watched head', () => {
     expect(verdictCounts(verdict('r', true, A, 'p1'), undefined)).toBe(true)
     expect(verdictCounts(verdict('r', true, undefined), undefined)).toBe(true)
-    expect(verdictCounts(verdict('r', true, undefined), {})).toBe(true)
+  })
+
+  // Review of #3218 (Ledger, round 3), Important 2: a task whose watched heads all left the watch (its links moved past them)
+  // was watched: its verdicts stay unverified, never "as before".
+  it('does not count once the task was watched, though it keeps no head now', () => {
+    expect(verdictCounts(verdict('r', true, A, 'p1'), {})).toBe(false)
+    expect(verdictCounts(verdict('r', true, undefined), {})).toBe(false)
   })
 
   // Review of #3218 (Ledger), Important 2 and 6: once the task's pull requests are watched, a verdict whose own one has no head
@@ -157,4 +163,3 @@ describe('the links a task is watched for', () => {
     expect(Object.keys(heads)).toHaveLength(HEADS_KEPT)
   })
 })
-
