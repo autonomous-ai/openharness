@@ -1366,6 +1366,9 @@ class AppNotifier extends ChangeNotifier {
     this.cliLogin = cliLogin ?? this.viewer.login;
     this.peerLinks = peerLinks ?? this.viewer.links;
     _groupSyncOverride = groupSync;
+    // A teammate's agent in a Harness Team account on this person's Mac is not their news.
+    agentNotices.inTeamAccount = (ref) =>
+        stateOf(ref.machineId)?.machine.sessionKind == 'team';
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
     this.productMeasurement =
