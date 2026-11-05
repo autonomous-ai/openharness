@@ -267,6 +267,17 @@ class _WorkspacePreview extends StatelessWidget {
                   padding: const EdgeInsets.all(4),
                   child: Row(
                     children: [
+                      // A theme's own sidebar (Plum's plum) shows in its card.
+                      if (palette.sidebar != palette.workspace) ...[
+                        Container(
+                          width: 18,
+                          decoration: BoxDecoration(
+                            color: palette.sidebar,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       for (var pane = 0; pane < 2; pane++) ...[
                         if (pane > 0) const SizedBox(width: 4),
                         Expanded(
