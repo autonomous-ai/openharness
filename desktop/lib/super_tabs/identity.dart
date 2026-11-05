@@ -159,10 +159,12 @@ String superTabPersonName(String email) => email.split('@').first;
 
 /// A computer as it calls itself: a Bonjour hostname without its `.local` suffix ("MacBookPro2021"), never mapped
 /// to a model name, so two machines of one model stay told apart. A name a person chose stays as it is.
+/// What names a Mac's Harness Team account entry after its Mac's name (backend model.ts TEAM_ENTRY_LABEL, task #3060).
+const kTeamEntryLabel = ' · Team account';
+
 String superTabMachineName(String name) {
-  // A Mac's Harness Team account entry reads as its Mac's name and this label (backend model.ts TEAM_ENTRY_LABEL, task
-  // #3060): the Mac's part is shown like any hostname, the label kept.
-  const team = ' · Team account';
+  // A Team account entry reads as its Mac's name and the label: the Mac's part is shown like any hostname, the label kept.
+  const team = kTeamEntryLabel;
   if (name.length > team.length && name.endsWith(team)) {
     return '${superTabMachineName(name.substring(0, name.length - team.length))}$team';
   }
