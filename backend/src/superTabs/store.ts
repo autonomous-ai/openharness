@@ -54,7 +54,9 @@ import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } 
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
-import { owedLines } from './inbox.js'
+import { crewNeedOf } from './crewNeeds.js'
+import { swarmUsernames } from './usernames.js'
+import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
@@ -3296,7 +3298,8 @@ export class SuperTabStore {
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
-        const gathered = gatheredMessage(state, message) && !!ledProject(state, recipient)
+        // A person's message or a crew need to a PM whose host sends its turn waits for its inbox too (inbox.ts, #3545).
+        const gathered = (gatheredMessage(state, message) && !!ledProject(state, recipient)) || gathersForInbox(state, target, message)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
@@ -4302,10 +4305,13 @@ export class SuperTabStore {
    * a second and a whole-Swarm rewrite check each, on 2026-10-27 the backend at 5 pods. Only a caller whose full poll
    * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
    */
-  async deliveries(user: AuthUser, tabId: string, agentId: string) {
+  async deliveries(user: AuthUser, tabId: string, agentId: string, turn?: 'idle' | 'busy') {
     const key = pollKey(user, tabId, agentId)
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
-    if (last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
+    // A PM whose turn just ended gets its inbox now, not at the next full poll (#3545): only its host sends `turn`, and only
+    // a read saying idle with something gathered skips the fast answer, by one indexed read.
+    const releasing = turn === 'idle' && (await agentGatheredDeliveries(this.db, tabId, agentId, 1)).length > 0
+    if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
       const open = await openDeliveries(this.db, tabId, agentId)
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
@@ -4318,7 +4324,7 @@ export class SuperTabStore {
       }
     }
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
-    const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view)
+    const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view, turn)
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
       ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
       .catch(pollMemoryFailed)
@@ -4346,7 +4352,7 @@ export class SuperTabStore {
     return allowed
   }
 
-  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string, view: CacheView) {
+  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string, view: CacheView, turn?: 'idle' | 'busy') {
     // Every write below is the Lead's: its time checks, idle stops, update request, digest and stale runs. Any other agent's
     // poll only reads, through the read cache with no transaction (Diego's review of 10-28, item 1: 20 workers were 40
     // whole-Swarm loads, clones and empty commits a minute). The authority checks are the same; a claim checks them again.
@@ -4363,8 +4369,19 @@ export class SuperTabStore {
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
       // What this coordinator gathered, oldest first (noticeDigest.ts): one indexed read per coordinator poll.
-      const gathered = led ? await agentGatheredDeliveries(tx, tabId, agentId, NOTICE_DIGEST_MAX) : []
-      const release = digestIsDue(gathered[0], this.now()) ? gathered : []
+      let gathered = led ? await agentGatheredDeliveries(tx, tabId, agentId, NOTICE_DIGEST_MAX) : []
+      // A read that sends no turn, from a PM whose machine says its host does (#3545): the people's messages and crew needs it
+      // gathered go now, in this read, as they would to an older host; the notices keep their digest.
+      if (turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
+        const requeued = new Set<string>()
+        for (const delivery of gathered) {
+          const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { author: true, source: true } })
+          if (!message || inboxSection({ author: message.author as unknown as Author, source: message.source }) === 'results') continue
+          if ((await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'queued' } })).count) requeued.add(delivery.id)
+        }
+        gathered = gathered.filter(d => !requeued.has(d.id))
+      }
+      const release = inboxDue(gathered[0], this.now(), turn) ? gathered : []
       // A due digest reads its notices where they were written: a group asleep since is not cancelled for not being loaded.
       const groupIds = new Set(release.map(d => d.conversationId))
       const due = led && !loaded.state.paused ? digestDue(led, this.now()) : null
@@ -4416,8 +4433,9 @@ export class SuperTabStore {
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
-        const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more, notices.some(n => n.otherAccount),
-          led ? owedLines(state, projectOf(state, led.id), this.now()) : [])
+        const lines = (section: InboxSection) => notices.filter(n => n.section === section).map(n => n.line)
+        const text = digestText(notices[0]!.delivery.createdAt, lines('results'), more, notices.some(n => n.otherAccount),
+          led ? owedLines(state, projectOf(state, led.id), this.now()) : [], { people: lines('people'), crew: lines('crew') })
         // One message when an update request goes in this poll: the PM gets one turn, not two. Never into one already stored: its row
         // would be kept as it is, with no lines, or fail the poll (writeMessages keepStored).
         const merged = await updateOpen()
@@ -4517,7 +4535,8 @@ export class SuperTabStore {
    *  and its agent may be stopped within the 5 minutes; its result is that sender's, so it goes (review of #2560). Each message by
    *  its id (no `in` on a hot collection); one that cannot be found is named by its id alone. */
   private async releasableNotices(tx: Transaction, state: SuperTabState, coordinator: Agent, rows: SuperTabDelivery[]) {
-    const notices: Array<{ delivery: SuperTabDelivery; line: string; otherAccount: boolean }> = []
+    const notices: Array<{ delivery: SuperTabDelivery; line: string; otherAccount: boolean; section: InboxSection }> = []
+    const names = swarmUsernames(state)
     // The digest is the coordinator's own message: each line says whether an agent of another account wrote what it quotes.
     const accounts = new Map<string, Promise<string>>()
     let refused = 0
@@ -4534,8 +4553,14 @@ export class SuperTabStore {
       // A post's line names who wrote it (#3387); a notice is in the server's own words.
       const poster = message && allowed && agentPost(state, { author: message.author as unknown as Author, source: message.source as MessageDraft['source'] })
         ? (message.author as unknown as Author) : null
-      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount,
-        poster ? poster.displayName ?? poster.name : undefined) })
+      // People's messages and crew needs have sections of their own in the inbox (inbox.ts, #3545); a person by username.
+      const section = message && allowed ? inboxSection({ author: message.author as unknown as Author, source: message.source }) : 'results'
+      const need = section === 'crew' ? crewNeedOf(message!.source) : null
+      const line = section === 'people' ? personLine(state, delivery, message!.text, names.get((message!.author as unknown as Author).id) ?? 'a person')
+        : need ? crewNeedLine(state, delivery, need, message!.text).replace(/^- /, otherAccount ? '- From another account: ' : '- ')
+          : noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount,
+        poster ? poster.displayName ?? poster.name : undefined)
+      notices.push({ delivery, otherAccount, section, line })
     }
     return { notices, refused }
   }

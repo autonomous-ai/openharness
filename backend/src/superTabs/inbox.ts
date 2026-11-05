@@ -6,7 +6,8 @@
 import type { SuperTabDelivery } from '@prisma/client'
 import { crewNeedOf, type CrewNeed } from './crewNeeds.js'
 import type { Agent, Author, SuperTabState } from './model.js'
-import { noticeLine } from './noticeDigest.js'
+import { digestIsDue, noticeLine } from './noticeDigest.js'
+import { TURN_END_WAIT_MS } from './turnEnd.js'
 import { ledProject, type SwarmProject } from './projects.js'
 import { swarmUsernames } from './usernames.js'
 
@@ -26,11 +27,21 @@ export function inboxSection(message: { author: Pick<Author, 'kind'>; source?: u
   return message.author.kind === 'person' && !message.source ? 'people' : 'results'
 }
 
+/** Whether [agent] leads a project and its host sends its turn with its list read (INBOX_CAPABILITY, from its machine's report). */
+export const turnInboxHost = (state: SuperTabState, agent: Agent): boolean => !!ledProject(state, agent.id)
+  && !!state.machines?.find(m => m.machineId === agent.machineId)?.observation?.capabilities?.includes(INBOX_CAPABILITY)
+
 /** Whether [message] to [recipient] waits for its inbox: a person's message or a crew need to a project's PM whose host sends
  *  its turn (INBOX_CAPABILITY). Results and notices are gathered as noticeDigest.ts says, whatever the host. */
-export function gathersForInbox(state: SuperTabState, recipient: Agent, message: { author: Pick<Author, 'kind'>; source?: unknown }): boolean {
-  if (inboxSection(message) === 'results' || !ledProject(state, recipient.id)) return false
-  return !!state.machines?.find(m => m.machineId === recipient.machineId)?.observation?.capabilities?.includes(INBOX_CAPABILITY)
+export const gathersForInbox = (state: SuperTabState, recipient: Agent, message: { author: Pick<Author, 'kind'>; source?: unknown }): boolean =>
+  inboxSection(message) !== 'results' && turnInboxHost(state, recipient)
+
+/** Whether the PM's gathered rows go out now, the oldest first: a read that sends no turn (an older host) keeps the notice
+ *  digest's own clock; one that does, when its turn has ended, or when the oldest has waited TURN_END_WAIT_MS. */
+export function inboxDue(oldest: Pick<SuperTabDelivery, 'createdAt'> | undefined, now: number, turn: 'idle' | 'busy' | undefined): boolean {
+  if (!oldest) return false
+  if (turn === undefined) return digestIsDue(oldest, now)
+  return turn === 'idle' || now - oldest.createdAt.getTime() >= TURN_END_WAIT_MS
 }
 
 type Where = Pick<SuperTabDelivery, 'conversationId' | 'messageId'>
