@@ -2307,6 +2307,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
                   'github.com/${owner.isEmpty ? 'owner' : owner}/'
                   '${name.isEmpty ? 'name' : name}',
                   key: const ValueKey('swarm-new-repo-address'),
+                  // A long name, or 200% text, wraps rather than cuts off.
+                  lines: 3,
                 ),
         ),
         const SizedBox(height: AppSpace.m),
@@ -2382,7 +2384,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
           child: SwarmRow.line(
             'GitHub asks you to confirm, then Harness creates it with you as '
             'its admin.',
-            lines: 2,
+            lines: 4,
           ),
         ),
       ],

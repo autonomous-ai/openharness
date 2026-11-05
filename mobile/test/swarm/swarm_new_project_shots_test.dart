@@ -531,4 +531,97 @@ void main() {
     swarmOpenGitHub = opened;
     AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null);
+
+  // Guide's review of #3204: New repository at 200% text with a long name,
+  // and the wait with GitHub not opened, in both phone themes.
+  testWidgets('New repository at 200% text with a long name', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
+    final opened = swarmOpenGitHub;
+    swarmOpenGitHub = (_) async => false;
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      final swarm = NewProjectSwarm(
+        machines: [leadPool('mac-studio', name: 'Studio.local', slots: 3)],
+      )..ownerState = 'ready';
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final host = SwarmHost(
+        accountId: () => me,
+        account: ValueNotifier<String?>(me),
+        request: newProjectBackend([swarm]).request,
+        notices: SilentSystemNotices(),
+        features: features,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      final boundary = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: const TextScaler.linear(2)),
+              child: SwarmScope(notifier: host, child: child!),
+            ),
+            onGenerateRoute: (_) => CupertinoPageRoute<void>(
+              builder: (_) => SwarmPage(now: () => newProjectNow),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> capture(String name) => tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/new-repository-200-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+        image.dispose();
+      });
+      Finder key(String value) => find.byKey(ValueKey(value));
+      Future<void> tap(String k) async {
+        await tester.ensureVisible(key(k));
+        await tester.pumpAndSettle();
+        await tester.tap(key(k));
+        await tester.pumpAndSettle();
+      }
+
+      await tap('swarm-title-button');
+      await tap('swarm-switch-new-project');
+      await tap('swarm-new-project-machine');
+      await tap('swarm-new-project-pick-machine-mac-studio');
+      await tap('swarm-new-project-repository');
+      await tap('swarm-new-project-pick-new-repo');
+      await tester.enterText(
+        key('swarm-new-repo-name'),
+        'notes-app-with-sync-between-the-phone-and-the-mac',
+      );
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await capture('subpage');
+      await tap('swarm-new-repo-use');
+      await capture('sheet');
+      await tester.ensureVisible(key('swarm-new-project-create'));
+      await tester.tap(key('swarm-new-project-create'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.ensureVisible(key('swarm-new-project-open-github'));
+      await tester.pumpAndSettle();
+      await capture('waiting-not-opened');
+      await tester.pumpWidget(const SizedBox());
+      host.dispose();
+    }
+    swarmOpenGitHub = opened;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
 }
