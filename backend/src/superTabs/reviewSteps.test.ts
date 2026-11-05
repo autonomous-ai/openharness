@@ -21,7 +21,7 @@ function fixture() {
   const add = (harnessId: string, group: string, roleName?: string) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
     name: harnessId, configuration: opus, lead: false, ...roleName ? { roleName } : {} } as Command, owner, contribution).result.agentId as string
   const lead = run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'pm', configuration: opus, lead: true }, owner, contribution).result.agentId as string
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [] }, as(lead)).result.conversationId as string
+  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
   const dev = add('dev', task, 'Engineer')
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!

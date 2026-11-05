@@ -24,7 +24,7 @@ function fixture(engineer: AgentConfiguration = opus) {
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const lead = run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'pm', configuration: opus, lead: true }, owner,
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [] }, as(lead)).result.conversationId as string
+  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
   const dev = add('dev', task, engineer)
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!
@@ -106,7 +106,7 @@ describe('reviewerCandidates', () => {
   it('is never busy, a PM, a Buddy, or holding another step of this task', () => {
     const f = fixture()
     const busy = f.add('busy', f.task, opus, { roleName: 'Reviewer' })
-    const other = f.run({ type: 'conversation.create', title: 'Other', brief: 'Other work.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Other', brief: 'Other work.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     f.run({ type: 'work.assign', conversationId: other, agentId: busy }, f.as(f.lead))
     const buddy = f.add('buddy', f.task, opus, { roleName: 'Reviewer' })
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'g' }
