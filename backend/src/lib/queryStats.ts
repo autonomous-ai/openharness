@@ -114,7 +114,7 @@ export function filterShape(action: string, args: unknown): string {
 }
 
 /** `Model.action`; a raw command by its collection and command name (`SwarmGroup.$runCommandRaw aggregate`). */
-function opName(model: string | undefined, action: string, args: unknown): string {
+export function opName(model: string | undefined, action: string, args: unknown): string {
   if (model) return `${model}.${action}`
   if (action === '$runCommandRaw' && isPlainObject(args)) {
     const command = Object.keys(args)[0] ?? '?'
@@ -125,7 +125,7 @@ function opName(model: string | undefined, action: string, args: unknown): strin
 }
 
 /** Documents a result holds: a list's length, one for a document, a raw cursor reply's first batch. */
-function docsOf(result: unknown): number {
+export function docsOf(result: unknown): number {
   if (Array.isArray(result)) return result.length
   if (isPlainObject(result)) {
     const cursor = result.cursor
