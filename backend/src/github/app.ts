@@ -10,6 +10,7 @@ import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
 import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
+import type { PullRequestFile } from '../superTabs/pullRequestPatch.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
@@ -40,11 +41,27 @@ export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read'
  *  pull request's files. */
 export const RELEASE_READ_PERMISSIONS = { contents: 'read', pull_requests: 'read', actions: 'read', metadata: 'read' } as const
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
+/** What reading a pull request head's patch may do (superTabs/pullRequestPatch.ts, #3394): read the pull request, and the
+ *  comparison of its base and head commits, which is repository contents. Read only, revoked when the watch's pass ends. */
+export const PULL_PATCH_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
+/** The most files GitHub gives for a comparison of two commits (GET /compare/{base}...{head}). */
+export const COMPARE_FILES_MAX = 300
 /** Pages of 100 a pull request's file list reads: GitHub lists at most 3,000 files. */
 const PULL_FILES_PAGES = 30
 const PUSH_ORIGINS_KEPT = 1000
+/** GitHub's files of a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
+function filesOf(body: unknown[]): PullRequestFile[] | null {
+  const text = (value: unknown) => typeof value === 'string' ? value : undefined
+  const files: PullRequestFile[] = []
+  for (const file of body as Array<Record<string, unknown>>) {
+    const filename = text(file?.filename), status = text(file?.status), sha = text(file?.sha), patch = text(file?.patch), previousFilename = text(file?.previous_filename)
+    if (!filename || !status || sha === undefined) return null
+    files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
+  }
+  return files
+}
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 /** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
@@ -663,6 +680,32 @@ export class GitHubApp {
         comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
           login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
       }
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /** The files of a pull request at [head], for its patch id (superTabs/pullRequestPatch.ts, #3394), read with a token of
+   *  [PULL_PATCH_PERMISSIONS]: the comparison of the base and head commits the pull request names in one answer
+   *  (GET /pulls/{number}, then GET /compare/{base}...{head}), two fixed commits no push changes (review of #3218, round 3:
+   *  a listing of the pull request's files ties removed ones to no head, and pages to no single head). Null unless the pull request still names [head], and when GitHub cannot
+   *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. With the branch it
+   *  merges into from the same answer, which the patch id names (security review of #3218, round 3). */
+  async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; files: PullRequestFile[] } | null> {
+    const base = `/repos/${repository.owner}/${repository.name}`
+    const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
+    try {
+      const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
+      if (pull.status !== 200) return null
+      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
+      const at = sha(named.head?.sha), from = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
+      if (!at || !from || !branch || at !== head.toLowerCase()) return null
+      const compared = await this.call('GET', `${base}/compare/${from}...${at}?per_page=1`, `Bearer ${token}`)
+      const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
+      if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
+      const files = filesOf(listed)
+      return files && { base: branch, files }
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error
