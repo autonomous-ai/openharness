@@ -86,16 +86,17 @@ describe('a computer signed in as another account', () => {
 
   it("moves its entry in every Swarm to the new account, once", async () => {
     const tabs = [await swarm(), await swarm()]
-    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: COMPUTER, autonomousEnv: 'prod' })).toBe(2)
+    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: COMPUTER, autonomousEnv: 'prod' })).toEqual(
+      expect.arrayContaining(tabs.map(tabId => ({ tabId, from: 'kelvin-mac', fromOwner: kelvin, to: 'tt-mac', toOwner: tt }))))
     for (const tab of tabs) expect(await machinesIn(tab)).toEqual([{ machineId: 'tt-mac', contributorId: tt, previousOwner: kelvin }])
-    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: COMPUTER, autonomousEnv: 'prod' })).toBe(0)
+    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: COMPUTER, autonomousEnv: 'prod' })).toEqual([])
     for (const tab of tabs) expect(await machinesIn(tab)).toEqual([{ machineId: 'tt-mac', contributorId: tt, previousOwner: kelvin }])
   })
 
   it('moves nothing for a computer id the signed-in machine does not have', async () => {
     const tab = await swarm()
-    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: OTHER, autonomousEnv: 'prod' })).toBe(0)
-    expect(await store.computerSignedIn({ machineId: 'other-elsewhere', ownerId: other, computerId: COMPUTER, autonomousEnv: 'prod' })).toBe(0)
+    expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: OTHER, autonomousEnv: 'prod' })).toEqual([])
+    expect(await store.computerSignedIn({ machineId: 'other-elsewhere', ownerId: other, computerId: COMPUTER, autonomousEnv: 'prod' })).toEqual([])
     expect(await machinesIn(tab)).toEqual([{ machineId: 'kelvin-mac', contributorId: kelvin, previousOwner: undefined }])
   })
 
@@ -116,10 +117,10 @@ describe('a computer signed in as another account', () => {
     }
     await run(tab, { type: 'machine.contribute', machineId: 'kelvin-victim', name: 'Victim Mac', cwd: '/work', scope: 'swarm', engines: ['claude'],
       maxAgents: 2, teamAccountOnly: true }, kelvinUser)
-    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toBe(0)
+    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toEqual([])
     // Nor with no key at all: a machine that never registered one proves nothing.
     keys.splice(keys.findIndex(k => k.machineId === 'forged-mac'), 1)
-    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toBe(0)
+    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toEqual([])
     expect(await machinesIn(tab)).toEqual([{ machineId: 'kelvin-victim', contributorId: kelvin, previousOwner: undefined }])
   })
 
@@ -153,15 +154,20 @@ describe('the one-time cleanup of computers listed under two accounts', () => {
     await add('kelvin-old', kelvinUser)
     await add('tt-new', ttUser)
 
+    // Security review 2 of #3100: what Ken's go covers is exactly what the write changes. A computer shared by two accounts whose
+    // machine key does not match is found, and moved neither in the dry run nor in the write.
+    await db.machine.update({ where: { machineId: 'forged-mac' }, data: { lastSeenAt: new Date() } })
+    const moved = { tabId: tab, from: 'kelvin-old', fromOwner: kelvin, to: 'tt-new', toOwner: tt }
     const dry = await cleanUpComputers(db, store, 'prod', { write: false })
     expect(dry.computers).toContainEqual({ signedIn: { machineId: 'tt-new', ownerId: tt }, others: ['kelvin-old'] })
-    expect(dry.moved).toBe(0)
+    expect(dry.computers.some(c => c.signedIn.machineId === 'forged-mac')).toBe(true)
+    expect(dry.moves).toEqual([moved])
     expect(await machinesIn(tab)).toEqual([`kelvin-old:${kelvin}`, `tt-new:${tt}`])
 
-    expect((await cleanUpComputers(db, store, 'prod', { write: true })).moved).toBeGreaterThanOrEqual(1)
+    expect((await cleanUpComputers(db, store, 'prod', { write: true })).moves).toEqual([moved])
     expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
     const again = await cleanUpComputers(db, store, 'prod', { write: true })
-    expect(again.computers.filter(c => c.signedIn.machineId === 'tt-new').length).toBe(1)
+    expect(again.moves).toEqual([])
     expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
   })
 })
