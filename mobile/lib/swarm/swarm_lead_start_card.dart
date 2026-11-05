@@ -204,10 +204,11 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                 ),
               ] else if (offline) ...[
                 const SizedBox(height: AppSpace.m),
+                // A state, not an action: quiet, and it starts nothing.
                 const SwarmButton(
                   key: ValueKey('swarm-lead-start-offline'),
                   label: 'Open Harness on your Mac to start',
-                  style: SwarmButtonStyle.fill,
+                  style: SwarmButtonStyle.plain,
                   wide: true,
                   onPressed: null,
                 ),
@@ -219,7 +220,8 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                   style: AppType.body(color: AppPalette.textPrimary),
                 ),
               ],
-              if (status?.reason case final reason?) ...[
+              // An old failure says nothing while no computer is on.
+              if (status?.reason case final reason? when !offline) ...[
                 const SizedBox(height: AppSpace.s),
                 Text(
                   'Couldn’t start a Lead: $reason',
