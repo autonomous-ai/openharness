@@ -107,6 +107,7 @@ typedef enum {
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
     A_TAB_LIST,
     A_INBOX,
+    A_PET_INBOX,   // a tap on a companion that wears the notice badge: the inbox, while a swipe from it still swipes
     A_SIDE_PM, A_SIDE_BUDDY,
     A_PICK_PERSONAL, A_PICK_TEAM,
     A_NOTICE,
@@ -1455,6 +1456,41 @@ static void face_buddy_ring(ht_scene_t *f)
     ht_ring_arc(f, 233 * 16, 233 * 16, 230 * 16, 3 * 16, 90, 180, color(mix_black(BUDDY_LILAC, 32)));
 }
 /*
+ * THE NOTICE BADGE (Diego's dial, 2026-11-05, option B): the bell pill at y 346 sat on a long recap's last line, while the
+ * space around the pet stood empty. So a face with a companion shows its unread count as a small blue badge on the
+ * companion's top-right shoulder, and a tap on the companion opens the notices. A face with none (a thread) keeps the pill.
+ */
+// The face's companion as drawn: the largest sprite or round disc centred in the upper middle of the glass (the Focus pet,
+// a creature, the Buddy's disc). False when there is none.
+static bool companion_box(const ht_scene_t *f, ht_rect_t *out)
+{
+    long best = 0;
+    for (int i = 0; i < f->count; i++) {
+        const ht_run_t *r = &f->runs[i];
+        bool disc = r->box.h && r->w == r->box.h && r->box.radius * 2 >= r->box.h;
+        if (!r->sprite.width && !disc) continue;
+        ht_rect_t b = ht_run_bounds(r);
+        int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        long area = (long)b.w * b.h;
+        if (cx < 153 || cx > 313 || cy < 60 || cy > 260 || area < 900 || area <= best) continue;
+        best = area; *out = b;
+    }
+    return best > 0;
+}
+static void notice_badge(ht_scene_t *f, const ht_rect_t *pet, unsigned count)
+{
+    enum { BADGE_D = 30, BADGE_RING = 3 };   // a 30 px disc in a 3 px black ring
+    int cx = pet->x + pet->w - 4, cy = pet->y + 4;
+    char text[4];
+    if (count > 9) snprintf(text, sizeof text, "9+"); else snprintf(text, sizeof text, "%u", count);
+    const ht_font_t *font = &ht_lv_inter_20.base;
+    int r = BADGE_D / 2 + BADGE_RING, tw = ht_measure(font, text);
+    uint16_t blue = color(0x006fff);
+    ht_box(f, cx - r, cy - r, 2 * r, 2 * r, r, BG, BG);   // a black ring, so it reads apart from the art under it
+    ht_box(f, cx - BADGE_D / 2, cy - BADGE_D / 2, BADGE_D, BADGE_D, BADGE_D / 2, blue, blue);
+    ht_text(f, cx - tw / 2, cy - font->height / 2, tw, font, color(0xffffff), blue, text);
+}
+/*
  * THE PM | BUDDY PAIR (spec 2026-11-05): a dark pill 180 x 44 px at y 388 with two equal halves, the current side's filled.
  * A tap on the other half shows that side. Four runs always (pill, current half, two labels), and the two hits.
  */
@@ -1660,10 +1696,6 @@ static void render_swarm_face(ht_scene_t *f)
     ht_rect_t bubble = {0};
     bool told = bell && focus_face && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
     int bell_y = l->buddies ? 346 : 400;   // clear of the pair
-    if (bell && !told) {
-        if (focus_face) focus_bell(f, unread, bell_y);
-        else ht_notification_bell_at(f, unread, f_.ink, l->buddies ? bell_y : HT_NOTIFICATION_Y);   // above the pair, else its own row
-    }
     if (buddy && !thread) {
         // The avatar stands where the pet does on Focus, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
         // today's place (it rises with its lines). A creature skin keeps its creature.
@@ -1686,6 +1718,14 @@ static void render_swarm_face(ht_scene_t *f)
             ht_cell_sprite(f, 208, cy - 25, face_buddy_avatar(l->buddy.cells, l->buddy.color));
         }
         face_buddy_ring(f);
+    }
+    // The count on the companion's shoulder; the pill only on a face with no companion (a thread).
+    ht_rect_t pet = {0};
+    bool badge = bell && !told && !thread && companion_box(f, &pet);
+    if (badge) notice_badge(f, &pet, unread);
+    else if (bell && !told) {
+        if (focus_face) focus_bell(f, unread, bell_y);
+        else ht_notification_bell_at(f, unread, f_.ink, l->buddies ? bell_y : HT_NOTIFICATION_Y);   // above the pair, else its own row
     }
     if (l->buddies) {
         // The pair stands at the bottom, so the lower arc is bare: the face's hint goes, and its working line (and the PM side's
@@ -1715,7 +1755,9 @@ static void render_swarm_face(ht_scene_t *f)
         s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
         break;
     }
-    if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, true};
+    // With the badge, the companion and its badge are the inbox's target; the rest of the face still talks.
+    if (badge) s.hits[s.hit_count++] = (hit_t){{pet.x - 16, pet.y - 24, pet.w + 48, pet.h + 40}, A_PET_INBOX, 0, true};
+    else if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, true};
     if (told && bubble.w) s.hits[s.hit_count++] = (hit_t){{bubble.x - 14, bubble.y - 14, bubble.w + 28, bubble.h + 28}, A_INBOX, 0, true};
     s.hits[s.hit_count++] = focus_face ? (hit_t){{0, 66, HT_WIDTH, HT_HEIGHT - 66}, A_PET, 0, true}
                                        : (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
@@ -3151,6 +3193,7 @@ static void dispatch(action_t a)
         else if (a.kind==A_ANSWER) send_answer();
         break;
     case A_INBOX:
+    case A_PET_INBOX:   // released on the badged companion (the touch path dispatches A_INBOX itself)
         notice_open();
         break;
     case A_PICK_PERSONAL:
@@ -3891,6 +3934,10 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (result == HT_TOUCH_TAP || (on_target && now - s.touch_started < 1800))
                 dispatch(pressed_action);
             change();
+        } else if (surface && pressed_action.kind == A_PET_INBOX && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
+            // The companion wears the notice badge: a touch on it, read as a thumb's (the face's talk rule below), opens the
+            // inbox. It is no footer button, so a swipe that starts on it still moves to the next project.
+            dispatch((action_t){.kind = A_INBOX});
         } else if (surface && character.id == HT_CHARACTER_FOCUS && pressed_action.kind == A_PET &&
                    !gesture.guarded && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
             /*
@@ -3927,7 +3974,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
-            } else if (surface && pressed_action.kind == A_PET)
+            } else if (surface && (pressed_action.kind == A_PET || pressed_action.kind == A_PET_INBOX))
                 tabs_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
