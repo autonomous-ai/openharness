@@ -778,15 +778,16 @@ describe('an instructions save may move a person\'s rule', () => {
     return { f, lead }
   }
   const PR = 'https://github.com/acme/app/pull/7'
-  /** A code task of the project whose brief carries [line]; [merged]: GitHub, read by the Swarm itself, saw its pull request
-   *  merge (store.ts archiveFinished), as no command can say. */
-  function codeTask(f: ReturnType<typeof fixture>, line: string, merged: boolean) {
+  /** A code task of the project whose brief carries [line], set at 1000 (the fixture's clock), linking [PR]. */
+  function codeTask(f: ReturnType<typeof fixture>, line: string) {
     const id = f.run({ type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock releases at night.\n\nChanges:\n- ${line}`, checks: [] })
       .result.conversationId as string
     const group = f.state.conversations.find(c => c.id === id)!
-    if (merged) group.mergeSeen = { [PR]: 900 }
+    group.pullRequestUrls = [PR]
     return group
   }
+  /** What the store read of GitHub before the save (store.ts pullRequestMergesFor): [PR] merged at [at]. */
+  const mergedAt = (at: number) => ({ pullRequestMerges: { [PR]: at } })
 
   it('lets a rule move word for word into people notes', () => {
     const { f, lead } = pm()
@@ -803,26 +804,39 @@ describe('an instructions save may move a person\'s rule', () => {
 
   it('lets a rule move into a code task once it merged, and keeps the line while the task is open, naming it', () => {
     const { f, lead } = pm()
-    const open = codeTask(f, quiet, false)
+    const open = codeTask(f, quiet)
     const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
     expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, people: ['owner'], why: 'waiting',
       movedTo: `task #${open.number}` }] } })
     expect(refused.message).toContain(`task #${open.number}`)
     expect(refused.message).toContain('until it merges')
-    open.mergeSeen = { [PR]: 900 }
-    expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+    expect(f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(1500) }).result.revision).toBe(2)
+  })
+
+  // Task #3463 (review of #3220): only work merged after the rule went into the task frees it, as GitHub itself dates the merge.
+  it('keeps the line for a pull request of the task that merged before the rule went into it', () => {
+    const { f, lead } = pm()
+    const task = codeTask(f, quiet)
+    expect(task.briefAt).toBe(1000)
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(900) })))
+      .toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting', movedTo: `task #${task.number}` }] } })
+    // Defined again later, carrying the rule: a merge between the two briefs is older than the move too.
+    f.run({ type: 'work.define', conversationId: task.id, brief: `Changes:\n- ${quiet}`, checks: [] }, owner, { now: 2000 })
+    expect(f.state.conversations.find(c => c.id === task.id)!.briefAt).toBe(2000)
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(1500) }))).toMatchObject({ details: { dropped: [{ why: 'waiting' }] } })
+    expect(f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(2500) }).result.revision).toBe(2)
   })
 
   // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
   // Swarm's own read of GitHub makes a moved rule's task merged.
   it('takes no task\'s merge record for a merge: a forged one keeps the line', () => {
     const { f, lead } = pm()
-    const task = codeTask(f, quiet, false)
+    const task = codeTask(f, quiet)
     f.run({ type: 'conversation.merged', conversationId: task.id, pullRequestUrl: PR }, as(lead))
     expect(f.state.conversations.find(c => c.id === task.id)!.ledger?.mergedAt).toBeDefined()
     expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting' }] } })
-    // Nor can any command write what the Swarm saw.
-    expect(() => f.run({ type: 'conversation.create', title: 'Forged', brief: `Changes:\n- ${quiet}`, checks: [], mergeSeen: { [PR]: 1 } } as never, as(lead))).toThrow()
+    // Nor can any command write when a brief was set.
+    expect(() => f.run({ type: 'conversation.create', title: 'Forged', brief: `Changes:\n- ${quiet}`, checks: [], briefAt: 1 } as never, as(lead))).toThrow()
   })
 
   it('still refuses a real drop, a move without who gave it, and a move into a cancelled task, saying how a rule may move', () => {
@@ -832,9 +846,9 @@ describe('an instructions save may move a person\'s rule', () => {
     expect(refused.message).toContain('people notes')
     expect(refused.message).toContain('rules record')
     expect(refused.message).toContain('code task')
-    codeTask(f, 'No releases between 18:00 and 09:00 Vietnam time.', true)
-    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
-    const cancelled = codeTask(f, quiet, false)
+    codeTask(f, 'No releases between 18:00 and 09:00 Vietnam time.')
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(1500) }))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const cancelled = codeTask(f, quiet)
     cancelled.assignment = { status: 'cancelled' } as never
     expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ why: 'removed' }] } })
   })
