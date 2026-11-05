@@ -91,8 +91,10 @@ describe('withPmAccounts', () => {
         .toContain('It keeps 25% of its week for its PMs')
     })
 
-    it('takes the reset from the candidate\'s own quota when the account names none', () => {
-      const p = probe({ quota: { known: true, leftPercent: 17, resetsAt: now + 4 * DAY } })
+    it('takes the weekly reset from the candidate\'s own quota when the account names none', () => {
+      // Its quota's own reset is the tightest window's, here the 5-hour one: the week's is in its windows.
+      const p = probe({ quota: { known: true, leftPercent: 17, resetsAt: now + 3_600_000, windows: [{ name: '5-hour', leftPercent: 17, resetsAt: now + 3_600_000 },
+        { name: 'weekly', leftPercent: 60, resetsAt: now + 4 * DAY }] } })
       expect(withPmAccounts(read({ pmAccounts: [measured(2, { resetsAt: undefined })] }), [p], now)[0]!.notes[0])
         .toContain('It keeps 8% of its week for its PM: 4 days to the reset × 2% a day.')
     })
