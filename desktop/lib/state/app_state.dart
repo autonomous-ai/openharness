@@ -5314,6 +5314,7 @@ class AppNotifier extends ChangeNotifier {
     activeSwarm.arrangedKey = null;
     notifyListeners();
     _persistLayout();
+    _personArranged(activeSwarm);
   }
 
   int _paneResizeRequest = 0;
@@ -5381,15 +5382,35 @@ class AppNotifier extends ChangeNotifier {
       return false;
     }
     if (identical(activeSwarm.paneSizes[layoutKey], arrangement)) {
-      if (persist) _persistLayout();
+      if (persist) {
+        _persistLayout();
+        _personArranged(activeSwarm);
+      }
       return true;
     }
     activeSwarm.savePaneSizes(layoutKey, arrangement);
     activeSwarm.arranged = arrangement;
     _paneLayoutRequest++;
     notifyListeners();
-    if (persist) _persistLayout();
+    if (persist) {
+      _persistLayout();
+      _personArranged(activeSwarm);
+    }
     return true;
+  }
+
+  final _arrangedListeners = <void Function(Swarm)>[];
+
+  /// [listener] hears each time the person arranged a tab's panes: a
+  /// finished divider drag or a preset chosen (a Personal project keeps its
+  /// own sizes, task #3099).
+  void addArrangedListener(void Function(Swarm) listener) =>
+      _arrangedListeners.add(listener);
+
+  void _personArranged(Swarm swarm) {
+    for (final listener in _arrangedListeners.toList()) {
+      listener(swarm);
+    }
   }
 
   void resetPaneSizes() {
@@ -14276,6 +14297,7 @@ class AppNotifier extends ChangeNotifier {
       // A Swarm's tab keeps the Swarm's name (task #2647).
       if (!tab.nameIsCustom &&
           !tab.isSuperTab &&
+          !tab.isProjectTab &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
         final title = Swarm.titleFor(agent);
@@ -20209,6 +20231,41 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A saved arrangement for Swarm tab [swarmId]'s [count] panes (a Personal
+  /// project's own, kept on this computer): what [copySuperTabLayout] takes
+  /// from a tab, from a record instead.
+  void applySuperTabLayout(
+    String swarmId, {
+    required int count,
+    PanePreset? preset,
+    Map<String, PaneArrangement> sizes = const {},
+    String? arrangedKey,
+    int? gridColumns,
+  }) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    if (tab == null || _disposed || tab.panes.length != count) return;
+    final prefix = '$count:';
+    tab.presets.remove(count);
+    if (preset != null && preset.supportsCount(count)) {
+      tab.presets[count] = preset;
+    }
+    tab.paneSizes.removeWhere((key, _) => key.startsWith(prefix));
+    for (final MapEntry(:key, :value) in sizes.entries) {
+      if (key.startsWith(prefix) && value.tiles.length == count) {
+        tab.paneSizes[key] = value;
+      }
+    }
+    final arranged = arrangedKey == null ? null : tab.paneSizes[arrangedKey];
+    tab.arranged = arranged;
+    tab.arrangedKey = arranged == null ? null : arrangedKey;
+    tab.gridColumns = gridColumns;
+    _paneLayoutRequest++;
+    _persistLayout();
+    notifyListeners();
+  }
+
   void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
     final tab = swarms
         .where((s) => s.id == swarmId && s.superTabId != null)
@@ -20518,6 +20575,7 @@ class AppNotifier extends ChangeNotifier {
     if (firstAgent &&
         !target.nameIsCustom &&
         !target.isSuperTab &&
+        !target.isProjectTab &&
         !target.isCompanions &&
         !target.isDevices) {
       final agent = machine.agents
@@ -21294,6 +21352,7 @@ class AppNotifier extends ChangeNotifier {
       if (firstAgent &&
           !target.nameIsCustom &&
           !target.isSuperTab &&
+          !target.isProjectTab &&
           pane.agentId != null) {
         final agent = machineStates[pane.machineId]?.agents
             .where((agent) => agent.id == pane.agentId)
@@ -21452,6 +21511,41 @@ class AppNotifier extends ChangeNotifier {
   /// Store tab, orchestrator tabs and an untouched New Tab are this window's.
   bool _deskTracks(Swarm swarm) =>
       swarm.kind == 'harness' && !isDraftSwarm(swarm.id);
+
+  /// The most tabs the desk keeps (backend `DESK_MAX_TABS`): it drops a 25th
+  /// without an error, so a caller that adds one checks first.
+  static const deskMaxTabs = 24;
+
+  /// How many of this window's tabs the desk holds.
+  int get deskTabCount => swarms.where(_deskTracks).length;
+
+  /// Tab [id] takes [name] without it becoming the person's: a Personal
+  /// project's tab following its project's rename. A name the person chose
+  /// stays.
+  void renameTabAutomatically(String id, String name) {
+    final swarm = swarms.where((s) => s.id == id).firstOrNull;
+    final clean = name.trim();
+    if (swarm == null || swarm.nameIsCustom || clean.isEmpty) return;
+    final next = clean.length > 80 ? clean.substring(0, 80) : clean;
+    if (swarm.name == next) return;
+    swarm.name = next;
+    _persistLayout();
+    notifyListeners();
+  }
+
+  /// Tab [id] named [name], made in the background when it is not here yet:
+  /// the tab on screen stays, and the name is not the person's, so it may
+  /// follow what it is named after (a Personal project's own tab, task
+  /// #3099). It reaches the desk as any new tab does.
+  Swarm ensureBackgroundTab(String id, String name) {
+    final existing = swarms.where((s) => s.id == id).firstOrNull;
+    if (existing != null) return existing;
+    final swarm = Swarm(id: id, name: name, nameIsCustom: false);
+    swarms.add(swarm);
+    _persistLayout();
+    notifyListeners();
+    return swarm;
+  }
 
   /// `swarms` as the desk would hold them.
   List<DeskTab> _deskProjection() => [
