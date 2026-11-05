@@ -169,7 +169,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
 
 ## Requests and Done
@@ -308,7 +308,7 @@ Record each acceptance check with the exact command, revision and observed resul
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
@@ -387,7 +387,7 @@ Mark your review assignment done with the verdict and revision. Print little.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
@@ -497,7 +497,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
 
 ## Requests and Done
@@ -566,7 +566,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
@@ -618,7 +618,7 @@ Mark your review done with the verdict and revision.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
