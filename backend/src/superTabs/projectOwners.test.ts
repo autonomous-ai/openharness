@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
+import type { AgentStart } from './model.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
-import { ownsProject, projectOf, settleOwners } from './projects.js'
+import { ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
 import { visibilityChanged } from './parts/commit.js'
 
 // Task #3073 (Diego, 11-05): a private project's owner who leaves the Swarm, or is removed, loses it, and the project stays
@@ -150,5 +151,68 @@ describe('a project whose owner leaves or is removed', () => {
     before.people.find(person => person.id === 'p')!.generation = 'p-second'
     expect(settleOwners(after)).toEqual([{ projectId: x.projectId, from: 'p', to: 'c' }])
     expect(visibilityChanged(before, after)).toBe(true)
+  })
+})
+
+describe('a private project left with no member', () => {
+  const configuration = { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }
+  /** P's private X, with a task worked by an agent on D's machine, and P removed by the Swarm's owner. */
+  function ownerless() {
+    const f = setup(), x = f.create(p)
+    const task = f.run({ type: 'conversation.create', projectId: x.projectId, title: 'Secret task', brief: 'Secret', checks: [] }, p).conversationId as string
+    const agentId = f.run({ type: 'agent.add', conversationId: task, harnessId: 'h', machineId: 'd-mac', name: 'Worker', configuration, lead: false }, p,
+      { contribution: { machineOwnerId: 'd', contributorId: 'd' } }).agentId as string
+    f.run({ type: 'work.assign', conversationId: task, agentId }, p)
+    f.run({ type: 'member.remove', userId: 'p' })
+    return { f, x, task, agentId }
+  }
+
+  it('is nobody\'s: not its former owner\'s back, nor the Swarm owner\'s, nor another member\'s', () => {
+    const { f, x, task } = ownerless()
+    expect(projectOf(f.state, x.projectId).ownerId).toBe('')
+    expect(projectOf(f.state, x.projectId).ownerGeneration).toBeUndefined()
+    expect(f.reads(owner, x.projectId)).toBe(false)
+    expect(f.reads(c, x.projectId)).toBe(false)
+    expect(() => readConversation(f.state, owner, task)).toThrow('unavailable')
+    expect(() => readConversation(f.state, owner, x.conversationId)).toThrow('unavailable')
+    f.rejoin(p, 'collaborator')
+    expect(f.reads(p, x.projectId)).toBe(false)
+    expect(() => readConversation(f.state, p, task)).toThrow('unavailable')
+  })
+
+  it('shows the Swarm\'s owner only that it exists, its name and size, and nobody else even that', () => {
+    const { f, x } = ownerless()
+    expect(visibleState(f.state, owner).ownerlessProjects).toEqual([{ id: x.projectId, name: 'X', conversations: 2 }])
+    expect(visibleState(f.state, c).ownerlessProjects).toBeUndefined()
+    const agent: Actor = { kind: 'agent', agentId: f.state.agents[0]!.id, machineOwnerId: 'd' }
+    expect(visibleState(f.state, agent).ownerlessProjects).toBeUndefined()
+  })
+
+  it('cannot be renamed, reshared or taken by the Swarm\'s owner', () => {
+    const { f, x } = ownerless()
+    expect(() => f.run({ type: 'project.rename', projectId: x.projectId, name: 'Mine' })).toThrow('unavailable')
+    expect(() => f.run({ type: 'project.sharing', projectId: x.projectId, visibility: 'public', memberIds: [] })).toThrow('unavailable')
+    expect(projectOf(f.state, x.projectId)).toMatchObject({ name: 'X', visibility: 'private', ownerId: '' })
+  })
+
+  it('is deleted by the Swarm\'s owner with its chats and agents, its live work included, and by no one else', () => {
+    const { f, x, task, agentId } = ownerless()
+    expect(() => f.run({ type: 'project.delete', projectId: x.projectId }, c)).toThrow('unavailable')
+    f.run({ type: 'project.delete', projectId: x.projectId })
+    expect(projectsOf(f.state).some(item => item.id === x.projectId)).toBe(false)
+    expect(f.state.conversations.some(group => group.id === task || group.id === x.conversationId)).toBe(false)
+    expect(f.state.agents.some(a => a.id === agentId)).toBe(false)
+    expect(visibleState(f.state, owner).ownerlessProjects).toBeUndefined()
+  })
+
+  it('refuses the delete while an agent is still starting there, naming nothing in it', () => {
+    const { f, x, task } = ownerless()
+    f.state.starts = [{ id: 'start', creationId: 'start', actorKey: 'person:d', contributorId: 'd', membershipGeneration: 'd-first', machineOwnerId: 'd',
+      hostGrant: null, harnessId: null, dispatched: true, dispatchedAt: 1000, requestedAt: 1000, error: null,
+      request: { conversationId: task, name: 'Secret starter', machineId: 'd-mac' } } as unknown as AgentStart]
+    let message = ''
+    try { f.run({ type: 'project.delete', projectId: x.projectId }) } catch (error) { message = (error as Error).message }
+    expect(message).toMatch(/still starting/)
+    expect(message).not.toMatch(/Secret/)
   })
 })
