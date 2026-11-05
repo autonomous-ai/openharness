@@ -61,6 +61,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
+import { RefusalMemory } from './dispatchRefusals.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
@@ -154,6 +155,10 @@ const freesOrOpens = (command: Command): boolean =>
   command.type === 'work.status' ? FREEING_STATUSES.has(command.status) : DISPATCH_TRIGGERS.has(command.type)
 /** How long a refused pick is not sent again in the same round. */
 const DISPATCH_REFUSAL_MS = 60 * 60_000
+/** How long a project waits after its PM itself was refused (its grant, its Team boundary) before the dispatch tries again. */
+export const DISPATCH_PM_RETRY_MS = 2 * 60_000
+/** At most this many refused picks, and as many waiting PMs, are remembered per process; the oldest go first. */
+const DISPATCH_REFUSALS_HELD = 5_000
 /** How long the dispatch waits after a trigger, so a burst of writes runs one pass. */
 const DISPATCH_DEBOUNCE_MS = 1_000
 /** Picks one member tries in a pass before the next member's turn: each refused one is logged by code. */
@@ -2213,7 +2218,15 @@ export class SuperTabStore {
     const pm = state.agents.find(a => a.id === agentId)
     const task = command.type === 'work.assign' ? state.conversations.find(c => c.id === command.conversationId) : undefined
     const project = task && groupProject(state, task)
-    if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
+    // A refusal of the PM itself (gone, stopping, its grant or its Team boundary) is the PM's, not this pick's: marked so the
+    // pass waits a little on that PM instead of remembering the pick (dispatchCrew).
+    const pmRefused = (error: unknown): never => {
+      if (error instanceof SuperTabError) throw new SuperTabError(error.code, error.message, error.status, error.unreachable, { ...error.details, pmRefused: true })
+      throw error
+    }
+    if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) {
+      return pmRefused(new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404))
+    }
     // The pick as this write's state has it: the member still free and in the crew, the task still its candidate (open, its
     // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
@@ -2221,23 +2234,29 @@ export class SuperTabStore {
     if (!member || !candidatesFor(state, member, DISPATCH_RULES, now).some(c => c.group.id === task.id)) {
       fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
     }
-    await this.agentGrant(tx, state, pm)
-    if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command)
+    try {
+      await this.agentGrant(tx, state, pm)
+      if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command)
+    } catch (error) { return pmRefused(error) }
     return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
   }
 
-  /** Picks whose work.assign was refused, by Swarm, task, round and member, until they expire: neither a pass nor the
-   *  sweep's check sends one again this round (review 1 of #3230). Per process; a new round or an hour starts afresh. */
-  private readonly refusedPicks = new Map<string, number>()
+  /** Picks whose work.assign was refused for a reason of the pick itself, by Swarm, task, round and member, for
+   *  DISPATCH_REFUSAL_MS (dispatchRefusals.ts: pruned every pass, bounded); and PMs refused themselves, by Swarm and PM, for
+   *  DISPATCH_PM_RETRY_MS, so a PM whose access comes back assigns within minutes (review 2 of #3230). Per process. */
+  private readonly refusedPicks = new RefusalMemory(DISPATCH_REFUSALS_HELD)
+  private readonly waitingPms = new RefusalMemory(DISPATCH_REFUSALS_HELD)
   private refusedKey(tabId: string, group: Conversation, agentId: string): string { return `${tabId}:${group.id}:${roundOf(group)}:${agentId}` }
   private refusedSkip(tabId: string, state: SuperTabState, now: number): Skip {
     return (conversationId, agentId) => {
       const group = state.conversations.find(c => c.id === conversationId)
-      const key = group && this.refusedKey(tabId, group, agentId)
-      const until = key ? this.refusedPicks.get(key) : undefined
-      if (until !== undefined && until <= now) this.refusedPicks.delete(key!)
-      return until !== undefined && until > now
+      return !!group && this.refusedPicks.refused(this.refusedKey(tabId, group, agentId), now)
     }
+  }
+  /** Whether [project]'s PM was refused itself a moment ago: its project waits until DISPATCH_PM_RETRY_MS has passed. */
+  private pmWaiting(tabId: string, state: SuperTabState, project: SwarmProject, now: number): boolean {
+    const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+    return !!leadId && this.waitingPms.refused(`${tabId}:${leadId}`, now)
   }
 
   private readonly dispatchWaiting = new Map<string, ReturnType<typeof setTimeout>>()
@@ -2271,7 +2290,10 @@ export class SuperTabStore {
     const { state } = await loadRow(this.db, row)
     const now = this.now(), rules = DISPATCH_RULES
     if (state.paused) return out
-    for (const project of projectsOf(state)) {
+    this.refusedPicks.prune(now)
+    this.waitingPms.prune(now)
+    projects: for (const project of projectsOf(state)) {
+      if (this.pmWaiting(tabId, state, project, now)) continue
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue
       for (const lane of laneCapacity(state, project.id, rules, now)) {
@@ -2302,11 +2324,16 @@ export class SuperTabStore {
             // Another pass took this task, or this member: the next member, or the next task.
             if (code === 'WORK_ACTIVE' || code === 'OPERATION_REUSED') { taken.add(group.id); continue }
             if (code === 'unknown') throw error
+            // The PM itself was refused: nothing more for its project now; the sweep tries it again after a short wait.
+            if (error instanceof SuperTabError && error.details?.pmRefused) {
+              this.waitingPms.remember(`${tabId}:${lead.id}`, now + DISPATCH_PM_RETRY_MS)
+              continue projects
+            }
             // What another write changed meanwhile (the member took work, its start is settling, the task moved): next pass.
             if (code === 'AGENT_BUSY' || code === 'START_PENDING') break
             if (code === 'DISPATCH_STALE') continue
             // Refused for a reason this round will not change: not sent again until the next round or the memory expires.
-            this.refusedPicks.set(this.refusedKey(tabId, group, member.id), now + DISPATCH_REFUSAL_MS)
+            this.refusedPicks.remember(this.refusedKey(tabId, group, member.id), now + DISPATCH_REFUSAL_MS)
             if (code === 'AGENT_CLOSED' || code === 'STOP_REQUESTED') break
           }
         }
@@ -3960,7 +3987,8 @@ export class SuperTabStore {
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
         ...sweep ? sweepLiveness(state, now) : []]
       // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
-      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
+      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => !this.pmWaiting(tabId, state, p, now)
+        && dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
         afterCommit(tx, () => this.dispatchSoon(tabId))
       }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
