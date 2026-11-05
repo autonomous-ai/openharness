@@ -18,5 +18,6 @@ const EXAMPLE = '{"type":"conversation.create","title":"Short plain title","task
 
 /** The refusal's text: what is missing, the next step, and an example. */
 export const contractRefusal = (missing: readonly ContractField[]): string =>
-  `Missing: ${missing.join(', ')}. A task an agent opens says its goal, at least one check that says when it is done, a priority (P1, P2 or P3) and the person who asked (requesterId). `
+  `Missing: ${missing.join(', ')}. A task an agent opens says its goal, at least one check that says when it is done, a priority (P0 to P3, P0 only for the PM) and the person who asked (requesterId). `
+  + `Work no person asked for (a flaky test seen twice, an alarm) names nobody: give noRequesterReason, a few words on why, in place of requesterId. `
   + `Add ${missing.length === 1 ? 'it' : 'them'} and send the create again, for example ${EXAMPLE}`

@@ -252,6 +252,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
     // How urgent the task is (taskPriority.ts); without one it is P2, and the reply says so.
     priority: z.enum(TASK_PRIORITIES).optional(),
+    // Work no person asked for (a flaky test seen twice, an alarm) names nobody; this says why, in a few words (taskContract.ts).
+    noRequesterReason: z.string().trim().min(1).max(200).optional(),
     // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
     // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
     step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
@@ -429,7 +431,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'buddy.modelResult': ['error'],
   'agent.switchHandoff': ['note'],
   'agent.startSettled': ['warning'],
-  'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
+  'conversation.create': ['title', 'brief', 'noRequesterReason', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
   'proposal.close': ['reason'],
@@ -2285,7 +2287,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A step and a
       // private chat are no task of their own; a Buddy's proposal supplies its brief, priority and person.
       if (actor.kind === 'agent' && prioritized && !command.reviewOf) {
-        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority || proposal), requester: Boolean(requesterId) })
+        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority || proposal), requester: Boolean(requesterId || command.noRequesterReason) })
         if (missing.length) fail('TASK_CONTRACT_MISSING', contractRefusal(missing), 400)
       }
       const number = nextConversationNumber(state)
@@ -2309,6 +2311,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         checks: storedChecks(command.checks, operationId),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
+      // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
+      const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined
+      if (noRequester && state.conversations.at(-1)!.ledger) state.conversations.at(-1)!.ledger!.noRequesterReason = noRequester
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
       if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId } }
@@ -2319,7 +2324,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!command.priority && !proposal) result.warnings = [...result.warnings as string[] ?? [], PRIORITY_DEFAULTED]
       }
       if (brief) {
-        message(operationId, brief, [], null, SYSTEM_ROW)
+        message(operationId, noRequester ? `${brief}\n\nNo requester: ${noRequester}` : brief, [], null, SYSTEM_ROW)
         bindTaskCard(state.conversations.at(-1)!, effects.messages.at(-1)!)
       }
       break

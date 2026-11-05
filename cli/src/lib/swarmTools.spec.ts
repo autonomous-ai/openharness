@@ -95,7 +95,12 @@ describe('SWARM_TOOLS_SKILL', () => {
   // Task #3117: the tools say how a task gets its priority and who changes it, as the help does.
   it('says how a task gets its priority, what P0 to P3 mean, and who changes it', () => {
     expect(SWARM_TOOLS_SKILL).toContain('- `mine`: what you work on, one line per task, P0 first: its number, priority, title,')
-    expect(SWARM_TOOLS_SKILL).toContain('`"priority":"P0|P1|P2|P3"` (P0 hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work; P1 needed by users soon; P2 planned goal; P3 tools, docs or process; without one the task is P2)')
+    expect(SWARM_TOOLS_SKILL).toContain('`"priority":"P0|P1|P2|P3"` (P0 hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work; P1 needed by users soon; P2 planned goal; P3 tools, docs or process; an agent\'s task must give one, a person\'s without one is P2)')
+    // Task #3389: an agent\'s task says what it needs, and how work nobody asked for names no requester.
+    expect(SWARM_TOOLS_SKILL).toContain('An agent\'s task (the PM\'s too) needs a goal, at least one check, a priority and `requesterId`')
+    expect(SWARM_TOOLS_SKILL).toContain('TASK_CONTRACT_MISSING')
+    expect(SWARM_TOOLS_SKILL).toContain('`"noRequesterReason":"found by the PM: second flaky sighting"`')
+    expect(SWARM_TOOLS_SKILL).not.toContain('checks may be empty')
     expect(SWARM_TOOLS_SKILL).toContain('- `{"type":"work.priority","conversationId":"GROUP","priority":"P0"}` changes a task\'s priority. Only a person or the project\'s coordinator may send it, and only they set P0.\n')
   })
   // River, 11-04 (task #2926): proposals answered before threads, or built without the task's link, closed by hand.

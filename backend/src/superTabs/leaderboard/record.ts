@@ -50,6 +50,8 @@ export interface ReviewHour extends RanOn { hour: number; count: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
+  /** Why nobody is named as its requester, said by the agent that opened work no person asked for (taskContract.ts). */
+  noRequesterReason?: string
   /** When it shipped: its earliest recorded merge, or without one the first time its work was done. A group is one request,
    *  so finishing it again ships nothing new. */
   shippedAt?: number
