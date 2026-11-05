@@ -42,6 +42,7 @@ import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { registerReplyJsonTiming, startCpuStats } from './lib/cpuStats.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { startEngineCpu } from './lib/engineCpu.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { startRelayStats } from './lib/relayStats.js'
 import { startPodRoutes } from './lib/hub.js'
@@ -160,6 +161,9 @@ async function start(): Promise<void> {
   registerReplyJsonTiming(app, cpuStats)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
   const stopQueryStats = startQueryStats({ onWindow: routes => metrics.dbWindow(routes) })
+  // Always on, every minute: the Prisma engine's CPU by query, from queries sampled while they run alone
+  // (lib/engineCpu.ts, task #3041), to read beside `cpu by thread`'s prismaEngineMs.
+  const stopEngineCpu = startEngineCpu()
   // Always on, every minute: `last hour`, the sums of the last 60 minutes the production scan reads from a log tail
   // (lib/lastHour.ts, task #2957).
   const stopLastHour = startLastHour(metrics.hour)
@@ -266,6 +270,7 @@ async function start(): Promise<void> {
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
       // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
+      stopEngineCpu()
       stopLastHour()
       stopRetryStats()
       stopDeliveryCalls()

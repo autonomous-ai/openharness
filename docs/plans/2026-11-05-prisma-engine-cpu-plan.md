@@ -81,11 +81,12 @@ result), flush() }`, `startEngineCpu(options)`, `activeEngineCpu()`.
 
 ### 2. The query hook feeds it (`backend/src/lib/queryStats.ts`)
 
-Files: `src/lib/queryStats.ts`, `src/lib/queryStats.test.ts`, `src/server.ts`, `src/worker.ts`.
+Files: `src/lib/queryStats.ts`, `src/lib/queryStats.test.ts`, `src/lib/prisma.ts`, `src/server.ts`.
 
 - [ ] Failing tests: every query, a failed one too, starts and ends one sample slot (in flight back to zero); a sampler
       that throws leaves the query's result alone.
-- [ ] Code: `withQueryStats` calls the sampler; server and worker start it beside `startQueryStats`.
+- [ ] Code: `withQueryStats` calls the sampler; both clients pass it (lib/prisma.ts); the API server starts it beside
+      `startQueryStats`, as it starts `cpu by thread` (the worker logs neither).
 
 ### 3. Read production, pick the first group (after the release)
 
