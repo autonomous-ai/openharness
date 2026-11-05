@@ -4,7 +4,7 @@ import * as store from '../parts/index.js'
 import { readerView } from './views.js'
 import { projectLightGroup, lightSelect } from '../parts/lightSelect.js'
 import { recordPulse } from '../pulse.js'
-import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
+import { fullSwarm, NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
 import type { Actor } from '../model.js'
 
 const R = 9_000
@@ -230,6 +230,23 @@ describe('the pulse on the read', () => {
     expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('pulse')
     const owners = readerView(parts, owner, NOW, { teamMachines: [] })
     expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
+  })
+
+  // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a
+  // Buddy reads only its person's own, so it gets the counts alone (they are its project's totals, which it may read).
+  it('names only conversations the reader may read: a Buddy gets the counts without the lists', () => {
+    const s = fullSwarm()
+    s.edit(state => {
+      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
+      recordPulse(state, NOW - MINUTE)
+    })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const pulseFor = (actor: Actor) => Object.values(readerView(parts, actor, NOW, { teamMachines: [] }).derived.pulse ?? {})[0]!
+    expect(pulseFor(peer).asks.list).toHaveLength(1)
+    const buddy = pulseFor(agentActor(s.buddy))
+    expect(buddy.asks).toMatchObject({ count: 1, list: [] })
+    expect([buddy.nextUp.conversationIds, buddy.lost.conversationIds, buddy.held.list, buddy.working.agentIds]).toEqual([[], [], [], []])
+    expect(buddy.nextUp.count).toBe(pulseFor(peer).nextUp.count)
   })
 
   // Hugo's review of #3209: a change poll reads the light base (parts/light.ts: the project chats and running work, light
