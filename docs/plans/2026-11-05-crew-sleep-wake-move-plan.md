@@ -98,9 +98,12 @@ These change the plan above where they differ.
   head a task the old session lost after the move began.
 - **Members with no work stay put.** An asleep member never moves. An awake member with no work on a machine that went
   offline (a laptop closed for the night) stays too. It moves once it holds work.
-- **Machine rules as data** (`crewRules.ts MACHINE_RULES`, by machine id) until the project rules record holds them:
-  - Ken's MacBook Pro takes no move on weekdays 07:30 to 09:30 and 18:00 to 21:00 Vietnam time;
-  - no Codex member moves to Diego's Mac.
+- **Machine rules come from the project rules record only** (Ledger's task; River, 11-05). They cover a machine's
+  away hours and the engines it takes no move of, matched by machine id. People's machines and hours never go in this
+  public repository. The keeper takes them as input (`CrewDeps.machineRules`), and until the record is on main, no
+  machine rule applies to moves.
+- **A take-over marks nothing Team-written** (Curlew3). Since #3198 a mark is permanent. The barred check keeps
+  main-account sessions out, and a push read marks real Team code.
 - **The Team-account facts** are read from the database only when some member needs another machine.
 - **A folder drop the removal refused** (work not committed or pushed) is tried again an hour later.
 - **Waits on #3222:** the keep-alive waits for a folder restore before it reopens, which builds on Keeper's crew

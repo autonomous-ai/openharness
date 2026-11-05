@@ -4,15 +4,16 @@
  * route's order (project instructions, Order and quota); folders of long-asleep members, and of asleep members on a machine
  * short of disk, are dropped. The numbers are in crewRules.ts. Applying the actions is liveness.ts's (sweepLiveness).
  */
+import type { MachineRule } from './crewRules.js'
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
-import { barredFromTeamWritten, markTeamWritten, teamWrittenTask } from './teamWritten.js'
+import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
-import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MACHINE_RULES, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, SLEEP_IDLE_MS } from './crewRules.js'
+import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, SLEEP_IDLE_MS } from './crewRules.js'
 
 export type CrewAction =
   | { kind: 'sleep'; agentId: string }
@@ -22,7 +23,11 @@ export type CrewAction =
 
 /** What the keeper asks of the rest of the Swarm: whether [machineId] would admit a start of [agent]'s kind now (machines.ts
  *  admitMachineStart, with the store's Team-account facts). */
-export interface CrewDeps { admits(machineId: string, agent: Agent): boolean }
+export interface CrewDeps {
+  admits(machineId: string, agent: Agent): boolean
+  /** The project's machine rules from its rules record (Ledger's task); none until that is on main (River, 11-05). */
+  machineRules?: readonly MachineRule[]
+}
 
 /** Whether [agent] is crew (#3397's `crew` record), read without its type until that change lands. */
 export const isCrewMember = (agent: Agent): boolean => !!(agent as Agent & { crew?: { role?: unknown } }).crew
@@ -35,9 +40,10 @@ function standingPool(state: SuperTabState, machineId: string): ContributedMachi
   return pool && contributor && contributor.role !== 'viewer' && contributor.generation === pool.membershipGeneration ? pool : undefined
 }
 
-/** Why [machineId] takes no crew member of [engine] at [now] by the project's machine rules (crewRules.ts MACHINE_RULES), or null. */
-export function machineRuleRefusal(machineId: string, engine: string, now: number): string | null {
-  for (const rule of MACHINE_RULES) {
+/** Why [machineId] takes no crew member of [engine] at [now] by the project's machine rules ([rules], from the project rules
+ *  record), or null. */
+export function machineRuleRefusal(rules: readonly MachineRule[], machineId: string, engine: string, now: number): string | null {
+  for (const rule of rules) {
     if (!rule.machineIds.includes(machineId)) continue
     if (rule.noEngines?.includes(engine)) return rule.why
     if (rule.away) {
@@ -116,7 +122,7 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
     // member never brings its own-account work into one. A machine that just refused its start waits.
     .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool))
       && teamAccountPool(pool) === kind && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
-      && !machineRuleRefusal(pool.machineId, engine, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
+      && !machineRuleRefusal(deps.machineRules ?? [], pool.machineId, engine, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
     .map(entry => entry.pool)
@@ -287,8 +293,9 @@ export function takeOverCrewMember(state: SuperTabState, start: AgentStart, agen
     // Never into Team-written work from the main account (audit H2): the placement keeps such a member in Team accounts,
     // and this holds even for a start placed otherwise.
     if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id) && !barredFromTeamWritten(state, group, moved)) {
+      // Joined, not marked: since #3198 a mark is permanent, and its old session only belonged here (Curlew3). The barred
+      // check above keeps main-account sessions out; a push read marks real Team code.
       group.agentIds.push(moved.id)
-      markTeamWritten(state, group, moved)
     }
     if (group.assignment?.agentId !== from.id) continue
     if (activeWork(group)) {
