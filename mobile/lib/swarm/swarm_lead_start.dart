@@ -17,13 +17,15 @@ const swarmPersonalName = 'Personal';
 const swarmLeadStartWindow = Duration(minutes: 10);
 
 /// One of the person's own computers a Lead can start on: its name, the
-/// engines signed in there (Claude Code first), and the folder of each repo
-/// its agents work in, by remote ([swarmNormalizedRemote]).
+/// engines signed in there (Claude Code first), the folder of each repo its
+/// agents work in, by remote ([swarmNormalizedRemote]), and when the person
+/// last opened one of its agents, from any app ([lastUsed]; null if never).
 typedef SwarmLeadComputer = ({
   String id,
   String name,
   List<String> engines,
   Map<String, String> folders,
+  DateTime? lastUsed,
 });
 
 /// What the computer is asked to start: the Lead's engine, the repo's folder
@@ -81,9 +83,12 @@ bool swarmWantsLeadStart(SwarmReader reader, String chatId) {
       snapshot.agent(leadId) == null;
 }
 
-/// Where [chatId]'s Lead starts, or throws why it cannot (Desktop's
-/// `planFor`): the computer picked, else the first that holds the project's
-/// repo, else the first; the engine picked, else its first signed in.
+/// Where [chatId]'s Lead starts, or throws why it cannot, picking what
+/// Desktop's card picks (`planFor`, task #3042): the computer picked, else
+/// the repo's folder on the computer the person used last of those that hold
+/// it (Desktop prefers its own, the one the person is at), else the computer
+/// used last; the engine picked, else its first signed in (Claude Code, then
+/// Codex). Claude runs at the Lead's model on the computer, as on Desktop.
 SwarmLeadPlan swarmLeadPlan(
   SwarmReader reader,
   SwarmLeadComputers computers,
@@ -105,10 +110,21 @@ SwarmLeadPlan swarmLeadPlan(
   if (machineId != null && picked == null) {
     throw const SuperTabFailure('NO_MACHINE', 'that computer isn’t online');
   }
+  // The last used first; ties and never used in the list's order (a sort
+  // alone may not keep it).
+  final order = {for (final (i, c) in all.indexed) c.id: i};
+  final byUse = [...all]
+    ..sort((a, b) {
+      final x = a.lastUsed, y = b.lastUsed;
+      final byTime = x == null || y == null
+          ? (x == y ? 0 : (x == null ? 1 : -1))
+          : y.compareTo(x);
+      return byTime != 0 ? byTime : order[a.id]!.compareTo(order[b.id]!);
+    });
   final chosen =
       picked ??
-      all.where((c) => folderOn(c) != null).firstOrNull ??
-      all.firstOrNull;
+      byUse.where((c) => folderOn(c) != null).firstOrNull ??
+      byUse.firstOrNull;
   if (chosen == null) {
     throw const SuperTabFailure(
       'NO_MACHINE',
