@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureSwarmStamps, freeze, noteChange, readStamps, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
+import { ALL_HOSTS, configureSwarmStamps, freeze, noteChange, readHostStamp, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
 import { machineFeedRule, machinesRule, type PatchRule } from './cachePatch.js'
 import { logger } from '../utils/logger.js'
@@ -228,16 +228,40 @@ describe('the stamps a machine report reads (DB 2.5)', () => {
   const db = { $transaction: async <T>(body: (tx: object) => Promise<T>) => body({}) }
 
   it('reads them, or none without stamps, while they fail, or late', async () => {
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
     const stamps = new MemoryStamps()
     configureSwarmStamps(stamps)
-    await stamps.bump('t1', ['main'])
-    expect((await readStamps(['t1']))?.get('t1')).toEqual({ main: 1, machine: 0 })
+    await stamps.bump('t1', ['main'], ['m1'])
+    expect(await readHostStamp('t1', 'm1')).toEqual({ main: 1, hosted: 1, uncovered: 0, host: 1, all: 0 })
     stamps.down = true
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
     stamps.down = false
     stamps.slowMs = 300
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
+  })
+
+  it('moves the host stamps a transaction\'s writes named, every host\'s for a change that names none (task #3119)', async () => {
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    await swarmTransaction(db as never, async tx => { noteChange(tx, 't1', 'main', ['m1']); noteChange(tx, 't1', 'machine', []) })
+    expect(await readHostStamp('t1', 'm1')).toMatchObject({ host: 1, all: 0 })
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 0, all: 0 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main'))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 0, all: 1 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'machine'))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ all: 1 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main', [ALL_HOSTS, 'm2']))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 1, all: 2 })
+  })
+
+  it('pays an owed bump with its host stamps', async () => {
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    stamps.down = true
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main', ['m1']))
+    stamps.down = false
+    await vi.waitFor(() => expect(stampOwed('t1')).toBe(false), { timeout: 5_000 })
+    expect(await readHostStamp('t1', 'm1')).toMatchObject({ host: 1, all: 0 })
   })
 
   it('knows a Swarm whose change committed here before Redis took its bump, until it is paid', async () => {

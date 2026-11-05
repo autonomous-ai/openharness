@@ -124,4 +124,18 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
       .toEqual([[true, live, live], [true, 1, 1]])
   })
+  it('reads the machines that changed in one read by id, however many changed (task #3119)', async () => {
+    const tabId = await scene()
+    const held = new HeldParts()
+    await observed(tabId, held)
+    const machines = liveOf((await db.$transaction(tx => parts.loadAll(tx, tabId))).machines)
+    expect(machines.length).toBeGreaterThanOrEqual(2)
+    for (const key of machines.slice(0, 2).map(m => m.key)) {
+      await write(tabId, all => { const m = liveOf(all.machines).find(x => x.key === key)!
+        return { op: 'update', kind: 'machine', key: m.key, seen: m.version, data: m.data } })
+    }
+    const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
+    expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
+      .toEqual([[true, machines.length, machines.length], [true, 2, 2]])
+  })
 })

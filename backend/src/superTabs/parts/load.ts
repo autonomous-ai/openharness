@@ -5,7 +5,7 @@ import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
 import { recordDeltaRows } from '../cacheStats.js'
 import type { AgentStart } from '../model.js'
-import { ms } from './light.js'
+import { ms, rawGroupRow, rawPartRow } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
 import { HELD, type HeldParts } from './held.js'
 
@@ -16,13 +16,6 @@ type GroupReads = Array<readonly [GroupIndex, Where]>
 
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T, ...(row.deleted ? { deleted: true as const } : {}), ...(row.dormant ? { dormant: true as const } : {}) })
-
-/** A group part as `aggregateRaw` returns it, as the PartRow Prisma would. */
-const rawGroupRow = (row: Record<string, unknown>): PartRow => ({ ...row, changedAt: new Date(ms(row.changedAt)) }) as unknown as PartRow
-/** Any part as `aggregateRaw` returns it: a Float ordinal can come wrapped, and a part stored before `deleted` lacks it. */
-const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(row), version: Number(row.version), deleted: !!row.deleted,
-  ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
-    ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
 
 /** The live groups these reads find, each once. */
 async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads): Promise<PartRow[]> {
