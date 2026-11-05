@@ -59,6 +59,29 @@ describe('the task contract: what an agent says when it opens a task', () => {
     expect(() => f.create({ ...whole, requesterId: undefined })).toThrow(refusal(['requester']))
   })
 
+  it('accepts a recorded reason in place of a requester, keeps it on the task and shows it in the task\'s first row (River, task #3389)', () => {
+    const f = fixture()
+    const reason = 'found by the PM: second flaky sighting'
+    const created = f.create({ ...whole, requesterId: undefined, noRequesterReason: reason })
+    const group = created.state.conversations.find(c => c.id === created.result.conversationId)!
+    expect(group.requesterId).toBeUndefined()
+    expect(group.ledger?.noRequesterReason).toBe(reason)
+    expect(created.messages.find(m => m.conversationId === group.id)!.text).toBe(`Save edits offline.\n\nNo requester: ${reason}`)
+    // The reason stands only for the requester: every other field is still asked, and the refusal says how to give it.
+    expect(() => f.create({ ...whole, requesterId: undefined, noRequesterReason: reason, checks: [] })).toThrow(refusal(['checks']))
+    expect(() => f.create({ ...whole, requesterId: undefined })).toThrow(expect.objectContaining({ message: expect.stringContaining('noRequesterReason') }))
+    expect(() => f.create({ ...whole, requesterId: undefined, noRequesterReason: '  ' })).toThrow()
+  })
+
+  it('records no reason when someone is named: the requester wins', () => {
+    const f = fixture()
+    const created = f.create({ ...whole, noRequesterReason: 'not needed' })
+    const group = created.state.conversations.find(c => c.id === created.result.conversationId)!
+    expect(group.requesterId).toBe('peer')
+    expect(group.ledger?.noRequesterReason).toBeUndefined()
+    expect(created.messages.find(m => m.conversationId === group.id)!.text).toBe('Save edits offline.')
+  })
+
   it('leaves a person\'s task with today\'s defaults alone: no priority or check needed, the requester is the person', () => {
     const f = fixture()
     const created = f.create({ title: 'Offline editing', brief: 'Save edits.', checks: [] }, owner)
