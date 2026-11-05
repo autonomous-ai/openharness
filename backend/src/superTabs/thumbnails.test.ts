@@ -12,6 +12,16 @@ async function jpeg(width: number, height: number, orientation?: number) {
   const { raw, data } = noise(width, height)
   return sharp(data, { raw }).jpeg({ quality: 95 }).withMetadata(orientation ? { orientation } : {}).toBuffer()
 }
+/** Stripes of eight colours: a real many-colour picture whose palette a GIF encoder finds at once. GIF-encoding noise of
+ *  the same size takes about 3 s on a fast Mac, which put this file's 5 s test timeout at the mercy of CI load (batch #3152). */
+function stripes(width: number, height: number) {
+  const data = Buffer.alloc(width * height * 3)
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const colour = ((x >> 5) + (y >> 5)) % 8, at = (y * width + x) * 3
+    data[at] = (colour & 1) * 255; data[at + 1] = ((colour >> 1) & 1) * 255; data[at + 2] = ((colour >> 2) & 1) * 255
+  }
+  return { raw: { width, height, channels: 3 as const }, data }
+}
 async function png(width: number, height: number) {
   const { raw, data } = noise(width, height)
   return sharp(data, { raw }).png().toBuffer()
@@ -73,7 +83,10 @@ describe('makeThumbnail', () => {
   })
 
   it('answers nothing for what is not a picture it handles', async () => {
-    const gif = await sharp(noise(900, 900).data, { raw: noise(900, 900).raw }).gif().toBuffer()
+    // A real GIF, past the thumbnail's long side, that a GIF encoder writes in milliseconds.
+    const pattern = stripes(900, 900)
+    const gif = await sharp(pattern.data, { raw: pattern.raw }).gif().toBuffer()
+    expect(await sharp(gif).metadata()).toMatchObject({ format: 'gif', width: 900, height: 900 })
     expect(await makeThumbnail(gif)).toBeNull()
     expect(await makeThumbnail(Buffer.from('not a picture at all'))).toBeNull()
     expect(await makeThumbnail(Buffer.alloc(0))).toBeNull()
