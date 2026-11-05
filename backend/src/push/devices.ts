@@ -39,7 +39,8 @@ export async function registerPushDevice(db: PrismaClient, userId: string, devic
   if (rows.length <= PUSH_DEVICES_PER_PERSON) return
   const seen = (row: Row) => Date.parse(row.seenAt?.$date ?? '') || 0
   const old = rows.sort((a, b) => seen(b) - seen(a)).slice(PUSH_DEVICES_PER_PERSON).map(row => row._id)
-  await db.pushDevice.deleteMany({ where: { id: { in: old }, userId } })
+  // A plain $in by _id: Prisma's `in` goes as $expr, which no index bounds (backend/AGENTS.md rule 3).
+  await db.$runCommandRaw({ delete: 'push_devices', deletes: [{ q: { _id: { $in: old }, userId }, limit: 0 }] })
 }
 
 /** Removes `device` if it is `userId`'s: false when it is not (another person's phone, or already gone). */
