@@ -9,7 +9,7 @@ for security work) once for the whole decision, instead of one "Unavailable" lin
 
 **Architecture:** Desktop only. The record's excluded rows (`cli/src/superTabs/route.ts` `recordOf`) keep `title` and
 `reason`; the title is the CLI's `titleOf` ("name · engine model effort · machine"), which `route_row.dart` already
-parses for the route's target. A pure function in `route_row.dart`, `routeUnavailableLines`, groups the rows:
+parses for the route's target. A pure function in `route_row.dart`, `_unavailableLines`, groups the rows:
 
 1. A row's machine is the title's last part when the title has the `titleOf` shape; other rows ("Named model",
    "Local models", "New agents", a model whose host is offline) have none.
@@ -55,7 +55,7 @@ and a title of another shape is shown as it was). Platforms: the same Flutter te
 
 **Files:** `desktop/test/super_tab_route_test.dart`, `desktop/lib/super_tabs/route_row.dart`
 
-**Interfaces:** `List<String> routeUnavailableLines(Iterable<Map<String, dynamic>> excluded)` in `route_row.dart`.
+**Interfaces:** `List<String> _unavailableLines(Iterable<Map<String, dynamic>> excluded)` in `route_row.dart`.
 
 - [ ] Test: an offline machine with 17 excluded rows (17 models, the same OFFLINE reason) shows as one line,
       "Unavailable: Mac 3 — Machine is offline or unreachable.", and the Considered lines come before it.
@@ -65,6 +65,6 @@ and a title of another shape is shown as it was). Platforms: the same Flutter te
       rows with no machine ("Named model") show once each.
 - [ ] Run `flutter test test/super_tab_route_test.dart`: the new tests fail (each row is printed).
 - [ ] Commit the failing tests.
-- [ ] Implement `routeUnavailableLines` and use it in `_detailsView`.
+- [ ] Implement `_unavailableLines` and use it in `_detailsView`.
 - [ ] Run `flutter test test/super_tab_route_test.dart` and the UI style check: green.
 - [ ] Commit, push, post red/green evidence in a PR comment, mark Ready.

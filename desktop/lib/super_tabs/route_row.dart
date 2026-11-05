@@ -181,9 +181,65 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
                 ].join(' — '),
               ),
         ],
-        for (final e in excluded)
-          Text('Unavailable: ${e['title']} — ${e['reason']}'),
+        for (final line in _unavailableLines(excluded)) Text(line),
       ],
     );
   }
 }
+
+/// The CLI's titleOf: "name · engine model effort · machine" (route.ts). The
+/// engine part holds no " · ", so a machine named with one keeps it whole.
+final _titled = RegExp(r'^(.*) · ((?:Claude|Codex) (?:(?! · ).)*) · (.*)$');
+
+/// How route.ts starts a plug-in's refusal: its name, then ": ".
+final _ruled = RegExp(r'^[A-Z][A-Za-z ]{0,40}: ');
+
+/// What a route decision left out, a line each for Details. Task #3292 (Ken,
+/// 2026-11-05): a line per excluded machine × agent × model made an offline
+/// machine 17 lines and the grid limit for security work about 30, a hundred
+/// lines before what the route weighed. So, as the PM's answer does (CLI
+/// routeCommand.ts leftOut): one line per machine with its distinct reasons,
+/// at most [_maxReasons]; a route rule's reason seen on several machines is
+/// the decision's, said once; a row of no machine keeps its own line, once.
+/// OFFLINE reads the same on every machine but is no rule (no "Name: "), so
+/// each offline machine keeps its line.
+List<String> _unavailableLines(Iterable<Map<String, dynamic>> excluded) {
+  final byMachine = <String, List<String>>{};
+  final others = <String>{};
+  final machinesOf = <String, Set<String>>{};
+  for (final e in excluded) {
+    final title = '${e['title'] ?? ''}', reason = '${e['reason'] ?? ''}';
+    final machine = _titled.firstMatch(title)?.group(3);
+    if (machine == null) {
+      others.add('Unavailable: $title — $reason');
+      continue;
+    }
+    final reasons = byMachine.putIfAbsent(machine, () => []);
+    if (!reasons.contains(reason)) reasons.add(reason);
+    if (_ruled.hasMatch(reason)) {
+      machinesOf.putIfAbsent(reason, () => {}).add(machine);
+    }
+  }
+  final rules = {
+    for (final MapEntry(key: reason, value: machines) in machinesOf.entries)
+      if (machines.length > 1) reason: machines.length,
+  };
+  return [
+    for (final MapEntry(key: reason, value: count) in rules.entries)
+      'Unavailable on $count machines — $reason',
+    for (final MapEntry(key: machine, value: all) in byMachine.entries)
+      if (all.where((r) => !rules.containsKey(r)).toList() case final reasons
+          when reasons.isNotEmpty)
+        'Unavailable: $machine — ${_upTo(reasons)}',
+    ...others,
+  ];
+}
+
+const _maxReasons = 4;
+
+/// A machine's distinct reasons, the first [_maxReasons] and how many more.
+String _upTo(List<String> reasons) => [
+  ...reasons.take(_maxReasons),
+  if (reasons.length > _maxReasons)
+    '(and ${reasons.length - _maxReasons} more)',
+].join(' ');
