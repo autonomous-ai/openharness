@@ -45,8 +45,12 @@ Swarm _tab(
   String? name,
   bool? nameIsCustom,
 }) {
-  final tab = Swarm(id: id, name: name ?? id, nameIsCustom: nameIsCustom)
-    ..panes.addAll(panes);
+  // A name given here is automatic unless said otherwise.
+  final tab = Swarm(
+    id: id,
+    name: name ?? id,
+    nameIsCustom: nameIsCustom ?? false,
+  )..panes.addAll(panes);
   app.swarms.add(tab);
   return tab;
 }
@@ -356,5 +360,43 @@ void main() {
       );
       expect(f.app.swarms.length, tabs);
     });
+  });
+
+  test('a project tab follows its project\'s renames, unless the person '
+      'renamed it', () async {
+    final f = SuperTabLaunchFixture();
+    final api = await _withApi(f);
+    final first = _tab(f.app, personalProjectTabId(api.project), [
+      _pane('m', 'a'),
+    ], name: 'api');
+    final second = _tab(f.app, personalProjectTabId(api.project, 2), [
+      _pane('m', 'b'),
+    ], name: 'api 2');
+    final mine = _tab(
+      f.app,
+      personalProjectTabId(api.project, 3),
+      [_pane('m', 'c')],
+      name: 'my work',
+      nameIsCustom: true,
+    );
+    await api.c.request(
+      'POST',
+      '/api/super-tabs/$tabId/commands',
+      body: {
+        'operationId': 'rename-api',
+        'command': {
+          'type': 'project.rename',
+          'projectId': api.project,
+          'name': 'payments',
+        },
+      },
+    );
+    await api.c.refresh();
+    await PersonalProjects.of(f.app).sync(api.c);
+    expect(first.name, 'payments');
+    expect(first.nameIsCustom, isFalse);
+    expect(second.name, 'payments 2');
+    expect(mine.name, 'my work');
+    expect(mine.nameIsCustom, isTrue);
   });
 }
