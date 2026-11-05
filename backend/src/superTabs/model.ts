@@ -423,6 +423,9 @@ export interface Conversation {
   /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
    *  owned paths choose. */
   lane?: string
+  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
+   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
+  handOutLane?: string | null
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }

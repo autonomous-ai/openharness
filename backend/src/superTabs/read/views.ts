@@ -71,9 +71,10 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
-  // A task's hand-out lane (dispatch.ts): its own fields alone choose it, so it is the same in every read of this version.
-  const lane = group.task && !group.reviewOf && !group.kind && !audience ? { handOutLane: laneOf(group, DISPATCH_RULES.lanes) } : {}
-  return { ...rest, ...lane, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }), ...readers }
+  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }), ...readers }
+  // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
+  if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
+  return view
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */

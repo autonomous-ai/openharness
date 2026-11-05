@@ -45,6 +45,13 @@ export function laneNamed(lanes: readonly Lane[], name: string): string | undefi
   return lanes.find(lane => lane.name.toLowerCase() === name.trim().toLowerCase())?.name
 }
 
+/** Stores [group]'s hand-out lane, when it is a task (not a chat, a step or a private chat), after its paths or lane changed:
+ *  readers copy it (read/views.ts groupView), no read computes it. */
+export function stampLane(group: Conversation): void {
+  if (group.task && !group.reviewOf && !group.kind && !group.audience) group.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
+  else delete group.handOutLane
+}
+
 /** "a, b or c": the lane names as a refusal lists them. */
 export function spokenList(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`

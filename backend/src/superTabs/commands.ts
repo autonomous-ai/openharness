@@ -64,7 +64,7 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
-import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList } from './dispatch.js'
+import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
@@ -2305,6 +2305,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })
+      stampLane(state.conversations.at(-1)!)
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
@@ -2385,9 +2386,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (task.id === groupProject(state, task).leadConversationId || task.kind || task.audience || task.reviewOf) {
         fail('LANE_TASK_ONLY', 'Only a task has a lane: name a task, not a chat or a step.', 400)
       }
-      if (command.lane === null) { delete task.lane; break }
-      task.lane = laneNamed(DISPATCH_RULES.lanes, command.lane)
+      if (command.lane === null) delete task.lane
+      else task.lane = laneNamed(DISPATCH_RULES.lanes, command.lane)
         ?? fail('LANE_UNKNOWN', `Name a lane: ${spokenList(DISPATCH_RULES.lanes.map(l => l.name))}.`, 400)
+      stampLane(task)
       break
     }
     case 'work.priority': {
@@ -3642,6 +3644,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.brief = command.task ? renderWorkTask(command.task) : command.brief!
       if (command.task) group.task = command.task
       else delete group.task
+      stampLane(group)
       group.checks = storedChecks(command.checks, operationId)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)

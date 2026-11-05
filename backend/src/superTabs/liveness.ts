@@ -361,9 +361,16 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 
 /** The crew members 2 hours without progress on their task hear it once in the task, from its PM (dispatch.ts crewClock). */
 function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
-  const steps = stepIndex(state)
-  return workerTasks(state).flatMap(({ group, assignment, worker }) => {
-    if (crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+  // Most Swarms have no crew: one pass over the agents, nothing else. Then one pass over the work, the step index only for a
+  // task whose line is due (a measured 25% on the sweep at 2,000 tasks when it walked every task twice).
+  const crew = new Map(state.agents.filter(a => a.crew).map(a => [a.id, a]))
+  if (!crew.size) return []
+  let steps: StepIndex | undefined
+  return state.conversations.flatMap(group => {
+    const assignment = group.assignment, worker = assignment && crew.get(assignment.agentId)
+    if (!worker || !activeWork(group) || crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    if (state.conversations.some(c => c.leadId === worker.id)) return []
+    steps ??= stepIndex(state)
     // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
     if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
     assignment.nudgedAt = now
