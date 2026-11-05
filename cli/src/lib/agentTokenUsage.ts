@@ -24,6 +24,9 @@ type Checkpoint = {
   models: Record<string, Buckets>
   /** The model Codex's latest turn settings named: its token counts carry none of their own. */
   codexModel: string | null
+  /** Still short of the transcript's end: a long one is read a slice per refresh (MAX_READ_BYTES), and its counts are
+   *  published only once caught up. Absent from a checkpoint saved before slices. */
+  behind?: boolean
 }
 type Entry = {
   target: Target; value: AgentTokenUsage | null; checked: number; pending: Promise<void> | null;
@@ -31,10 +34,17 @@ type Entry = {
   readable?: boolean;
   dirty?: boolean;
   timer?: NodeJS.Timeout;
+  /** Its checkpoint is short of the transcript's end: another slice follows without waiting for a change. */
+  behind?: boolean;
 }
 const REFRESH_MS = 15_000
 const MAX_CACHE_BYTES = 8 * 1024 * 1024
-const MAX_TRANSCRIPT_BYTES = 128 * 1024 * 1024
+/** What one refresh reads of a transcript at most, from its checkpoint on. A whole-file cap of 128 MB stopped a PM's counts for
+ *  good: its one session ran 10 days to 823 MB and was never reported (task #3222). A slice keeps each refresh short, and the
+ *  reader's one queue lets other sessions' refreshes run between a long transcript's slices. */
+const MAX_READ_BYTES = 64 * 1024 * 1024
+/** The wait before a transcript that is behind gets its next slice. */
+const CATCH_UP_MS = 1_000
 const MAX_LINE_BYTES = 8 * 1024 * 1024
 const MAX_ENTRIES = 512
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
@@ -165,6 +175,8 @@ export class AgentTokenUsageCache {
     now?: () => number; refreshMs?: number; opencodeDb?: string;
     readSqlite?: typeof sqliteReadAll;
     onRead?: (bytes: number) => void;
+    /** Tests only: a smaller slice (MAX_READ_BYTES) and catch-up wait (CATCH_UP_MS). */
+    maxReadBytes?: number; catchUpMs?: number;
   } = {}) {}
 
   /** Synchronous cache lookup. A cold or unsupported count is unknown, never invented as zero. */
@@ -244,6 +256,14 @@ export class AgentTokenUsageCache {
       entry.checked = this.now()
       entry.readable = false
       try { entry.readable = await this.refresh(key, entry) } catch { /* An unreadable usage file must never affect a harness. */ }
+      // A transcript still behind gets its next slice soon, not at its next change: an idle one would otherwise stay unreported.
+      if (entry.behind && !this.disposed && !entry.timer) {
+        entry.timer = setTimeout(() => {
+          entry.timer = undefined
+          this.schedule(keyFor(entry.target)!, entry)
+        }, this.options.catchUpMs ?? CATCH_UP_MS)
+        entry.timer.unref()
+      }
     })
     entry.pending = task
     this.queue = task.finally(() => {
@@ -256,7 +276,8 @@ export class AgentTokenUsageCache {
     const work = sessionWorkSnapshot(state.work)
     if (!state.updatedAt) return
     const previous = entry.value
-    if (!state.observed && !output && !work) {
+    // Part way through a long transcript the counts are short of the session's: unknown until caught up, never a low total.
+    if (state.behind || (!state.observed && !output && !work)) {
       entry.value = null
       if (previous) this.onChanged?.(entry.target)
       return
@@ -305,7 +326,8 @@ export class AgentTokenUsageCache {
         && validSessionWork(raw.work) && (raw.sourceSession === null || typeof raw.sourceSession === 'string')
         && object(raw.models) && Object.keys(raw.models).length <= MAX_USAGE_MODELS
         && Object.entries(raw.models).every(([model, buckets]) => usageModelName(model) === model && validBuckets(buckets))
-        && (raw.codexModel === null || usageModelName(raw.codexModel) === raw.codexModel)) return raw
+        && (raw.codexModel === null || usageModelName(raw.codexModel) === raw.codexModel)
+        && (raw.behind === undefined || typeof raw.behind === 'boolean')) return raw
     } catch { /* First run, corrupt cache, or removed cache: rebuild from the trusted transcript. */ }
     return empty(key)
   }
@@ -358,10 +380,10 @@ export class AgentTokenUsageCache {
       const file = await open(path, 'r')
       try {
         const info = await file.stat()
-        if (!info.isFile() || info.size > MAX_TRANSCRIPT_BYTES) return false
+        if (!info.isFile()) return false
         const inode = `${info.dev}:${info.ino}`
         const fingerprint = `${inode}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
-        if (state.inode === inode && state.size === info.size && state.mtime === info.mtimeMs) {
+        if (state.inode === inode && state.size === info.size && state.mtime === info.mtimeMs && !state.behind) {
           entry.fingerprint = fingerprint
           return true
         }
@@ -385,8 +407,9 @@ export class AgentTokenUsageCache {
         }
         let offset = state.offset
         let partial = Buffer.alloc(0)
-        while (offset < info.size) {
-          const buffer = Buffer.alloc(Math.min(64 * 1024, info.size - offset))
+        const end = Math.min(info.size, offset + (this.options.maxReadBytes ?? MAX_READ_BYTES))
+        while (offset < end) {
+          const buffer = Buffer.alloc(Math.min(64 * 1024, end - offset))
           const { bytesRead } = await file.read(buffer, 0, buffer.length, offset)
           if (!bytesRead) throw new Error('Transcript changed during usage read')
           this.options.onRead?.(bytesRead)
@@ -407,7 +430,9 @@ export class AgentTokenUsageCache {
         state.inode = inode
         state.mtime = info.mtimeMs
         state.boundary = await boundary(state.offset)
-        nextFingerprint = fingerprint
+        if (end < info.size) state.behind = true
+        else delete state.behind
+        if (!state.behind) nextFingerprint = fingerprint
       } finally { await file.close() }
     }
     if (!Number.isSafeInteger(state.total)) return false

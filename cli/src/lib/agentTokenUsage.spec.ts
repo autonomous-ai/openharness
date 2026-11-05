@@ -171,7 +171,7 @@ describe('owning-machine token cache', () => {
     const lines = Array.from({ length: 40 }, (_, i) => claude(`m${i}`) + JSON.stringify({ type: 'user', text: 'y'.repeat(600) }) + '\n').join('')
     await writeFile(target.transcriptPath!, lines)
     store.dispose()
-    store = new AgentTokenUsageCache(join(dir, 'sliced'), { now: () => now, onRead: n => { bytes += n }, maxReadBytes: 4096 })
+    store = new AgentTokenUsageCache(join(dir, 'sliced'), { now: () => now, onRead: n => { bytes += n }, maxReadBytes: 4096, catchUpMs: 60_000 })
     const seen: Array<number | null> = []
     for (let pass = 0; pass < 40; pass++) {
       const before = bytes
