@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { otherAccountsOnComputer } from '../src/superTabs/computerMoves.js'
+import { cleanUpComputers, otherAccountsOnComputer } from '../src/superTabs/computerMoves.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { localReportMemory } from '../src/superTabs/machineReports.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -97,5 +97,40 @@ describe('a computer signed in as another account', () => {
     await expect(run(tab, { type: 'machine.moved', machineId: 'kelvin-mac' }, kelvinUser)).rejects.toThrow()
     await expect(run(tab, { type: 'machine.moved', machineId: 'kelvin-mac' }, ttUser)).rejects.toThrow()
     expect(await machinesIn(tab)).toEqual([{ machineId: 'kelvin-mac', contributorId: kelvin, previousOwner: undefined }])
+  })
+})
+
+describe('the one-time cleanup of computers listed under two accounts', () => {
+  const run = (tab: string, command: Command, as: AuthUser = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
+  const DUPLICATED = 'e'.repeat(32)
+  const machinesIn = async (tab: string) => (await store.read(owner, tab)).state.machines!.map(m => `${m.machineId}:${m.contributorId}`).sort()
+
+  it('leaves each computer listed once, under the account seen last, writes nothing on a dry run, and moves nothing the second time', async () => {
+    // The reported Mac: added by kelvin, then by ttkhoahcmus once they signed in on it, so both are listed (Scholes, 11-05).
+    const at = (minutes: number) => new Date(Date.now() - minutes * 60_000)
+    for (const [machineId, userId, seen] of [['kelvin-old', kelvin, at(50)], ['tt-new', tt, at(1)]] as const) {
+      await db.machine.create({ data: { machineId, userId, computerId: DUPLICATED, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '',
+        autonomousEnv: 'prod', authMode: 'remote', lastSeenAt: seen } })
+    }
+    const tab = (await store.create(owner, randomUUID(), 'Duplicates')).id
+    for (const person of [kelvinUser, ttUser]) {
+      const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+      await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    }
+    const add = (machineId: string, as: AuthUser) => run(tab, { type: 'machine.contribute', machineId, name: 'MacBooks-MacBook-Pro-7', cwd: '/work',
+      scope: 'swarm', engines: ['claude'], maxAgents: 2, teamAccountOnly: true }, as)
+    await add('kelvin-old', kelvinUser)
+    await add('tt-new', ttUser)
+
+    const dry = await cleanUpComputers(db, store, 'prod', { write: false })
+    expect(dry.computers).toContainEqual({ signedIn: { machineId: 'tt-new', ownerId: tt }, others: ['kelvin-old'] })
+    expect(dry.moved).toBe(0)
+    expect(await machinesIn(tab)).toEqual([`kelvin-old:${kelvin}`, `tt-new:${tt}`])
+
+    expect((await cleanUpComputers(db, store, 'prod', { write: true })).moved).toBeGreaterThanOrEqual(1)
+    expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
+    const again = await cleanUpComputers(db, store, 'prod', { write: true })
+    expect(again.computers.filter(c => c.signedIn.machineId === 'tt-new').length).toBe(1)
+    expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
   })
 })
