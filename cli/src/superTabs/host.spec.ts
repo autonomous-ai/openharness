@@ -5882,3 +5882,43 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(lead.lists).toBe(2)
   }, 60_000)
 })
+
+// Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
+// kept alive; an awake one is left to the keep-alive.
+describe('a crew member at rest', () => {
+  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'owner' }, ...agent } })
+  it('closes an asleep member\'s live session once, keeps its folder, and never reopens it', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1 } })])
+    t.live(true)
+    await t.poll()
+    await t.poll(1_000)
+    await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+  it('closes a moving member and one whose folder is dropped; an awake member is not closed', async () => {
+    for (const agent of [{ movedTo: { machineId: 'mini', startId: 's', reason: 'offline', at: 1 } }, { asleep: { since: 1, folderDropped: true } }]) {
+      const t = lifeFixture([crewRow(agent)])
+      t.live(true)
+      await t.poll()
+      expect(t.closeMember).toHaveBeenCalledWith('harness')
+    }
+    const awake = lifeFixture([crewRow()])
+    awake.live(true)
+    await awake.poll()
+    expect(awake.closeMember).not.toHaveBeenCalled()
+  })
+  it('a member woken and put to sleep again is closed again', async () => {
+    const rows = [crewRow({ asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    t.live(true)
+    await t.poll()
+    rows[0] = crewRow()
+    await t.poll(1_000)
+    rows[0] = crewRow({ asleep: { since: 2 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
+  })
+})
