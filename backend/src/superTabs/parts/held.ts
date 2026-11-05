@@ -30,6 +30,9 @@ function columnsOf(row: Record<string, unknown>): string {
 }
 const byKey = (rows: PartRow[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 const COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, readAt: 1, dormant: 1 }
+/** A group's columns: it has no readAt, and every other one is in the held index (parts/indexed.ts `held`), so a listing of the
+ *  awake ones through it reads no document. */
+const GROUP_COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, dormant: 1 }
 
 export class HeldParts {
   private readonly tabs = new Map<string, Tab>()
@@ -88,8 +91,11 @@ export class HeldParts {
   }
 }
 
-/** The process's held parts. */
+/** The process's held parts: machine reports'. */
 export const HELD = new HeldParts()
+/** Commands' (parts/load.ts loadActive), apart from the reports': each read lets go of what it did not select, and a report
+ *  selects only running work and Lead conversations, where a command selects every awake conversation. */
+export const COMMAND_HELD = new HeldParts()
 
 export class HeldRead {
   constructor(private readonly owner: HeldParts, private readonly tab: Tab, private readonly at: number) {}
@@ -124,7 +130,7 @@ export class HeldRead {
   async groups(tx: Transaction, reads: ReadonlyArray<readonly [GroupIndex, Where]>): Promise<Array<Record<string, unknown>>> {
     const { tabId } = this.tab
     const read = (columns: boolean) => Promise.all(reads.map(([index, match]) => groupsBy(tx, index, [
-      { $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }, ...columns ? [{ $project: COLUMNS }] : []])))
+      { $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }, ...columns ? [{ $project: GROUP_COLUMNS }] : []])))
     const once = (rows: Array<Record<string, unknown>>) => [...new Map(rows.map(row => [row.key as string, row])).values()]
     // Holding none of them, the whole reads alone, as before.
     if (!this.owner.holds(this.tab, 'group')) return this.kept('group', once((await read(false)).flat()), 'cold')
