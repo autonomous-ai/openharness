@@ -1171,7 +1171,10 @@ class SuperTabAttachment {
       expiresAt = row['expiresAt'] is num
           ? (row['expiresAt'] as num).toInt()
           : null,
-      voice = SuperTabVoice.read(row['voice']);
+      voice = SuperTabVoice.read(row['voice']),
+      width = _positive(row['width']),
+      height = _positive(row['height']),
+      thumb = SuperTabThumb.read(row['thumb']);
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -1195,6 +1198,13 @@ class SuperTabAttachment {
   /// (swarm_voice_bubble.dart); null for any other file.
   final SuperTabVoice? voice;
 
+  /// A picture's size as it is shown, and the small copy the backend made of
+  /// it at upload (superTabs/thumbnails.ts): the chat draws [thumb] and the
+  /// full-screen viewer opens the original. Null for any other file, a picture
+  /// sent before thumbnails, and from an older backend.
+  final int? width, height;
+  final SuperTabThumb? thumb;
+
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.
   bool get isImage => const {
@@ -1203,6 +1213,59 @@ class SuperTabAttachment {
     'image/gif',
     'image/webp',
   }.contains(mime);
+}
+
+int? _positive(Object? value) =>
+    value is num && value == value.toInt() && value > 0 ? value.toInt() : null;
+
+/// The thumbnail of a picture: linked in the same read as the original, so
+/// whoever may open the original may open it and nobody else.
+class SuperTabThumb {
+  const SuperTabThumb({
+    required this.url,
+    required this.width,
+    required this.height,
+    required this.size,
+    this.link,
+    this.expiresAt,
+    this.unlinked = false,
+  });
+
+  /// [row] as a thumbnail, or null when any part of it does not read: the
+  /// picture is then drawn from the original.
+  static SuperTabThumb? read(Object? row) {
+    if (row is! Map) return null;
+    final width = _positive(row['width']),
+        height = _positive(row['height']),
+        size = _positive(row['size']);
+    if (row['url'] is! String ||
+        width == null ||
+        height == null ||
+        size == null) {
+      return null;
+    }
+    return SuperTabThumb(
+      url: row['url'] as String,
+      width: width,
+      height: height,
+      size: size,
+      link: row['link'] is String ? row['link'] as String : null,
+      expiresAt: row['expiresAt'] is num
+          ? (row['expiresAt'] as num).toInt()
+          : null,
+      unlinked: row['unlinked'] == true,
+    );
+  }
+
+  final String url;
+  final int width, height, size;
+
+  /// Its short-lived signed link, as [SuperTabAttachment.link] is the original's.
+  final String? link;
+  final int? expiresAt;
+
+  /// The backend could not sign it this time: the original is drawn.
+  final bool unlinked;
 }
 
 /// A voice message's clip, as the backend read it before it was sent

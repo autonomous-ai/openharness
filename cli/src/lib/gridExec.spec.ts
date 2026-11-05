@@ -227,6 +227,32 @@ describe('grid on Windows', () => {
     })
   })
 
+  // Smart App Control blocked the unsigned launcher 593 times in an hour on DESKTOP-0TFH0OJ (2026-11-05), each a notice to the person
+  // that Node.js had been blocked, and each a `spawn UNKNOWN`. What it starts is signed: that is run instead.
+  it('runs the python a launcher grid.exe names, past the launcher Windows blocks', async () => {
+    const bin = installed()
+    const python = join(root, 'python.exe')
+    writeFileSync(python, 'MZ')
+    writeFileSync(join(bin, 'grid.exe'), Buffer.concat([Buffer.from([0x4d, 0x5a, 0, 1, 2]), Buffer.from(`#!${python}\r\nPK\u0003\u0004zip`, 'latin1')]))
+    const { gridCommand } = await load()
+
+    expect(gridCommand(join(bin, 'grid.exe'), ['ls'], 'win32')).toEqual({ file: python, args: ['-m', 'cli', 'ls'] })
+    expect(gridCommand(join(bin, 'grid.exe'), ['ls'], 'darwin')).toEqual({ file: join(bin, 'grid.exe'), args: ['ls'] })
+  })
+
+  it.each([
+    ['names a python that has gone', (root: string) => `MZ#!${join(root, 'gone', 'python.exe')}\r\nPK`],
+    ['names something else', (root: string) => `MZ#!${join(root, 'other.exe')}\r\nPK`],
+    ['names nothing', () => 'MZ a program of its own'],
+  ])('runs grid.exe itself when it %s', async (_name, content) => {
+    const bin = installed()
+    writeFileSync(join(root, 'other.exe'), 'MZ')
+    writeFileSync(join(bin, 'grid.exe'), content(root))
+    const { gridCommand } = await load()
+
+    expect(gridCommand(join(bin, 'grid.exe'), ['ls'], 'win32')).toEqual({ file: join(bin, 'grid.exe'), args: ['ls'] })
+  })
+
   it('leaves everything else as it is: an .exe, a .cmd it cannot read, and any other OS', async () => {
     const bin = installed('grid.exe', 'grid.cmd')
     const { gridCommand } = await load()

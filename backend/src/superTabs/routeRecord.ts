@@ -81,9 +81,9 @@ export const routeRecordSchema = z.object({
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
 /** The part of a quota fit every candidate of a record without a pick keeps: what the route history reads of the one that ran,
- *  and its quota when the route ran (task #3163: with account and spend alone, quota at route time could not be measured).
- *  Rows written before keep no status, % left or reset. */
-export type KeptFit = Pick<z.infer<typeof fit>, 'account' | 'spend'> & Partial<Pick<z.infer<typeof fit>, 'status' | 'left' | 'resetsAt'>>
+ *  and its quota when the route ran (task #3163: with account and spend alone, quota at route time could not be measured), and
+ *  how far that quota covered the task (task #3255). Rows written before keep no status, coverage, % left or reset. */
+export type KeptFit = Pick<z.infer<typeof fit>, 'account' | 'spend'> & Partial<Pick<z.infer<typeof fit>, 'status' | 'coverage' | 'left' | 'resetsAt'>>
 /** A candidate as a decision keeps it: the pick whole; any other only who and where it is and its title, and with no pick its
  *  account and spend too (storedRecord). */
 export type KeptCandidate = Omit<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'> & Partial<Pick<RouteCandidate, 'quality' | 'cost' | 'label'>>
@@ -104,10 +104,11 @@ export interface StoredRouteRecord extends Omit<ReadRouteRecord, 'excluded'> {
  *  and where it is (a start or assignment matching it, startedAs; a person choosing it, route.override; its Team-work check) and
  *  its title (the chat lines, Desktop's Details). Its label, strength, cost and quota fit are read of the pick only: the route
  *  showed the others when it ran, and the route history takes the account and spend of the pick (cli service.ts routeHistory).
- *  A record with no pick (task #2901) keeps every candidate's account, spend and quota instead, as any of them may be the one that
- *  runs and nobody knows which until the start. Each exclusion reason is kept once, with its titles in order. */
-function keptFit({ account, spend, status, left, resetsAt }: z.infer<typeof fit>): KeptFit {
-  return { ...account ? { account } : {}, spend, status, ...left !== undefined ? { left } : {}, ...resetsAt !== undefined ? { resetsAt } : {} }
+ *  A record with no pick (task #2901) keeps every candidate's account, spend and quota (status, coverage, % left and reset) instead,
+ *  as any of them may be the one that runs and nobody knows which until the start. Each exclusion reason is kept once, with its
+ *  titles in order. */
+function keptFit({ account, spend, status, coverage, left, resetsAt }: z.infer<typeof fit>): KeptFit {
+  return { ...account ? { account } : {}, spend, status, coverage, ...left !== undefined ? { left } : {}, ...resetsAt !== undefined ? { resetsAt } : {} }
 }
 
 export function storedRecord(record: RouteRecord): StoredRouteRecord {

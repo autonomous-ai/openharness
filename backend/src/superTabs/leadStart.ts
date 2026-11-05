@@ -5,7 +5,7 @@
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
-  slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
+  noRepositoryStart, slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { BUILT_IN_ROLE_DEFAULTS, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -89,7 +89,7 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   const listed = state.machines?.find(m => m.machineId === machineId)
   if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
-  const startIn = (pool: ContributedMachine): AgentStartRequest => ({ conversationId: project.leadConversationId, machineId: pool.machineId,
+  const startIn = (pool: ContributedMachine): AgentStartRequest => noRepositoryStart(pool, project, { conversationId: project.leadConversationId, machineId: pool.machineId,
     engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
   const teamMachines = context.teamMachines ?? []

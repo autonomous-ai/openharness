@@ -11,6 +11,7 @@ import { managedNodePath } from '../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
 import { findGitBash, INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 import { endGitBashTree, gitBashTreeDeps } from '../lib/windows/gitBashTree.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -167,8 +168,9 @@ export function spawnDshCommand(
     cwd: opts.cwd,
     env: { ...process.env, ...env, ...(opts.env ?? {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Its own process group, so stopping it stops what it started (`sh -c node …`).
-    detached: true,
+    // Its own process group, so stopping it stops what it started (`sh -c node …`). Windows ends the tree instead, and
+    // Git Bash detached there would flash a window for each program it starts (docs/windows-rules.md).
+    ...ownProcessGroup(),
   })
 }
 

@@ -7,6 +7,7 @@ import { plausibleBranchName, projectFolderName, projectFolderSlug } from './age
 import { GitProjectError, prepareGitProject, stopTree, validGitPath } from './gitProject.js'
 import { cloneAttempts, isGitHubHost, parseGitHubRepository, resolvedRepositoryIdentity } from './githubRepository.js'
 import { githubAliases, resolveHost } from './sshHosts.js'
+import { ownProcessGroup } from './windows/noWindow.js'
 import { scmByKind } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 
@@ -307,7 +308,7 @@ export function cloneRepository(url: string, destination: string, gitEnv?: NodeJ
       GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' }
     // Its own process group, so a stalled clone's remote helper and index-pack stop with it.
     const child = spawn(git, ['clone', '--progress', '--filter=blob:none', '--single-branch', '--', url, destination], {
-      stdio: ['ignore', 'ignore', 'pipe'], env, detached: process.platform !== 'win32', windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'], env, ...ownProcessGroup(),
     })
     let diagnostic = '', stalled = false
     const stall = setTimeout(() => {

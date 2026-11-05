@@ -32,9 +32,10 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
@@ -65,7 +66,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { movableEntry, otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type MachineKeys } from './computerMoves.js'
+import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type LeftMove, type MachineKeys } from './computerMoves.js'
 import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
@@ -2197,8 +2198,9 @@ export class SuperTabStore {
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
     const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES)
-    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }) }
+      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES, (objectKey, bytes) => this.pictureOf(attachments, objectKey, bytes))
+    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+      ...pictureFields(row.image) }) }
   }
 
   /** A link to put one file of `size` bytes straight into the bucket, for a file too big for this server's form route. The
@@ -2269,9 +2271,9 @@ export class SuperTabStore {
       await this.poster(tx, user, tabId, found!.conversationId, asAgentId)
       return found!
     })
-    const sendable = async (mime: string) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
-      url: publicUrl(attachments.publicBase, row.objectKey) }) })
-    if (!row.purpose) return sendable(row.mime)
+    const sendable = async (mime: string, image: unknown) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
+      url: publicUrl(attachments.publicBase, row.objectKey), ...pictureFields(image) }) })
+    if (!row.purpose) return sendable(row.mime, row.image)
     let stored: { size: number } | null, head: Buffer
     try {
       stored = await direct.stored(row.objectKey)
@@ -2287,11 +2289,23 @@ export class SuperTabStore {
       unavailable()
     }
     const mime = typeFromHead(row.mime, head!)
-    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
-    if (finished.count === 1) return sendable(mime)
+    // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.
+    let image: StoredImage | null = null
+    const place = THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES ? thumbnailsReserve() : null
+    if (place) {
+      try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
+        logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
+      } finally { place() }
+    }
+    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE },
+      data: { purpose: { unset: true }, mime, ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    if (finished.count === 1) return sendable(mime, image)
     // Another finish of the same upload won: the same answer. The sweep claimed it first: its file is going, so it is refused.
     const now = await this.db.superTabAttachment.findFirst({ where: { id: row.id, tabId } })
-    return now && !now.purpose && !now.usedBy ? sendable(now.mime) : unavailable()
+    if (now && !now.purpose && !now.usedBy) return sendable(now.mime, now.image)
+    // The row will not carry the thumbnail just stored, so nothing would ever remove it: it goes now.
+    if (image?.thumb) await attachments.store.delete(thumbKeyOf(row.objectKey)).catch(() => {})
+    return unavailable()
   }
 
   /**
@@ -2427,14 +2441,26 @@ export class SuperTabStore {
 
   /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
   private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
-    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number,
+    /** Given the stored picture's bytes, its facts and stored thumbnail (pictureOf); a picture is held in memory for it, up to `cap`. */
+    thumbnail?: (objectKey: string, bytes: Buffer) => Promise<StoredImage | null>) {
     const objectKey = objectKeyFor(prefix, tabId, file.name)
     let size: number, mime: string
+    const held: Buffer[] = []
+    // A place to hold the picture whole for its thumbnail, given back when its thumbnail is made or the upload fails.
+    let place: (() => void) | null = null
     try {
       const checked = await typed()
       mime = checked.mime
-      size = await bucket.put(objectKey, { name: file.name, mime }, checked.body, cap)
+      if (thumbnail && THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
+      const tee = place !== null
+      const body = !tee ? checked.body : Readable.from((async function* () {
+        for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
+      })())
+      size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
     } catch (error) {
+      place?.()
+      held.length = 0
       if (error instanceof SuperTabError) throw error
       if (error instanceof AttachmentTooLarge) {
         if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
@@ -2445,8 +2471,39 @@ export class SuperTabStore {
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    return this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
-      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
+    // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
+    // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
+    const whole = thumbnail && held.length ? Buffer.concat(held) : null
+    held.length = 0
+    let image: StoredImage | null = null
+    try { image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null } finally { place?.() }
+    try {
+      return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+        actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
+        ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    } catch (error) {
+      // No row will name the thumbnail, so nothing would remove it.
+      if (image?.thumb) await bucket.delete(thumbKeyOf(objectKey)).catch(() => {})
+      throw error
+    }
+  }
+
+  /** A picture's size and its thumbnail, made and stored beside the original; null when it is not a picture this reads. A thumbnail
+   *  that cannot be stored leaves the size and no thumbnail. Never throws. */
+  private async pictureOf(attachments: Attachments, objectKey: string, bytes: Buffer): Promise<StoredImage | null> {
+    const made = await makeThumbnail(bytes)
+    if (!made) return null
+    const image: StoredImage = { width: made.width, height: made.height }
+    if (made.thumb) {
+      const key = thumbKeyOf(objectKey)
+      try {
+        await attachments.store.put(key, { name: 'thumbnail.webp', mime: 'image/webp' }, Readable.from([made.thumb.bytes]), made.thumb.bytes.byteLength)
+        image.thumb = { url: publicUrl(attachments.publicBase, key), width: made.thumb.width, height: made.thumb.height, size: made.thumb.bytes.byteLength }
+      } catch (error) {
+        logger.warn('super-tab thumbnail could not be stored', { code: errorCode(error) })
+      }
+    }
+    return image
   }
 
   /** The actor, once it may post in this conversation. */
@@ -2474,7 +2531,8 @@ export class SuperTabStore {
       const voice = voiceFacts(row.voice)
       if (!voice && row.voiceSince) fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
       if (voice) voiceWords[row.id] = voiceTranscript(row.voice)
-      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {} }
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {},
+        ...pictureFields(row.image) }
     }) }
   }
 
@@ -2508,7 +2566,8 @@ export class SuperTabStore {
       const heard = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!))).filter(m => !m.buddySession).map(m => m.id))
       handed = handed.filter(r => heard.has(r.usedBy!))
     }
-    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
+    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+        ...pictureFields(row.image) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }
 
@@ -4360,9 +4419,10 @@ export class SuperTabStore {
    * Another account's sign-in on a computer (computerMoves.ts, #3122): each Swarm with an entry of the computer's previous
    * accounts moves it to [signIn]'s machine, by the store-only machine.moved run as that entry's owner. One Swarm at a time;
    * one that fails is logged and left to the next connect. With [write] false (the cleanup's dry run) nothing is written, and
-   * each entry is decided as machine.moved decides (computerMoves.ts movableEntry). The moves made, or that would be.
+   * each entry is decided as the write decides it (wouldMove). The moves made, or that would be; [left] gets each entry the
+   * Swarm refused to move, with its refusal's code, in both.
    */
-  async computerSignedIn(signIn: ComputerSignIn, { write = true }: { write?: boolean } = {}): Promise<ComputerMove[]> {
+  async computerSignedIn(signIn: ComputerSignIn, { write = true, left }: { write?: boolean; left?: LeftMove[] } = {}): Promise<ComputerMove[]> {
     const others = await otherAccountsOnComputer(this.db, signIn)
     if (!others.length) return []
     const to = await this.db.machine.findFirst({ where: { machineId: signIn.machineId, userId: signIn.ownerId, autonomousEnv: signIn.autonomousEnv, ...machineAlive },
@@ -4381,23 +4441,40 @@ export class SuperTabStore {
       const user: AuthUser = { sub: from.userId, email: person.email, autonomousEnv: signIn.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
       const move = { from: from.machineId, fromOwner: from.userId, to: signIn.machineId, toOwner: signIn.ownerId }
       for (const tabId of await machineSwarms(this.db, signIn.autonomousEnv, from.machineId, MACHINE_RENAME_SWARMS)) {
+        const movedTo = { machineId: signIn.machineId, ownerId: signIn.ownerId }
         try {
-          if (!write) {
-            const swarm = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-            if (!swarm || swarm.deletedAt) continue
-            const { state } = await loadRow(this.db as unknown as Transaction, requireParts(swarm))
-            if (movableEntry(state, from.machineId, from.userId, { machineId: signIn.machineId, ownerId: signIn.ownerId }, this.now())) moves.push({ tabId, ...move })
-            continue
-          }
-          const done = await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
-            undefined, undefined, false, { movedTo: { machineId: signIn.machineId, ownerId: signIn.ownerId } })
-          if (done.result.moved) moves.push({ tabId, ...move })
+          const moved = write
+            ? (await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
+              undefined, undefined, false, { movedTo })).result.moved === true
+            : await this.wouldMove(user, tabId, from.machineId, movedTo)
+          if (moved) moves.push({ tabId, ...move })
         } catch (error) {
-          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code: error instanceof SuperTabError ? error.code : 'unknown' })
+          const code = error instanceof SuperTabError ? error.code : 'unknown'
+          left?.push({ tabId, ...move, code })
+          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code })
         }
       }
     }
     return moves
+  }
+
+  /**
+   * Whether machine.moved, run by the store as [user] for [movedTo], moves [user]'s entry [machineId] in Swarm [tabId]: the
+   * checks executeOnce makes for it, in its order (the Swarm loaded for [user], their access to it and their membership, the
+   * move read from both account rows), then the command itself on a copy. Nothing is written and no transaction is opened, so
+   * the read-only login runs it. It throws the refusal the write meets. The cleanup's dry run read the entry alone, and on prod
+   * listed a move the write then refused (task #3227).
+   */
+  private async wouldMove(user: AuthUser, tabId: string, machineId: string, movedTo: { machineId: string; ownerId: string }): Promise<boolean> {
+    const reader = this.db as unknown as Transaction
+    const command: Command = { type: 'machine.moved', machineId }
+    const first = await this.load(reader, user, tabId, namedFor(command))
+    const { state: original } = await this.ensure(reader, first, await this.moreNamed(reader, tabId, first.state, command, user.sub))
+    const actor = await this.actor(reader, user, original)
+    author(original, actor)
+    const context: CommandContext = { operationId: `computer-move-${randomUUID()}`, now: this.now(),
+      computerMove: actor.kind === 'person' ? await this.computerMove(reader, original, actor.userId, machineId, movedTo) : undefined }
+    return applyCommand(cloneData(original), actor, command, context).result.moved === true
   }
 
   /** The move [ownerId]'s entry [machineId] makes to [to], read from both account rows in this transaction: the same computer,

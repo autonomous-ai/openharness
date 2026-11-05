@@ -400,7 +400,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       ;(options.teamNodeTools ?? (() => linkTeamNodeTools(realTeamNodeToolsDeps())))()
     }
   }
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
+  let hostWake: (() => void) | null = null
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -412,6 +414,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
       if (identifier(core.daemon.machineId()) && (existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))
         || (options.team ?? (() => readAuthSession()?.kind === 'team'))())) wake()
+      // A machine can be in a Swarm without this daemon ever adding it (Amon, #3215: the server moved his computer's entry to his
+      // account, backend computerMoves.ts), so it keeps no host record and the check above never starts its host. The server says
+      // when one of this machine's Swarms changes, naming it: that starts the host. Its word that it pushes names none.
+      hostWake?.()
+      hostWake = core.account.onNotice(notice => {
+        if (!host && notice.type === 'swarm_host_changed' && identifier(notice.tabId) && identifier(core.daemon.machineId())) wake()
+      })
     },
     disconnected: disconnect,
     stop: () => { disconnect(); void relay.stop() },
@@ -452,6 +461,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
         // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
         // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
+        // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
+        // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks, as for teamSetup.
+        // The status starts nothing; Retry starts the host if it never ran, which then reads its roster as any start does.
+        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          // Retry starts a host that never ran (Amon, #3215): it then reads its Swarms in full, the Team account's join among them.
+          if (payload.action === 'teamJoinRetry') { wake().retryTeamJoins(); return { ok: true } }
+          return { ok: true, failure: host?.teamJoinFailure() ?? null, hostRunning: !!host }
+        }
         if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline'
           || payload.action === 'teamSetupStatus') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }

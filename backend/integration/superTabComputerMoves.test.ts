@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
@@ -17,6 +19,7 @@ const user = (sub: string, email: string): AuthUser => ({ sub, email, autonomous
 const owner = user('500000000000000000000009', 'owner@example.com'), kelvinUser = user(kelvin, 'kelvin@example.com'), ttUser = user(tt, 'ttkhoahcmus@example.com')
 let replica: MongoMemoryReplSet
 let db: PrismaClient
+let uri: string
 let store: SuperTabStore
 /** Each machine's key in its account's device key log (lib/deviceKeyLog.ts): one key per computer, whatever account it signs
  *  in to, so a computer's machines of two accounts hold the same one (e2ee/store.ts identity.json). */
@@ -26,7 +29,7 @@ const keys: Array<{ userId: string; machineId: string; pub: string }> = [
 ]
 
 beforeAll(async () => {
-  ({ replica, db } = await planDatabase('computer_moves'))
+  ({ replica, db, uri } = await planDatabase('computer_moves'))
   const machine = (machineId: string, userId: string, computerId: string, extra: Record<string, unknown> = {}) => db.machine.create({ data: {
     machineId, userId, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '', autonomousEnv: 'prod', authMode: 'remote', ...extra } })
   await machine('kelvin-mac', kelvin, COMPUTER)
@@ -170,6 +173,91 @@ describe('the one-time cleanup of computers listed under two accounts', () => {
     expect(again.moves).toEqual([])
     expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
   })
+})
+
+// Task #3227 (Ken, 11-05): on prod the write moved nothing where the dry run, run just after, listed a move. The dry run read
+// the entry alone; the write runs machine.moved as its owner, through every check a command meets (the Swarm loaded for them,
+// their access to it, the move read from both account rows). One computer, one Swarm, the same data through both.
+describe('the cleanup\'s dry run and its write', () => {
+  const run = (tab: string, command: Command, as: AuthUser = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
+  const machinesIn = async (tab: string) => (await store.read(owner, tab)).state.machines!.map(m => `${m.machineId}:${m.contributorId}`).sort()
+  let computer = 0
+  /** A computer listed in one new Swarm under kelvin (seen first) and ttkhoahcmus (seen last), its key in both logs. */
+  async function listedTwice() {
+    const id = (0xf0 + computer++).toString(16).repeat(16), from = `kelvin-${id.slice(0, 4)}`, to = `tt-${id.slice(0, 4)}`
+    const at = (minutes: number) => new Date(Date.now() - minutes * 60_000)
+    for (const [machineId, userId, seen] of [[from, kelvin, at(50)], [to, tt, at(1)]] as const) {
+      await db.machine.create({ data: { machineId, userId, computerId: id, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '',
+        autonomousEnv: 'prod', authMode: 'remote', lastSeenAt: seen } })
+    }
+    keys.push({ userId: kelvin, machineId: from, pub: `pub-${id}` }, { userId: tt, machineId: to, pub: `pub-${id}` })
+    const tab = (await store.create(owner, randomUUID(), 'Twice')).id
+    for (const person of [kelvinUser, ttUser]) {
+      const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+      await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    }
+    for (const [machineId, as] of [[from, kelvinUser], [to, ttUser]] as const) {
+      await run(tab, { type: 'machine.contribute', machineId, name: 'MacBooks-MacBook-Pro-7', cwd: '/work', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+        teamAccountOnly: true }, as)
+    }
+    return { tab, from, to }
+  }
+  const mine = (moves: Array<{ tabId: string }>, tab: string) => moves.filter(m => m.tabId === tab)
+
+  it('decide the same moves on the same data, and say why one is left', async () => {
+    const { tab, from, to } = await listedTwice()
+    // The entry's owner was taken out of the Swarm's Workspace and is still listed in the Swarm (a Workspace removal whose leave
+    // did not reach this Swarm): no command of theirs reaches it, machine.moved included.
+    const { workspaceId } = (await store.read(owner, tab)).state
+    const membership = { workspaceId: workspaceId!, userId: kelvin }
+    await db.swarmWorkspaceMember.updateMany({ where: membership, data: { removedAt: new Date() } })
+    try {
+      const dry = await cleanUpComputers(db, store, 'prod', { write: false })
+      const written = await cleanUpComputers(db, store, 'prod', { write: true })
+      expect(mine(written.moves, tab)).toEqual([])
+      expect(mine(dry.moves, tab)).toEqual(mine(written.moves, tab))
+      // Both name the entry left and the Swarm's own refusal, so a dry run says what the write will not do.
+      const left = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt, code: 'WORKSPACE_ACCESS_REVOKED' }
+      expect(mine(dry.left, tab)).toEqual([left])
+      expect(mine(written.left, tab)).toEqual([left])
+    } finally { await db.swarmWorkspaceMember.updateMany({ where: membership, data: { removedAt: null } }) }
+    expect(await machinesIn(tab)).toEqual([`${from}:${kelvin}`, `${to}:${tt}`])
+
+    // The Swarm reachable again: both decide the move, and the write makes it.
+    const dry = await cleanUpComputers(db, store, 'prod', { write: false })
+    const moved = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt }
+    expect(mine(dry.moves, tab)).toEqual([moved])
+    expect(mine((await cleanUpComputers(db, store, 'prod', { write: true })).moves, tab)).toEqual([moved])
+    expect(await machinesIn(tab)).toEqual([`${to}:${tt}`])
+  })
+})
+
+// Task #3227: on prod the script printed its JSON and never exited, and its env check refused to start without billing's
+// credential key. Run as Ken runs it, with only the database's URL, and Redis nowhere to be reached.
+describe('the cleanup script', () => {
+  const script = (env: NodeJS.ProcessEnv) => new Promise<{ code: number; stdout: string; stderr: string }>(resolve => {
+    execFile(join(process.cwd(), 'node_modules/.bin/tsx'), ['scripts/swarm-computer-moves/run.ts'],
+      { env: { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL: uri, REDIS_URL: 'redis://127.0.0.1:1', ...env }, timeout: 60_000 },
+      (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout, stderr }))
+  })
+
+  it('runs without billing\'s environment and exits once it has printed', async () => {
+    const started = Date.now()
+    const { code, stdout } = await script({ SWARM_WORKSPACES_REQUIRED: '0' })
+    expect(code).toBe(0)
+    const printed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { write: boolean; env: string; moves: unknown[]; left: unknown[] }
+    expect(printed).toMatchObject({ write: false, env: 'prod', moves: expect.any(Array), left: expect.any(Array) })
+    expect(Date.now() - started).toBeLessThan(60_000)
+  }, 90_000)
+
+  // Security review 1 of #3146: the Workspace check reads anything but '1' as not required, so a run that forgot the server's
+  // setting would pass a Swarm the server refuses, in its dry run and its write alike. It must be said, either way.
+  it('will not start unless told whether this server requires Workspaces', async () => {
+    const { code, stdout, stderr } = await script({})
+    expect(code).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('SWARM_WORKSPACES_REQUIRED')
+  }, 90_000)
 })
 
 describe("a Mac whose owner's Team account is about to join", () => {

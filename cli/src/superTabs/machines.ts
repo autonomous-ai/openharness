@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { backend, FIELD_REFUSED_MS, fieldRefused, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
@@ -1336,7 +1337,7 @@ export function createQuietGit(timeoutMs = 15_000): GitRun {
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never',
       GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0' }
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
-    const child = spawn('git', ['-C', cwd, ...args], { env, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('git', ['-C', cwd, ...args], { env, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = '', stderr = '', settled = false
     const settle = (answer: { ok: boolean; timedOut?: boolean }) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...answer, stdout, stderr }) } }
     child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })

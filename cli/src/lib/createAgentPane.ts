@@ -127,7 +127,8 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       command: deps.argv,
       ...(deps.current ? { current: deps.current } : {}),
       ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
-      ...(deps.env ? { env: deps.env } : {}),
+      // The caller's own variables win over the pane's PATH rule (lib/windows/engineStart.ts `windowsPaneLaunch`).
+      ...(deps.paneLaunch?.env || deps.env ? { env: { ...(deps.paneLaunch?.env ?? {}), ...(deps.env ?? {}) } } : {}),
     })
     if (spawned.state !== 'succeeded') {
       console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)

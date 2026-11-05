@@ -16,7 +16,46 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
+import type { ProcessRow } from '../lib/processTable.js'
+import { ptyHostBinary } from '../lib/ptyHost/launch.js'
+import { WINDOWS_PS_TIMEOUT_MS, windowsProcessTable } from '../lib/windows/processTable.js'
+import { windowsStartTime } from '../lib/windows/treeKill.js'
 import { killPidGroup } from './shell.js'
+
+const WINDOWS_EPOCH_MS = 11_644_473_600_000n
+/** [ms] as a Windows start time (100 ns ticks since 1601), as `windowsStartTime` reads one. */
+const asWindowsTime = (ms: number): bigint => (BigInt(Math.trunc(ms)) + WINDOWS_EPOCH_MS) * 10_000n
+
+/** Windows' process table now, or null when it could not be read. */
+function readWindowsRows(): ProcessRow[] | null {
+  try {
+    const binary = ptyHostBinary()
+    if (!binary) return null
+    const output = execFileSync(binary, ['ps', '--json'], { encoding: 'utf8', timeout: WINDOWS_PS_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, windowsHide: true })
+    return windowsProcessTable(JSON.parse(output))
+  } catch { return null }
+}
+
+/**
+ * The pids of what remains of a ledgered viewer on Windows: its launcher, and a program running from its folder whose parent
+ * has gone. The launcher alone is not enough: what Git Bash runs is a process of its own whose Windows parent has exited
+ * (lib/windows/gitBashTree.ts), so nothing walks down to it once the launcher ends with the daemon. A parent still running means
+ * something else started it, an agent in a pane for one, and it is left alone, as is what started before this viewer.
+ */
+export function windowsViewerLeftovers(entry: ViewerLedgerEntry, rows: readonly ProcessRow[]): number[] {
+  const since = asWindowsTime(entry.startedAt - START_TOLERANCE_MS)
+  const started = (row: ProcessRow) => windowsStartTime(row.startMarker)
+  const fresh = (row: ProcessRow) => { const at = started(row); return at !== null && at >= since }
+  const folder = `${entry.viewerDir.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()}/`
+  const live = new Set(rows.map(row => row.pid))
+  const launcher = rows.filter(row => {
+    const at = started(row)
+    return row.pid === entry.pid && at !== null && at >= since && at <= asWindowsTime(entry.startedAt + START_TOLERANCE_MS)
+  })
+  const programs = rows.filter(row => row.pid !== entry.pid && !live.has(row.parentPid) && fresh(row)
+    && row.args.replaceAll('\\', '/').toLowerCase().includes(folder))
+  return [...launcher, ...programs].map(row => row.pid)
+}
 
 export interface ViewerLedgerEntry {
   pid: number
@@ -51,6 +90,9 @@ export interface ViewerLedgerDeps {
   startedAt?: (pid: number) => number | null
   kill?: (pid: number) => void
   log?: (line: string) => void
+  platform?: NodeJS.Platform
+  /** Windows' process table; null when it could not be read. */
+  windowsRows?: () => ProcessRow[] | null
 }
 
 export class ViewerLedger {
@@ -106,6 +148,20 @@ export class ViewerLedger {
     const startedAt = this.deps.startedAt ?? processStartedAt
     const kill = this.deps.kill ?? ((pid: number) => { killPidGroup(pid) })
     const reaped: ViewerLedgerEntry[] = []
+    if ((this.deps.platform ?? process.platform) === 'win32') {
+      // Windows has no `ps` for the check below. A table that could not be read keeps the ledger for the next start.
+      const rows = (this.deps.windowsRows ?? readWindowsRows)()
+      if (!rows) return []
+      for (const entry of entries) {
+        const pids = windowsViewerLeftovers(entry, rows)
+        for (const pid of pids) kill(pid)
+        if (!pids.length) continue
+        reaped.push(entry)
+        this.deps.log?.(`[dsh] reaped orphaned ${entry.dshId} viewer: ${pids.length} process(es)`)
+      }
+      this.write([])
+      return reaped
+    }
     for (const entry of entries) {
       const live = startedAt(entry.pid)
       if (live === null) continue // gone, or unknowable — a pid we cannot vouch for is left alone
