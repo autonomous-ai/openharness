@@ -50,3 +50,12 @@ describe('a patch id', () => {
     expect(patchId([file('a.ts', parser)])).not.toBe(patchId([file('a.ts', parser.replace('export function parse()', 'export function other()'))]))
   })
 })
+
+// Security review of #3218 (Warden2, round 3), Important 1: retargeting a pull request to a branch with other code, pushing the
+// same diff against it, and retargeting back carried a verdict to code nobody read. The branch it merges into is in the id.
+describe('a patch id and its base branch', () => {
+  it('differs for the same files against another base branch', () => {
+    expect(patchId([file('app.py', parser)], 'main')).not.toBe(patchId([file('app.py', parser)], 'evil'))
+    expect(patchId([file('app.py', parser)], 'main')).toBe(patchId([file('app.py', parser)], 'main'))
+  })
+})

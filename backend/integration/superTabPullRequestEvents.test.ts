@@ -50,7 +50,8 @@ function fakeReader() {
   const patchReads: string[] = []
   const reader: PullRequestReader = {
     watch: async url => { asked.push(url); return pulls.get(url) ?? null },
-    patch: async (url, head) => { patchReads.push(`${url}@${head}`); return patches.get(head) ?? null },
+    // A patch id names the base branch too (pullRequestPatch.ts): `HEAD@BASE` when a test sets one, else by head alone.
+    patch: async (url, head) => { patchReads.push(`${url}@${head}`); return patches.get(`${head}@${pulls.get(url)?.base}`) ?? patches.get(head) ?? null },
     botLogin: async () => 'harness[bot]',
     done: async () => {},
   }
@@ -305,6 +306,27 @@ describe('pull request events', () => {
       // The task lists its steps from now on, the old dormant one and the new one.
       const listed = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { stepIds?: string[] }
       expect(listed.stepIds).toEqual(expect.arrayContaining([step, later]))
+    })
+
+    // Security review of #3218 (Warden2, round 3), Important 1: retarget to a branch with other code, push the same diff against
+    // it, retarget back. The base branch is part of the head's record: a new base reads the patch again, against that base.
+    it('a retargeted base reads the patch again, and a verdict never follows the same diff onto another branch', async () => {
+      const { f, read } = await reviewed()
+      const H = '1234567890abcdef1234567890abcdef12345678'
+      f.patches.set(`${HEAD}@evil`, 'p-evil').set(`${H}@evil`, 'p-evil').set(`${H}@main`, 'p-main-backdoor')
+      const reads = () => f.patchReads.filter(r => r.startsWith(`${f.PR}@`)).length
+      const before = reads()
+      f.pulls.set(f.PR, f.pull({ base: 'evil' }))
+      await f.pass()
+      expect(reads()).toBe(before + 1)
+      f.pulls.set(f.PR, f.pull({ base: 'evil', head: H }))
+      await f.pass()
+      f.pulls.set(f.PR, f.pull({ base: 'main', head: H }))
+      await f.pass()
+      expect(reads()).toBe(before + 3)
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+      const kept = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { base?: string }> }).pullRequestHeads
+      expect(kept[f.PR]).toMatchObject({ head: H, base: 'main', patch: 'p-main-backdoor' })
     })
 
     // Review of #3218 (Ledger, round 3), Important 2: links added later can move a reviewed pull request out of the watch;

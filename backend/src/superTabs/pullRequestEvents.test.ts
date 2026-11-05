@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { pullRequestEvents, SEEN_KEPT, type PullRequestWatch } from './pullRequestEvents.js'
+import { appPullRequestWatch } from './pullRequestEvents.js'
+import type { GitHubApp } from '../github/app.js'
 
 // Dee, #1891: what GitHub says about a task's pull request becomes one message per event for its Engineer.
 const URL = 'https://github.com/acme/app/pull/12'
@@ -138,5 +140,23 @@ describe('pullRequestEvents', () => {
     expect(keys.some(k => k.startsWith('ready:'))).toBe(true)
     expect(keys).toContain('ci-red:head0')
     expect(keys).not.toContain('ci-red:head59')
+  })
+})
+
+// Security review of #3218 (Warden2, round 3): the reader's patch id names the base branch its comparison was against.
+describe('the app reader\'s patch', () => {
+  it('is another id for the same files against another base branch', async () => {
+    let base = 'main'
+    const files = [{ filename: 'app.py', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }]
+    const app = { installation: async () => 1, createToken: async () => ({ token: 't' }), revoke: async () => {}, botLogin: async () => null,
+      pullRequestPatchFiles: async () => ({ base, files }) } as unknown as GitHubApp
+    const reader = appPullRequestWatch(app)
+    const head = 'a'.repeat(40)
+    const onMain = await reader.patch('https://github.com/acme/app/pull/7', head)
+    base = 'evil'
+    const onEvil = await reader.patch('https://github.com/acme/app/pull/7', head)
+    expect(onMain).toMatch(/^[0-9a-f]{64}$/)
+    expect(onEvil).not.toBe(onMain)
+    await reader.done()
   })
 })

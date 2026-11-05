@@ -651,9 +651,10 @@ describe('watching a pull request', () => {
     github.compares.set(`acme/app@${base}...${head}`, [
       { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
       { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }])
-    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toEqual([
+    // The base branch the comparison was against comes with the files (security review of #3218, round 3).
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toEqual({ base: 'main', files: [
       { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
-      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }])
+      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }] })
     expect(github.calls.slice(-2).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/compare/${base}...${head}`])
   })
 
@@ -666,7 +667,7 @@ describe('watching a pull request', () => {
     expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
     github.compares.set(`acme/app@${base}...${head}`, [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }])
     expect(await app.pullRequestPatchFiles(repo, 12, token, 'c'.repeat(40))).toBeNull()
-    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toHaveLength(1)
+    expect((await app.pullRequestPatchFiles(repo, 12, token, head))?.files).toHaveLength(1)
     github.compares.set(`acme/app@${base}...${head}`, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
     expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
   })
