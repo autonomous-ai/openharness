@@ -295,6 +295,9 @@ model Machine {
 
   @@index([userId])
   @@index([userId, computerId])
+  /// A computer's rows of every account (superTabs/computerMoves.ts otherAccountsOnComputer): another account's sign-in there
+  /// moves the computer's Swarm entries to it (#3122).
+  @@index([computerId, userId])
   @@index([managerId, billingStatus])
   @@index([billingStatus, externalSubscriptionStatus, externalSubscriptionEndAt])
   @@map("machines")
