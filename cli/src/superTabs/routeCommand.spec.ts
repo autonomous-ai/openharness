@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
-import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -2274,3 +2274,79 @@ describe('needs.access', () => {
     for (const r of requirements) expect(r).not.toContain('access')
   })
 })
+
+// Ken, 2026-11-05 (task #3294): each route answer was ~45k characters (the whole instructions, every candidate as an object,
+// long left-out reasons), 467 a day in one project's PM context. The answer printed is a few thousand.
+describe('the route answer an agent reads (task #3294)', () => {
+  const names = ['Ken\'s MacBook Pro', 'Mac Studio', 'Tony\'s Mac mini', 'Diego\'s review machine', 'Huy\'s MacBook Air', 'Scholes\'s iMac',
+    'Dee\'s Mac mini', 'Amon\'s MacBook Pro', 'Build box', 'Kelvin\'s Mac Studio']
+  const machineIds = names.map((_, i) => `${String(i).padStart(2, '0')}f3923b927e36499865b0bd2b6223a4`)
+  const gone = ['Old Linux box', 'Windows laptop', 'Lab Raspberry Pi', 'Office NUC', 'Spare Mac mini'].map((name, i) => ({ machineId: `gone${i}9865b0bd2b6223a457f3923b927`, name }))
+  const fleetPolicy = { ...policy, models: [...policy.models.filter(m => m.model !== 'sonnet'), { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 3, enabled: true }] }
+  const week = (provider: string, used: number) => ({ provider, outcome: 'answered', httpStatus: 200, account: `${provider}-acct`, body: {
+    five_hour: { utilization: 20, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    seven_day: { utilization: used, resets_at: new Date(Date.now() + 5 * 86_400_000).toISOString() } } })
+  // Every machine runs an idle Claude and an idle Codex member, and offers a new agent of each: 40 candidates.
+  const crew = machineIds.flatMap((machineId, i) => [
+    { id: `${machineId.slice(0, 20)}cl${i}`, name: `Aspen${i}`, machineId, harnessId: `hc${i}`, configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
+    { id: `${machineId.slice(0, 20)}cx${i}`, name: `Birch${i}`, machineId, harnessId: `hx${i}`, configuration: { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' } }])
+  const fleet = () => {
+    const state = tab().state
+    state.agents = [agents[1]!, ...crew]
+    state.conversations[0]!.agentIds = ['lead', ...crew.map(a => a.id)]
+    return { revision: 3, state }
+  }
+  const routing = ['## Routing', '', '### Models', '', ...Array.from({ length: 12 }, (_, i) => `- Rule ${i}: ${'route by quota and machine. '.repeat(12)}`)].join('\n')
+  const document = ['# Project instructions', '', '## Roles', '', 'x'.repeat(20_000), '', routing, '', '## Rules for every agent', '', 'y'.repeat(6_000)].join('\n')
+  const fleetScoped = (revision = 74) => scoped({ policy: fleetPolicy as typeof policy,
+    context: { ok: true, value: { agentId: 'lead', tab: fleet(), policy: { policy: fleetPolicy, warnings: [] },
+      machines: [...machineIds.map((machineId, i) => ({ machineId, name: names[i] })), ...gone] } },
+    instructions: { ok: true, value: { projectId: 'p1', revision, text: document, notes: [{ id: 'n1', text: 'Release Amon\'s hotfix first.', askedBy: 'Ken' }] } } })
+  const fleetOpener = () => opener(id => {
+    const i = machineIds.indexOf(id)
+    if (i < 0) return { ...daemon(id), request: vi.fn(async () => { throw new Error('offline') }) }
+    return daemon(id, { agents: [`hc${i}`, `hx${i}`], usage: { providers: [week('claude', 38), week('codex', 55)] },
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })
+  })
+  const fit: PluginMaker = { name: 'Machine fit', make: async () => ({ name: 'Machine fit',
+    adjust: c => c.kind === 'new' ? { strength: 0, reason: 'its 3 agents use 61% of the CPU; a build here waits on the others, and its disk has 40 GB free, enough for this task.' } : null }) }
+  const fleetRoute = () => routeTask(input, fleetScoped(), where as never, fleetOpener(), () => 'op', undefined, [fit])
+
+  it('is under 8,000 characters for 40 candidates, and every row still says what a start or an assignment needs', async () => {
+    const answer = await fleetRoute()
+    expect((answer.candidates as unknown[]).length).toBe(40)
+    const printed = routeAnswer(answer, { instructionsRead: 74 })
+    expect(JSON.stringify(printed).length).toBeLessThan(8_000)
+    const lines = printed.candidates as string[]
+    expect(lines).toHaveLength(40)
+    for (const [i, row] of (answer.candidates as Array<{ id: string; kind: string; agentId?: string; engine: string; model: string; effort: string }>).entries()) {
+      expect(lines[i]).toMatch(new RegExp(`^${row.id} `))
+      expect(lines[i]).toContain(`${row.engine} ${row.model} ${row.effort}`)
+      if (row.agentId) expect(lines[i]).toContain(row.agentId)
+    }
+  })
+  it('gives the instructions as their Routing section and revision, the whole text on request, and none of it again for a revision read', async () => {
+    const answer = await fleetRoute()
+    const plain = routeAnswer(answer).instructions as Record<string, unknown>
+    expect(plain).toEqual({ revision: 74, routing, notes: ['Release Amon\'s hotfix first.'], more: expect.stringContaining('--full-instructions') })
+    expect(JSON.stringify(routeAnswer(answer))).not.toContain('x'.repeat(100))
+    expect(routeAnswer(answer, { fullInstructions: true }).instructions).toMatchObject({ revision: 74, text: document, notes: ['Release Amon\'s hotfix first.'] })
+    // A revision already read is not sent again; an older one is.
+    const read = routeAnswer(answer, { instructionsRead: 74 }).instructions as Record<string, unknown>
+    expect(read).toEqual({ revision: 74, unchanged: expect.stringContaining('revision 74') })
+    expect(routeAnswer(answer, { instructionsRead: 73 }).instructions).toMatchObject({ revision: 74, routing })
+    // The whole text wins over a revision read.
+    expect(routeAnswer(answer, { fullInstructions: true, instructionsRead: 74 }).instructions).toMatchObject({ text: document })
+    // Instructions with no Routing section are sent whole, never as nothing; unreadable ones say so.
+    const bare = { ...answer, instructions: { revision: 2, text: '# Rules\n\nWork by this.', notes: [] } }
+    expect(routeAnswer(bare).instructions).toMatchObject({ revision: 2, text: '# Rules\n\nWork by this.' })
+    expect(routeAnswer({ ...answer, instructions: undefined, instructionsUnreadable: true })).toMatchObject({ instructionsUnreadable: true })
+  })
+  it('finds the Routing section up to the next heading of its level or higher, its own subsections kept', () => {
+    expect(routingSection('# P\n\n## Roles\nr\n\n## Routing\n\n### Models\nm\n\n## Rules\nx')).toBe('## Routing\n\n### Models\nm')
+    expect(routingSection('## Routing\nonly')).toBe('## Routing\nonly')
+    expect(routingSection('# Routing\nTop\n# Next')).toBe('# Routing\nTop')
+    expect(routingSection('## Roles\nRouting is mentioned, not a heading.\n### Routing notes\nn')).toBeNull()
+  })
+})
+

@@ -814,3 +814,12 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return probes
   } finally { target.close() }
 }
+
+/** What `harness super-tab route` prints of [answer] (task #3294). */
+export function routeAnswer(answer: Json, _options: { fullInstructions?: boolean; instructionsRead?: number } = {}): Json {
+  return answer
+}
+/** The Routing section of [text]. */
+export function routingSection(_text: string): string | null {
+  return null
+}
