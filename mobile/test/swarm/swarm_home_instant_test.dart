@@ -244,8 +244,8 @@ void main() {
       stopReads(host);
     });
 
-    /// Refresh, from Sort and filter in the Swarm switcher (a pull on Home
-    /// until 2026-11-03, which opens Search now), up to the read it starts.
+    /// Refresh, from Sort and filter in the Swarm switcher, up to the read it
+    /// starts.
     Future<void> refresh(WidgetTester tester) async {
       for (final k in ['swarm-title-button', 'swarm-switch-view']) {
         await tester.tap(key(k));
@@ -258,100 +258,120 @@ void main() {
       }
     }
 
-    testWidgets('Refresh looks for the computers, then reads the Swarms', (
-      tester,
-    ) async {
-      var away = true;
-      final computers = FakeComputers([macAway])
-        ..held = Completer<void>()
-        ..found = [mac];
-      final (:host, :fake) = await coldStart(
-        tester,
-        computers: computers,
-        list: (_) => away
-            ? unavailable(null)
-            : {
-                'tabs': [
-                  {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-                ],
-                'next': null,
-              },
-      );
-      final inbox = host.session!.inbox;
-      // The quick reads stopped: only Refresh's is counted.
-      stopReads(host);
-      int lists() =>
-          fake.paths.where((p) => p == '/api/super-tabs/list').length;
-      final before = lists();
-
-      await refresh(tester);
-      expect(computers.rechecks, 1);
-      expect(lists(), before, reason: 'not before the look ends');
-
-      away = false;
-      computers.held!.complete();
+    /// A pull down at the top of Home, up to the read it starts: far enough
+    /// for iOS's list too, which gives back less than the finger moves.
+    Future<void> pullDown(WidgetTester tester) async {
+      await tester.fling(key('swarm-home-list'), const Offset(0, 500), 1000);
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
+    }
 
-      expect(lists(), before + 1);
-      expect(inbox.noComputer, isFalse);
-      expect(key('swarm-project-$tab-$project'), findsOneWidget);
-    });
+    for (final (way, start) in [
+      ('Refresh', refresh),
+      ('a pull down at the top of Home', pullDown),
+    ]) {
+      testWidgets(
+        '$way looks for the computers, then reads the Swarms',
+        (tester) async {
+          var away = true;
+          final computers = FakeComputers([macAway])
+            ..held = Completer<void>()
+            ..found = [mac];
+          final (:host, :fake) = await coldStart(
+            tester,
+            computers: computers,
+            list: (_) => away
+                ? unavailable(null)
+                : {
+                    'tabs': [
+                      {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+                    ],
+                    'next': null,
+                  },
+          );
+          final inbox = host.session!.inbox;
+          // The quick reads stopped: only Refresh's is counted.
+          stopReads(host);
+          int lists() =>
+              fake.paths.where((p) => p == '/api/super-tabs/list').length;
+          final before = lists();
 
-    testWidgets('a look that fails is logged, and the Swarms are read still', (
-      tester,
-    ) async {
-      final log = _Log();
-      final logged = appLog;
-      appLog = log;
-      addTearDown(() => appLog = logged);
-      final computers = _BrokenComputers([macAway]);
-      final (:host, :fake) = await coldStart(
-        tester,
-        computers: computers,
-        list: unavailable,
-      );
-      int lists() =>
-          fake.paths.where((p) => p == '/api/super-tabs/list').length;
-      final before = lists();
+          await start(tester);
+          expect(computers.rechecks, 1);
+          expect(lists(), before, reason: 'not before the look ends');
 
-      await refresh(tester);
+          away = false;
+          computers.held!.complete();
+          for (var i = 0; i < 10; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
 
-      expect(computers.rechecks, 1);
-      expect(log.messages, contains('Computers not looked for'));
-      expect(lists(), greaterThan(before));
-      expect(tester.takeException(), isNull);
-      expect(key('swarm-project-$tab-$project'), findsOneWidget);
-      stopReads(host);
-    });
-
-    testWidgets('with the computers answering, Refresh only reads the '
-        'Swarms', (tester) async {
-      final computers = FakeComputers([mac]);
-      final (:host, :fake) = await coldStart(
-        tester,
-        computers: computers,
-        list: (_) => {
-          'tabs': [
-            {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-          ],
-          'next': null,
+          expect(lists(), before + 1);
+          expect(inbox.noComputer, isFalse);
+          expect(key('swarm-project-$tab-$project'), findsOneWidget);
         },
+        // Android's list stretches at its top, iOS's bounces past it.
+        variant: TargetPlatformVariant(const {
+          TargetPlatform.android,
+          TargetPlatform.iOS,
+        }),
       );
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      int lists() =>
-          fake.paths.where((p) => p == '/api/super-tabs/list').length;
-      final before = lists();
 
-      await refresh(tester);
+      testWidgets('$way: a look that fails is logged, and the Swarms are read '
+          'still', (tester) async {
+        final log = _Log();
+        final logged = appLog;
+        appLog = log;
+        addTearDown(() => appLog = logged);
+        final computers = _BrokenComputers([macAway]);
+        final (:host, :fake) = await coldStart(
+          tester,
+          computers: computers,
+          list: unavailable,
+        );
+        int lists() =>
+            fake.paths.where((p) => p == '/api/super-tabs/list').length;
+        final before = lists();
 
-      expect(computers.rechecks, 0);
-      expect(lists(), greaterThan(before));
-      stopReads(host);
-    });
+        await start(tester);
+
+        expect(computers.rechecks, 1);
+        expect(log.messages, contains('Computers not looked for'));
+        expect(lists(), greaterThan(before));
+        expect(tester.takeException(), isNull);
+        expect(key('swarm-project-$tab-$project'), findsOneWidget);
+        stopReads(host);
+      });
+
+      testWidgets('with the computers answering, $way only reads the Swarms', (
+        tester,
+      ) async {
+        final computers = FakeComputers([mac]);
+        final (:host, :fake) = await coldStart(
+          tester,
+          computers: computers,
+          list: (_) => {
+            'tabs': [
+              {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+            ],
+            'next': null,
+          },
+        );
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        int lists() =>
+            fake.paths.where((p) => p == '/api/super-tabs/list').length;
+        final before = lists();
+
+        await start(tester);
+
+        expect(computers.rechecks, 0);
+        expect(lists(), greaterThan(before));
+        stopReads(host);
+      });
+    }
   });
 
   testWidgets(
