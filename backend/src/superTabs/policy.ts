@@ -86,16 +86,24 @@ function deepFreeze<T>(value: T): T {
  * a saved record says (River, 2026-11-06): a record can raise an area, never lower it.
  */
 export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: string[] }> = deepFreeze([
-  { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/session*', '**/middlewares/**'] },
+  { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/middlewares/**', '**/sessionScope*', 'backend/src/**/session*', '**/community/session*', '**/session-lock*'] },
   { area: 'Tokens', reads: 2, paths: ['**/*token*', '**/*token*/**', '**/*credential*', '**/*credential*/**', '**/*secret*', '**/*secret*/**', '**/*keychain*', 'backend/src/github/**'] },
-  { area: 'Encryption', reads: 2, paths: ['**/*crypt*', '**/*crypt*/**', '**/*cipher*', '**/*cipher*/**', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*', '**/*key', '**/*key.*', '**/*key/**', '**/*key-*', '**/*key *', '**/*key@*', '**/*key+*', '**/*keys', '**/*keys.*', '**/*keys/**', '**/*keys-*', '**/*keys *', '**/*keys@*', '**/*keys+*', '**/*keychain', '**/*keychain.*', '**/*keychain/**', '**/*keychain-*', '**/*keychain *', '**/*keychain@*', '**/*keychain+*'] },
+  { area: 'Encryption', reads: 2, paths: ['**/*crypt*', '**/*crypt*/**', '**/*cipher*', '**/*cipher*/**', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*', '**/*tlsguard*', 'backend/src/**/*key', 'backend/src/**/*key.*', 'backend/src/**/*key/**', 'backend/src/**/*key-*', 'backend/src/**/*keys', 'backend/src/**/*keys.*', 'backend/src/**/*keys/**', 'backend/src/**/*keys-*', 'cli/src/**/*key', 'cli/src/**/*key.*', 'cli/src/**/*key/**', 'cli/src/**/*key-*', 'cli/src/**/*keys', 'cli/src/**/*keys.*', 'cli/src/**/*keys/**', 'cli/src/**/*keys-*'] },
   { area: 'Access', reads: 2, paths: ['**/*access*', '**/*access*/**', '**/*permission*', '**/*permission*/**', '**/*audience*', '**/*audience*/**', '**/*membership*', '**/*membership*/**', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
-  { area: 'Buddy guard', reads: 2, paths: ['**/*guard*', '**/*guard*/**'] },
-  { area: 'Device links', reads: 2, paths: ['**/*device*', '**/*device*/**', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
+  { area: 'Buddy guard', reads: 2, paths: ['**/*buddy*guard*', '**/*ruleguard*', '**/*rule_guard*', '**/*devicesguard*', '**/*devices_guard*', '**/*leadguard*', '**/*lead_guard*', 'backend/src/superTabs/*guard*'] },
+  { area: 'Device links', reads: 2, paths: ['**/*device*', 'cli/src/device/**', 'cli/src/devices/**', 'cli/src/lib/*device*/**', '**/add_device/**', '**/*wifi_robot*', 'devices/**/*cable*', 'devices/**/*pair*', 'devices/**/*link*', 'devices/**/*key*', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
   { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*'] },
 ])
 /** The fewest reads a change to a security area gets, whatever a saved record says. */
 export const SECURITY_FLOOR_READS = 2
+/** What runs no code: images, video, 3D models, Markdown, docs, samples and build output. It never carries a security area's
+ *  two reads, from the floor or from the record's own security rows (River, SecAlder and ReviewLinnea, review of #3250). */
+const NOT_CODE = /\.(png|jpe?g|gif|webp|svg|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i
+/** Names a security term catches by accident, per area: accessibility is not access control. */
+const NOT_AREA: Readonly<Record<string, RegExp>> = { access: /accessib/i }
+/** Whether [file] is in the security area [row] as the floor reads it: code, not a known false name. */
+const inSecurityArea = (row: { area: string; paths: readonly string[] }, file: string) =>
+  !NOT_CODE.test(file) && !NOT_AREA[row.area.toLowerCase()]?.test(file) && row.paths.some(glob => globMatch(glob, file))
 
 /** Today's numbers (task #3393; project instructions, 2026-11-05): what a project reads until its first save. */
 export const SEED_RULES: ProjectRules = deepFreeze({
@@ -245,8 +253,13 @@ export function touchedRows(rules: ProjectRules, files: readonly string[] | null
 export function requiredReads(rules: ProjectRules, files: readonly string[] | null): number {
   // The floor (River, 2026-11-06): a security area's two reads hold whatever the record's own rows say, and unknown files
   // touch every area.
-  const security = files === null || files.some(file => SECURITY_ROWS.some(row => row.paths.some(glob => globMatch(glob, file))))
-  return Math.max(rules.reviews.defaultReads, ...touchedRows(rules, files).map(row => row.reads), security ? SECURITY_FLOOR_READS : 0)
+  const security = files === null || files.some(file => SECURITY_ROWS.some(row => inSecurityArea(row, file)))
+  // A security area's own row in the record reads files the same way, so a doc or an image named after a device asks no
+  // second read; any other row reads every file.
+  const areas = new Set(SECURITY_ROWS.map(row => row.area.toLowerCase()))
+  const rows = files === null ? touchedRows(rules, null) : rules.reviews.rows.filter(row => areas.has(row.area.toLowerCase())
+    ? files.some(file => inSecurityArea(row, file)) : files.some(file => row.paths.some(glob => globMatch(glob, file))))
+  return Math.max(rules.reviews.defaultReads, ...rows.map(row => row.reads), security ? SECURITY_FLOOR_READS : 0)
 }
 
 /** Where a change to [files] runs, for its test, in the table's order: none for tests, fixtures and docs alone, and none when
