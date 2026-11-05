@@ -114,6 +114,23 @@ the granted-permission filter, exclude both), so a later change cannot widen age
 **Left to confirm live:** once Ken adds Repository creation to our app and autonomous-ai accepts it, one real New
 repository run on a throwaway name confirms (1) and (2) against GitHub. It is listed in the pull request.
 
+### After the security reviews (2026-11-05)
+
+- **The callback claims the ask before it uses GitHub's code.** One write turns `waiting` into `creating`. A replayed or
+  doubled callback then finds nothing to claim and shows "This link has expired". It never writes over the outcome of
+  the callback that is still running. The outcome is written only over that `creating` ask.
+- **The repository is allowed for the project only once its outcome is recorded on the project.** A project deleted, or
+  an ask replaced, while GitHub was creating gets no approval.
+- **Who may is checked before any call signed with the app's key**, and organization checks are limited to 30 a minute
+  per person, on both routes.
+- **Create states are signed with a key of their own**, derived from the app's key under its own label, apart from
+  approval states.
+- **A revoke GitHub didn't confirm is logged**, never with the token.
+- **Known limit, shared with today's repository approval:** the callback is not tied to the browser that started it.
+  Whoever opens the 10-minute link signs in with their own GitHub. They become the creator, and the approval names them.
+  Here the worst case is a new empty repository in an organization they can create in. Binding the callback to the
+  starting browser should be a separate task on the shared callback.
+
 ### Who may use it (Harness side)
 
 - **People only.** The backend refuses an agent (`HUMAN_REQUIRED`), as `project.create` and `lead.start` do. No PM or

@@ -122,12 +122,14 @@ yet. Otherwise the person is told that an owner of the organization adds it unde
 The endpoints:
 
 - `GET /api/super-tabs/:tabId/github/owners/:owner` answers `ready`, `not-installed` (with
-  `installUrl`), `not-accepted` or `not-configured`.
+  `installUrl`), `not-accepted` or `not-configured`. Organization checks are limited to 30 a
+  minute per person, on both routes (`RATE_LIMITED`, 429).
 - `POST /api/super-tabs/:tabId/projects/:projectId/github/repository` takes
   `{ owner, name, private }`. Only the project's owner may call it, while the project has
   no repository. It answers `{ authorizeUrl, at }`.
 - GitHub sends the person back to `/api/github/callback`. The callback creates the
-  repository and writes the outcome on the project as `repositoryCreation`: `created`
+  repository and writes the outcome on the project as `repositoryCreation`. While it runs, the state is `creating`, and a
+  replay of the same link changes nothing. The outcome is `created`
   (with `repositoryUrl` and `reachable`), `taken`, `refused` (with GitHub's `reason`),
   `failed` or `cancelled`. The apps then start the Product Manager with today's
   `lead.start`.
