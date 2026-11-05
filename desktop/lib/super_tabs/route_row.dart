@@ -199,10 +199,13 @@ final _ruled = RegExp(r'^[A-Z][A-Za-z ]{0,40}: ');
 /// machine 17 lines and the grid limit for security work about 30, a hundred
 /// lines before what the route weighed. So, as the PM's answer does (CLI
 /// routeCommand.ts leftOut): one line per machine with its distinct reasons,
-/// at most [_maxReasons]; a route rule's reason seen on several machines is
-/// the decision's, said once; a row of no machine keeps its own line, once.
-/// OFFLINE reads the same on every machine but is no rule (no "Name: "), so
-/// each offline machine keeps its line.
+/// at most [_maxReasons]; a "Name: …" reason seen on several machines (the
+/// grid limit for security work) is said once, naming those machines, since
+/// some read the same but are a machine's fact ("Required tool missing: git."):
+/// a person must still see where. A row of no machine keeps its own line, once.
+/// OFFLINE has no "Name: ", so each offline machine keeps its line. Unlike
+/// leftOut, a machine that also offered candidates keeps its line: Details is
+/// the whole decision, the PM's answer only why a machine was never offered.
 List<String> _unavailableLines(Iterable<Map<String, dynamic>> excluded) {
   final byMachine = <String, List<String>>{};
   final others = <String>{};
@@ -222,11 +225,11 @@ List<String> _unavailableLines(Iterable<Map<String, dynamic>> excluded) {
   }
   final rules = {
     for (final MapEntry(key: reason, value: machines) in machinesOf.entries)
-      if (machines.length > 1) reason: machines.length,
+      if (machines.length > 1) reason: machines.toList(),
   };
   return [
-    for (final MapEntry(key: reason, value: count) in rules.entries)
-      'Unavailable on $count machines — $reason',
+    for (final MapEntry(key: reason, value: machines) in rules.entries)
+      'Unavailable on ${_named(machines)} — $reason',
     for (final MapEntry(key: machine, value: all) in byMachine.entries)
       if (all.where((r) => !rules.containsKey(r)).toList() case final reasons
           when reasons.isNotEmpty)
@@ -235,7 +238,16 @@ List<String> _unavailableLines(Iterable<Map<String, dynamic>> excluded) {
   ];
 }
 
-const _maxReasons = 4;
+const _maxReasons = 4, _maxNamed = 3;
+
+/// "A and B", "A, B and C", or past [_maxNamed] "A, B, C and 2 more machines".
+String _named(List<String> machines) {
+  if (machines.length > _maxNamed) {
+    final more = machines.length - _maxNamed;
+    return '${machines.take(_maxNamed).join(', ')} and $more more machine${more == 1 ? '' : 's'}';
+  }
+  return '${machines.take(machines.length - 1).join(', ')} and ${machines.last}';
+}
 
 /// A machine's distinct reasons, the first [_maxReasons] and how many more.
 String _upTo(List<String> reasons) => [

@@ -13,12 +13,17 @@ parses for the route's target. A pure function in `route_row.dart`, `_unavailabl
 
 1. A row's machine is the title's last part when the title has the `titleOf` shape; other rows ("Named model",
    "Local models", "New agents", a model whose host is offline) have none.
-2. A reason that a route rule gave ("Name: …", how `route.ts` prefixes a plug-in's refusal) on rows of two or more
-   machines is that rule's, not a machine's: one line, "Unavailable on N machines — Grid limits: …".
+2. A "Name: …" reason (how `route.ts` prefixes a plug-in's refusal) on rows of two or more machines is said once,
+   naming those machines: "Unavailable on Mac 3, Gray.local and Kay.local — Grid limits: …", past three "and N more
+   machines". Some machine facts read the same ("Required tool missing: git."), so the line always says where
+   (review of #3167).
 3. Every other reason goes on its machine's one line, distinct reasons in first-seen order, at most four and then how
    many more (as the CLI's `leftOut` keeps at most four): "Unavailable: Mac 3 — Machine is offline or unreachable."
    A machine whose every reason was a rule's has no line of its own.
 4. Rows with no machine stay one line each, once per distinct title and reason.
+
+Unlike `leftOut`, which lists only machines none of whose candidates was offered, Details keeps the line of a machine
+that also offered candidates: Details shows the whole decision, the PM's answer only why a machine was never offered.
 
 No shared helper with the CLI: Dart and TypeScript share no code, and the CLI's `leftOut` needs the `machine` field the
 record does not keep (adding it would change `recordOf` and the backend's strict record schema, outside this task).

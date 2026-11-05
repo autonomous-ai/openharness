@@ -311,6 +311,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Unavailable'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
     await openDetails(tester, [
       for (final machine in ['A', 'B', 'C', 'D', 'E']) ...rowsOn(machine, git),
     ]);
