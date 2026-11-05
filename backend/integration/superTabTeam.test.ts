@@ -242,6 +242,24 @@ describe('a task a Team agent worked on', () => {
     expect((await storedState(tab)).conversations.find(c => c.id === clean)?.teamWritten).toBeUndefined()
     await expect(assign()).resolves.toBeTruthy()
   })
+
+  // #3304: a join marked Magnolia2's task before, and nothing cleared it. GitHub's clean read of every pull request it records does.
+  it('clears a stored mark from a join, on the task and its step, once GitHub reads every pull request the task records as clean', async () => {
+    const { tab } = await fixture()
+    const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
+    const state = await storedState(tab)
+    Object.assign(state.conversations.find(c => c.id === joined)!, { teamWritten: true, pullRequestUrls: ['https://github.com/acme/app/pull/3154'] })
+    await saveState(tab, state)
+    const review = await step(tab, joined)
+    expect((await storedState(tab)).conversations.find(c => c.id === review)?.teamWritten).toBe(true)
+    const read = vi.fn(async () => 'clean' as const)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
+    await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } })).resolves.toBeTruthy()
+    expect(read).toHaveBeenCalledWith(null, ['https://github.com/acme/app/pull/3154'])
+    const stored = await storedState(tab)
+    expect(stored.conversations.find(c => c.id === joined)?.teamWritten).toBeUndefined()
+    expect(stored.conversations.find(c => c.id === review)?.teamWritten).toBeUndefined()
+  })
 })
 
 describe('a team session speaking in a Swarm', () => {
