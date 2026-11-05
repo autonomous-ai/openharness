@@ -16,8 +16,10 @@ import 'package:harness_mobile/swarm/swarm_you_page.dart';
 import 'devices_fixture.dart';
 
 /// With Swarm on, the app opens on Swarm Home, full screen, with Settings in
-/// You — opened from the avatar on Home since 2026-11-03, no longer a tab —
-/// and no way to Harness there: Settings ▸ Swarm off is the way back to it. With it off, the app opens on the terminal, as it always has.
+/// You — opened from the avatar on Home since 2026-11-03, no longer a tab. Harness is the root
+/// while an agent is open, with a back chevron in its header to Swarm Home (and, on iOS, an edge
+/// swipe), as Android's system back always went; Settings ▸ Swarm off turns Swarm Home off. With
+/// Swarm off, the app opens on the terminal, as it always has.
 void main() {
   late DevicesApp app;
 

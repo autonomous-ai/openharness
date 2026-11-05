@@ -153,9 +153,12 @@ export async function writeReactionActivity(tx: Tx, write: { tabId: string; reac
 /** A digest of which of the person's rows are unread, moving when one is written, read or removed: a client reads its list
  *  again when it moves, never on a timer. It carries no count and no chat: only that something changed. */
 export async function activityDigest(tx: Tx, tabId: string, personId: string, now: number): Promise<string> {
-  const rows = await tx.superTabActivity.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) }, ...unread },
-    orderBy: { createdAt: 'desc' }, take: ACTIVITY_DIGEST_ROWS, select: { id: true } })
-  return createHash('sha256').update(rows.map(r => r.id).sort().join('\n')).digest('base64url').slice(0, 16)
+  // A plain `$match` through the unread index: `readAt: null` matches a row with no readAt too. Prisma's read sent an `$expr`
+  // the index could bound only by person, and examined every row of theirs of 30 days (task #3146).
+  const rows = await readBy(tx, 'SuperTabActivity', 'unread', [
+    { $match: { tabId, personId, readAt: null, createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
+    { $sort: { createdAt: -1 } }, { $limit: ACTIVITY_DIGEST_ROWS }, { $project: { _id: 1 } }])
+  return createHash('sha256').update(rows.map(r => r._id as string).sort().join('\n')).digest('base64url').slice(0, 16)
 }
 
 export interface ActivityItem {

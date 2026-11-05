@@ -539,6 +539,57 @@ class PersonalProjects extends ChangeNotifier {
     );
   }
 
+  /// Whether project [projectId] of [c] leaves the project list (Huy, 11-05,
+  /// task #3042): one made for the person's panes, with none of them open
+  /// now. Nothing about it changes on the server, so its chat is there when a
+  /// pane of it opens again. Never while a machine holding one of their panes
+  /// has not said what runs there yet: that pane may be this project's.
+  bool hidden(SuperTabController c, String projectId) =>
+      hiddenIn(c).contains(projectId);
+
+  /// Every project of [c] that leaves the project list now ([hidden]), in
+  /// one walk of the person's panes, so the list asks once per draw, not once
+  /// per row (ENGINEERING §4, review of #3073): a project made for panes
+  /// whose repos have none of them open, the same answer as [panesFor] being
+  /// empty for it.
+  Set<String> hiddenIn(SuperTabController c) {
+    if (!eligible(c)) return const {};
+    final known = _known[c.accountId]?[c.tabId];
+    if (known == null || known.isEmpty || _unresolvedPanes(app)) {
+      return const {};
+    }
+    final shown = {for (final entry in personalPanes(app)) ?known[entry.repo]};
+    final snapshot = c.snapshot!;
+    return {
+      for (final id in known.values)
+        if (id != null &&
+            !shown.contains(id) &&
+            snapshot.projectById(id) != null)
+          id,
+    };
+  }
+
+  /// A pane of the person's on a machine that has not listed its agents yet.
+  static bool _unresolvedPanes(AppNotifier app) {
+    for (final tab in app.swarms) {
+      if (tab.isSuperTab || tab.isUtility) continue;
+      for (final pane in tab.panes) {
+        if (pane.agentId == null || pane.isViewer) continue;
+        final machine = app.stateOf(pane.machineId);
+        if (machine == null ||
+            machine.belongsToOtherAccount ||
+            machine.machine.isTeamAccount) {
+          continue;
+        }
+        if (!machine.agentsListedOnce &&
+            machine.agentLoadStatus != AgentLoadStatus.loaded) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /// The tab all of [panes] come from, when they are exactly its panes: its
   /// split sizes are theirs.
   Swarm? soleTab(List<TerminalPane> panes) {

@@ -7,7 +7,7 @@
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
   slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 import { coordinatorNameOf } from './instructions.js'
 
@@ -98,7 +98,7 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
     (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
   let candidates: ContributedMachine[]
-  if (named.contributorId === project.ownerId) candidates = [named]
+  if (ownsProject(state, named.contributorId, project)) candidates = [named]
   else if (teamAccountPool(named)) {
     if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
     const why = refusal(named)

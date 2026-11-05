@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../core/open_in_browser.dart';
 import '../finder/finder_file_kind.dart';
+import '../measurement/speed_marks.dart';
 import '../widgets/desktop_chrome.dart';
 import 'attachment_upload.dart' show kSuperTabFormAttachmentMaxBytes;
 import 'file_links.dart';
@@ -38,6 +39,24 @@ ImageProvider attachmentPicture(Uri url) => attachmentImage(url);
 /// (`attachment_text_viewer.dart`), which a browser downloads apart.
 Future<Uint8List> readAttachment(Uri url, {int? maxBytes}) =>
     attachmentFetcher(url, maxBytes: maxBytes);
+
+/// A picture shown in place, read through [attachmentFetcher] and timed: its
+/// bytes and milliseconds (or its failure) go to the speed marks
+/// (`measurement/speed_marks.dart`), never its address.
+Future<Uint8List> readPicture(Uri url) async {
+  final clock = Stopwatch()..start();
+  try {
+    final bytes = await readAttachment(
+      url,
+      maxBytes: kSuperTabFormAttachmentMaxBytes,
+    );
+    speedMarks.image(ms: clock.elapsedMilliseconds, bytes: bytes.length);
+    return bytes;
+  } catch (_) {
+    speedMarks.image(ms: clock.elapsedMilliseconds);
+    rethrow;
+  }
+}
 
 /// A file past the text viewer's limit; it opens in the browser instead.
 class AttachmentTooLarge implements Exception {
@@ -246,11 +265,8 @@ class AttachmentImage extends ImageProvider<AttachmentImage> {
 
   // No more than a picture shown in place may weigh, whatever its row says:
   // a larger one fails to draw rather than being read whole.
-  Future<ui.Codec> _decode(ImageDecoderCallback decode) async => decode(
-    await ui.ImmutableBuffer.fromUint8List(
-      await readAttachment(url, maxBytes: kSuperTabFormAttachmentMaxBytes),
-    ),
-  );
+  Future<ui.Codec> _decode(ImageDecoderCallback decode) async =>
+      decode(await ui.ImmutableBuffer.fromUint8List(await readPicture(url)));
 
   @override
   bool operator ==(Object other) =>

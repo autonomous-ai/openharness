@@ -17,6 +17,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
@@ -85,8 +86,8 @@ class ProjectSidebar extends StatelessWidget {
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
 
-  /// What the three rows count; without it Decisions and Mentions count what
-  /// the server says waits, and Threads nothing.
+  /// What the three rows read, to be bold or grey; without it Decisions and
+  /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
 
   /// The reader's places, for the back and forward arrows at the top;
@@ -133,7 +134,6 @@ class ProjectSidebar extends StatelessWidget {
     required IconData icon,
     required VoidCallback? onTap,
     bool selected = false,
-    int badge = 0,
     Widget? trailing,
     bool? unread,
   }) => Padding(
@@ -200,8 +200,7 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing ?? (badge > 0 ? SuperTabCountBadge(badge) : null)
-                  case final mark?)
+              if (trailing case final mark?)
                 Padding(padding: const EdgeInsets.only(right: 10), child: mark),
             ],
           ),
@@ -210,28 +209,24 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// Threads: bold with a plain count while followed threads have unread
-  /// replies, never red (anh Dee, 11-05).
-  Widget _threadsRow(ValueChanged<SwarmPage> onPage) {
-    final count = activity?.threadsCount ?? 0;
-    return _navigationRow(
-      key: 'super-threads',
-      label: 'Threads',
-      icon: AppIcons.messagesSquare,
-      onTap: () => onPage(SwarmPage.threads),
-      selected: page == SwarmPage.threads,
-      unread: count > 0,
-      trailing: count > 0
-          ? Text(
-              '$count',
-              style: SwarmType.sidebar(
-                compact: compact,
-                color: grid.SidebarInk.ink,
-              ).copyWith(fontWeight: grid.AppFont.semibold),
-            )
-          : null,
-    );
-  }
+  /// A page row of Decisions, Mentions or Threads: no number and no red,
+  /// bold at full strength while something waits, grey when nothing does
+  /// (anh Dee, 11-05, task #3128).
+  Widget _pageRow(
+    ValueChanged<SwarmPage> onPage, {
+    required SwarmPage target,
+    required String key,
+    required String label,
+    required IconData icon,
+    required int waiting,
+  }) => _navigationRow(
+    key: key,
+    label: label,
+    icon: icon,
+    onTap: () => onPage(target),
+    selected: page == target,
+    unread: waiting > 0,
+  );
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
   Widget _arrows(SuperTabPlaces places) => Row(
@@ -637,26 +632,43 @@ class ProjectSidebar extends StatelessWidget {
       controller.unreadShown(group) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
+  /// A Personal project whose panes are all closed (personal_projects.dart
+  /// `hidden`, task #3042), unless its chat is the one open now, as the
+  /// unread filter keeps it.
+  /// [hidden] is worked out once per draw (`superTabHiddenProjects`).
+  bool _paneless(
+    SuperTabProject project,
+    SuperTabConversation chat,
+    Set<String> hidden,
+  ) =>
+      (_paneCovered || controller.selectedId != chat.id) &&
+      hidden.contains(project.id);
+
   /// Every project with its workgroups, by name from A to Z. The round dial
-  /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`): the
-  /// two must match.
+  /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`); a
+  /// Personal project whose panes are all closed leaves this list but stays
+  /// on the dial (task #3042: the brief is the project list).
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
-  ) => [
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (reading.of(project) case final read
-          when read.lead != null &&
-              (!controller.unreadOnly || _hasUnread(read)))
-        (
-          project.name,
-          Column(
-            key: ValueKey('super-project-${project.id}'),
-            mainAxisSize: MainAxisSize.min,
-            children: [_row(read.lead!, reading: read)],
+  ) {
+    final hidden = superTabHiddenProjects(controller, app: app);
+    return [
+      for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+        if (reading.of(project) case final read
+            when read.lead != null &&
+                (!controller.unreadOnly || _hasUnread(read)) &&
+                !_paneless(project, read.lead!, hidden))
+          (
+            project.name,
+            Column(
+              key: ValueKey('super-project-${project.id}'),
+              mainAxisSize: MainAxisSize.min,
+              children: [_row(read.lead!, reading: read)],
+            ),
           ),
-        ),
-  ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
+    ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
+  }
 
   // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
   // shared rows drawn in it.
@@ -676,6 +688,9 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
+    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
+    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
+    final threads = activity?.threadsCount ?? 0;
     return Material(
       // The page's color: the rule at its edge is what separates them. A
       // theme may give the sidebar its own (Plum's plum).
@@ -709,29 +724,36 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                   ),
                 // Three rows, each one thing, in anh Dee's order (11-05, task
-                // #2996): only Decisions and Mentions are ever red.
+                // #2996): bold when something waits, grey when not, and no
+                // numbers (task #3128). The Swarm switcher stands apart from
+                // them by a control gap.
                 if (onPage case final onPage?) ...[
-                  _navigationRow(
+                  if (app != null && onNewSwarm != null)
+                    const SizedBox(height: DesktopChrome.controlGap),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.decisions,
                     key: 'super-decisions',
                     label: 'Decisions',
                     icon: AppIcons.flag,
-                    onTap: () => onPage(SwarmPage.decisions),
-                    selected: page == SwarmPage.decisions,
-                    badge:
-                        activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0,
+                    waiting: decisions,
                   ),
-                  _navigationRow(
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.mentions,
                     key: 'super-mentions',
                     label: 'Mentions',
                     icon: AppIcons.atSign,
-                    onTap: () => onPage(SwarmPage.mentions),
-                    selected: page == SwarmPage.mentions,
-                    badge:
-                        activity?.mentionsCount ??
-                        snapshot?.mentionsWaiting ??
-                        0,
+                    waiting: mentions,
                   ),
-                  _threadsRow(onPage),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.threads,
+                    key: 'super-threads',
+                    label: 'Threads',
+                    icon: AppIcons.messagesSquare,
+                    waiting: threads,
+                  ),
                 ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(
@@ -929,21 +951,36 @@ class _ProjectReading {
 /// under Projects), each project's chat from A to Z, then the reader's
 /// project Buddy chats. Tasks are in each project's Tasks view, not here
 /// (task #2569). The round dial swipes projects in this A to Z order too (cli
-/// superTabs/cards.ts `leadsOf`): the two must match.
-List<String> superTabSidebarOrder(SuperTabController controller) {
+/// superTabs/cards.ts `leadsOf`), less the Personal projects this list hides
+/// (task #3042).
+List<String> superTabSidebarOrder(
+  SuperTabController controller, {
+  AppNotifier? app,
+}) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.projects]
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  final hidden = superTabHiddenProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
       if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
           case final chat?)
         chat.id,
     for (final project in projects)
-      if (snapshot.conversation(project.leadConversationId) != null)
+      if (snapshot.conversation(project.leadConversationId) != null &&
+          (controller.selectedId == project.leadConversationId ||
+              !hidden.contains(project.id)))
         project.leadConversationId,
     for (final project in projects)
       if (controller.buddyChat(project.id) case final chat?) chat.id,
   ];
 }
+
+/// The projects the list leaves out: Personal projects of the person's whose
+/// panes are all closed (personal_projects.dart, task #3042), worked out in
+/// one pass. None without the app, which holds the panes.
+Set<String> superTabHiddenProjects(
+  SuperTabController controller, {
+  AppNotifier? app,
+}) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);

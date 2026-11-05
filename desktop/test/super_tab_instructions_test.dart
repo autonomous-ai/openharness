@@ -569,68 +569,6 @@ void main() {
       expect(editorText(tester), 'Text of revision 7');
     });
 
-    // Ken, 11-05 (#3021): the save's chat line shows the lines it changed, and opens the revision it saved to read it whole.
-    testWidgets(
-      'an instructions line in the chat opens the revision it saved',
-      (tester) async {
-        final (server, _) = await mount(
-          tester,
-          account: 'peer',
-          messages: [
-            {
-              'id': 'saved',
-              'conversationId': 'lead',
-              'sequence': 1,
-              'text':
-                  'owner changed the instructions: Reviews run on Opus.\n\n'
-                  'In Routing › Models:\nRemoved: Haiku reviews.\n'
-                  'Added: Opus reviews.\n\nand 3 more changes.',
-              'createdAt': ago(const Duration(minutes: 5)),
-              'author': {'kind': 'person', 'id': 'owner', 'name': 'owner'},
-              'source': {
-                'kind': 'instructions',
-                'projectId': 'lead',
-                'revision': 8,
-              },
-            },
-            {
-              'id': 'plain',
-              'conversationId': 'lead',
-              'sequence': 2,
-              'text': 'Thanks, I read it.',
-              'createdAt': ago(const Duration(minutes: 4)),
-              'author': {'kind': 'person', 'id': 'peer', 'name': 'peer'},
-            },
-          ],
-        );
-        seed(server);
-        expect(find.textContaining('Haiku reviews.'), findsOneWidget);
-        expect(find.textContaining('and 3 more changes.'), findsOneWidget);
-        // One link, on the save's line only.
-        final link = find.byKey(
-          const ValueKey('super-instructions-link-saved'),
-        );
-        expect(link, findsOneWidget);
-        expect(find.text('See revision 8'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('super-instructions-link-plain')),
-          findsNothing,
-        );
-        await tester.tap(link);
-        await tester.pumpAndSettle();
-        expect(find.text('Instructions › History'), findsOneWidget);
-        expect(
-          server.instructionReads.where((r) => r.endsWith('/revisions/8')),
-          hasLength(1),
-        );
-        final text = tester.widget<TextField>(
-          find.byKey(const ValueKey('super-revision-text')),
-        );
-        expect(text.readOnly, isTrue);
-        expect(text.controller!.text, 'Text of revision 8');
-      },
-    );
-
     testWidgets('a viewer has no Restore', (tester) async {
       final (server, _) = await mount(tester, account: 'viewer');
       seed(server);

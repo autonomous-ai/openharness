@@ -13,6 +13,7 @@ import type { Actor, Conversation, SuperTabState } from './model.js'
 import { pageThreads, type ThreadReply } from './pageReads.js'
 import { readBy } from './parts/indexed.js'
 import { readConversation, readProject } from './projects.js'
+import { proposalPriority, type TaskPriority } from './taskPriority.js'
 import { threadSummaries } from './threads.js'
 
 type Transaction = Prisma.TransactionClient
@@ -24,7 +25,9 @@ export const MAX_ROOTS = 1_000
 /** The words buddy.propose puts before a proposal's name (commands.ts), which the apps leave out. */
 const ROOT_PREFIX = "Let's build: "
 
-export interface OpenProposal { messageId: string; title: string; personId?: string; at: number }
+export interface OpenProposal { messageId: string; title: string; personId?: string
+  /** Its Buddy's low, normal or high on the tasks' one scale (taskPriority.ts). */
+  priority: TaskPriority; at: number }
 /** How long after a chat's seed its reads scan it again: a server still on the release before writes a proposal with no row
  *  in the open set, and a rolling release replaces them within minutes. */
 export const SEED_SETTLE_MS = 30 * 60_000
@@ -110,7 +113,7 @@ async function scanned(state: SuperTabState, chat: Conversation, reads: Proposal
 function shown(root: ProposalRoot): OpenProposal {
   const personId = root.source.personId
   return { messageId: root.id, title: root.text.startsWith(ROOT_PREFIX) ? root.text.slice(ROOT_PREFIX.length) : root.text,
-    ...typeof personId === 'string' ? { personId } : {}, at: root.createdAt.getTime() }
+    ...typeof personId === 'string' ? { personId } : {}, priority: proposalPriority(root.source.priority), at: root.createdAt.getTime() }
 }
 
 const date = (value: unknown): Date => new Date((value as { $date?: string } | null)?.$date ?? value as string)

@@ -117,6 +117,27 @@ describe('the built-in PM schedule', () => {
     expect(text).toContain('follow the instructions and say so')
   })
 
+  // Ken, 11-05: River's own script started Poplar on Gray.local at 14:01 and waited in the foreground until the start failed
+  // at 14:09; for 6.5 minutes no person's message was read. The CLI's start returns in about 20 s; the wait was the PM's.
+  it('tells the coordinator to run a start in the background and keep answering people', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('while a command runs you read no one\'s messages')
+    expect(text).toContain('When your tool runs commands in the background (Claude Code: run_in_background)')
+    // Only resume finishes a pending start, and an assignment before it settles is refused (START_PENDING): a PM without
+    // background commands needs the command by name, once a turn (review of #3121).
+    expect(text).toContain('on your next turn run `resume START_ID` once')
+    expect(text).toContain('Never repeat `resume` in a loop in the foreground')
+  })
+
+  // Ken, 11-05: River ran 1,389 Swarm commands in a day in its own session, and long reads fill its context until it is
+  // compacted and the instructions fall out of it.
+  it('tells the coordinator to hand long reading to a background subagent, which never writes code or decides', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('to a subagent that runs in the background')
+    expect(text).toContain('take back only its summary')
+    expect(text).toContain('A subagent never writes code and never decides')
+  })
+
   it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
     expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
     expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
@@ -203,6 +224,30 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     recordWake(project(state), next, T + SCHEDULE_SLOT_MS, 'wake-2')
     expect(project(state).schedule).toEqual({ lastSlot: SLOT + 1, wakeId: 'wake-2', heardAt: T + SCHEDULE_SLOT_MS, tidiedOn: '2026-11-04', tidiedRevision: 2 })
     expect(wake(state, T + 2 * SCHEDULE_SLOT_MS)).toBeNull()
+  })
+
+  // Ken, 11-05: lamp-gtm's PM saved dee's "start what dee asks at once, on the PM's account if needed" (revision 14) beside
+  // the older routing line that keeps the PM's own account for the PM, left both, and then asked dee three options.
+  it('tells the coordinator to fix a contradicted line in the same save, and to settle a conflict without asking', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('fix every line it contradicts in that same save')
+    // Review of #3134: replacing a line drops another person's rule, which the tidy keeps.
+    expect(text).toContain('replace a line only when it names no one or the same person gave both')
+    expect(text).toContain('When two rules still disagree, don\'t ask; settle it by the first that applies')
+    // A rule that says to ask a person (spending money, say) is never overridden by this order.
+    expect(text).toContain('a rule that says to ask a person still holds')
+    expect(text).toContain('an account owner\'s rule beats a default about their account; the newer beats the older')
+    expect(text).toContain('say what you changed')
+  })
+
+  // Ken, 11-05: a project's own instructions guard only its own PM's account, and a copy made before this rule has none.
+  it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('Never ask anyone about quota or whose account to use: pick by Routing and go.')
+    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less than 20% of its weekly quota left')
+    // Review of #3134: a project copied before this keeps an older line about its own PM's account; this one still holds.
+    expect(text).toContain('even where an older Routing line in your instructions says otherwise')
+    expect(text).not.toContain('except work that account\'s owner asks for')
   })
 
   it('says in the built-in section when the Swarm wakes it for them', () => {

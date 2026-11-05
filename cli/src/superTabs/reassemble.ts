@@ -61,6 +61,8 @@ export function reassemble(store: PartsStore): Json {
     })
   }
   if (derived.otherProjectsWork !== undefined) state.otherProjectsWork = derived.otherProjectsWork
+  // Every project's PM account, for the route's notes (pmAccounts.ts).
+  if (derived.pmAccounts !== undefined) state.pmAccounts = derived.pmAccounts
   if (derived.mentionsWaiting !== undefined) state.mentionsWaiting = derived.mentionsWaiting
   if (derived.mentionsDigest !== undefined) state.mentionsDigest = derived.mentionsDigest
   return state
