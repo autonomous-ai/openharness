@@ -455,6 +455,9 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
       titleLines: list ? 1 : 3,
+      // A merged task's release parts are what the card is for: they wrap
+      // however long, never cut off (task #3452).
+      captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
       tile: !list,
       selected: id == widget.selectedId,
       onOpen: () =>

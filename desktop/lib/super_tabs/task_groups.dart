@@ -75,6 +75,18 @@ String? _pullRequest(SuperTabConversation task) {
   return number == null || int.tryParse(number) == null ? null : 'PR #$number';
 }
 
+/// The parts a task waits on, as people name them.
+String _parts(List<String> parts) => parts
+    .map(
+      (part) => switch (part) {
+        'desktop' => 'Desktop',
+        'cli' => 'CLI',
+        'web' => 'Web',
+        _ => part,
+      },
+    )
+    .join(', ');
+
 /// [task]'s place for the reader [readerId] at [now]; null for one that is
 /// not listed: cancelled, stopped, closed without shipping, or shipped before
 /// the window. It needs the reader as the sidebar's groups did: tagged
@@ -103,7 +115,15 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
       (column: column, needsYou: needsYou, state: words);
   SuperTabTaskPlace waiting(String words) =>
       at(SuperTabTaskColumn.waiting, words);
-  // Shipped means merged; finished with nothing to merge is Done (#2872).
+  // Merged is Shipped only once a release carries it (#3452): until then it
+  // waits, whatever else the task is (it is often closed already).
+  if (superTabTaskReleasing(task)) {
+    final parts = _parts(task.releasing!);
+    return waiting(
+      parts.isEmpty ? 'merged, releasing' : 'merged, releasing ($parts)',
+    );
+  }
+  // Shipped means released; finished with nothing to merge is Done (#2872).
   final merged = task.cards.pullRequests.any((card) => card.merged);
   if (superTabTaskShipped(task)) {
     final shipped = task.shippedAt;
