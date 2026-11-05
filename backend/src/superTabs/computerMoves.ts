@@ -5,6 +5,8 @@
  */
 import type { Prisma } from '@prisma/client'
 import { readBy } from './parts/indexed.js'
+import { machineOffline, type ContributedMachine } from './machines.js'
+import type { SuperTabState } from './model.js'
 
 type Reader = Pick<Prisma.TransactionClient, 'machine'>
 
@@ -19,6 +21,22 @@ export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId,
     { $sort: { userId: 1 } }, { $limit: 16 }, { $project: { _id: 0, machineId: 1, userId: 1 } }],
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ machineId: string; userId: string }>
   return rows.map(row => ({ machineId: row.machineId, userId: row.userId }))
+}
+
+/** One entry a computer's sign-in moves (or, in a dry run, would): in Swarm [tabId], [fromOwner]'s machine [from] to
+ *  [toOwner]'s [to]. Ids only, so the cleanup's output names what Ken's go covers and what each owner may add back. */
+export interface ComputerMove { tabId: string; from: string; fromOwner: string; to: string; toOwner: string }
+
+/**
+ * The entry of [ownerId]'s machine [machineId] that a sign-in of [to] on the same computer moves, or none: the computer's own
+ * entry (not a Team account's), not being removed, still [ownerId]'s, and not reporting, since two live accounts on one
+ * computer id are no switch. machine.moved and the cleanup's dry run both decide by it.
+ */
+export function movableEntry(state: SuperTabState, machineId: string, ownerId: string, to: { machineId: string; ownerId: string }, now: number):
+  ContributedMachine | undefined {
+  const pool = state.machines?.find(m => m.machineId === machineId && !m.hostMachineId && !m.removal)
+  if (!pool || pool.contributorId !== ownerId || ownerId === to.ownerId || machineId === to.machineId || !machineOffline(pool, now)) return undefined
+  return pool
 }
 
 /** Each account's active device keys (lib/deviceKeyLog.ts activeMachineKeysOf): only `machine` keys are read here. */
@@ -78,29 +96,32 @@ export async function teamCleanupPending(db: Reader & Pick<Prisma.TransactionCli
 }
 
 /** What the one-time cleanup found: each computer with live rows of two or more accounts, the one seen last, and the others. */
-export interface CleanUp { computers: Array<{ signedIn: { machineId: string; ownerId: string }; others: string[] }>; moved: number }
+export interface CleanUp { computers: Array<{ signedIn: { machineId: string; ownerId: string }; others: string[] }>; moves: ComputerMove[] }
 
 /**
  * The one-time cleanup of computers listed under two accounts before moves existed (Scholes, 11-05: MacBooks-MacBook-Pro-7 three
  * times): the account seen last on each is the one signed in there, and its sign-in moves the others' entries as a connect does
  * (store.ts computerSignedIn). A computer whose last two accounts were seen at the same moment, or never, is left. With [write]
- * false it only lists them. Safe to run again: an entry moved is gone, and nothing else is written.
+ * false it writes nothing and lists the moves the write would make, decided the same way. Safe to run again: an entry moved
+ * is gone, and nothing else is written.
  */
-export async function cleanUpComputers(db: Reader, store: { computerSignedIn(signIn: ComputerSignIn): Promise<number> }, autonomousEnv: string,
+export async function cleanUpComputers(db: Reader, store: { computerSignedIn(signIn: ComputerSignIn, options: { write: boolean }): Promise<ComputerMove[]> },
+  autonomousEnv: string,
   { write }: { write: boolean }): Promise<CleanUp> {
   const groups = await db.machine.aggregateRaw({ pipeline: [
     { $match: { computerId: { $type: 'string' }, autonomousEnv, authMode: 'remote', sessionKind: { $ne: 'team' }, deletedAt: null } },
     { $group: { _id: '$computerId', accounts: { $addToSet: '$userId' }, rows: { $push: { machineId: '$machineId', userId: '$userId', seen: '$lastSeenAt' } } } },
     { $match: { 'accounts.1': { $exists: true } } }],
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ _id: string; rows: Array<{ machineId: string; userId: string; seen?: { $date: string } | null }> }>
-  const result: CleanUp = { computers: [], moved: 0 }
+  const result: CleanUp = { computers: [], moves: [] }
   for (const group of groups) {
     const seen = (row: (typeof group.rows)[number]) => row.seen ? Date.parse(row.seen.$date) : 0
     const [last, next] = [...group.rows].sort((a, b) => seen(b) - seen(a))
     if (!last || !seen(last) || (next && seen(next) === seen(last))) continue
     result.computers.push({ signedIn: { machineId: last.machineId, ownerId: last.userId },
       others: group.rows.filter(row => row.userId !== last.userId).map(row => row.machineId) })
-    if (write) result.moved += await store.computerSignedIn({ machineId: last.machineId, ownerId: last.userId, computerId: group._id, autonomousEnv })
+    // The dry run decides as the write does, so what it lists is what the write moves.
+    result.moves.push(...await store.computerSignedIn({ machineId: last.machineId, ownerId: last.userId, computerId: group._id, autonomousEnv }, { write }))
   }
   return result
 }

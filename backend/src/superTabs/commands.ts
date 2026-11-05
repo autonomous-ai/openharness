@@ -1,6 +1,7 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
@@ -2054,9 +2055,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // accounts from their rows. An entry still reporting is left (two live accounts on one computer id are no switch).
       const move = context.computerMove
       if (!move || actor.kind !== 'person') fail('FORBIDDEN', 'Harness moves a computer to the account signed in on it.', 403)
-      const pool = state.machines?.find(m => m.machineId === command.machineId && !m.hostMachineId && !m.removal)
-      if (!pool || pool.contributorId !== actor.userId || pool.contributorId === move.to.ownerId || pool.machineId === move.to.machineId
-        || !machineOffline(pool, context.now)) break
+      const pool = movableEntry(state, command.machineId, actor.userId, move.to, context.now)
+      if (!pool) break
       const teams = teamPoolsOf(state, pool).filter(m => !m.removal)
       const here = new Set([pool.machineId, ...teams.map(t => t.machineId)])
       // Its host is gone, so a start it launched never arrives: each fails now, launched or not.

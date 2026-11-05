@@ -1,6 +1,10 @@
 // One row per computer (#3122): computers listed in Swarms under two accounts before a sign-in moved them. From this release a
 // sign-in moves the computer's entries by itself (superTabs/computerMoves.ts); this moves the ones listed twice already, once.
-// Dry run by default: it prints each computer's account seen last and the other accounts' machines, and writes nothing.
+// Dry run by default: it writes nothing and prints each computer shared by two accounts, and every move the write would make
+// (Swarm, old entry and owner, new entry and owner), decided exactly as the write decides. `--write` prints the moves it made:
+// what Ken's go covered, and what each old owner can add back with Add machine.
+// It reads every machine row that has a computer id, once, on the (computerId, userId) index: check that read's plan and the
+// collection's size on the read-only login (dry run) before the go.
 // Rows count as one computer by their computer id alone, which is self-declared: a pinned ADAPTER_COMPUTER_ID shared by
 // containers under different accounts reads as one computer here. The write moves an entry only where both accounts' logs
 // hold the same machine key for it (computerMoves.ts sameComputerKey), so those containers are listed and left alone.
