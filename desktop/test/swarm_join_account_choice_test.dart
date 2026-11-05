@@ -217,6 +217,35 @@ void main() {
     },
   );
 
+  for (final system in ['windows', 'linux']) {
+    testWidgets('the account choice uses $system permission wording', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SwarmJoinAccountChoice(
+              ownAccount: false,
+              onChanged: (_) {},
+              operatingSystem: system,
+            ),
+          ),
+        ),
+      );
+      expect(find.textContaining('this computer'), findsWidgets);
+      expect(find.textContaining('this Mac'), findsNothing);
+      expect(find.textContaining('your Mac'), findsNothing);
+      expect(
+        find.textContaining(
+          system == 'windows'
+              ? 'Windows administrator permission'
+              : 'computer password',
+        ),
+        findsOneWidget,
+      );
+    });
+  }
+
   for (final brightness in Brightness.values) {
     testWidgets(
       'join account choices fit and remain usable in ${brightness.name}',
