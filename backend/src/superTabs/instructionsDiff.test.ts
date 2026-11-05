@@ -184,3 +184,43 @@ describe('budgetParts', () => {
     expect(parts(doc)).toEqual({ core: size(doc) - size(pm), 'role PM': size(pm), total: size(doc) })
   })
 })
+
+// Task #3392 (anh Dee, 11-05, decision 5): a person's rule may move instead of being kept in place, word for word with who
+// gave it: into people notes or a role section, into the project's rules record, or into a code task once it merges.
+describe('droppedRules with moved rules', () => {
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (Leo, 2026-11-04).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (Ken, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const brief = (line: string) => `Goal:\nShip the release guard.\n\nChanges:\n- ${line}\n\nConstraints:\nNone.\n\nOwns:\n- backend/`
+  const task = (line: string, open = false) => ({ text: brief(line), people: [], where: 'task #12', open })
+
+  it('keeps a rule moved word for word into people notes or a role section', () => {
+    const moved = ['# Project instructions', '', '## Roles', '', '### PM', '', `- ${quiet}`, '', '## People notes', '', `- ${leo}`].join('\n')
+    expect(droppedRules(doc(leo, quiet), moved)).toEqual([])
+  })
+
+  it('keeps a rule moved into the rules record, by who asked for it or by its attribution', () => {
+    const record = (text: string, people: string[]) => ({ text, people, where: 'the rules record', open: false })
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record('No releases between 18:00 and 09:00 Vietnam time.', ['ken'])])).toEqual([])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record(quiet, [])])).toEqual([])
+    // Asked for by someone else, its person is lost: still dropped.
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record('No releases between 18:00 and 09:00 Vietnam time.', ['dee'])]))
+      .toEqual([expect.objectContaining({ people: ['Ken'], why: 'removed' })])
+  })
+
+  it('keeps a rule moved into a code task once that task merged; an open one keeps the line, naming the task', () => {
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet)])).toEqual([])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet, true)]))
+      .toEqual([{ text: quiet, people: ['Ken'], why: 'waiting', movedTo: 'task #12' }])
+  })
+
+  it('still drops a rule that moved without who gave it, or changed on the way', () => {
+    const unattributed = 'No releases between 18:00 and 09:00 Vietnam time.'
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(unattributed)])).toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('18:00', '20:00'))])).toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('time', 'time, unless the PM judges it urgent'))]))
+      .toEqual([expect.objectContaining({ why: 'removed' })])
+    // A real drop, with nowhere it moved to.
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [])).toEqual([expect.objectContaining({ people: ['Ken'], why: 'removed' })])
+  })
+})

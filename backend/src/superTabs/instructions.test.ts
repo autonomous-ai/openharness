@@ -733,3 +733,70 @@ describe('an instructions save keeps to the size budget', () => {
     expect(f.run(save(3, doc({ core: 20, pm: 6, notes: 10 })), owner, stored(doc({ core: 75, pm: 6 }), 3)).result.revision).toBe(4)
   })
 })
+
+// Task #3392 (anh Dee, 11-05, decision 5): one restructure save may move every person's rule, word for word with who gave
+// it, into people notes or a role section, the project's rules record, or a code task (its line stays until that merges).
+describe('an instructions save may move a person\'s rule', () => {
+  const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Restructured', askedBy: 'owner', ...extra })
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (peer, 2026-11-04).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const stored = (text = doc(leo, quiet)) => ({ instructions: { revision: 1, text, at: 500 } })
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; message: string; details: { dropped: unknown[] } } }
+    throw new Error('the save went through')
+  }
+  function pm() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    return { f, lead }
+  }
+  /** A code task of the project whose brief carries [line], merged or not. */
+  function codeTask(f: ReturnType<typeof fixture>, line: string, merged: boolean) {
+    const id = f.run({ type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock releases at night.\n\nChanges:\n- ${line}`, checks: [] })
+      .result.conversationId as string
+    const group = f.state.conversations.find(c => c.id === id)!
+    if (merged) group.ledger = { ...group.ledger, mergedAt: 900, shippedAt: 900 }
+    return group
+  }
+
+  it('lets a rule move word for word into people notes', () => {
+    const { f, lead } = pm()
+    const moved = [doc(leo), '', '## People notes', '', `- ${quiet}`].join('\n')
+    expect(f.run(save(1, moved), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  it('lets a rule move into the project\'s rules record, asked for by its person', () => {
+    const { f, lead } = pm()
+    f.state.rules = [{ id: 'r1', projectId: 'lead', rule: { kind: 'preferIdle' }, text: 'No releases between 18:00 and 09:00 Vietnam time.',
+      askedBy: 'owner', askedIn: null, addedBy: 'owner', createdAt: '2026-11-05T00:00:00.000Z' }]
+    expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  it('lets a rule move into a code task once it merged, and keeps the line while the task is open, naming it', () => {
+    const { f, lead } = pm()
+    const open = codeTask(f, quiet, false)
+    const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, people: ['owner'], why: 'waiting' }] } })
+    expect(refused.message).toContain(`task #${open.number}`)
+    expect(refused.message).toContain('until it merges')
+    open.ledger = { ...open.ledger, mergedAt: 900, shippedAt: 900 }
+    expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  it('still refuses a real drop, a move without who gave it, and a move into a cancelled task, saying how a rule may move', () => {
+    const { f, lead } = pm()
+    const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, why: 'removed' }] } })
+    expect(refused.message).toContain('people notes')
+    expect(refused.message).toContain('rules record')
+    expect(refused.message).toContain('code task')
+    codeTask(f, 'No releases between 18:00 and 09:00 Vietnam time.', true)
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const cancelled = codeTask(f, quiet, false)
+    cancelled.assignment = { status: 'cancelled' } as never
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ why: 'removed' }] } })
+  })
+})
