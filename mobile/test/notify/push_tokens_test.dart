@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/api/api_client.dart' show ApiException;
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/notify/push_channel.dart';
 import 'package:harness_mobile/notify/push_tokens.dart';
 
@@ -133,6 +134,24 @@ void main() {
     expect(api.registered, hasLength(1));
   });
 
+  test('a failure that echoes the token logs no token', () async {
+    final log = _Log();
+    final before = appLog;
+    appLog = log;
+    addTearDown(() => appLog = before);
+
+    api.refuseRegister = ApiException('Request failed (400): token apns-1 is not valid', status: 400);
+    await sync();
+    api.refuseRegister = null;
+    now = now.add(const Duration(hours: 2));
+    await sync();
+    api.refuseForget = ApiException('Request failed (503) for apns-1', status: 503);
+    await push.forget(api);
+
+    expect(log.lines, isNotEmpty);
+    expect(log.lines.where((line) => line.contains('apns-1')), isEmpty);
+  });
+
   test('a sign-in that ended meanwhile registers nothing', () async {
     await sync(current: false);
     expect(api.registered, isEmpty);
@@ -250,4 +269,17 @@ class _Api implements PushTokenApi {
     if (refuseForget case final error?) throw error;
     forgotten.add(address);
   }
+}
+
+class _Log implements AppLog {
+  final lines = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message ${error ?? ''}');
 }
