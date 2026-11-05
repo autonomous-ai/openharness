@@ -8,8 +8,10 @@ import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { TEAM_RELAY_GUEST } from '../team/relay.js'
 import { probeRelay, RELAY_REASONS } from './relayHealth.js'
 
+/** Anthropic's own error body for [status] (https://docs.anthropic.com/en/api/errors). */
+const vendorError = (status: number) => JSON.stringify({ type: 'error', error: { type: ({ 401: 'authentication_error', 403: 'permission_error', 429: 'rate_limit_error', 529: 'overloaded_error' } as Record<number, string>)[status] ?? 'api_error', message: 'fixture' } })
 async function relay(owner: { read: () => Promise<unknown>; refresh: () => Promise<null> }, status = 200) {
-  const upstream = createServer((req, res) => { res.writeHead(req.url === '/v1/models' ? status : 404); res.end('{"type":"error","error":{"type":"overloaded_error"}}') })
+  const upstream = createServer((req, res) => { res.writeHead(req.url === '/v1/models' ? status : 404); res.end(status === 200 ? '{"data":[]}' : vendorError(status)) })
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   onTestFinished(() => { upstream.closeAllConnections(); upstream.close() })
   const started = await startSubscriptionRelay({ owner: owner as never, upstream: { claude: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` } })
@@ -51,8 +53,19 @@ describe('asking the owner\'s relay whether it answers', () => {
     await new Promise<void>(resolve => endless.listen(0, '127.0.0.1', resolve))
     onTestFinished(() => { endless.closeAllConnections(); endless.close() })
     const started = Date.now()
-    expect(await probeRelay({ url: `http://127.0.0.1:${(endless.address() as AddressInfo).port}`, token: 'any-token-aaaaaaaaaaaaaaaa' })).toEqual({ ok: true })
+    expect(await probeRelay({ url: `http://127.0.0.1:${(endless.address() as AddressInfo).port}`, token: 'any-token-aaaaaaaaaaaaaaaa' })).toEqual({ ok: false, reason: RELAY_REASONS.down })
     expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  // Review 2 of #3098, second read: once the owner's Harness has gone, whatever else listens on its port must not read ready.
+  it('reads anything but a 2xx or Anthropic\'s own error as not answering: a redirect, a 404, an empty body', async () => {
+    for (const [status, body] of [[302, ''], [404, ''], [500, 'oops'], [401, ''], [503, '{"type":"error"}']] as const) {
+      const other = createServer((_req, res) => { res.writeHead(status, status === 302 ? { location: 'http://example.com/' } : {}); res.end(body) })
+      await new Promise<void>(resolve => other.listen(0, '127.0.0.1', resolve))
+      onTestFinished(() => { other.closeAllConnections(); other.close() })
+      expect(await probeRelay({ url: `http://127.0.0.1:${(other.address() as AddressInfo).port}`, token: 'any-token-aaaaaaaaaaaaaaaa' }), String(status))
+        .toEqual({ ok: false, reason: RELAY_REASONS.down })
+    }
   })
 
   it('says Anthropic refused the owner\'s Claude sign-in, as Claude\'s alone, apart from the relay refusing this account', async () => {
