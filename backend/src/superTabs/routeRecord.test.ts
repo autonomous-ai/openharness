@@ -161,6 +161,22 @@ describe('a route decision of every engine on every machine, as stored (task #27
       expect(back.candidates[i]!.fit).toEqual({ account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status, left: c.fit!.left, resetsAt: c.fit!.resetsAt })
     }
   })
+  // Task #3255 (Ken, 2026-11-05): quota at route time is measured on every candidate, a Codex as much as a Claude, and how far
+  // its quota covers the task (coverage) was still dropped. A candidate whose quota was not read keeps its null coverage.
+  it('keeps of a recorded Codex and Claude candidate the whole quota fit: status, coverage, weekly % left and reset', () => {
+    const r = quoted()
+    r.candidates[2]!.fit = { ...r.candidates[2]!.fit!, status: 'unknown', coverage: null, left: null, resetsAt: null }
+    const back = readRecord(storedRecord(r)).candidates
+    for (const engine of ['claude', 'codex'] as const) {
+      const i = r.candidates.findIndex(c => c.engine === engine && c.kind === 'new')
+      const { status, coverage, left, resetsAt } = r.candidates[i]!.fit!
+      expect(back[i]!.fit, engine).toMatchObject({ status, coverage, left, resetsAt })
+      expect(status, engine).toEqual(expect.any(String))
+    }
+    expect(back[2]!.engine).toBe('claude')
+    expect(back[2]!.fit).toMatchObject({ status: 'unknown', coverage: null, left: null, resetsAt: null })
+    for (const c of back) expect(c.fit).toHaveProperty('coverage')
+  })
   // Measured 11-05: 16,742 bytes, the 42 candidates' status, % left and reset 2,174 of it (about 52 bytes a candidate).
   it('stores a record that names no pick, 42 candidates each with its quota, in under 17 KB (measured 16,742 bytes)', () => {
     expect(size(storedRecord(quoted()))).toBeLessThan(17_000)
