@@ -3511,7 +3511,6 @@ class _Pending extends StatelessWidget {
                 'url': '',
               }),
               voice: voice,
-              words: '',
             )
           else
             for (final file in files)

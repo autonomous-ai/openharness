@@ -55,11 +55,7 @@ void main() {
     });
   });
 
-  Future<void> pump(
-    WidgetTester tester, {
-    SuperTabAttachment? file,
-    String words = 'Ship the parser today.',
-  }) async {
+  Future<void> pump(WidgetTester tester, {SuperTabAttachment? file}) async {
     final shown = file ?? clip;
     await tester.pumpWidget(
       MaterialApp(
@@ -68,7 +64,6 @@ void main() {
           body: SwarmVoiceBubble(
             file: shown,
             voice: shown.voice!,
-            words: words,
             fileRef: SwarmFileRef(shown),
           ),
         ),
@@ -122,7 +117,7 @@ void main() {
         'failure': 'limit',
       },
     });
-    await pump(tester, file: quiet, words: '');
+    await pump(tester, file: quiet);
     expect(find.text('0:02'), findsOneWidget);
     expect(find.text('→A'), findsNothing);
     expect(
@@ -178,7 +173,6 @@ void main() {
               child: SwarmVoiceBubble(
                 file: clip,
                 voice: clip.voice!,
-                words: '',
                 fileRef: SwarmFileRef(clip),
               ),
             ),

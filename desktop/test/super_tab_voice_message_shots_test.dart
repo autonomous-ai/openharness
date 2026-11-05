@@ -15,8 +15,8 @@ import 'support/super_tab_fixture.dart';
 /// Set to a folder to write the voice message PR's pictures there.
 final shots = Platform.environment['SUPER_TAB_VOICE_SHOTS'];
 
-/// A chat with a voice message, as the PR shows it (#2584): at rest, with its
-/// words open under →A, and playing at 40%, in both appearances.
+/// A chat with a voice message, as the PR shows it (#2584): at rest and
+/// playing at 40%, in both appearances.
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
@@ -123,13 +123,6 @@ void main() {
         );
         await tester.pumpAndSettle();
         await captureWindow(tester, shots, 'voice-chat-${brightness.name}');
-
-        final words = find.byKey(const ValueKey('super-voice-words-toggle:v1'));
-        await tester.tap(words);
-        await tester.pumpAndSettle();
-        await captureWindow(tester, shots, 'voice-words-${brightness.name}');
-        await tester.tap(words);
-        await tester.pumpAndSettle();
 
         await tester.tap(find.byTooltip('Play'));
         for (var i = 0; i < 20 && player == null; i++) {

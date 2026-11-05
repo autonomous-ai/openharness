@@ -828,8 +828,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                   child: _editor(context, editing),
                                 )
-                              // A voice message's text is its words, shown
-                              // under its bubble from →A.
+                              // A voice message's text is its words, never
+                              // shown: it plays only (anh Dee, 2026-11-04).
                               else if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
@@ -872,7 +872,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       message.attachments,
                                       conversationId: message.conversationId,
                                       messageId: message.id,
-                                      words: message.text,
                                     ),
                                   ),
                                 ),
