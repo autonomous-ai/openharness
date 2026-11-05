@@ -139,14 +139,27 @@ void main() {
     backend.version++;
     await poll(session);
     expect(notices.cancelled, [g1Notice]);
-    // Read, the chat's next message sounds again (task #3248).
-    backend.move('g1', 5);
-    await poll(session);
-    expect([for (final n in notices.shown) (n.key, n.quiet)].last, (g1Notice, false));
 
     backend.gone = true;
     await poll(session);
     expect(notices.cancelled, [g1Notice, 'chat:$tab:g2']);
+  });
+
+  test('read, the chat\'s next message sounds again (task #3248)', () async {
+    backend.settings = {'g1': 'all'};
+    final session = await start();
+    backend.move('g1', 4);
+    await poll(session);
+    backend.move('g1', 5);
+    await poll(session);
+    session.inbox.reader(tab)!.readMarks!.markRead('g1', 5);
+    backend.version++;
+    await poll(session);
+    expect(notices.cancelled, [g1Notice]);
+
+    backend.move('g1', 6);
+    await poll(session);
+    expect([for (final n in notices.shown) n.quiet], [false, true, false]);
   });
 
   test('signed out or Swarm turned off: every chat notice goes', () async {

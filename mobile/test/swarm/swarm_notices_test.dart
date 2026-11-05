@@ -309,21 +309,40 @@ void main() {
     });
 
     test('is not posted for a thread a push shows: the push already says '
-        'so, until the next look finds it gone (task #3248)', () {
+        'so, and comes down once the thread is read (task #3248)', () {
       final notices = _Recording();
       final told = SwarmTold();
       final announcer = SwarmAnnouncer(notices, quiet: (_) => false, told: told);
+      final slot = threadSlot('tab-b', 'g9', 'root-1');
       // Android's FCM push carries the thread's slot as its tag, iOS's the slot and the key it showed.
-      told.pushesShown([threadSlot('tab-b', 'g9', 'root-1'), 'reply:tab-b:a1', 'decision:d1']);
+      told.pushesShown([slot, 'reply:tab-b:a1', 'decision:d1']);
       announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
       announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
       announcer.announce(decision());
       expect(notices.shown, isEmpty);
 
-      // Back again: that push is gone (read, or swiped away), so the thread's next reply is news.
-      told.pushesShown(const []);
+      // Read in the app: the push goes with the thread's notification, and the next reply there sounds.
+      announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2', read: true)]);
+      expect(notices.cancelled, [slot]);
+      expect(told.pushed(slot), isFalse);
       announcer.announceReply(swarmId: 'tab-b', entry: reply('a3'), project: 'M');
-      expect([for (final n in notices.shown) (n.key, n.quiet)], [(threadSlot('tab-b', 'g9', 'root-1'), false)]);
+      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, false)]);
+    });
+
+    test('a thread whose push was swiped away unread only replaces quietly, '
+        'as the server does', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false, told: told);
+      final slot = threadSlot('tab-b', 'g9', 'root-1');
+      told.pushesShown([slot]);
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      expect(notices.shown, isEmpty);
+
+      // Back again with that push gone, and a1 still unread.
+      told.pushesShown(const []);
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, true)]);
     });
 
     test('is not posted again when its push is already in the notification '
