@@ -43,9 +43,10 @@ CLI TypeScript (node:test specs).
 
 ## Review Focus (two security reviews)
 
-- Who can take over a computer's entry: a member who connects with another person's computer id. The id is local
-  (`~/.harness/computer-id`), never in a Swarm read; a move needs the old entry offline; the old owner is told in their
-  Buddy chat; their next connect on that computer moves it back. Reviewers judge whether that bound is enough.
+- Who can take over a computer's entry: nobody by its id. The computer id is self-declared, so a move also needs both
+  accounts' device key logs to hold the same machine key for their machines (computerMoves.ts sameComputerKey): the
+  key is the computer's own (`identity.json`, untouched by sign-ins) and every add is self-signed for one account, so
+  only a holder of its private key can list it under a second one (security review 1 of #3100).
 - Whether the old owner's agents, Team entry, grants or Team sign-in survive a switch.
 - That `machine.moved` cannot be sent from outside the store.
 
