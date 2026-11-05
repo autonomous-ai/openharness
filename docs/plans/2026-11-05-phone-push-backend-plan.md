@@ -7,6 +7,26 @@
 - **Secrets:** the two APNs `.p8` files and the FCM credentials are **not** in this file. They are handed over
   separately, on a secure channel. Section 1 says where each one goes.
 
+## Merged server, 11-05: what differs from this plan
+
+The server part merged in #3071 (task #2905, backend v1.4.9) before this plan was read. The phone in this pull request
+now follows what merged. One line per gap; **phone** ones are fixed here, **server** ones go to the PM as proposals.
+
+| # | Gap | Plan | Merged | Where it goes |
+| --- | --- | --- | --- | --- |
+| 1 | Route | `PUT` / `DELETE /api/push-tokens` | `POST /api/push-devices`, `POST /api/push-devices/drop` | phone, fixed |
+| 2 | Register body | `token`, `platform`, `environment`, `device` | strict `{platform, token}`: any other key answers 400 | phone, fixed |
+| 3 | Payload field | `kind`, `swarm`, `conversation`, `message`, `thread`, `decision`, `key` | `key` and `link` (the app's `swarm:` payload) | phone, fixed |
+| 4 | Platform: Android | data-only, drawn by `PushService` | a notification message Android draws (channel `swarm-needs-you`, tag = `key`) | phone, fixed: the tap is read from the launch intent |
+| 5 | Platform: iOS gateway | the phone sends `environment`; one APNs key per gateway | one APNs key; a token production calls bad is retried on the sandbox and marked | phone, fixed (sends none). The owner's key must be valid for both hosts |
+| 6 | Device key | rows carry `device`; removing a phone from the account deletes its rows | no `device`; a row goes at sign-out, when Apple or Google call it dead, or after 90 days | server, proposal |
+| 7 | Triggers | decisions, tags and waiting work (`needs_human`, `blocked`); no thread replies | thread replies and tags only | server, proposal: decisions and waiting work |
+| 8 | Held tags | pushed when a quiet chat's grace ends | a held tag is skipped and nothing pushes it later | server, proposal |
+| 9 | Agent question / finished turn | CLI `push_request` frame (6.2) | not built | server and CLI, proposal (the phone reads none today) |
+| 10 | Notice id | `apns-collapse-id` = the shared FNV id | none on iOS; Android tag is the `key` text | server, proposal: a push and the app's own notice can both show |
+| 11 | Limits | 20 rows per account, 60 days | 10 rows per person, 90 days (TTL index) | none: the phone renews every 7 days |
+| 12 | Sign-out on Android | `PushService` draws nothing once signed out | Android draws a notification message itself | none while the phone's drop or FCM token delete lands; both failing shows pushes until the server drops the row |
+
 ## 0. Scope
 
 What the phone already does:

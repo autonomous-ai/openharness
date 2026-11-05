@@ -1,8 +1,8 @@
 # Phone push notifications: the phone's side, and the contract the backend builds to
 
-Status: the phone side is built on `feat/mobile-push-notifications`. The backend (token store, sender,
-triggers) and the CLI (terminal events) are the backend team's, still to build; their plan is
-[docs/plans/2026-11-05-phone-push-backend-plan.md](../plans/2026-11-05-phone-push-backend-plan.md).
+Status: the server part merged first (#3071) with its own routes and payload, and the phone now
+follows it. Where this contract and the merged server differ, the server wins: the gaps are listed
+in [docs/plans/2026-11-05-phone-push-backend-plan.md](../plans/2026-11-05-phone-push-backend-plan.md#merged-server-11-05-what-differs-from-this-plan).
 
 Phase 1 only: the push carries ids and the same short copy the app's own notices use, never what was
 asked or said. Phase 2 (a payload sealed to the phone's device key, opened by a Notification Service
