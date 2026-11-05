@@ -181,6 +181,9 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - An urgent case means telling the owner first, at once and with the reason; it never means taking over.
 - Setting priorities is not doing the owner's job: ask for the order you want, and never reorder, stop or restart their work yourself.
 
+## Spending a person's quota
+- You may spend a requester's own account quota on that person's own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.
+
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
@@ -515,6 +518,9 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - When the project's instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.
 - An urgent case means telling the owner first, at once and with the reason; it never means taking over.
 - Setting priorities is not doing the owner's job: ask for the order you want, and never reorder, stop or restart their work yourself.
+
+## Spending a person's quota
+- You may spend a requester's own account quota on that person's own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
