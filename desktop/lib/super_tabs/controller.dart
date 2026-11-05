@@ -293,11 +293,24 @@ class SuperTabController extends ChangeNotifier {
           if (key is String && value is num) _threadSeen[key] = value.toInt();
         }
       }
+      if (initial['openThreads'] case final Map saved) {
+        for (final MapEntry(:key, :value) in saved.entries) {
+          if (key is String && value is String && value.isNotEmpty) {
+            _rememberOpenThread(key, value);
+          }
+        }
+      }
+      // Read the single-thread shape written by older Desktop builds.
       if (initial['openThread'] case {
         'conversationId': final String conversation,
         'root': final String root,
       }) {
-        openedThread = (conversationId: conversation, root: root);
+        if (!_openThreads.containsKey(conversation)) {
+          _rememberOpenThread(conversation, root);
+        }
+      }
+      if (_openThreads[selectedId] case final root?) {
+        openedThread = (conversationId: selectedId, root: root);
         _reopenThread = true;
         _threadUnshown = true;
       }
@@ -389,7 +402,16 @@ class SuperTabController extends ChangeNotifier {
       _leftAt[selectedId] = clock.now();
       // Marked unread while open: once left, it reads as any chat does.
       _unreadHeld.remove(selectedId);
+      if (openedThread case final open?
+          when open.conversationId == selectedId) {
+        _rememberOpenThread(selectedId, open.root);
+      }
       selectedId = to;
+      final root = _openThreads[to];
+      openedThread = root == null ? null : (conversationId: to, root: root);
+      threadTarget = null;
+      _threadUnshown = root != null;
+      _reopenThread = root != null;
     }
   }
 
@@ -898,6 +920,20 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each thread's rows as its own read brought them.
   final _threadRows = <String, List<SuperTabMessage>>{};
+
+  /// The open thread each conversation should restore when selected again.
+  final _openThreads = <String, String>{};
+
+  static const _keptOpenThreads = 500;
+
+  void _rememberOpenThread(String conversationId, String root) {
+    _openThreads
+      ..remove(conversationId)
+      ..[conversationId] = root;
+    if (_openThreads.length > _keptOpenThreads) {
+      _openThreads.remove(_openThreads.keys.first);
+    }
+  }
 
   /// Where each thread's earlier replies continue, while there are more.
   final _threadBefore = <String, Map<String, dynamic>>{};
@@ -1601,6 +1637,7 @@ class SuperTabController extends ChangeNotifier {
   /// without it), as the transcript is forgotten when access goes.
   void _forgetThreads([bool Function(String conversationId)? keep]) {
     bool gone(String id) => keep == null || !keep(id);
+    _openThreads.removeWhere((id, _) => gone(id));
     _threads.removeWhere((id, _) => gone(id));
     final roots = {
       for (final MapEntry(key: root, value: rows) in _threadRows.entries)
@@ -1656,6 +1693,8 @@ class SuperTabController extends ChangeNotifier {
   void openThread(String root, {bool shown = true, String? at}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    _rememberOpenThread(selectedId, root);
+    _reopenThread = false;
     threadTarget = at == null ? null : (root: root, messageId: at);
     _threadUnshown = !shown;
     _pruneThreadFiles();
@@ -1667,8 +1706,23 @@ class SuperTabController extends ChangeNotifier {
 
   void closeThread() {
     if (openedThread == null) return;
+    _openThreads.remove(selectedId);
+    openedThread = null;
+    _reopenThread = false;
+    threadTarget = null;
+    _pruneThreadFiles();
+    _saveSoon();
+    _changed();
+  }
+
+  /// Drops a restored thread when its root can no longer be read.
+  void _discardOpenThread(({String conversationId, String root}) open) {
+    _openThreads.remove(open.conversationId);
+    if (openedThread != open) return;
     openedThread = null;
     threadTarget = null;
+    _threadUnshown = false;
+    _reopenThread = false;
     _pruneThreadFiles();
     _saveSoon();
     _changed();
@@ -1796,6 +1850,13 @@ class SuperTabController extends ChangeNotifier {
           if (m.id == open.root) rows[m.id] = m;
         }
       }
+      if (!rows.containsKey(open.root) &&
+          !(_messages[open.conversationId] ?? const []).any(
+            (m) => m.id == open.root,
+          )) {
+        _discardOpenThread(open);
+        return;
+      }
       _threadRows[open.root] = rows.values.toList();
       if (from == null) {
         _threadBefore.remove(open.root);
@@ -1807,6 +1868,11 @@ class SuperTabController extends ChangeNotifier {
       _changed();
     } catch (failure) {
       if (!current()) return;
+      if (failure case SuperTabFailure(:final code)
+          when const {'FORBIDDEN', 'NOT_FOUND'}.contains(code)) {
+        _discardOpenThread(open);
+        return;
+      }
       _readFailure(failure, revokeTab: false);
       _changed();
     } finally {
@@ -2744,6 +2810,8 @@ class SuperTabController extends ChangeNotifier {
     'threadSeen': Map<String, int>.fromEntries(
       _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
     ),
+    if (_openThreads.isNotEmpty)
+      'openThreads': Map<String, String>.of(_openThreads),
     if (openedThread case final open?)
       'openThread': {'conversationId': open.conversationId, 'root': open.root},
     // ponytail: the newest 500, as threadSeen.
@@ -3494,13 +3562,13 @@ class SuperTabController extends ChangeNotifier {
     } else {
       _staleHeld.remove(id);
     }
-    openedThread = null;
     _pruneThreadFiles();
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
     _changed();
     unawaited(loadMessages(id));
+    if (openedThread != null) unawaited(loadThread());
     return true;
   }
 

@@ -12,7 +12,7 @@
 
 ## Design
 
-1. Growth: one root per conversation in the existing per-tab local view; removing a conversation prunes its entry, and closing its thread deletes its entry. Existing saved-view caps bound the record.
+1. Growth: one root per conversation in the existing per-tab local view; removing a conversation prunes its entry, and closing its thread deletes its entry. The view keeps the newest 500 conversation roots, in step with its thread-read marks; the saved-view byte cap is a second bound.
 2. Concurrency: the controller owns the map and updates it synchronously on select, open, and close; the existing serialized local saved-view writer persists snapshots.
 3. Read cost: no added network reads or polling. Existing thread reads load only the selected, visible thread; the existing local view read supplies the saved map.
 4. Scale: storage grows by one conversation/root pair per open thread; the saved-view byte cap is the first limit and already evicts older chat state.
@@ -51,12 +51,12 @@
 - Consumes: existing `selectedId`, `openedThread`, `_localState`, and constructor `initial` saved state.
 - Produces: per-conversation open thread state serialized as `openThreads: {conversationId: root}` and restored into the controller; existing `openedThread`, `openThread`, and `closeThread` continue to represent the selected conversation.
 
-- [ ] **Step 1: Write failing tests** for two conversations retaining separate roots across selection, local-state restart round trip, closing only the selected entry, legacy `openThread` restoration, and missing/unreadable roots restoring closed.
-- [ ] **Step 2: Run the focused tests** with `flutter test test/super_tab_thread_composer_test.dart --plain-name "open thread"` and confirm the new assertions fail before implementation.
-- [ ] **Step 3: Implement the per-conversation map** in `controller.dart`; save/restore it with the existing local state, switch the active open entry with `_moveView`, and remove entries when closed or when the conversation is removed.
-- [ ] **Step 4: Validate restored roots** using the selected conversation's readable thread data; keep the pane closed when the root is absent or no longer readable.
-- [ ] **Step 5: Rerun focused tests** and confirm they pass.
-- [ ] **Step 6: Commit** the failing tests first, then the passing implementation.
+- [x] **Step 1: Write failing tests** for two conversations retaining separate roots across selection, local-state restart round trip, closing only the selected entry, legacy `openThread` restoration, missing/unreadable roots restoring closed, and the 500-entry bound.
+- [x] **Step 2: Run focused tests** and confirm the switching, missing-root, and unreadable-root assertions fail before implementation.
+- [x] **Step 3: Implement the per-conversation map** in `controller.dart`; save/restore it with the existing local state, switch the active open entry with `_moveView`, and remove entries when closed or when the conversation is removed.
+- [x] **Step 4: Validate restored roots** using the selected conversation's readable thread data; keep the pane closed when the root is absent or no longer readable.
+- [x] **Step 5: Rerun the focused test file** and confirm all 54 tests pass.
+- [x] **Step 6: Commit** the failing tests first, then the passing implementation.
 
 ### Task 2: Cover project switches and Back/Forward places
 
@@ -68,8 +68,6 @@
 - Consumes: Task 1 selected-conversation thread restoration and existing `SuperTabPlaces` records.
 - Produces: widget-level evidence that project/sidebar selection and Back/Forward display the expected root and read it only while shown.
 
-- [ ] **Step 1: Write a failing widget test** that opens a thread in one conversation, switches to another project/chat, opens its thread, then returns to the first and sees its original thread.
-- [ ] **Step 2: Run the focused widget test** and confirm it fails without the fix.
-- [ ] **Step 3: Add only the necessary view wiring** so selection and Back/Forward use the controller's per-conversation state while explicit close clears the selected entry.
-- [ ] **Step 4: Add Back/Forward assertions** for a root and no-root place, then run the focused widget test and confirm it passes.
-- [ ] **Step 5: Commit** the tests before any view implementation.
+- [x] **Step 1: Add widget tests** that open a thread in one conversation, switch to another, return, and step Back/Forward between a thread and a no-thread place.
+- [x] **Step 2: Run the widget tests**; both pass using the controller's per-conversation state, so no additional view wiring is needed.
+- [x] **Step 3: Commit** the tests and implementation in their task commits.
