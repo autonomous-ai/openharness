@@ -106,6 +106,19 @@ void main() {
       expect(superTabTaskShipped(merged(releasing: ['cli'])), isFalse);
       expect(superTabTaskShipped(merged()), isTrue);
     });
+
+    test('a Done task with no pull request cards is not shipped while the '
+        'server lists it as releasing, and is when it does not', () {
+      SuperTabConversation done({List<String>? releasing}) =>
+          SuperTabConversation.fromJson({
+            ...conversationFixture('work', 'A task'),
+            'assignment': {'id': 'a1', 'agentId': 'kestrel', 'status': 'done'},
+            'releasing': ?releasing,
+          });
+      expect(superTabTaskShipped(done(releasing: [])), isFalse);
+      expect(superTabTaskShipped(done(releasing: ['web'])), isFalse);
+      expect(superTabTaskShipped(done()), isTrue);
+    });
   });
 
   group('Manage ▸ Backlog', () {
