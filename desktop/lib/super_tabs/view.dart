@@ -1579,9 +1579,29 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _earlier() => _loadEarlier(c.selectedId);
 
-  /// A scroll ending near the top reads the earlier page with no click.
+  /// Older pages are read while fewer rows than this are above the view: a
+  /// page takes about a second to arrive, and in a busy chat most of its
+  /// rows are thread replies, so a reader who scrolled to the top waited at
+  /// a spinner every few rows (#3049). Counted in rows, not pixels: the
+  /// height above the rows laid out is an estimate, and one not laid out
+  /// again while the view stands still.
+  static const _readAheadRows = 40;
+
+  /// The list's rows as last built, by row key: their place in it.
+  Map<String, int> _rowPlaces = const {};
+
+  /// Whether the reader is near the top of what is read of [id].
+  bool _nearTop(ScrollMetrics metrics) {
+    if (metrics.extentBefore <= 400) return true;
+    final top = _rowAtTop();
+    final at = top == null ? null : _rowPlaces[_rowKey(c.messageIdentity(top))];
+    return at != null && at < _readAheadRows;
+  }
+
+  /// A scroll near the top reads the earlier page with no click: while it
+  /// moves up, and once it ends.
   void _readEarlierNearTop(String id, ScrollMetrics metrics) {
-    if (metrics.extentBefore > 400 ||
+    if (!_nearTop(metrics) ||
         _finding != null ||
         _find?.reading != null ||
         _loadingOlder.contains(id) ||
@@ -1589,11 +1609,13 @@ class _SuperTabViewState extends State<SuperTabView>
         !c.hasOlder(id)) {
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && c.selectedId == id && !_loadingOlder.contains(id)) {
-        unawaited(_loadEarlier(id));
-      }
-    });
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted && c.selectedId == id && !_loadingOlder.contains(id)) {
+          unawaited(_loadEarlier(id));
+        }
+      })
+      ..scheduleFrame();
   }
 
   /// Reads the page before those loaded, keeping what is on screen in place:
@@ -1629,7 +1651,23 @@ class _SuperTabViewState extends State<SuperTabView>
         _olderFailed.remove(id);
       }
     });
-    if (anchor != null) await _keepRow(id, anchor, request: request);
+    // While the reader scrolls, the list keeps their place as it lays the
+    // page out (SuperTabChatScroll); a jump now would cut their scroll short.
+    final scrolling =
+        scroll.hasClients && scroll.position.isScrollingNotifier.value;
+    if (anchor != null && !scrolling) {
+      await _keepRow(id, anchor, request: request);
+    }
+    // Still near the top once the page is laid out, as after a page of
+    // thread replies: the next one.
+    if (!mounted || c.selectedId != id) return;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted && c.selectedId == id && scroll.hasClients) {
+          _readEarlierNearTop(id, scroll.position);
+        }
+      })
+      ..scheduleFrame();
   }
 
   /// The row of [keep] when it is built, else the topmost row, and its top.
@@ -4490,6 +4528,7 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final (index, entry) in entries.indexed)
         _rowKey(c.messageIdentity(entry.message.id)): index,
     };
+    _rowPlaces = rowIndex;
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
     final split = _splitAt(
@@ -4769,9 +4808,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                 final id = c.selectedId;
                                 final atEnd = event.metrics.extentAfter < 40;
                                 _follow(id, atEnd);
-                                // Once the scroll ends, so keeping the place never
-                                // cuts a drag short.
-                                if (event is ScrollEndNotification) {
+                                // Moving up, or once the scroll ends.
+                                if (event is ScrollEndNotification ||
+                                    (event is ScrollUpdateNotification &&
+                                        (event.scrollDelta ?? 0) < 0)) {
                                   _readEarlierNearTop(id, event.metrics);
                                 }
                                 if (atEnd) {
