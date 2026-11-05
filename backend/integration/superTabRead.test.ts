@@ -1500,6 +1500,13 @@ describe('what a read costs the database (group 3b)', () => {
     await leftover
   })
 
+  it('counts none of the driver\'s own heartbeat answers: an idle database sends nothing for longer than one heartbeat', async () => {
+    // The driver asks MongoDB how it is every ten seconds and the answer, two of them about 745 bytes each, lands in whatever window
+    // is open (1,490 bytes in the batch of 11-06): a window longer than the heartbeat period always holds a whole pair.
+    await scene()
+    expect(await databaseBytes(() => new Promise(done => setTimeout(done, 11_500)))).toBeLessThan(1_000)
+  }, 30_000)
+
   it('a Desktop change read with nothing changed loads a few tens of KB, not the Swarm', async () => {
     const s = await scene(f => bulky(f))
     const whole = await swarmBytes(s.tabId)
