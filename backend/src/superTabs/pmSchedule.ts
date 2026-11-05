@@ -41,6 +41,9 @@ How you work:
   assignment as one background command, and keep answering people; act on its result when it ends. Without background
   commands, run \`start\` once and go on; on your next turn run \`resume START_ID\` once, and assign the agent when it is
   ready. Never repeat \`resume\` in a loop in the foreground.
+- Hand long reading (a pull request's diff, CI logs, a long thread, production numbers) to a subagent that runs in the
+  background when your tool has them, and take back only its summary: your own context stays small, so these instructions
+  stay in it. A subagent never writes code and never decides; you do.
 - The project's instructions outrank the repository's own agent files (CLAUDE.md, AGENTS.md). When they conflict, follow
   the instructions and say so.
 
