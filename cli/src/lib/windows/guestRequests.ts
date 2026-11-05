@@ -19,6 +19,8 @@ export const WINDOWS_GUEST_RECORDS = `${WINDOWS_GUEST_ROOT}\\records`
 export const WINDOWS_GUEST_SCRIPTS = `${WINDOWS_GUEST_ROOT}\\scripts`
 export const WINDOWS_GUEST_RUNTIME = `${WINDOWS_GUEST_ROOT}\\runtime`
 export const WINDOWS_GUEST_HOOK = `${WINDOWS_GUEST_ROOT}\\hook`
+/** One home per guest host (`hosts\<user>`): its discovery file, logs and `host.cmd`. */
+export const WINDOWS_GUEST_HOSTS = `${WINDOWS_GUEST_ROOT}\\hosts`
 
 /** The macOS form's cap, and the same one the setup record enforces. */
 export const GUEST_REQUEST_MAX_BYTES = 16_384

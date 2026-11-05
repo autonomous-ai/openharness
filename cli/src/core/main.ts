@@ -69,6 +69,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
+import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
 import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -3015,7 +3016,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   const guestCreate = createGuestCreate({
     launch: (input) => (ports.sharedMachines ?? SHARED_MACHINES_OFF).guestLaunch(input),
-    tmuxBackend: () => tmuxBackend, registry, announceSession, watchNewPane,
+    tmuxBackend: () => tmuxBackend,
+    // Windows: a guest's panes are made on the guest's own host, which runs as that account; there is no owner
+    // pane to hand over (lib/windows/guestHostBackend.ts). Reached before the pane is made, so its instance is
+    // known and the owner can capture and type into that pane like any other.
+    ...(process.platform === 'win32' ? { guestBackend: async (user: string) => {
+      const backend = createGuestHostBackend({ user })
+      const prepared = await backend.prepare({ ownedPanes: new Map() })
+      if (prepared.state !== 'ready') return null
+      terminals.addBackend(backend)
+      return backend
+    } } : {}),
+    registry, announceSession, watchNewPane,
   })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.

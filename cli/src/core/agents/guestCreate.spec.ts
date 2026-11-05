@@ -73,6 +73,27 @@ describe('a guest\'s New Harness', () => {
     expect((await create({ engine: 'claude', dsh: null, agent: '' }, 'kim@acme.io')).ok).toBe(true)
   })
 
+  it('makes a launch that names the guest\'s own host there, never the owner\'s pane', async () => {
+    said()
+    // Windows: the guest's panes come from its own host, whose processes already run as that account.
+    const windows: GuestLaunch = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
+      guestHostUser: 'hg_0123456789ab' }
+    const runtime = { backend: 'ptyhost', instance: 'p3', paneId: '%1' } as const
+    const host = { create: vi.fn(async () => ({ state: 'succeeded' as const, runtime })), kill: vi.fn(async () => {}) }
+    const guestBackend = vi.fn(() => host as never)
+    const run = setup({ answer: windows, guestBackend })
+    expect(await run.create({ engine: 'claude' }, 'kim@acme.io')).toEqual({ ok: true, session: run.session })
+    expect(guestBackend).toHaveBeenCalledWith('hg_0123456789ab')
+    expect(run.tmux.create).not.toHaveBeenCalled()
+    // The pane is made on the guest's host, starts in its workspace, and becomes the guest's shell when the engine goes.
+    expect(host.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: windows.workspace, command: ['claude'], afterExit: expect.any(Object) }))
+    expect(run.deps.registry.openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimes: [runtime], guest: 'kim@acme.io' }))
+    // A host that is gone is said as such: the owner's pane is never a fallback (it would run as the owner).
+    const missing = setup({ answer: windows, guestBackend: () => null })
+    expect(await missing.create({ engine: 'claude' }, 'kim@acme.io')).toEqual({ ok: false, error: 'GUEST_HOST_UNAVAILABLE', detail: expect.any(String) })
+    expect(missing.tmux.create).not.toHaveBeenCalled()
+  })
+
   it('starts on the guest\'s first message, bounded as the owner\'s are', async () => {
     said()
     const { create, deps } = setup()

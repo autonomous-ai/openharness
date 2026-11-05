@@ -9,11 +9,12 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
+import { WINDOWS_GUEST_HOSTS } from './guestRequests.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
 import { reachPtyHost, readInstanceDiscovery } from '../ptyHost/launch.js'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
 
-export const guestHostHome = (user: string): string => `C:\\ProgramData\\HarnessGuests\\hosts\\${user}`
+export const guestHostHome = (user: string): string => `${WINDOWS_GUEST_HOSTS}\\${user}`
 export const guestHostTask = (user: string): string => `\\Harness\\Guests\\${user}`
 
 export interface GuestHostBackendOptions {

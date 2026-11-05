@@ -17,6 +17,7 @@ import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags } f
 import { DEFAULT_HARNESS_PERMISSION } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import type { createPaneWatcher } from './newPane.js'
 
 export type GuestCreateResult =
@@ -27,6 +28,10 @@ export interface GuestCreateDeps {
   launch: (input: GuestLaunchInput) => Promise<GuestLaunch>
   /** The tmux backend; null where the configuration lists no tmux. */
   tmuxBackend: () => CreateAgentPaneDeps['tmuxBackend'] | null
+  /** The pane backend of a guest's own host, for a launch that must not be made by this account (Windows: the
+   *  guest's `harness-pty` host, lib/windows/guestHostBackend.ts); absent where the platform has no such host.
+   *  Resolves null when that host cannot be reached: the owner's backend is never a fallback. */
+  guestBackend?: (user: string) => Promise<CreateAgentPaneDeps['tmuxBackend'] | null> | CreateAgentPaneDeps['tmuxBackend'] | null
   registry: CreateAgentPaneDeps['registry']
   announceSession: (session: RegisteredSession) => void
   watchNewPane: ReturnType<typeof createPaneWatcher>
@@ -45,8 +50,6 @@ export function createGuestCreate(deps: GuestCreateDeps) {
       const value = payload[key]
       if (value !== undefined && value !== null && value !== '') return { ok: false, error: 'GUEST_UNSUPPORTED', detail }
     }
-    const tmuxBackend = deps.tmuxBackend()
-    if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     const engine = typeof payload.engine === 'string' ? payload.engine : ''
     // The mode the guest chose, with the engine's own flags for it, as an owner's launch has (Auto-approve is the
     // engine's auto mode, never Skip all checks). A client that predates the choice sends only `bypassPermission`.
@@ -68,16 +71,33 @@ export function createGuestCreate(deps: GuestCreateDeps) {
     const launch = await deps.launch({ email: guest, engine, bypassPermission, permissionFlags: [...permissionFlags],
       ...(prompt ? { prompt } : {}), ...(cwd ? { cwd } : {}) })
     if (!launch.ok) return { ok: false, error: launch.error, ...(launch.detail ? { detail: launch.detail } : {}) }
+    // Where the pane must be made by the guest's own host (Windows), never by this account: the owner's tmux or
+    // pty host has no pane there, and a fallback to it would run the guest's harness as the owner.
+    let backend: CreateAgentPaneDeps['tmuxBackend'] | null
+    if (launch.guestHostUser) {
+      backend = await deps.guestBackend?.(launch.guestHostUser) ?? null
+      if (!backend) {
+        return { ok: false, error: 'GUEST_HOST_UNAVAILABLE',
+          detail: 'The guest\'s own terminal host is not running on this computer. Turn sharing on again for it.' }
+      }
+    } else {
+      backend = deps.tmuxBackend()
+      if (!backend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    }
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim().slice(0, 120) : null
     const label = buildHarnessSessionLabel(engine as AgentEngine)
     const result = await createAndRegisterPane({
-      tmuxBackend,
+      tmuxBackend: backend,
       registry: deps.registry,
       engine: engine as AgentEngine,
       cwd: launch.workspace,
       // The owner's tmux starts the pane: in a folder the owner may enter (the guest's home gives the owner a
       // read ACL). The helper changes to the workspace as the guest.
       spawnCwd: launch.workspace,
+      // Windows: the guest's host makes the pane in the workspace; when the engine exits it becomes the guest's
+      // shell, as an owner's pane does. Nothing of this account's environment goes in (no `windowsPaneLaunch`:
+      // its PATH is the owner's, which the guest may not read).
+      ...(launch.guestHostUser ? { paneLaunch: { cwd: launch.workspace, afterExit: windowsAfterExit(engine) } } : {}),
       sessionLabel: label,
       argv: launch.argv,
       env: launch.env,

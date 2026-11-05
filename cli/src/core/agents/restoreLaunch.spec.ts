@@ -69,6 +69,16 @@ describe('an old Swarm session with no saved role', () => {
   })
 })
 
+describe('a guest\'s harness at boot', () => {
+  it('is never relaunched as the owner: refused before a workspace or service is touched', async () => {
+    const { deps, build } = setup()
+    expect(await build({ ...entry, guest: 'kim@acme.io' } as RegisteredSession, { current: () => true }))
+      .toEqual({ error: 'GUEST_HARNESS', detail: expect.stringContaining('shared with you') })
+    expect(deps.workspaceMissing).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+})
+
 describe('a restore launch Windows refuses', () => {
   it('fails that row alone, with its reason; any other error is thrown on', async () => {
     const { deps, build } = setup()

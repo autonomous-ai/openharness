@@ -16,7 +16,9 @@ import { GUEST_LAUNCH_ENGINES, guestPaneCommand, type GuestLaunchEngine } from '
 import type { SubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 export interface GuestLaunchesDeps {
-  accounts: GuestAccounts
+  /** The guests' accounts; only what a launch and a share change read (lib/guestAccounts.ts, or the
+   *  Windows setup client's adapter, lib/windows/windowsGuestAccounts.ts). */
+  accounts: Pick<GuestAccounts, 'ensureGuest' | 'shareFolders' | 'guests'>
   /** Whether the owner turned guest access on here: the helper installed, current and allowed. */
   helperState: () => Promise<GuestHelperState>
   startRelay: () => Promise<SubscriptionRelay>
@@ -24,6 +26,8 @@ export interface GuestLaunchesDeps {
   folders?: () => SharedFolder[]
   helperPath?: string
   lang?: string
+  /** The platform the pane is made on; `process.platform` when absent. Windows makes it on the guest's own host. */
+  platform?: NodeJS.Platform
   log?: (line: string) => void
 }
 
@@ -52,6 +56,7 @@ const within = (path: string, folder: string): boolean => {
 
 export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
   const log = deps.log ?? (() => {})
+  const platforms = deps.platform ?? process.platform
   const folders = deps.folders ?? (() => [])
   let relay: Promise<SubscriptionRelay> | null = null
   /** Whom tokens were minted for, to revoke when sharing with them ends. */
@@ -107,12 +112,14 @@ export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
       minted.add(guest)
       const where = folder && start ? start : account.workspace
       const command = guestPaneCommand({
-        account, engine: engine as GuestLaunchEngine, relayUrl: running.url, token, bypassPermission, cwd: where,
+        account, engine: engine as GuestLaunchEngine, relayUrl: running.url, token, bypassPermission, cwd: where, platform: platforms,
         ...(permissionFlags ? { permissionFlags } : {}),
         ...(prompt ? { prompt } : {}), ...(deps.lang ? { lang: deps.lang } : {}), ...(deps.helperPath ? { helperPath: deps.helperPath } : {}),
       })
       log(`launch · ${engine} · ${account.user}`)
-      return { ok: true, workspace: where, argv: command.argv, env: command.env }
+      // Windows: the pane is made by the guest's own host, whose panes already run as the guest (lib/windows/).
+      return { ok: true, workspace: where, argv: command.argv, env: command.env,
+        ...(platforms === 'win32' ? { guestHostUser: account.user } : {}) }
     },
     async sync(still, shared) {
       for (const guest of [...minted]) {
