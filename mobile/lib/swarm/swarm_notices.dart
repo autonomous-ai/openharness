@@ -303,6 +303,11 @@ class SwarmTold {
     return true;
   }
 
+  /// Records [keys] as told somewhere else: pushes already in the
+  /// notification centre (task #2905), which the server keys as this phone
+  /// keys its notices.
+  void addAll(Iterable<String> keys) => keys.forEach(add);
+
   /// Whose notices these are: another account, or none (Swarm turned off),
   /// forgets every key.
   set account(String? id) {
