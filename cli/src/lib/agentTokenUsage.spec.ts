@@ -164,6 +164,46 @@ describe('owning-machine token cache', () => {
     expect((await read())?.totalTokens).toBe(630)
   })
 
+  // Task #3222: a PM's one session ran 10 days to an 823 MB transcript, past the 128 MB the reader would open at all, so its
+  // tokens were never reported (harnessTokens had every worker on its Mac but the PM). A long transcript is read a slice per
+  // refresh from its checkpoint, and its counts are published only once the reader has caught up.
+  it('counts a transcript larger than one refresh reads, a slice at a time, and publishes no partial count', async () => {
+    const lines = Array.from({ length: 40 }, (_, i) => claude(`m${i}`) + JSON.stringify({ type: 'user', text: 'y'.repeat(600) }) + '\n').join('')
+    await writeFile(target.transcriptPath!, lines)
+    store.dispose()
+    store = new AgentTokenUsageCache(join(dir, 'sliced'), { now: () => now, onRead: n => { bytes += n }, maxReadBytes: 4096 })
+    const seen: Array<number | null> = []
+    for (let pass = 0; pass < 40; pass++) {
+      const before = bytes
+      const usage = await read()
+      // One slice, and the 256-byte boundary check, a refresh.
+      expect(bytes - before).toBeLessThanOrEqual(4096 + 512)
+      seen.push(usage?.totalTokens ?? null)
+      if (usage) break
+      now += 20_000
+    }
+    expect(seen.length).toBeGreaterThan(5)
+    expect(seen.slice(0, -1).every(total => total === null)).toBe(true)
+    expect(seen.at(-1)).toBe(40 * 210)
+    // Caught up, it reads only what is appended.
+    now += 20_000
+    const before = bytes
+    await appendFile(target.transcriptPath!, claude('last'))
+    expect((await read())?.totalTokens).toBe(41 * 210)
+    expect(bytes - before).toBeLessThan(2048)
+  })
+
+  it('counts a transcript past 128 MB, as a PM\'s long session grows to', { timeout: 60_000 }, async () => {
+    const filler = `${'x'.repeat(1024 * 1024 - 1)}\n`
+    await writeFile(target.transcriptPath!, claude('one'))
+    for (let i = 0; i < 130; i++) await appendFile(target.transcriptPath!, filler)
+    await appendFile(target.transcriptPath!, claude('two'))
+    expect((await stat(target.transcriptPath!)).size).toBeGreaterThan(128 * 1024 * 1024)
+    let usage = null
+    for (let pass = 0; pass < 10 && !usage; pass++) { usage = await read(); now += 20_000 }
+    expect(usage?.totalTokens).toBe(420)
+  })
+
   it('waits for a complete JSONL record without double counting its prefix', async () => {
     const line = claude('two')
     await writeFile(target.transcriptPath!, claude('one') + line.slice(0, 100))
