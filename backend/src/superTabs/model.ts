@@ -569,7 +569,8 @@ export function pmAccounts(state: SuperTabState, actor: Actor): PmAccount[] {
     const engine = pm?.configuration?.engine
     if (!pm || !engine) return []
     const host = state.machines?.find(m => m.machineId === pm.machineId)?.hostMachineId
-    const readable = canReadProject(state, actor, project)
+    // A public project is named to every project agent, as otherProjectsWork names it (sharedWithLeads).
+    const readable = canReadProject(state, actor, project) || sharedWithLeads(project)
     return [{ machineId: pm.machineId, ...(host ? { hostMachineId: host } : {}), engine,
       project: readable ? project.name : 'another project', pm: readable ? pm.displayName ?? pm.name : 'its PM' }]
   })

@@ -102,8 +102,8 @@ export const TEMPLATE_ROUTING = `## Routing
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine, a model strong enough, a machine not paused.
-  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps 20% of its week for
-     that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any
+  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps 20% of its weekly
+     quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any
      other account.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.

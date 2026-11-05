@@ -171,7 +171,8 @@ const POOLS_FRESH_MS = 5_000
  *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
  *  that still sends it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
-  const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
+  // The PM accounts are the route's (pmAccounts.ts), not a roster line.
+  const { otherProjectsWork, leadsConversationId, pmAccounts: _pmAccounts, ...state } = object(answer.state)
   const shown = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
   // A task's steps are printed under it, not as rows of their own (task steps design); one whose task is not here stays a row.
   const ids = new Set(shown.map(c => c.id))
