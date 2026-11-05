@@ -3826,17 +3826,55 @@ class _SuperTabViewState extends State<SuperTabView>
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     final owner = project.ownerId == c.accountId;
     void act(String action) => unawaited(_groupAction(action, group));
+    ProjectSettingsRow row(
+      String label,
+      String action, {
+      String? value,
+      bool danger = false,
+    }) =>
+        (label: label, value: value, action: () => act(action), danger: danger);
+    // Each value from what is held already, in Project details' own words
+    // (task #3194); Archived only once its list is read to the end, so the
+    // dialog starts no read.
+    final repository = project.repository;
+    final leadId = c.snapshot?.conversation(project.leadConversationId)?.leadId;
+    final archived =
+        c.dormantLoaded(project.id) && !c.hasEarlierDormant(project.id)
+        ? c.snapshot?.conversations
+              .where((g) => g.archived && g.projectId == project.id)
+              .length
+        : null;
     return showProjectSettings(context, c, project, [
-      if (editable && owner) ('Rename project', () => act('rename')),
-      ('Project details', () => act('details')),
+      if (editable && owner)
+        row('Rename project', 'rename', value: project.name),
+      row(
+        'Project details',
+        'details',
+        value:
+            repository?['repositoryUrl'] as String? ??
+            repository?['cwd'] as String? ??
+            'Not set',
+      ),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
           c.snapshot?.leadOf(project.id)?.switchRequest == null)
-        ('Switch PM…', () => act('switch-pm')),
+        row(
+          'Switch PM…',
+          'switch-pm',
+          value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
+        ),
       if (_mayHaveArchived(group.projectId))
-        ('Archived conversations', () => act('archived')),
-      if (editable && owner) ('Delete Project', () => act('delete')),
+        row(
+          'Archived conversations',
+          'archived',
+          value: switch (archived) {
+            null || 0 => null,
+            1 => '1 conversation',
+            final n => '$n conversations',
+          },
+        ),
+      if (editable && owner) row('Delete Project', 'delete', danger: true),
     ], rowHeight: _phone ? kFingerTarget : 32);
   }
 
