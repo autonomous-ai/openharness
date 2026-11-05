@@ -20,6 +20,7 @@ beforeAll(async () => {
   ({ replica, db } = await planDatabase('crew_dispatch_test'))
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'owner-mac', userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  await db.machine.create({ data: { machineId: 'team-mac', userId: owner.sub, apiKey: 'fixture-team-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -27,11 +28,11 @@ afterAll(async () => {
 })
 
 /** A Swarm with a PM and the crew [lanes] (name -> lane), and the tasks [owns] (title -> one owned path), in that order. */
-async function swarm(lanes: Record<string, string | null>, owns: Record<string, string>, dispatch = false) {
+async function swarm(lanes: Record<string, string | null>, owns: Record<string, string>, dispatch = false, pmMachine = 'owner-mac') {
   const store = new SuperTabStore(db, () => NOW, null, { dispatch })
   const tab = (await store.create(owner, randomUUID(), 'Crew', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
-  const add = async (name: string, lead = false) => String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac',
+  const add = async (name: string, lead = false) => String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: lead ? pmMachine : 'owner-mac',
     harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
   const pm = await add('PM', true)
   const crew: Record<string, string> = {}
@@ -167,8 +168,8 @@ describe('the crew dispatch pass', () => {
   })
 
   it('never has a Team-account PM assign a member outside a Team account', async () => {
-    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
-    // The PM runs in a Harness Team account (its record says so); Ash runs in the main account.
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' }, false, 'team-mac')
+    // The PM runs in a Harness Team account on its own machine (its record says so); Ash runs in the main account.
     await editAgent(s.tab, s.pm, agent => ({ ...agent, teamAccount: true }))
     expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
     expect(await s.holders()).toEqual({ Api: null })

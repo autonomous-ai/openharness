@@ -7,7 +7,10 @@
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, projectOf, projectsOf } from './projects.js'
+import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
+import { barredFromTeamWritten } from './teamWritten.js'
+import { digestOf, localNow } from './digest.js'
+import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 
@@ -86,8 +89,10 @@ export function crewClock(group: Conversation, worker: Agent, assignment: Assign
 /** A task its own Engineer handed over: ready for review (its own `review` status), still its own, its Engineer free for the
  *  next (task #3399, handed.ts; until that lands, the same rule here). A step's review status is not a hand-over. */
 export const handed = (group: Conversation): boolean => !group.reviewOf && group.assignment?.status === 'review'
-/** Active work in its agent's hands: open and not handed (#3399 handed.ts occupiesAgent). */
-export const occupiesAgent = (group: Conversation): boolean => activeWork(group) && !handed(group)
+/** Work that keeps its agent from a new task: what work.assign refuses as AGENT_BUSY, which today is any active work, a handed
+ *  task too. #3399 (handed.ts occupiesAgent) leaves handed tasks out of both; until then a pick for a member with a handed
+ *  task would be refused on every pass (review 1 of #3230). */
+export const occupiesAgent = (group: Conversation): boolean => activeWork(group)
 
 /** Moving off a failing machine (task #3398, crewMove.ts): work.assign refuses it until the move lands. Read without a type
  *  until #3398 declares it, as #3397 does. */
@@ -107,11 +112,16 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
     if (occupiesAgent(group)) busy.add(holder)
     else if (activeWork(group) && handed(group)) handedBy.set(holder, (handedBy.get(holder) ?? 0) + 1)
   }
+  // A PM in a Harness Team account assigns only agents of its own machine or another Team account (store.ts teamCommand,
+  // security review 2 of #2089): the main account stays out of its reach.
+  const leadId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
+  const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+  const reachable = (agent: Agent) => !lead || !onTeamAccount(state, lead) || agent.machineId === lead.machineId || onTeamAccount(state, agent)
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
   return state.agents
     .filter(agent => !!agent.crew && agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
       && agent.workDecision !== 'stop' && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
-      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded)
+      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent))
     .map((agent, at) => ({ agent, at, handed: handedBy.get(agent.id) ?? 0 }))
     .sort((a, b) => a.handed - b.handed || a.at - b.at)
     .map(entry => entry.agent)
@@ -121,8 +131,10 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
  *  private chat or a step) with a brief, no active work, not finished, whose not-before day has come; P0 first, then the
  *  project's Next up. */
 export function openTasks(state: SuperTabState, projectId: string, now: number): Conversation[] {
-  const today = new Date(now).toISOString().slice(0, 10)
-  const open = queueSiblings(state, projectOf(state, projectId)).filter(group => (group.task || group.brief.trim())
+  const project = projectOf(state, projectId)
+  // The day people meant: the project's own (its digest's time zone), Vietnam's without one, as the PM schedule reads it.
+  const today = localNow(digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE, now).date
+  const open = queueSiblings(state, project).filter(group => (group.task || group.brief.trim())
     && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today))
   const ordered = queueOrder(open)
   return [...ordered.filter(g => g.priority === 'P0'), ...ordered.filter(g => g.priority !== 'P0')]
@@ -137,26 +149,36 @@ function takes(member: Agent, lane: string | null, rules: DispatchRules): boolea
 
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
-export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now)) {
+export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
+  skip: Skip = () => false) {
   const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && group.assignment?.status === 'lost'
     && !!group.assignment.lost?.reason.startsWith(RETURN_PREFIX)
   const pinned = open.filter(g => g.pin?.agentId === member.id).sort((a, b) => a.pin!.at - b.pin!.at)
   const crewIds = new Set(state.agents.filter(a => a.crew).map(a => a.id))
   const lane = open.filter(g => !pinned.includes(g) && !(g.pin && crewIds.has(g.pin.agentId)) && !lostByIt(g)
     && takes(member, laneOf(g, rules.lanes), rules))
-  return [...pinned.map(group => ({ group, why: 'pin' as const })), ...lane.map(group => ({ group, why: 'lane' as const }))]
+  // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
+  const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
+  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
+
+/** A pick the caller leaves out: one whose work.assign was refused this round (store.ts dispatchCrew). */
+export type Skip = (conversationId: string, agentId: string) => boolean
+
+/** The round a task is in, for its dispatch's operation id and refusal memory: its last assignment's, kept across a
+ *  redefinition (its run ledger), so a new round never replays the last one's receipt. */
+export const roundOf = (group: Conversation): string => group.ledger?.runs?.at(-1)?.assignmentId ?? group.assignment?.id ?? 'first'
 
 /** One assignment the dispatch makes. */
 export interface DispatchPick { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }
 
 /** What each free crew member of [projectId] gets in one pass: its first candidate no other member took first. Nothing while
  *  the Swarm is paused. */
-export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number): DispatchPick[] {
+export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number, skip: Skip = () => false): DispatchPick[] {
   if (state.paused) return []
   const open = openTasks(state, projectId, now), taken = new Set<string>(), picks: DispatchPick[] = []
   for (const member of freeCrew(state, projectId, rules, now)) {
-    const next = candidatesFor(state, member, rules, now, open).find(c => !taken.has(c.group.id))
+    const next = candidatesFor(state, member, rules, now, open, skip).find(c => !taken.has(c.group.id))
     if (!next) continue
     taken.add(next.group.id)
     picks.push({ conversationId: next.group.id, agentId: member.id, why: next.why, lane: laneOf(next.group, rules.lanes) })
@@ -211,7 +233,8 @@ export function pullRequestPin(watch: Pick<PullRequestWatch, 'mergeable' | 'chec
 /** Pins [group], a task with no active work, to its last attempt's agent for [why]: the dispatch hands it to that member
  *  first, while it is in the crew (candidatesFor). A pin already there keeps its time; active work is never pinned. */
 export function pinBuilder(group: Conversation, why: NonNullable<Conversation['pin']>['why'], now: number): void {
-  const builder = group.lostAttempt?.agentId ?? group.assignment?.agentId
+  // Its last round's agent: a stopped round's, not an older lost one's.
+  const builder = group.assignment?.agentId ?? group.lostAttempt?.agentId
   if (!builder || activeWork(group) || group.pin) return
   group.pin = { agentId: builder, why, at: now }
 }

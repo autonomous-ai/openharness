@@ -352,8 +352,11 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 
 /** The crew members 2 hours without progress on their task hear it once in the task, from its PM (dispatch.ts crewClock). */
 function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
+  const steps = stepIndex(state)
   return workerTasks(state).flatMap(({ group, assignment, worker }) => {
     if (crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
+    if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
     assignment.nudgedAt = now
     return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
       replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, DISPATCH_RULES.lanes)), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
