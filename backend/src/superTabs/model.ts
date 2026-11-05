@@ -883,6 +883,11 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 }
 
 /** Pending invitations are management data, not part of the shared conversation. */
+/** What every read appends to a Mac's Harness Team account entry's name (task #3060). */
+export const TEAM_ENTRY_LABEL = ' · Team account'
+/** A Team account entry's name as people read it: its Mac's, then TEAM_ENTRY_LABEL, once. */
+export const teamEntryName = (name: string): string => name.endsWith(TEAM_ENTRY_LABEL) ? name : `${name}${TEAM_ENTRY_LABEL}`
+
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   // The copy leaves out what no reader gets and no step below reads: the owner-only sharing, the hosts' slot claims, released
@@ -909,6 +914,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
+  // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
+  // the stored name, which renames and the server's own sentences read, stays the Mac's.
+  for (const pool of visible.machines ?? []) if (pool.hostMachineId) pool.name = teamEntryName(pool.name)
   // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
   // project's id is not another member's to see.
   for (const pool of visible.machines ?? []) {
