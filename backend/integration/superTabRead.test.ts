@@ -17,6 +17,7 @@ import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { recordPulse } from '../src/superTabs/pulse.js'
 import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
 import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
@@ -98,7 +99,8 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   })
   const more = extra(s, { web, done, lead, secret })
   // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
-  s.edit(state => { storeOldLeads(state, [lead]) })
+  // The board's pulse as the commands that wrote this scene would have recorded it (pulse.ts), once its Leads are stored.
+  s.edit(state => { storeOldLeads(state, [lead]); recordPulse(state, MIGRATED) })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
@@ -1502,9 +1504,12 @@ describe('what a read costs the database (group 3b)', () => {
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
     clock = Date.now()
-    let groups = 0
-    const bytes = await databaseBytes(async () => { groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.length })
-    expect(groups).toBe(1)
+    let groups: string[] = []
+    const bytes = await databaseBytes(async () => {
+      groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.map((g: { key: string }) => g.key)
+    })
+    // The task, and its project's chat: the post is an ask the PM now owes, which the board's pulse there counts (task #3384).
+    expect(groups.sort()).toEqual([s.web, 'lead'].sort())
     expect(bytes).toBeLessThan(30_000)
   })
 
