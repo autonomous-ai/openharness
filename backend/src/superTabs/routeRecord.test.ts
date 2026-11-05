@@ -139,6 +139,32 @@ describe('a route decision of every engine on every machine, as stored (task #27
     }
   })
 
+  // Task #3163 (Ken, 2026-11-05): with only account and spend kept, 3,905 of 3,915 Codex candidates on production had no fit
+  // status, and quota at route time could not be measured. Every candidate keeps its status, weekly % left and reset again.
+  const quoted = (): RouteRecord => {
+    const r = pickless()
+    r.candidates = r.candidates.map((c, i) => ({ ...c, fit: { ...c.fit!, status: i % 3 ? 'fits' as const : 'short' as const, left: i % 3 ? 64 : 2, resetsAt: 1_793_900_000_000 + i } }))
+    return r
+  }
+  it('takes each candidate\'s weekly % left and reset in its fit, and refuses them out of range', () => {
+    expect(routeRecordSchema.safeParse(quoted()).success).toBe(true)
+    const r = quoted()
+    r.candidates[0]!.fit = { ...r.candidates[0]!.fit!, left: null, resetsAt: null }
+    expect(routeRecordSchema.safeParse(r).success).toBe(true)
+    r.candidates[0]!.fit = { ...r.candidates[0]!.fit!, left: 101 }
+    expect(routeRecordSchema.safeParse(r).success).toBe(false)
+  })
+  it('keeps of every candidate of a record that names no pick its fit status, weekly % left and reset beside its account and spend', () => {
+    const r = quoted(), back = readRecord(storedRecord(r))
+    for (const [i, c] of r.candidates.entries()) {
+      expect(back.candidates[i]!.fit).toEqual({ account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status, left: c.fit!.left, resetsAt: c.fit!.resetsAt })
+    }
+  })
+  // Measured 11-05: 16,742 bytes, the 42 candidates' status, % left and reset 2,174 of it (about 52 bytes a candidate).
+  it('stores a record that names no pick, 42 candidates each with its quota, in under 17 KB (measured 16,742 bytes)', () => {
+    expect(size(storedRecord(quoted()))).toBeLessThan(17_000)
+  })
+
   it('keeps no fit of a candidate that had none, and no account of one that had none', () => {
     const r = pickless()
     delete r.candidates[0]!.fit

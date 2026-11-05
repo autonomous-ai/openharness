@@ -710,6 +710,22 @@ describe('routeTask', () => {
     expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
     expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
   })
+  // Task #3163: each candidate's weekly % left and reset go with its fit; a backend from before them refuses them, and the
+  // decision is then recorded without them, still with no pick, before any older shape is tried.
+  it('records each candidate\'s quota, and without it for a backend that refuses it, still with no pick', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"left"')
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0.fit: Unrecognized key: "left"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [quoted, unquoted, ...rest] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(rest).toEqual([])
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('left')
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('resetsAt')
+    expect(unquoted.operationId).toBe(quoted.operationId)
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision.candidates[0].fit).not.toHaveProperty('left')
+    expect(unquoted.command.decision.candidates[0].fit).toHaveProperty('status')
+  })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
     s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
