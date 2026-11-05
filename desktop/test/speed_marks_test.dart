@@ -159,6 +159,49 @@ void main() {
       expect(report.imageBytes, 4000);
     });
 
+    test('reads and images before the last launch are not reported', () {
+      final report = SpeedReport.parse(
+        lines([
+          'launch step=started ms=0',
+          'messages kind=latest rows=50 request_ms=9000 total_ms=9500',
+          'messages kind=older rows=50 request_ms=9000 total_ms=9500',
+          'image ok=1 bytes=99999 ms=9000',
+          'launch step=started ms=0',
+          'launch step=first_chat_painted ms=2000',
+          'messages kind=latest rows=3 request_ms=100 total_ms=120',
+          'messages kind=latest rows=50 request_ms=300 total_ms=380',
+          'image ok=1 bytes=1000 ms=100',
+        ]),
+      );
+
+      // Both first pages of this launch (the chat shown at launch and the big
+      // chat opened after it), none of the earlier launch.
+      expect(report.reads.map((r) => r.totalMs), [120, 380]);
+      expect(report.images, hasLength(1));
+      expect(report.imageBytes, 1000);
+      final table = report.markdown();
+      expect(table, contains('| latest | 3 |'));
+      expect(table, contains('| latest | 50 |'));
+      expect(table, isNot(contains('9500')));
+    });
+
+    test('steps after the first chat are not among the slowest of launch', () {
+      final report = SpeedReport.parse(
+        lines([
+          'launch step=started ms=0',
+          'launch step=tools ms=500',
+          'launch step=first_chat_painted ms=1500',
+          'launch step=machines_listed ms=9000',
+        ]),
+      );
+
+      expect(report.slowestLaunch.map((s) => s.name), [
+        'tools',
+        'first_chat_painted',
+        'started',
+      ]);
+    });
+
     test('the table has launch, big-chat and image rows', () {
       final table = SpeedReport.parse(
         lines([

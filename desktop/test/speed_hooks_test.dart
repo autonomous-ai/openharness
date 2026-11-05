@@ -15,6 +15,7 @@ import 'support/super_tab_fixture.dart';
 
 class _Recorder implements AppLog {
   final lines = <String>[];
+  final levels = <AppLogLevel>{};
   @override
   void record(
     AppLogLevel level,
@@ -23,7 +24,9 @@ class _Recorder implements AppLog {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (category == 'speed') lines.add(message);
+    if (category != 'speed') return;
+    levels.add(level);
+    lines.add(message);
   }
 }
 
@@ -36,6 +39,15 @@ void main() {
     appLog = log = _Recorder();
   });
   tearDown(() => appLog = before);
+
+  test('marks go through the log\'s batched debug path, not a write each', () {
+    speedMarks.restart();
+    speedMarks.launch('tools');
+    speedMarks.messages(kind: 'latest', rows: 1, requestMs: 1, totalMs: 1);
+    speedMarks.image(ms: 1, bytes: 1);
+
+    expect(log.levels, {AppLogLevel.debug});
+  });
 
   group('message reads', () {
     test('the first page and each scroll-up page are recorded', () async {
