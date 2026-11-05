@@ -130,6 +130,23 @@ describe('an agent’s needs_human, decision ask and line to a person go to the 
     expect(crewNeedOf(plainRow.source)).toMatchObject({ agentId: f.worker, personIds: [], question: 'Which database?' })
   })
 
+  // Review of #3223, Important 1: routing is by who sends it, not whose assignment it is.
+  it('routes another agent’s needs_human on the task to the PM as well, and keeps the PM’s own', () => {
+    const f = assigned()
+    const other = f.add(f.app.conversationId, 'other', false)
+    f.run({ type: 'conversation.agent', conversationId: f.group, agentId: other, present: true, lead: false })
+    const ask = (actor: Actor) => f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
+      result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices } }, actor)
+    const byOther = ask(asAgent(other))
+    expect(byOther.decisions ?? []).toEqual([])
+    expect(byOther.messages.map(m => crewNeedOf(m.source)).filter(Boolean)).toEqual([expect.objectContaining({ agentId: other, personIds: ['peer'] })])
+    expect(byOther.result.routedToPm).toMatch(/PM/)
+    f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, asAgent(f.worker))
+    const byPm = ask(asAgent(f.pm))
+    expect(byPm.decisions).toHaveLength(1)
+    expect(byPm.messages.filter(m => crewNeedOf(m.source))).toEqual([])
+  })
+
   it('turns a worker’s decision ask into a crew need, and keeps the PM’s', () => {
     const f = assigned()
     const question = { question: 'Ship how?', ...choices }

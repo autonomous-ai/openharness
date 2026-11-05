@@ -193,6 +193,16 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(asked, root)).toEqual([expect.stringMatching(/^Needs a decision: Keep drafts for a week\? Next: .+ is on it\.$/)])
   })
 
+  // Review of #3223, Minor 1: the line follows the decision, so the PM's own question on a builder's task still tags.
+  it('tags the person the PM asks on a builder\'s task, with its default', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    const asked = f.status(id, f.pm, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
+      unblocks: 'how long drafts are kept' } })
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+  })
+
   it('tags the person a decision waits on, with its default, in a project with no PM', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
