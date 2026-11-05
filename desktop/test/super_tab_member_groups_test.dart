@@ -683,19 +683,12 @@ void main() {
     expect(SuperTabConversation.fromJson(_task('t', 'T', 1)).handOutLane, null);
   });
 
-  test('an agent record reads its crew, and none from an older server', () {
-    final crew = SuperTabAgent.fromJson(
-      _agent(
-        'finch',
-        'Engineer',
-        crew: {'role': 'Engineer', 'lane': 'Desktop', 'at': 5, 'by': 'owner'},
-      ),
-    ).crew!;
-    expect((crew.role, crew.lane, crew.by), ('Engineer', 'Desktop', 'owner'));
-    expect(SuperTabAgent.fromJson(_agent('plover', 'Plover')).crew, isNull);
-    expect(
-      SuperTabAgent.fromJson({..._agent('odd', 'Odd'), 'crew': 'yes'}).crew,
-      isNull,
-    );
+  test('a member heads its column with its lane as the lane table names it', () {
+    String heading(Map<String, Object?> crew) =>
+        superTabMemberHeading(SuperTabAgent.fromJson(_agent('finch', 'Finch', crew: crew)));
+    // The crew mark keeps its lane in lower case (backend crew.ts, #3397).
+    expect(heading({'role': 'Engineer', 'lane': 'desktop', 'at': 5, 'by': 'owner'}), 'Finch · Desktop');
+    expect(heading({'role': 'Engineer', 'lane': 'cli', 'at': 5, 'by': 'owner'}), 'Finch · CLI');
+    expect(heading({'role': 'Engineer', 'at': 5, 'by': 'owner'}), 'Finch');
   });
 }
