@@ -96,6 +96,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
     json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
+    json('GET', 'GET /api/super-tabs/:tabId/scorecard', `${t}/scorecard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
@@ -121,6 +122,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/rules', `${t}/projects/${project}/rules`),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', `${t}/attachments/uploads/${MISSING}/complete`, {}),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/:attachmentId/voice', `${t}/attachments/${MISSING}/voice?lang=en`, {}),
@@ -209,7 +211,8 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       || JSON.stringify(c.payload ?? '').includes(f.privateChat) || String(c.payload ?? '').includes(f.privateChat))
     expect(named.map(c => c.route)).toEqual(expect.arrayContaining(['POST /api/super-tabs/:tabId/commands', 'GET /api/super-tabs/:tabId/groups/:conversationId',
       'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'POST /api/super-tabs/:tabId/attachments',
-      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard']))
+      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard',
+      'GET /api/super-tabs/:tabId/scorecard']))
     // Checked before the chat: a terminal opens for one agent (made up here), and approving needs the server's GitHub App.
     const before = ['POST /api/super-tabs/:tabId/native', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
       'POST /api/super-tabs/:tabId/projects/:projectId/github/repository']
