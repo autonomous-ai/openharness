@@ -176,6 +176,10 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   @override
   final openedSwarm = ValueNotifier<SwarmNoticeTarget?>(null);
 
+  /// Told when the person has just allowed notices ([requestPermission]): the moment pushes can
+  /// start reaching them (`notify/push_tokens.dart`).
+  void Function()? onAllowed;
+
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
   /// thread each kind is grouped under.
@@ -262,7 +266,9 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
             AndroidFlutterLocalNotificationsPlugin
           >()
           ?.requestNotificationsPermission();
-      return ios ?? android;
+      final allowed = ios ?? android;
+      if (allowed == true) onAllowed?.call();
+      return allowed;
     } catch (error) {
       appLog.warn('notify', 'permission request failed', error: error);
       return null;
@@ -510,4 +516,15 @@ AgentRef? decodeAgentPayload(String? payload) {
   if (parts == null || parts.length != 2) return null;
   if (parts[0].isEmpty || parts[1].isEmpty) return null;
   return (machineId: parts[0], agentId: parts[1]);
+}
+
+/// A tapped push (`notify/push_channel.dart`) opens the chat its `link` names: the app's own
+/// `swarm:` payload, which the server puts beside the notice's `key` (`backend/src/push/notices.ts`).
+/// Anything else (no link, an agent's or a device's payload) only opened the app.
+void openPushed(Map<String, String> data, SystemNotices notices) {
+  if (notices case final SwarmNotices swarm) {
+    if (decodeSwarmPayload(data['link']) case final target?) {
+      swarm.openedSwarm.value = target;
+    }
+  }
 }
