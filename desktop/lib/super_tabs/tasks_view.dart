@@ -15,6 +15,7 @@ import 'backlog.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'pulse_strip.dart';
 import 'task_card.dart';
 import 'task_groups.dart';
 
@@ -30,6 +31,7 @@ class SuperTabTasksView extends StatefulWidget {
     required this.needsHuman,
     required this.onOpenTask,
     required this.onOpenProposal,
+    required this.onOpenMessage,
     this.selectedId,
     this.storage,
     this.now = DateTime.now,
@@ -44,6 +46,9 @@ class SuperTabTasksView extends StatefulWidget {
 
   /// Opens a proposal's thread in the project chat, by its message id.
   final ValueChanged<String> onOpenProposal;
+
+  /// Opens a message in its conversation: an ask the pulse lists.
+  final void Function(String conversationId, String messageId) onOpenMessage;
 
   /// The task (or proposal, by its message id) the reader has open: its card
   /// shows selected (task #2948).
@@ -183,10 +188,30 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key: value.where(_keeps).toList(),
     };
     final empty = board.values.every((entries) => entries.isEmpty);
+    final pulse = c.snapshot?.pulseOf(project.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _bar(context),
+        // What waits for the PM and who works (task #3384); none from a
+        // server before it.
+        if (pulse != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.groupGap,
+              0,
+              grid.AppDesktop.groupGap,
+              grid.AppDesktop.controlGap,
+            ),
+            child: SuperTabPulseStrip(
+              pulse: pulse,
+              snapshot: c.snapshot!,
+              projectId: project.id,
+              now: widget.now,
+              onOpenTask: widget.onOpenTask,
+              onOpenMessage: widget.onOpenMessage,
+            ),
+          ),
         Expanded(
           child: empty
               ? Center(

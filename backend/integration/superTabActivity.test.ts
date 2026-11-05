@@ -454,7 +454,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     const s = await scene()
     const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
     const assignmentId = state.conversations.find(c => c.id === s.web)!.assignment!.id
-    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human',
+    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' },
       result: 'Ship it behind a flag?', ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command,
     owner, s.worker))
     expect(notices.map(n => [n.personId, n.key.split(':')[0], n.title, n.link.includes('/decision/'), n.quiet === true]))
