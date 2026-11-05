@@ -62,7 +62,9 @@ describe('built-in Swarm skills', () => {
 
   it('tells every agent in swarm-tools to answer right below a message in the main chat, and in its thread inside one (task #2929)', () => {
     expect(SWARM_TOOLS_SKILL).toContain('`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...`\n'
-      + '- Answer a message once, where it was asked: `--answers MESSAGE_ID` puts your answer right below a message in the main chat; `--reply-to MESSAGE_ID` puts it in the thread of a message that is in one. '
+      // Task #3403: `answer` is the answer itself, placed by the server; a post's --answers and --reply-to place as before.
+      + '- Answer a message once, where it was asked: `answer GROUP MESSAGE_ID TEXT OPERATION_ID [--to AGENT]...` goes in its thread if in one, else below it; '
+      + 'a second is refused, naming where the first is. `post --answers` goes below a message, `--reply-to` in its thread. '
       + 'Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.\n')
     expect(SWARM_TOOLS_SKILL).not.toContain('answers in the main chat bury each other')
   })

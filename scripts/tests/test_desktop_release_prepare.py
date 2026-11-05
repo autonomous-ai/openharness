@@ -29,6 +29,10 @@ class DesktopPrepareTests(unittest.TestCase):
         source = self.repo / 'desktop/scripts'
         source.mkdir(parents=True)
         shutil.copyfile(ROOT / 'desktop/scripts/release-desktop.sh', source / 'release-desktop.sh')
+        (self.repo / 'scripts').mkdir()
+        # These tests are about other refusals, so the release window must not depend on the clock they run at.
+        shutil.copyfile(ROOT / 'scripts/release-window.sh', self.repo / 'scripts/release-window.sh')
+        (self.repo / 'scripts/release-window.py').write_text('import sys\nsys.exit(0)\n')
         self.git('add', '.')
         self.git('commit', '-qm', 'previous version')
         self.git('tag', '-a', 'v1.2.54_desktop', '-m', 'previous release')

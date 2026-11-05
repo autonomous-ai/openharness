@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { CrewFolders } from './crewFolders.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -5990,5 +5991,100 @@ describe('a delivery that waits for the agent\'s turn to end', () => {
       expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
       expect(t.core.agents.activity).not.toHaveBeenCalled()
     }
+  })
+})
+
+// Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
+// kept alive; an awake one is left to the keep-alive.
+describe('a crew member at rest', () => {
+  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'owner' }, ...agent } })
+  it('closes an asleep member\'s live session once, keeps its folder, and never reopens it', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1 } })])
+    t.live(true)
+    await t.poll()
+    await t.poll(1_000)
+    await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+  it('closes a moving member and one whose folder is dropped; an awake member is not closed', async () => {
+    for (const agent of [{ movedTo: { machineId: 'mini', startId: 's', reason: 'offline', at: 1 } }, { asleep: { since: 1, folderDropped: true } }]) {
+      const t = lifeFixture([crewRow(agent)])
+      t.live(true)
+      await t.poll()
+      expect(t.closeMember).toHaveBeenCalledWith('harness')
+    }
+    const awake = lifeFixture([crewRow()])
+    awake.live(true)
+    await awake.poll()
+    expect(awake.closeMember).not.toHaveBeenCalled()
+  })
+  it('after a host restart, an awake member whose folder was dropped gets it back before it reopens (security review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('restored')
+    await t.poll()
+    expect(restore).toHaveBeenCalledWith('tab', 'harness')
+    restore.mockRestore()
+  })
+  it('a folder drop the removal refused is tried again an hour later (review of #3229)', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1, folderDropped: true } })])
+    const drop = vi.spyOn(CrewFolders.prototype, 'drop').mockResolvedValue('kept')
+    await t.poll()
+    await t.poll(60_000)
+    expect(drop).toHaveBeenCalledTimes(1)
+    await t.poll(60 * 60_000)
+    expect(drop).toHaveBeenCalledTimes(2)
+    drop.mockRestore()
+  })
+  it('a woken member whose folder is coming back is not reopened until it is there (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    let finish!: (value: 'restored') => void, back = false
+    // As the real restore does, a folder brought back is no longer remembered.
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockImplementation(() => !back)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = value => { back = true; resolve(value) } }))
+    await t.poll()
+    await t.poll(10_000)
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    finish('restored')
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a restore that keeps failing never holds the keep-alive back for good (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockReturnValue(true)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('failed')
+    await t.poll()
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    // Tried again after its wait, not on every roster.
+    const tries = restore.mock.calls.length
+    await t.poll(10_000)
+    expect(restore.mock.calls.length).toBe(tries)
+    await t.poll(60_000)
+    expect(restore.mock.calls.length).toBe(tries + 1)
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a member woken and put to sleep again is closed again', async () => {
+    const rows = [crewRow({ asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    t.live(true)
+    await t.poll()
+    rows[0] = crewRow()
+    await t.poll(1_000)
+    rows[0] = crewRow({ asleep: { since: 2 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
   })
 })
