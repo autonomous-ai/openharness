@@ -53,6 +53,8 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
+import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
+import { owedLines } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
@@ -2242,6 +2244,8 @@ export class SuperTabStore {
         // A notice gathered for the digest and answered before it (read in its chat): the digest does not name it again.
         await this.settleAnswered(tx, tabId, (command.replyTo ?? command.answers)!, actor.agentId, context.now)
       }
+      // The agent's own status change is a turn's end it says itself: what waited for it goes now (turnEnd.ts).
+      if (command.type === 'work.status' && actor.kind === 'agent') await this.endTurnWaits(tx, tabId, actor.agentId)
       // An agent's reaction settles its delivery of the message as an answer does (task #3391).
       if (effects.settles) await this.settleAnswered(tx, tabId, effects.settles.messageId, effects.settles.agentId, context.now)
       if (command.type === 'project.report' && actor.kind === 'agent') {
@@ -3299,7 +3303,8 @@ export class SuperTabStore {
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
           authorId: message.author.id, authorGeneration: message.author.membershipGeneration,
-          ...gathered ? { status: 'gathered', createdAt: new Date(this.now()) } : {} })
+          ...gathered ? { status: 'gathered', createdAt: new Date(this.now()) } : {},
+          ...!gathered && waitsForTurnEnd(state, target, message) ? { waitsUntil: new Date(this.now() + TURN_END_WAIT_MS) } : {} })
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
@@ -3378,6 +3383,13 @@ export class SuperTabStore {
 
   /** Once `tx` commits, never for an attempt that failed or was retried: told earlier, a host could read before the delivery
    *  is visible, and wait 30 s for its next read. */
+  /** Lets go of what [agentId]'s open deliveries wait for (turnEnd.ts), each by its id, and tells its host to read its list. */
+  private async endTurnWaits(tx: Transaction, tabId: string, agentId: string): Promise<void> {
+    const waiting = (await openDeliveries(tx, tabId, agentId)).filter(d => d.waitsUntil && d.waitsUntil.getTime() > this.now())
+    for (const delivery of waiting) await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { waitsUntil: null } })
+    if (waiting.length) this.announce(tx, { machineId: waiting[0]!.machineId, tabId, agentId })
+  }
+
   private announce(tx: Transaction, waiting: DeliveriesWaiting): void {
     const told = this.hooks.deliveriesWaiting
     if (told) afterCommit(tx, () => told(waiting))
@@ -4302,7 +4314,7 @@ export class SuperTabStore {
       // A turn typed into a terminal rests on its typist's access too (native.ts allowsDelivery): it takes the full poll.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
       if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen) && !open.some(d => d.nativeContextId)) {
-        return this.heldDeliveries(user, agentId, open, seen)
+        return (await this.heldDeliveries(user, agentId, open, seen)).map(d => withTurnEnd(d, this.now()))
       }
     }
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
@@ -4310,7 +4322,7 @@ export class SuperTabStore {
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
       ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
       .catch(pollMemoryFailed)
-    return allowed
+    return allowed.map(d => withTurnEnd(d, this.now()))
   }
 
   /** The open deliveries the last full poll allowed, while the Swarm is as it read it: the grants it checked are checked
@@ -4404,7 +4416,8 @@ export class SuperTabStore {
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
-        const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more, notices.some(n => n.otherAccount))
+        const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more, notices.some(n => n.otherAccount),
+          led ? owedLines(state, projectOf(state, led.id), this.now()) : [])
         // One message when an update request goes in this poll: the PM gets one turn, not two. Never into one already stored: its row
         // would be kept as it is, with no lines, or fail the poll (writeMessages keepStored).
         const merged = await updateOpen()

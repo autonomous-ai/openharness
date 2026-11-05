@@ -30,6 +30,7 @@ const assignment: Required<Assignment> = {
 }
 const conversation: Required<Conversation> = {
   agentIds: [],
+  answered: [],
   archived: false,
   assignment,
   audience: { people: [] },
