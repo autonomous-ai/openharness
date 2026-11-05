@@ -79,6 +79,8 @@ class DurationSplitTests(unittest.TestCase):
             self.assertEqual(driver.load_durations(broken), {})
             self.assertEqual(driver.load_durations(Path(folder) / "missing.json"), {})
 
+    @unittest.skipUnless((SCRIPT.parents[1] / "desktop" / "test").is_dir(),
+                         "needs the Desktop test files; ci.yml runs it in desktop-tests, whose checkout has them")
     def test_ci_split_leaves_every_shard_a_quarter_of_its_time_limit(self):
         """The committed durations, CI's shard count, workers and limit, and today's test files: each shard's estimate stays
         within 75% of its limit, with a slow runner's margin. Fails before CI does when the suite outgrows its shards."""

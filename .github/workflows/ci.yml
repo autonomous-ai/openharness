@@ -220,6 +220,9 @@ jobs:
       - uses: ./.github/actions/desktop-flutter
         with:
           version: ${{ steps.toolchain.outputs.version }}
+      - name: Every Desktop shard keeps a quarter of its time limit (task #3458)
+        if: matrix.shard == 1
+        run: python3 -m unittest discover -s scripts/tests -p test_desktop_tests.py -k test_ci_split_leaves_every_shard -v
       - name: Run bounded Desktop VM shard
         env:
           DESKTOP_SHARD: ${{ matrix.shard }}
