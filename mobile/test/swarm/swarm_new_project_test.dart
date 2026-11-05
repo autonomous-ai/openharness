@@ -2937,6 +2937,21 @@ void main() {
         expect(find.text('Creating $owner/notes-app…'), findsOneWidget);
       });
 
+      // F11, as the design says it now (#3201): the callback checks the ask is
+      // still current before it calls GitHub, so nothing was made.
+      testWidgets('a project deleted while out in GitHub says so, and that '
+          'nothing was created', (tester) async {
+        final swarm = NewProjectSwarm()..ownerState = 'ready';
+        final host = await pump(tester, [swarm]);
+        final made = await createNew(tester, host, swarm);
+        swarm.projects.removeWhere((p) => p['id'] == made);
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project-check-again');
+        expect(find.text(swarmRepositoryProjectGone), findsOneWidget);
+        expect(swarm.commands('lead.start'), isEmpty);
+      });
+
       testWidgets('too many organization checks: the choice stays, and it '
           'says to try again in a minute', (tester) async {
         final swarm = NewProjectSwarm()
