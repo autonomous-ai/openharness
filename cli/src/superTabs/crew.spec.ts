@@ -40,7 +40,7 @@ function setup(options: { working?: () => boolean; owns?: () => boolean; typing?
       }) },
   })
   const log = vi.fn()
-  const keeper = new CrewKeeper(core, 'm1', { now: () => clock, log, owns: async () => options.owns?.() ?? true, stillSince: () => still, team: options.team ?? false })
+  const keeper = new CrewKeeper(core, 'm1', { now: () => clock, log, owns: async () => options.owns?.() ?? true, stillSince: () => still, team: () => options.team ?? false })
   return { core, keeper, steps, log, closeMember, activity, screen,
     wait: (ms: number) => { clock += ms },
     moved: () => { still = clock },
@@ -181,7 +181,7 @@ describe('a reopened crew session', () => {
     never.keeper.reopened('h1')
     for (let i = 0; i < CREW_CONTINUE_TRIES + 3; i++) { await never.keeper.tick([row()]); never.wait(CREW_LOOK_MS) }
     expect(vi.mocked(never.core.superTabs!.input)).toHaveBeenCalledTimes(CREW_CONTINUE_TRIES)
-    expect(never.log.mock.calls.filter(([line]) => String(line).includes('gave up'))).toHaveLength(1)
+    expect(never.log.mock.calls.filter(([line]) => /gave up/i.test(String(line)))).toHaveLength(1)
   })
 
   it('is told nothing when it holds no task here', async () => {

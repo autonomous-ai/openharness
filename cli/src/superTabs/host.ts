@@ -636,7 +636,8 @@ export class SuperTabHost {
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
-    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log,
+    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon,
+      stillSince: harnessId => this.terminal.stillSince(harnessId),
       owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
     this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
