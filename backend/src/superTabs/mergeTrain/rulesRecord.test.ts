@@ -133,6 +133,16 @@ describe('the merge train reads each project\'s record', () => {
     expect(await runMergeTrain(value, memories, start + 30 * MINUTE)).toBe(1)
   })
 
+  // SecAlder's security review of #3250: a saved row with no read count read as one read, failing open.
+  it('holds a project whose saved record does not pass the schema: a broken row never reads as fewer reads', async () => {
+    const broken = { ...structuredClone(SEED_RULES), mergeTrain: { enabled: true, everyMinutes: 10 },
+      reviews: { ...structuredClone(SEED_RULES.reviews), rows: [{ area: 'Tokens', paths: ['**/*token*'] }] } } as unknown as ProjectRules
+    const { value, calls } = deps(recordTrainRules(db(row(broken))))
+    expect(await runMergeTrain(value, new Map(), 100 * MINUTE)).toBe(0)
+    expect(calls).toEqual([])
+    await expect(recordTrainRules(db(row(broken)))('t1', 'p1')).rejects.toThrow()
+  })
+
   it('holds a project whose record cannot be read: nothing read from GitHub, never the seed\'s numbers instead', async () => {
     const { value, calls } = deps(recordTrainRules(db(new Error('database unavailable'))))
     expect(await runMergeTrain(value, new Map(), 1_000_000)).toBe(0)

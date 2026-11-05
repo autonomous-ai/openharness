@@ -141,7 +141,10 @@ describe('the seed asks two reads wherever the merge train did', () => {
       'backend/src/push/keys.ts', 'backend/src/routes/deviceKeys.ts', 'cli/src/gateway/tabKey.ts', 'cli/src/lib/terminalKeys.ts',
       'backend/src/superTabs/ruleGuard.ts', 'backend/src/superTabs/sweeps.ts', 'backend/src/lib/attachmentSweep.ts',
       'backend/src/lib/chunkSweep.ts', 'backend/src/lib/harness_links.ts', 'mobile/lib/join_link.dart', 'backend/src/audience.ts',
-      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'desktop/lib/keys/store.dart']) {
+      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'desktop/lib/keys/store.dart',
+      // SecAlder's security review of #3250.
+      'backend/src/routes/harnessLinks.ts', 'backend/src/lib/deviceLogCore.ts', 'cli/src/core/devicesLink.ts',
+      'cli/src/gateway/observerKey.ts', 'backend/src/lib/pendingUploadSweep.ts', 'cli/src/lib/worktreeSweep.ts']) {
       expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
     }
   })
