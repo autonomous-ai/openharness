@@ -203,6 +203,15 @@ class SuperTabAgent {
           decision,
         _ => null,
       },
+      crewRole = switch (row['crew']) {
+        {'role': final String role} when role.isNotEmpty => role,
+        _ => null,
+      },
+      crewLane = switch (row['crew']) {
+        {'lane': final String lane} => lane,
+        _ => null,
+      },
+      crewAsleep = row['asleep'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
 
@@ -256,6 +265,16 @@ class SuperTabAgent {
   final String? workDecision;
 
   static const _workDecisions = {'awaiting', 'keep', 'stop'};
+
+  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397), as the desktop's model
+  /// reads it; null when not crew.
+  final String? crewRole;
+
+  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
+  final String? crewLane;
+
+  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
+  final bool crewAsleep;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -559,6 +578,9 @@ class SuperTabProject {
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null,
+      repositoryCreation = row['repositoryCreation'] is Map
+          ? Map.unmodifiable(superTabMap(row['repositoryCreation']))
+          : null,
       leadWaiting = {
         for (final entry in row['leadWaiting'] as List? ?? const [])
           if (entry is Map && entry['id'] is String) entry['id'] as String,
@@ -604,6 +626,13 @@ class SuperTabProject {
   /// Status sheet.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+
+  /// New project's New repository for it (task #3373): what was asked
+  /// (`owner`, `name`, `private`, `by`, `at`) and how GitHub's sign-in came
+  /// back (`state`: waiting, created, taken, refused, failed or cancelled,
+  /// with `repositoryUrl`, `reachable` and `reason`). Null from a server
+  /// before it, and for a project nobody asked one for.
+  final Map<String, dynamic>? repositoryCreation;
 }
 
 /// A project's status card text, as the desktop's model reads it

@@ -1,5 +1,6 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
+import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
@@ -47,7 +48,7 @@ function waitingToResume(state: SuperTabState, target: Agent): boolean {
 
 /**
  * Tells the project's coordinator, once per idle spell, of every agent of the project with no open task for IDLE_NOTICE_MS:
- * not a Buddy (it waits for its person) nor the coordinator, not stopping nor kept (a keep answers the notice until the agent
+ * not a Buddy (it waits for its person), crew (it stands by between tasks, crew.ts) nor the coordinator, not stopping nor kept (a keep answers the notice until the agent
  * is assigned again, which clears it, and finishes that work), with no delivery waiting for it (`busy`), not
  * waiting to resume after a usage limit, and in no loaded group with active work. One row in the coordinator's chat, to it
  * alone (model.ts NOTICE_READERS `idle`); the agent's `idleNoticedAt` records the spell, so the next poll says nothing until
@@ -60,7 +61,7 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
   if (!project || !coordinator) return []
   const rows: MessageDraft[] = []
   for (const target of state.agents) {
-    if (target.id === coordinator.id || isBuddy(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
+    if (target.id === coordinator.id || isBuddy(target) || isCrew(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
       || agentProjectId(state, target) !== projectId || waitingToResume(state, target)) continue
     const groups = groupsOf(state, target)
     if (groups.some(activeWork)) continue

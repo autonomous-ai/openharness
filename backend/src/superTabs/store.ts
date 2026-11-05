@@ -91,7 +91,7 @@ import { STATUS_LABELS,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
-import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
+import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
@@ -2138,11 +2138,10 @@ export class SuperTabStore {
       // deliveries of the message.
       if (command.type === 'message.send' && (command.replyTo || command.answers) && actor.kind === 'agent') {
         // A notice gathered for the digest and answered before it (read in its chat): the digest does not name it again.
-        const replyTo = (command.replyTo ?? command.answers)!, agentId = actor.agentId
-        await this.endDeliveries(tx, tabId, { where: { messageId: replyTo, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId: replyTo, agentId,
-          status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
-          data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
+        await this.settleAnswered(tx, tabId, (command.replyTo ?? command.answers)!, actor.agentId, context.now)
       }
+      // An agent's reaction settles its delivery of the message as an answer does (task #3391).
+      if (effects.settles) await this.settleAnswered(tx, tabId, effects.settles.messageId, effects.settles.agentId, context.now)
       if (command.type === 'project.report' && actor.kind === 'agent') {
         // Judged on the progress after this report summarized what it names.
         const progress = projectsOf(effects.state).find(p => p.id === command.projectId)?.progress
@@ -2633,6 +2632,13 @@ export class SuperTabStore {
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }
 
+  /** Closes an agent's own open deliveries of a message as answered: by its reply, its answer right below it, or its reaction. */
+  private async settleAnswered(tx: Transaction, tabId: string, messageId: string, agentId: string, now: number) {
+    await this.endDeliveries(tx, tabId, { where: { messageId, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId, agentId,
+      status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
+      data: { status: 'answered', answeredAt: new Date(now), holdReason: null, holdSince: null } }))
+  }
+
   /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
    *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
   private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, state: SuperTabState): Promise<ReactionTarget | undefined> {
@@ -3012,7 +3018,7 @@ export class SuperTabStore {
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
-        const gathered = gatheredNotice(message.source) && !!ledProject(state, recipient)
+        const gathered = gatheredMessage(state, message) && !!ledProject(state, recipient)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
@@ -4237,7 +4243,11 @@ export class SuperTabStore {
         continue
       }
       const otherAccount = allowed && !!message && await this.otherAccount(tx, state, coordinator, message, accounts)
-      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount) })
+      // A post's line names who wrote it (#3387); a notice is in the server's own words.
+      const poster = message && allowed && agentPost(state, { author: message.author as unknown as Author, source: message.source as MessageDraft['source'] })
+        ? (message.author as unknown as Author) : null
+      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount,
+        poster ? poster.displayName ?? poster.name : undefined) })
     }
     return { notices, refused }
   }
