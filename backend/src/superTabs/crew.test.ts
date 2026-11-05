@@ -64,6 +64,17 @@ describe('crew.add and crew.remove', () => {
     expect(f.state.agents.some(a => a.crew)).toBe(false)
   })
 
+  // Budget's automatic assignment (River, 11-05): a member gets its lane's top task; one with no lane, the project's.
+  it('keeps an optional lane, one of the project\'s five, and none when not given', () => {
+    const f = fixture()
+    f.run({ type: 'crew.add', agentId: f.worker, role: 'Engineer', lane: 'desktop' }, f.agentActor(f.pm))
+    expect(f.target().crew).toEqual({ role: 'Engineer', lane: 'desktop', at: 5000, by: f.pm })
+    f.run({ type: 'crew.add', agentId: f.worker, role: 'Engineer' }, f.agentActor(f.pm))
+    expect(f.target().crew).toEqual({ role: 'Engineer', at: 5000, by: f.pm })
+    for (const lane of ['backend', 'cli', 'desktop', 'mobile', 'docs']) expect(commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success).toBe(true)
+    for (const lane of ['', 'web', 'Backend']) expect([lane, commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success]).toEqual([lane, false])
+  })
+
   it('refuses a role that is empty, too long or holds control characters', () => {
     for (const role of ['', ' ', 'x'.repeat(41), 'Rev\u0007iewer']) {
       expect([role, commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', role }).success]).toEqual([role, false])
