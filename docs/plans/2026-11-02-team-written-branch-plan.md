@@ -29,8 +29,10 @@ project settings off.
 A branch is **Team-written** when any of these holds. It is trusted only when the check reads clean, and a failed read counts
 as Team-written:
 
-1. An agent on a Team account opened its task, was assigned to it or was added to it (a lasting mark on the task, kept by the
-   server). A Team agent given only a step does not count, and neither does the project's coordinator.
+1. An agent on a Team account was assigned to build its task (a lasting mark on the task, kept by the server). A Team agent
+   given only a step does not count, and neither does the project's coordinator. Opening the task, joining it, being named
+   into it or posting there writes no code and marks nothing (#3304, `docs/plans/2026-11-05-team-written-follows-code-plan.md`):
+   a push of the agent's own shows under 2.
 2. GitHub shows a push by the app's bot of a commit in the pull request. This also catches a batch branch that the PM pushed with
    Team commits inside.
 3. Its head has commits not on the default branch, and the activity log can't cover them (the log was too short, the read
