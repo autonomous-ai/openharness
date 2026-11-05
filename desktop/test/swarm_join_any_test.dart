@@ -160,6 +160,35 @@ void main() {
     expect(_contributions(f), hasLength(1));
   });
 
+  // Task #3212: a reinstall (an empty record here) added this Mac back to a
+  // Swarm its person had taken it out of.
+  test(
+    'after its person took this Mac out, a fresh install does not add it back',
+    () async {
+      final f = _computer();
+      // As the Swarm tells this person: their own removed computers.
+      f.connection.server.state['removedMachines'] = ['m'];
+      await _discover(f);
+      expect(_contributions(f), isEmpty);
+      expect(_teamOffers(f), isEmpty);
+      // Decided for this Swarm: the next discovery does not read it again.
+      final loads = _firstLoads(f);
+      await _discover(f);
+      expect(_firstLoads(f), loads);
+    },
+  );
+
+  test(
+    'a fresh install still adds this Mac to a Swarm it was never taken out of',
+    () async {
+      final f = _computer();
+      f.connection.server.state['removedMachines'] = ['another-computer'];
+      await _discover(f);
+      expect(_contributions(f), hasLength(1));
+      expect(_teamOffers(f), hasLength(1));
+    },
+  );
+
   group('a failed step shows the person a note', () {
     test(
       'a Team account this Mac could not be offered says where to set it up',
