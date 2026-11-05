@@ -3,11 +3,13 @@
 // starts an agent gets its own desk tab, the one link from tab to project on
 // every computer.
 import 'dart:convert';
+import 'dart:ui' show Rect;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -398,5 +400,93 @@ void main() {
     expect(second.name, 'payments 2');
     expect(mine.name, 'my work');
     expect(mine.nameIsCustom, isTrue);
+  });
+
+  group('a project\'s own layout', () {
+    /// Personal on screen showing the api project behind [term]: its two
+    /// panes come from two tabs, so no tab's sizes are theirs.
+    Future<({SuperTabController c, String chat, String project, Swarm view})>
+    showApi(SuperTabLaunchFixture f) async {
+      f.app.machineStates['m']!.agents = [
+        _agent('a1', remote: 'git@github.com:acme/api.git', cwd: '/w/api'),
+        _agent('a2', remote: 'https://github.com/acme/api', cwd: '/w/api2'),
+      ];
+      final one = _pane('m', 'a1'), two = _pane('m', 'a2');
+      _tab(f.app, 'desk-one', [one], name: 'one');
+      _tab(f.app, 'desk-two', [two], name: 'two');
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final api = c.snapshot!.projects.firstWhere((p) => p.name == 'api');
+      c.select(api.leadConversationId);
+      c.selectGroupTerminals(api.leadConversationId);
+      final view = f.app.activeSwarm;
+      expect(view.superTabId, tabId);
+      view.panes.addAll([one, two]);
+      expect(PersonalProjects.of(f.app).panesFor(c, api.leadConversationId), [
+        one,
+        two,
+      ]);
+      expect(PersonalProjects.of(f.app).soleTab([one, two]), isNull);
+      return (c: c, chat: api.leadConversationId, project: api.id, view: view);
+    }
+
+    test('is saved when the person arranges it, on this computer only, and '
+        'comes back when the project is shown again', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await showApi(f);
+      final arranged = PaneArrangement(const [
+        Rect.fromLTRB(0, 0, 0.3125, 1),
+        Rect.fromLTRB(0.3125, 0, 1, 1),
+      ]);
+      api.view.arrangedKey = '2:manual';
+      final postsBefore = f.connection.server.posts.length;
+      final callsBefore = f.connection.calls.length;
+      expect(f.app.resizePanes(api.view.id, '2:manual', arranged), isTrue);
+      await Future<void>.delayed(Duration.zero);
+      final saved = jsonDecode(
+        (await f.app.superTabs.storage.read(
+          PersonalProjects.storageKey('owner'),
+        ))!,
+      ) as Map;
+      final layout = (saved[tabId] as Map)['layouts'][api.project] as Map;
+      expect(layout['count'], 2);
+      expect((layout['sizes'] as Map)['2:manual'], arranged.toJson());
+      // Never sent: nothing the server or a machine heard carries it.
+      final heard = jsonEncode([
+        ...f.connection.server.posts.skip(postsBefore),
+        for (final call in f.connection.calls.skip(callsBefore)) call.$2,
+      ]);
+      expect(heard, isNot(contains('0.3125')));
+
+      // Another project's sizes take the view; the api's come back.
+      api.view.paneSizes.clear();
+      api.view.arranged = null;
+      api.view.arrangedKey = null;
+      expect(
+        PersonalProjects.of(f.app).applyLayout(api.c, api.chat, api.view),
+        isTrue,
+      );
+      expect(api.view.paneSizes['2:manual']?.tiles, arranged.tiles);
+    });
+
+    test('is applied only to the number of panes it was saved for', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await showApi(f);
+      api.view.arrangedKey = '2:manual';
+      f.app.resizePanes(
+        api.view.id,
+        '2:manual',
+        PaneArrangement(const [
+          Rect.fromLTRB(0, 0, 0.5, 1),
+          Rect.fromLTRB(0.5, 0, 1, 1),
+        ]),
+      );
+      await Future<void>.delayed(Duration.zero);
+      api.view.panes.removeLast();
+      expect(
+        PersonalProjects.of(f.app).applyLayout(api.c, api.chat, api.view),
+        isFalse,
+      );
+    });
   });
 }
