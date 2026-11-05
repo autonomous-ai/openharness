@@ -121,8 +121,8 @@ export function accessReasons(pool: Json | undefined, mac: Json | undefined, pro
 /** What the route notes on a candidate whose account would use a production system: access is never permission (design section 4). */
 export function productionNotes(pool: Json | undefined, mac: Json | undefined, needed: readonly string[]): string[] {
   const account = typeof pool?.hostMachineId === 'string' ? 'team' : 'own'
-  const production = needed.map(name => entryOf(mac, name, account)).filter((e): e is Json => !!e && e.production === true).map(e => String(e.name))
-  return production.length ? [`${production.join(', ')} ${production.length > 1 ? 'are production systems' : 'is a production system'}: writes still need a person's go.`] : []
+  return needed.map(name => entryOf(mac, name, account)).filter((e): e is Json => !!e && e.production === true)
+    .map(e => `${String(e.name)} is a production system: writes still need a person's go.`)
 }
 /** A note on a new agent there, not a filter (project instructions, phase 4): the agent choosing may still try it. */
 export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up); its owner can check the machine. This clears once a start there succeeds, its Harness is updated, or 30 minutes pass.'
