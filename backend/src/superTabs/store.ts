@@ -4674,11 +4674,12 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return null
-      const head = await loadRow(tx, requireParts(row), { groupIds: [] })
-      const ledger = projectsOf(head.state).find(p => p.id === projectId)?.releases
+      // The list names the groups to load: the head alone first, then one load with them.
+      const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
+      const ledger = head?.projects?.find(p => p.id === projectId)?.releases
       if (!ledger) return null
       const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
-      const loaded = groupIds.length ? await loadRow(tx, requireParts(row), { groupIds }) : head
+      const loaded = await loadRow(tx, requireParts(row), { groupIds })
       const state = cloneData(loaded.state)
       const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
       const outcome = settleReleases(state, projectId, facts, now, rules)

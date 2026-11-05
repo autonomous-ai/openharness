@@ -122,10 +122,10 @@ type Log = Pick<typeof logger, 'warn' | 'info'>
  * it could not read is logged and skipped; the others go on. The projects settled.
  */
 export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore, 'settleReleases'>, reader: ReleaseReader, now: number,
-  log: Log = logger): Promise<number> {
+  log: Log = logger, candidates: () => Promise<Map<string, string[]>> = () => reflectionCandidates(db, now, log)): Promise<number> {
   let settled = 0
   try {
-    for (const [tabId, projectIds] of await reflectionCandidates(db, now, log)) {
+    for (const [tabId, projectIds] of await candidates()) {
       const head = await db.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { deleted: true, data: true } })
       if (!head || head.deleted) continue
       for (const project of projectsOf(head.data as unknown as SuperTabState).filter(p => projectIds.includes(p.id))) {
@@ -171,13 +171,23 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
   return settled
 }
 
+/** How long the pass keeps the Swarms with work this week: one aggregation an hour, not one a pass. A Swarm whose first routed
+ *  attempt of the week came since is read within the hour, before any of its merges can wait on a release. */
+export const CANDIDATES_MS = 60 * 60_000
+
 /** Runs the release watch every 5 minutes in the singleton worker. */
 export function startReleaseWatch(db: PrismaClient, store: Pick<SuperTabStore, 'settleReleases'>, reader: () => ReleaseReader, everyMs = 5 * 60_000): () => void {
   let running = false
+  let kept: { at: number; value: Map<string, string[]> } | null = null
+  const candidates = async (now: number) => {
+    if (!kept || now - kept.at >= CANDIDATES_MS) kept = { at: now, value: await reflectionCandidates(db, now) }
+    return kept.value
+  }
   const run = () => {
     if (running) return
     running = true
-    void watchReleases(db, store, reader(), Date.now())
+    const now = Date.now()
+    void watchReleases(db, store, reader(), now, logger, () => candidates(now))
       .catch(error => logger.warn('[swarm-releases] pass failed', { error: error instanceof Error ? error.message : String(error) }))
       .finally(() => { running = false })
   }

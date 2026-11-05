@@ -12,7 +12,8 @@ Swarm redesign, 11-05). Strengthens "Tell the PM what you want, and your crew sh
 **Architecture:** Three pieces in `backend/src/superTabs/`.
 
 1. `releases.ts` (pure): the release rules (window and pace, the same shape as the project rules record's `releaseWindow`
-   and `releasePace`, #3393; constants in this one file until that record lands), the release components (backend, CLI,
+   and `releasePace`, #3393, with `backendPause` 09:00-10:00 per River 11-05; constants in this one file until that record
+   lands), the release components (backend, CLI,
    Desktop, web: tag suffix, release workflow, visible paths), and the decisions: `inReleaseWindow`, `componentsOf(files)`,
    `releaseDue`, `shippedNow`. A per-project ledger on the project (`SwarmProject.releases`): merged tasks not shipped yet
    (`pending`), the last verified release per component (`last`), and the open release step per component (`steps`).
@@ -21,8 +22,9 @@ Swarm redesign, 11-05). Strengthens "Tell the PM what you want, and your crew sh
 3. `releaseWatch.ts` (worker, every 5 minutes): for each Swarm with recent work, each project with a ledger to settle and a
    GitHub repository the app reads: resolve new pending entries (the merged pull request's merge commit; the task's own
    pull request's files → components), read each component's newest successful tag-push run of its release workflow (the
-   verified release: tag + its artifacts built and checked by that workflow), check which pending merge commits that tag
-   contains, then `SuperTabStore.settleReleases` writes in one transaction: tasks shipped (`Conversation.released`, a line
+   verified release: tag + its artifacts built and checked by that workflow) and check that its tag sits on main. Main is
+   linear (squash merges only) and the merge train records the original pull request with its merge time, so a release
+   carries every merge recorded at or before its tag's commit landed on main. Then `SuperTabStore.settleReleases` writes in one transaction: tasks shipped (`Conversation.released`, a line
    in the release step), and a new release step for each due component, the Integrator named in it.
 
 **Tech Stack:** TypeScript, vitest, Prisma on MongoDB (no schema change), the Harness GitHub App (read-only token:
@@ -49,8 +51,8 @@ through the day"); sibling #3393 (`policy.ts` `ProjectRules.releaseWindow/releas
   versions); a concurrent write retries. Steps are opened by a stable id per (project, component, release slot), so a
   retry or a second worker pass never opens two.
 - Read cost: one head read per candidate Swarm a pass; GitHub only for projects with pending entries or open steps; each
-  pending entry's pull request read once (cached in the entry); four workflow-run reads per project a pass; one compare
-  per (entry, new tag).
+  pending entry's pull request read once (cached in the entry); per project a pass, one workflow-run read and one compare for
+  each component something waits for; the Swarm candidates' aggregation once an hour.
 - Scale: 10x merges = ~300 pending a day at peak, still cleared by each release; the warning "pending full" and the
   GitHub rate (5 minutes × 4 reads × projects) warn first.
 - Compatibility: older clients ignore `released`; Desktop keeps its merged = Shipped until a follow-up reads `released`
@@ -65,9 +67,9 @@ through the day"); sibling #3393 (`policy.ts` `ProjectRules.releaseWindow/releas
 
 ## Review Focus
 
-- The window and pace edges (08:59/09:00/17:59/18:00 VN, 119/120 minutes).
-- That only a successful tag-push run of the component's own release workflow counts as verified, and only for merges its
-  tag contains.
+- The window, pause and pace edges (08:59/09:00/09:59/10:00/17:59/18:00 VN, 119/120 minutes).
+- That only a successful tag-push run of the component's own release workflow counts as verified, only for a tag on main,
+  and only for merges recorded at or before its tag's commit.
 - A task touching two components ships only when both are released; docs-only work ships at its merge.
 
 ## Task 1: release rules and decisions (pure)
