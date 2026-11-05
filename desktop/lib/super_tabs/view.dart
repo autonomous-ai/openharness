@@ -4108,6 +4108,14 @@ class _SuperTabViewState extends State<SuperTabView>
             username: name,
       },
       references: _references,
+      onOpenInstructions: (saved) => unawaited(
+        showSuperTabInstructions(
+          context,
+          c,
+          saved.projectId,
+          revision: saved.revision,
+        ),
+      ),
       onOpenGroup: (id) {
         setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
@@ -5742,7 +5750,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: grid.AppPalette.swarmWelcome,
+                              color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
                               child: _sidebar(),
                             ),

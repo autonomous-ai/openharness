@@ -89,12 +89,14 @@ class SuperTabBuddyRow extends StatelessWidget {
   Widget build(BuildContext context) {
     // Muted when read, full strength when unread or open (Dee, 10-31).
     final color = onTap != null && (selected || unread)
-        ? DesktopChrome.foreground
-        : DesktopChrome.muted;
+        ? grid.SidebarInk.foreground(context)
+        : grid.SidebarInk.muted(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
       child: Material(
-        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+        color: selected
+            ? grid.SidebarInk.selectedFill(context)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
         child: Semantics(
@@ -102,8 +104,8 @@ class SuperTabBuddyRow extends StatelessWidget {
           selected: selected,
           child: InkWell(
             onTap: onTap,
-            hoverColor: grid.AppSurface.hoverFill,
-            focusColor: grid.AppSurface.hoverFill,
+            hoverColor: grid.SidebarInk.hoverFill(context),
+            focusColor: grid.SidebarInk.hoverFill(context),
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
             child: Tooltip(
               message: tooltip,
@@ -159,7 +161,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       '($project)',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(),
+                                      style: DesktopChrome.metadata(
+                                        color: grid.SidebarInk.muted(context),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -171,7 +175,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       note,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(),
+                                      style: DesktopChrome.metadata(
+                                        color: grid.SidebarInk.muted(context),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -189,7 +195,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       detail,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(),
+                                      style: DesktopChrome.metadata(
+                                        color: grid.SidebarInk.muted(context),
+                                      ),
                                     ),
                                   ),
                                 ],
