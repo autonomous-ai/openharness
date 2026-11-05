@@ -278,6 +278,35 @@ describe('the inbox honors Follow and Unfollow', () => {
   })
 })
 
+describe('a tag brings an unfollowed thread back (task #3010, as in Slack)', () => {
+  /** Owner's thread in Web that peer read and then unfollowed. */
+  async function unfollowedScene() {
+    const s = await scene()
+    const [root, other] = await insert(s.tabId, s.web, [{ text: 'Owner root', author: personAuthor(owner) }, { text: 'Other root', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    await insert(s.tabId, s.web, [{ text: 'Worker reply', author: agentAuthor(s.worker), thread: root }, { text: 'Worker reply 2', author: agentAuthor(s.worker), thread: other }])
+    for (const each of [root!, other!]) await follow(s.tabId, s.web, each, false, peer)
+    return { ...s, root: root!, other: other! }
+  }
+  const reply = (s: { tabId: string; web: string }, root: string, mentions: string[]) => store.execute(owner, s.tabId, { operationId: randomUUID(),
+    command: { type: 'message.send', conversationId: s.web, text: 'A reply.', replyTo: root, recipientIds: [], mentions } })
+  const listedRoots = async (tabId: string) => { const { unread, read } = (await threads(tabId, peer)).body.data; return roots([...unread, ...read]) }
+
+  it('puts the thread back on the tagged person\'s Threads page, and a reply that tags nobody keeps it off', async () => {
+    const s = await unfollowedScene()
+    expect(await listedRoots(s.tabId)).toEqual([])
+    await reply(s, s.other, [])
+    expect(await stored(s.tabId, s.other, peer)).toEqual([expect.objectContaining({ follow: false })])
+    expect(await listedRoots(s.tabId)).toEqual([])
+    await reply(s, s.root, [peer.sub])
+    expect(await stored(s.tabId, s.root, peer)).toEqual([expect.objectContaining({ follow: null })])
+    expect(await listedRoots(s.tabId)).toEqual(['Owner root'])
+    // Only the tagged thread, and only the tagged person's mark.
+    expect(await stored(s.tabId, s.other, peer)).toEqual([expect.objectContaining({ follow: false })])
+    expect(await stored(s.tabId, s.root, owner)).toEqual([])
+  })
+})
+
 describe('a thread reply past the person\'s thread mark, though the chat\'s mark is further on', () => {
   /** Peer's thread in Web with a reply peer read; a later thread-only reply; then a main message peer reads in the chat. With
    *  `opened`, peer read the thread to its first reply on some device; with `followOnly`, peer only followed it. */
