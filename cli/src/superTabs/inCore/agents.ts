@@ -8,7 +8,7 @@ import type { SwarmAgentDeps, SwarmAgents } from '../../core/api.js'
 import { PURGE_RECORD_UNREADABLE } from './teamPurge.js'
 
 export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members, purgeEnded }: SwarmAgentDeps & {
-  /** The Leads and members this machine's Super Tab host keeps (superTabs/retention.ts). */
+  /** The Leads and crew (`leads`) and members this machine's Super Tab host keeps (superTabs/retention.ts). */
   members: { leads(): Set<string>; harnesses(): Set<string> }
   /** On a Team daemon, deletes the session data of a confidential member the Swarm ended (inCore/teamApps.ts); absent elsewhere. */
   purgeEnded?: (agentId: string) => Promise<Record<string, unknown>>
@@ -51,7 +51,7 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
       if (!resumeAgent) return { ok: false, error: 'UNSUPPORTED' }
       if (byAgent(agentId)) return { ok: true }
       if (!members.leads().has(agentId) || !stoppedIds().includes(agentId)) {
-        return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' }
+        return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager or crew member of a Swarm project is reopened.' }
       }
       const reply = await resumeAgent(agentId)
       return reply.ok ? { ok: true } : { ok: false, error: reply.error, ...(reply.detail ? { detail: reply.detail } : {}) }
