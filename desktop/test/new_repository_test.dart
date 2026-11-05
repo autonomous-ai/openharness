@@ -158,6 +158,47 @@ void main() {
       );
     });
 
+    test(
+      'created for another repository than the one asked reads as nothing made',
+      () {
+        for (final url in [
+          'https://github.com/acme/other',
+          'https://github.com/globex/notes',
+          'https://gitlab.com/acme/notes',
+          'not a link',
+        ]) {
+          expect(
+            line(
+              newRepositoryOutcome(
+                creation('created', url: url, reachable: true),
+                ask,
+                at: at,
+                now: now,
+              ),
+            ),
+            'Nothing was created.',
+            reason: url,
+          );
+        }
+        // GitHub keeps a login's case as typed: the same repository.
+        for (final url in [
+          'https://github.com/ACME/Notes',
+          'https://github.com/acme/notes.git',
+        ]) {
+          expect(
+            newRepositoryOutcome(
+              creation('created', url: url, reachable: true),
+              ask,
+              at: at,
+              now: now,
+            ),
+            isA<NewRepositoryCreated>(),
+            reason: url,
+          );
+        }
+      },
+    );
+
     test('each failure says its line (F2, F3, F8, F9)', () {
       expect(
         line(newRepositoryOutcome(creation('taken'), ask, at: at, now: now)),

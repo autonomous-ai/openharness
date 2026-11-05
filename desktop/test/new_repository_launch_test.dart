@@ -23,6 +23,9 @@ class _GitHubConnection extends SuperTabFixtureConnection {
 
   /// The ask's refusal, as the backend gives it before any sign-in.
   SuperTabFailure? refuseAsk;
+
+  /// Where the sign-in's link points, as GitHub's own does.
+  String authorize = 'https://github.com/login/oauth/authorize';
   final asks = <(String, Map<String, dynamic>)>[];
   int at = DateTime.now().millisecondsSinceEpoch;
 
@@ -93,11 +96,7 @@ class _GitHubConnection extends SuperTabFixtureConnection {
         server.revision++;
         return {
           'ok': true,
-          'value': {
-            'authorizeUrl':
-                'https://github.test/login/oauth/authorize?state=$at',
-            'at': at,
-          },
+          'value': {'authorizeUrl': '$authorize?state=$at', 'at': at},
         };
       }
     }
@@ -244,7 +243,7 @@ void main() {
     expect(projectId, f.connection.server.state['projects'].last['id']);
     expect(body, {'owner': 'acme', 'name': 'notes', 'private': true});
     expect(opened, [
-      Uri.parse('https://github.test/login/oauth/authorize?state=${github.at}'),
+      Uri.parse('https://github.com/login/oauth/authorize?state=${github.at}'),
     ]);
     await answered(
       integration,
@@ -394,6 +393,56 @@ void main() {
             (e) => e.message,
             'message',
             'The project was deleted meanwhile. Nothing was created.',
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'opens a sign-in link only on https://github.com, else creates nothing',
+    () async {
+      final integration = await open();
+      for (final link in [
+        'https://github.evil.test/login/oauth/authorize',
+        'http://github.com/login/oauth/authorize',
+        'https://github.com.evil.test/login/oauth/authorize',
+        'https://evil.test/github.com/login/oauth/authorize',
+      ]) {
+        github.authorize = link;
+        await expectLater(
+          integration.createRepository!(_ask, 'A notes app.'),
+          throwsA(
+            isA<SuperTabFailure>().having(
+              (e) => e.message,
+              'message',
+              'Harness got a sign-in link that isn’t GitHub’s. Nothing was created.',
+            ),
+          ),
+          reason: link,
+        );
+      }
+      expect(opened, isEmpty);
+    },
+  );
+
+  test(
+    'a created answer for another repository is never taken as this one',
+    () async {
+      final integration = await open();
+      final created = await asking(integration);
+      await answered(
+        integration,
+        'created',
+        url: 'https://github.com/acme/other',
+      );
+      await expectLater(
+        created,
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (e) => e.message,
+            'message',
+            'Nothing was created.',
           ),
         ),
       );
