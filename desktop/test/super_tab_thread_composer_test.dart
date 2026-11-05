@@ -621,6 +621,28 @@ void main() {
       },
     );
 
+    testThread('returning to a chat reads its thread only once', (tester) async {
+      final server = threaded();
+      final c = await openThread(tester, server);
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      var reads = 0;
+      server.onRead = (path) {
+        if (Uri.parse(path).queryParameters['thread'] == 'message-1') reads++;
+      };
+
+      await c.select('lead');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(reads, 1);
+
+      (server.state['conversations'] as List).first['title'] = 'Renamed lead';
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(reads, 1);
+    });
+
     test(
       'open threads survive a saved view restart per conversation',
       () async {
