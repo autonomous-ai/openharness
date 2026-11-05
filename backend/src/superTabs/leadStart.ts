@@ -7,7 +7,7 @@
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
   slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { ownsProject, projectsOf, type SwarmProject } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 import { coordinatorNameOf } from './instructions.js'
 
@@ -38,6 +38,25 @@ export interface LeadContext {
   teamAccountsIdle?: boolean
   /** The slots of each pool, counted once for a read that admits many (machines.ts slotCounter). */
   slots?: (pool: ContributedMachine) => number
+}
+
+/** Efforts a Product Manager never runs at (task #3022, Ken 11-05): it keeps what people teach it only when it thinks hard
+ *  enough to. Claude's and Codex's names below high. */
+const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
+/** The effort a Product Manager gets when its start or switch names a model and no effort. */
+export const LEAD_EFFORT = 'high'
+
+/** [request] for a Product Manager at high effort or above: an effort named below it is refused, and a model named with no
+ *  effort gets the coordinator's own default effort for that model (Claude Opus at xhigh, as its start; review of #3066, 3),
+ *  else high. With no model it keeps its engine's own model and effort, which its host sets only together. */
+export function leadEffort<T extends { engine: string; model?: string; effort?: string }>(request: T, name: string): T {
+  if (request.effort && BELOW_LEAD_EFFORT.has(request.effort.toLowerCase())) {
+    fail('EFFORT_TOO_LOW', `A ${name} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
+  }
+  if (!request.model || request.effort) return request
+  const defaults = BUILT_IN_ROLE_DEFAULTS.lead
+  const own = defaults?.engine === request.engine && defaults.model && family(defaults.model) === family(request.model) ? defaults.effort : undefined
+  return { ...request, effort: own ?? LEAD_EFFORT }
 }
 
 /** The engines a Product Manager runs on, as people read them. */

@@ -54,7 +54,7 @@ import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liv
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
-import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { instructionsChange } from './instructionsDiff.js'
@@ -1639,7 +1639,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${name} runs on.`, 400)
       // Its person named no model: the coordinator's built-in default for this engine (Claude Opus 5.5 at xhigh), since the
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
-      const asked = withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead)
+      const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead), name)
       const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
       // A branch a Team agent pushed, or GitHub cannot place, never starts a PM in the main account (audit H2).
       if (context.pushOrigin && context.pushOrigin !== 'clean' && !teamAccountPool(state.machines?.find(m => m.machineId === start.request.machineId))) failTeamWritten()
@@ -1682,11 +1682,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
+      // At high effort or above (leadStart.ts leadEffort), before anything is placed.
+      const { type: _type, projectId: _projectId, ...asked } = leadEffort(command, name)
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
         const start = placeLead(state, project, person(state, actor.userId), command.machineId,
-          { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
+          { engine: asked.engine, ...(asked.model ? { model: asked.model } : {}), ...(asked.effort ? { effort: asked.effort } : {}) },
           stableId(operationId, 'switch-start'), context)
         if (previousPlacement) project.lead = previousPlacement
         else delete project.lead
@@ -1711,7 +1713,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
         start.request.profileId = profileId
       }
-      const { type: _type, projectId: _projectId, ...asked } = command
       pm.switchRequest = { id: operationId, ...asked, profileId, ...(destination.machineId !== pool.machineId ? { targetMachineId: destination.machineId } : {}),
         requestedBy: actor.userId, at: new Date(context.now).toISOString() }
       break
