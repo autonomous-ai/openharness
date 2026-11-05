@@ -90,15 +90,16 @@ describe('reviewerCandidates', () => {
     expect(f.pick('security', 'abc1234')).toEqual(['older'])
   })
 
-  it('counts a verdict without a head as at this head when given since the task was handed', () => {
+  it('compares whole heads: a verdict naming no head, or a prefix of this one, is not at this head (#3394)', () => {
     const f = fixture()
-    const since = f.add('since', f.task, opus, { roleName: 'Reviewer' })
-    const before = f.add('before', f.task, opus, { roleName: 'Reviewer' })
+    const bare = f.add('bare', f.task, opus, { roleName: 'Reviewer' })
+    const prefix = f.add('prefix', f.task, opus, { roleName: 'Reviewer' })
+    const head = 'abc1234'.padEnd(40, '0')
     f.group(f.task).checks = [{ id: 'c', description: 'Reviewed', independent: true, evidence: null, passedBy: null, verdicts: [
-      { by: `agent:${since}`, passed: true, evidence: 'Yes', at: 50 },
-      { by: `agent:${before}`, passed: true, evidence: 'Yes', at: 5 },
+      { by: `agent:${bare}`, passed: true, evidence: 'Yes', at: 50 },
+      { by: `agent:${prefix}`, passed: true, evidence: 'Yes', at: 50, head: 'abc1234' } as never,
     ] }]
-    expect(f.pick('security', 'abc1234', 10)).toEqual(['before'])
+    expect(f.pick('security', head, 10).sort()).toEqual(['bare', 'prefix'])
   })
 
   it('is never busy, a PM, a Buddy, or holding another step of this task', () => {
