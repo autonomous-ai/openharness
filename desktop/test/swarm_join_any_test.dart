@@ -51,6 +51,15 @@ List<Map> _teamOffers(SuperTabLaunchFixture f) => [
     if (type == 'super_tabs' && payload['action'] == 'teamSetupCheck') payload,
 ];
 
+/// The Swarm's first loads: each is a read of its whole state.
+int _firstLoads(SuperTabLaunchFixture f) => [
+  for (final (type, payload) in f.connection.calls)
+    if (type == 'super_tabs' &&
+        payload['method'] == 'GET' &&
+        payload['path'] == '/api/super-tabs/$tabId/parts')
+      payload,
+].length;
+
 void main() {
   test('a Swarm first seen through a domain auto-join adds this Mac and offers the Team account, once', () async {
     final f = _computer();
@@ -124,6 +133,32 @@ void main() {
       expect(_teamOffers(f), hasLength(1));
     },
   );
+
+  // Review of #3115: a Swarm opened only for the add kept polling, and a
+  // viewer's was read in full on every discovery.
+  test('a Swarm opened only to add this Mac is let go, and a viewer\'s is read once', () async {
+    final viewer = _computer(role: 'viewer');
+    await _discover(viewer);
+    await _discover(viewer);
+    expect(_firstLoads(viewer), 1);
+    expect(viewer.app.superTabs.peek(tabId), isNull);
+
+    final collaborator = _computer();
+    await _discover(collaborator);
+    expect(_contributions(collaborator), hasLength(1));
+    expect(collaborator.app.superTabs.peek(tabId), isNull);
+  });
+
+  test('a first discovery before this Mac\'s own row is known still takes the update\'s baseline', () async {
+    final f = _computer();
+    f.app.teamAccountHereForTest = false;
+    await _discover(f);
+    expect(_contributions(f), isEmpty);
+    // Discovery showed the Swarm meanwhile; it is still new to the add.
+    f.app.teamAccountHereForTest = true;
+    await _discover(f);
+    expect(_contributions(f), hasLength(1));
+  });
 
   group('a failed step shows the person a note', () {
     test(

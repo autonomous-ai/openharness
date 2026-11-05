@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/join_seen.dart';
 
@@ -107,4 +109,31 @@ void main() {
       'new',
     ]);
   });
+
+  test('a write that fails neither throws nor stops the next one', () async {
+    final failing = _FailingOnce();
+    final seen = SwarmJoinSeen(failing);
+    await seen.fresh('mate', ['a', 'b'], knownHere: const {});
+    await seen.mark('mate', 'a');
+    await seen.mark('mate', 'b');
+    final restarted = SwarmJoinSeen(failing);
+    expect(
+      await restarted.fresh('mate', ['a', 'b'], knownHere: const {}),
+      isEmpty,
+    );
+  });
+}
+
+/// A store whose first write fails, as a full disk does once.
+class _FailingOnce extends MemoryKeyValueStore {
+  var _failed = false;
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (!_failed) {
+      _failed = true;
+      throw const FileSystemException('No space left on device');
+    }
+    await super.write(key, value);
+  }
 }
