@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
 import '../state/harness_activity.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 
@@ -94,10 +97,23 @@ class SuperTabTaskCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: grid.AppDesktop.menuInset),
-              ActivityMark(
-                activity: activity,
-                color: DesktopChrome.foreground,
-                tooltip: false,
+              ListenableBuilder(
+                listenable: Listenable.merge([
+                  terminalThemeStore,
+                  appearancePrefsStore,
+                ]),
+                builder: (context, _) => ActivityMark(
+                  activity: activity,
+                  color: activityColor(
+                    activity,
+                    terminalThemeFor(
+                      grid.AppTheme.surfacePalette,
+                      terminalThemeStore.value,
+                    ),
+                    color: appearancePrefsStore.value.prompt.color,
+                  ),
+                  tooltip: false,
+                ),
               ),
               ?trailing,
             ],
