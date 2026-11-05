@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attributedRules, droppedRules, instructionsChange, CHANGE_ITEMS, ITEM_CHARS } from './instructionsDiff.js'
+import { attributedRules, droppedRules, instructionsChange, personKey, CHANGE_ITEMS, ITEM_CHARS } from './instructionsDiff.js'
 
 /** The words every line of a change starts with: none can open a Markdown block (a heading, list, quote, code or table). */
 const LINE_START = /^(?:In .+:|Added: |Removed: |Added section: |Removed section: |and \d+ more changes?\.$|$)/
@@ -95,6 +95,7 @@ describe('attributedRules', () => {
     expect(people('- Two reviews (Ken, Dee, 2026-11-03).')).toEqual([['Ken', 'Dee']])
     expect(people('- Two reviews (Ken, 11-02; Dee, 11-03).')).toEqual([['Ken', 'Dee']])
     expect(people('## Talking in the project chat (anh Dee, 2026-11-04)')).toEqual([['anh Dee']])
+    expect(['anh Dee', '@Dee', "Dee's daily check", 'DEE'].map(personKey)).toEqual(['dee', 'dee', 'dee', 'dee'])
   })
 
   it('takes a bullet with one attribution as one rule, and splits one with several at each', () => {
@@ -134,7 +135,7 @@ describe('droppedRules', () => {
     const merged = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and its '
       + 'Tester both (Ken, 2026-11-02; 0xken15, 4 Nov).'
     expect(droppedRules(doc(leo, tony, quiet), doc(leo, merged))).toEqual([])
-    expect(droppedRules(doc(leo, tony, quiet), doc(leo, `${quiet.slice(0, -21)} (Ken, 2026-11-02), and ${tony[0]!.toLowerCase()}${tony.slice(1)}`))).toEqual([])
+    expect(droppedRules(doc(leo, tony, quiet), doc(leo, `${quiet.replace('.', ',')} and ${tony[0]!.toLowerCase()}${tony.slice(1)}`))).toEqual([])
   })
 
   it('accepts rewrapping, renumbering, moving to another section and a light reword by the same person', () => {
