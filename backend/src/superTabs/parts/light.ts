@@ -91,6 +91,7 @@ export const GROUP_FIELDS = {
     'pullRequestUrls',
     'queueRank',
     'reactionSeq',
+    'released',
     'reportSeq',
     'requesterId',
     'reviewStamp',

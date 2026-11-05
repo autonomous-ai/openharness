@@ -68,6 +68,7 @@ const conversation: Required<Conversation> = {
   pulse: {} as never,
   queueRank: 1.5,
   reactionSeq: 0,
+  released: { at: 1, tags: [] },
   reportSeq: 0,
   requesterId: 'p',
   reviewOf: 'r',
