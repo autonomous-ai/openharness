@@ -13,7 +13,7 @@ import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -2650,10 +2650,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       recordCardMerged(group, pullRequestUrl, mergedAt)
       // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
       // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
-      // a step never closes here, nor its parent through it. Only a pull request the task already had closes it: a merge of an
-      // unrelated one recorded here is a link, not the task's own work (Aster, review of #3259).
+      // a step never closes here, nor its parent through it. Only the task's own pull request closes it: one its builder named in
+      // its result (the Ready line) or a check's evidence names, which a merge record never writes. A merge of an unrelated one
+      // recorded here, even twice, only links it (Aster, review of #3259).
       const assignment = group.assignment
-      if (linked && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
+      const ownPullRequest = assignment && [assignment.result, ...group.checks.map(check => check.evidence)]
+        .some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl))
+      if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
         const previous = assignment.status
         assignment.status = 'done'
         assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
