@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
@@ -137,24 +138,53 @@ const oldTrainHeldAtTwo = (file: string) => OLD_TRAIN_AREAS.some(({ paths }) => 
 describe('the seed asks two reads wherever the merge train did', () => {
   it('holds the files the review of #3250 named at two reads', () => {
     for (const file of ['backend/src/lib/deviceRevoke.ts', 'backend/src/lib/deviceKeyLog.ts', 'backend/src/lib/deviceWs.ts',
-      'backend/src/push/devices.ts', 'backend/src/superTabs/sessionScope.ts', 'cli/src/core/terminals/sessions.ts',
+      'backend/src/push/devices.ts', 'backend/src/superTabs/sessionScope.ts',
       'backend/src/push/keys.ts', 'backend/src/routes/deviceKeys.ts', 'cli/src/gateway/tabKey.ts', 'cli/src/lib/terminalKeys.ts',
       'backend/src/superTabs/ruleGuard.ts', 'backend/src/superTabs/sweeps.ts', 'backend/src/lib/attachmentSweep.ts',
       'backend/src/lib/chunkSweep.ts', 'backend/src/lib/harness_links.ts', 'mobile/lib/join_link.dart', 'backend/src/audience.ts',
-      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'desktop/lib/keys/store.dart',
+      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'backend/src/lib/keys/store.ts',
       // SecAlder's security review of #3250.
       'backend/src/routes/harnessLinks.ts', 'backend/src/lib/deviceLogCore.ts', 'cli/src/core/devicesLink.ts',
-      'cli/src/gateway/observerKey.ts', 'backend/src/lib/pendingUploadSweep.ts', 'cli/src/lib/worktreeSweep.ts']) {
+      'cli/src/gateway/observerKey.ts', 'backend/src/lib/pendingUploadSweep.ts', 'cli/src/lib/worktreeSweep.ts',
+      // Kept when the false hits were narrowed (River, SecAlder, ReviewLinnea): the real sign-in sessions, guards, device code
+      // and the device link's own files in the firmware.
+      'website/src/lib/community/session.ts', 'os/packaging/labwc/session-lock-presentation.patch', 'cli/src/lib/turnTlsGuard.ts',
+      'cli/src/services/devicesGuard.ts', 'desktop/lib/super_tabs/lead_guard.dart', 'backend/src/superTabs/anyGuard.ts',
+      'desktop/lib/devices/wifi_robots.dart', 'mobile/lib/phone/add_device/saved_wifi.dart', 'cli/src/devices/client.ts',
+      'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c']) {
       expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
     }
   })
 
-  it('holds every file of this repository the old patterns held, at two reads', () => {
+  // River, 11-06: fail closed, but a pattern that catches unrelated files is narrowed. These stay at one read.
+  it('leaves the old matcher\'s false hits at one read', () => {
+    for (const file of ['devices/harness-device/firmware/main/app_main.c', '.github/assets/readme/device.gif',
+      'output/orchestrator-live/token/model.stl', 'docs/autonomous-device-integration.md', 'desktop/tool/accessibility_regression/main.dart',
+      'backend/src/lib/redisGuard.ts', 'cli/src/engines/claude/sessionStore.ts', 'cli/src/core/terminals/sessions.ts',
+      'desktop/lib/finder/widgets/finder_diff_keys.dart', 'docs/performance/2026-09-22-pane-data/pane-sweep-after-1.json']) {
+      expect(requiredReads(SEED_RULES, [file]), file).toBe(1)
+    }
+  })
+
+  // Every file the old matcher held stays at two reads, except what the reviews dropped on purpose: whole classes by rule
+  // here, and single files in policy.securityExclusions.json, each under its reason. A file dropping out of the security
+  // areas fails this until a review adds it there.
+  it('holds every file of this repository the old patterns held, at two reads, except the reviewed exclusions', () => {
+    const DROPPED_BY_RULE: ReadonlyArray<{ reason: string; test: (file: string) => boolean }> = [
+      { reason: 'Runs no code: images, video, 3D models, Markdown, docs/, samples/, output/',
+        test: file => /\.(png|jpe?g|gif|webp|svg|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i.test(file) },
+      { reason: 'Firmware and hardware under devices/ that is not a link file (cable, pair, link and key files stay held)',
+        test: file => file.startsWith('devices/') },
+      { reason: 'Accessibility is not access control', test: file => /accessib/i.test(file) },
+    ]
+    const listed = new Set((JSON.parse(readFileSync(new URL('./policy.securityExclusions.json', import.meta.url), 'utf8')) as
+      { dropped: Array<{ reason: string; files: string[] }> }).dropped.flatMap(group => group.files))
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
     const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean)
     expect(files.length).toBeGreaterThan(100)
-    const missed = files.filter(file => oldTrainHeldAtTwo(file) && requiredReads(SEED_RULES, [file]) < 2)
-    expect(missed, `${missed.length} files the train held at two now need one`).toEqual([])
+    const missed = files.filter(file => oldTrainHeldAtTwo(file) && requiredReads(SEED_RULES, [file]) < 2
+      && !listed.has(file) && !DROPPED_BY_RULE.some(rule => rule.test(file)))
+    expect(missed, `${missed.length} files the train held at two now need one, and no review dropped them`).toEqual([])
   })
 })
 
