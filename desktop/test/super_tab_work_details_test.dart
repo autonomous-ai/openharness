@@ -233,4 +233,107 @@ void main() {
       findsOneWidget,
     );
   });
+
+  // Dee, #3394: a verdict counts only at the pull request head it read; the
+  // check line says which head, or that a newer head made it stale.
+  group('a check line names the head its verdict read', () {
+    Future<void> open(WidgetTester tester, Map<String, dynamic> check) async {
+      final server = ConversationServer();
+      final row =
+          (server.state['conversations'] as List)[1] as Map<String, dynamic>;
+      row['checks'] = [check];
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () =>
+                    showSuperTabWork(context, controller, 'offline'),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+    }
+
+    const a = 'aaaaaaa1111111111111111111111111111111aa';
+    const b = 'bbbbbbb2222222222222222222222222222222bb';
+
+    testWidgets('Yes at its head while it counts', (tester) async {
+      await open(tester, {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': 'Diff reads right',
+        'passedBy': 'agent:reviewer',
+        'verdicts': [
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+            'pullRequest': 'https://github.com/acme/app/pull/7',
+            'head': a,
+            'patch': 'p1',
+          },
+        ],
+      });
+      expect(find.text('Yes at aaaaaaa'), findsOneWidget);
+      expect(find.text('Verified'), findsNothing);
+    });
+
+    testWidgets('Stale once a newer head stopped it counting', (tester) async {
+      await open(tester, {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': null,
+        'passedBy': null,
+        'verdicts': [
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+            'pullRequest': 'https://github.com/acme/app/pull/7',
+            'head': a,
+            'patch': 'p1',
+            'stale': b,
+          },
+        ],
+      });
+      expect(
+        find.text('Stale: read aaaaaaa, PR is at bbbbbbb'),
+        findsOneWidget,
+      );
+      expect(find.text('Not verified'), findsNothing);
+    });
+
+    testWidgets('Verified as before for a verdict with no head', (
+      tester,
+    ) async {
+      await open(tester, {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': 'Diff reads right',
+        'passedBy': 'agent:reviewer',
+        'verdicts': [
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+          },
+        ],
+      });
+      expect(find.text('Verified'), findsOneWidget);
+    });
+  });
 }
