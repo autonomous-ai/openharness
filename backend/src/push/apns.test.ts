@@ -1,4 +1,5 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import http2 from 'node:http2'
 import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -120,6 +121,14 @@ describe('APNs: one notification per slot, and quiet repeats (task #3248)', () =
     expect(swarmNoticeId('decision:d1')).toBe(15921470)
     expect(swarmNoticeId('work:s1:c1:a1:needs_human')).toBe(701122187)
     expect(swarmNoticeId('mention:é✓')).toBe(1555091707)
+  })
+
+  it('sends the body the phone end to end replays on a simulator (mobile/integration_test/push_e2e)', async () => {
+    const replay = JSON.parse(readFileSync(new URL('../../../mobile/integration_test/push_e2e/reply_push.apns', import.meta.url), 'utf8'))
+    const { asked, transport } = scripted({ status: 200, reason: null })
+    await apnsSender(keys, { transport, now: () => NOW }).send(device, { personId: 'u1', ...replay.aps.alert, key: replay.key,
+      link: replay.link, slot: replay.slot })
+    expect(JSON.parse(asked[0]!.body)).toEqual(replay)
   })
 
   it('sends a quiet push with no sound and passive, so it only replaces what its slot showed', async () => {
