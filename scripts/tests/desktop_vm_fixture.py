@@ -60,6 +60,9 @@ def main():
             behavior = "assertion"
         if scenario == "incomplete":
             behavior = "incomplete"
+        if scenario == "partial" and index == 1:
+            # The first file finished; the second is never reached before the time limit.
+            time.sleep(30)
         for event in suite(path, index * 10, behavior):
             print(json.dumps(event), flush=True)
         successful &= behavior == "pass"

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -34,6 +35,71 @@ class WorkerCountTests(unittest.TestCase):
                 driver.shard_pair(value)
         with self.assertRaises(ValueError):
             driver.partition(files[:1], (2, 2))
+
+
+class DurationSplitTests(unittest.TestCase):
+    """Task #3458: shard 3 hit its 10-minute limit with tests passing, because round-robin by name ignored file times."""
+
+    def loads(self, groups, durations):
+        return [sum(durations[path] for path in group) for group in groups]
+
+    def test_heavy_files_spread_across_shards_and_every_file_runs_once(self):
+        durations = {"test/a_test.dart": 100, "test/b_test.dart": 90, "test/c_test.dart": 60, "test/d_test.dart": 50,
+                     **{f"test/small{i}_test.dart": 5 for i in range(10)}}
+        files = sorted(durations)
+        groups = [driver.partition(files, (i, 2), durations) for i in (1, 2)]
+        self.assertEqual(sorted(p for g in groups for p in g), files)
+        loads = self.loads(groups, durations)
+        # Round-robin by name put a, c and four small files together (190 + 20 against 140 + 30).
+        self.assertLessEqual(max(loads) - min(loads), 10, loads)
+        for group in groups:
+            self.assertEqual(group, sorted(group))
+
+    def test_a_file_with_no_measurement_counts_as_the_median(self):
+        durations = {"test/a_test.dart": 10, "test/b_test.dart": 20, "test/c_test.dart": 30}
+        self.assertEqual(driver.file_weights(["test/a_test.dart", "test/new_test.dart"], durations),
+                         {"test/a_test.dart": 10, "test/new_test.dart": 20})
+
+    def test_absolute_paths_use_their_desktop_relative_measurement(self):
+        durations = {"test/a_test.dart": 100, "test/b_test.dart": 1, "test/c_test.dart": 1}
+        absolute = [f"/work/repo/desktop/test/{n}_test.dart" for n in "abc"]
+        self.assertEqual(driver.partition(absolute, (1, 2), durations), [absolute[0]])
+
+    def test_without_measurements_the_split_stays_round_robin(self):
+        files = [f"test/{i:02d}_test.dart" for i in range(11)]
+        for durations in ({}, None):
+            with self.subTest(durations=durations):
+                self.assertEqual([driver.partition(files, (i, 4), durations) for i in range(1, 5)],
+                                 [files[i - 1::4] for i in range(1, 5)])
+
+    def test_unreadable_durations_file_falls_back_to_equal_weights(self):
+        with tempfile.TemporaryDirectory() as folder:
+            broken = Path(folder) / "durations.json"
+            broken.write_text("{not json")
+            self.assertEqual(driver.load_durations(broken), {})
+            self.assertEqual(driver.load_durations(Path(folder) / "missing.json"), {})
+
+    @unittest.skipUnless((SCRIPT.parents[1] / "desktop" / "test").is_dir(),
+                         "needs the Desktop test files; ci.yml runs it in desktop-tests, whose checkout has them")
+    def test_ci_split_leaves_every_shard_a_quarter_of_its_time_limit(self):
+        """The committed durations, CI's shard count, workers and limit, and today's test files: each shard's estimate stays
+        within 75% of its limit, with a slow runner's margin. Fails before CI does when the suite outgrows its shards."""
+        root = SCRIPT.parents[1]
+        workflow = (root / ".github" / "workflows" / "ci.yml").read_text()
+        command = re.search(r'test-desktop\.py --shard "\$DESKTOP_SHARD/(\d+)" --workers (\d+) --timeout (\d+)', workflow)
+        self.assertIsNotNone(command, "ci.yml's Desktop shard command changed shape")
+        shards, workers, limit = (int(value) for value in command.groups())
+        matrix = re.search(r"desktop-tests:.*?shard: \[([0-9, ]+)\]", workflow, re.S)
+        self.assertEqual([int(v) for v in matrix.group(1).split(",")], list(range(1, shards + 1)))
+        durations = driver.load_durations()
+        self.assertGreater(len(durations), 500, "the durations file is missing or nearly empty")
+        inventory = [Path(p).relative_to(root / "desktop").as_posix() for p in driver.select_files(root / "desktop", [])]
+        weights = driver.file_weights(inventory, durations)
+        for index in range(1, shards + 1):
+            group = driver.partition(inventory, (index, shards), durations)
+            estimate = driver.SLOW_RUNNER * sum(weights[p] for p in group) / workers + driver.STARTUP_SECONDS
+            with self.subTest(shard=index):
+                self.assertLessEqual(estimate, 0.75 * limit, f"shard {index}/{shards}: about {estimate:.0f}s of {limit}s")
 
 
 class ReporterTests(unittest.TestCase):
@@ -209,6 +275,23 @@ class DesktopProcessTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(receipt["checks"][0]["status"], "timeout")
         self.assertLess(receipt["duration_seconds"], 5)
+
+
+    def test_a_shard_out_of_time_names_the_files_it_did_not_reach(self):
+        """Task #3458: shard 3 hit its limit with a few files never reached, and nothing said which."""
+        result, receipt, calls = self.run_driver("partial", ["--timeout", "2"])
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(receipt["checks"][0]["status"], "timeout")
+        self.assertEqual(receipt["unreached_files"], ["test/two_test.dart"])
+        self.assertIn("Not reached before the time limit (1 file): test/two_test.dart", result.stdout)
+        self.assertIn("::error title=Desktop shard out of time::", result.stdout)
+        self.assertNotIn("one_test.dart", result.stdout.split("Not reached", 1)[1].splitlines()[0])
+
+    def test_a_run_that_finishes_names_no_unreached_files(self):
+        result, receipt, calls = self.run_driver()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(receipt.get("unreached_files"), [])
+        self.assertNotIn("Not reached", result.stdout)
 
 
 if __name__ == "__main__":
