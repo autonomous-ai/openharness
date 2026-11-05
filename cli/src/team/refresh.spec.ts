@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +7,7 @@ import { validCreationId } from '../lib/agentCreationReceipt.js'
 import type { TeamConfig } from './config.js'
 import type { TeamStatus } from './privacy.js'
 import {
-  readLastTry, refreshCreationId, refreshTeamAccount, TEAM_REFRESH_RETRY_MS, teamBuildStale, writeLastTry, type TeamRefreshDeps,
+  readLastTry, refreshCreationId, refreshTeamAccount, TEAM_REFRESH_RETRY_MS, teamBuildStale, teamUpdateArgv, writeLastTry, type TeamRefreshDeps,
 } from './refresh.js'
 
 const config = { node: '/Users/harnessteam/.harness/runtime/node/bin/node', cli: '/Users/harnessteam/.harness/cli/cli.js',
@@ -46,7 +47,7 @@ describe('a Harness Team account on a build too old for its owner\'s subscriptio
   it('is updated by its owner\'s daemon, as itself, over the link to its own machine; once a day', async () => {
     const d = deps()
     await refreshTeamAccount(d)
-    expect(d.run).toHaveBeenCalledWith('team', [config.node, config.cli, 'team', '__update'], '/Users/harnessteam')
+    expect(d.run).toHaveBeenCalledWith('team', teamUpdateArgv(config, 'darwin'), '/Users/harnessteam')
     expect(d.remember).toHaveBeenCalledWith(5_000)
     expect(d.log).toHaveBeenCalledWith(expect.stringContaining('updating it'))
     await refreshTeamAccount(d)
@@ -109,4 +110,32 @@ it('waits for a status read that happens off the main thread (audit W4)', async 
   const look = vi.fn(() => null)
   await refreshTeamAccount(deps({ status: async () => { await new Promise((r) => setTimeout(r, 5)); return signedOut(2_000) }, lastTry: look }))
   expect(look).toHaveBeenCalled()
+})
+
+// A shell hosted by the Team daemon is ended when update stops that daemon. The updater must finish outside that group.
+it.skipIf(process.platform === 'win32')('finishes a simulated update after its hosting daemon process group closes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'team-update-survival-'))
+  cleanup.push(dir)
+  mkdirSync(join(dir, '.harness', 'cli', 'data'), { recursive: true })
+  const cli = join(dir, 'fake-cli.cjs')
+  writeFileSync(cli, `const fs = require('node:fs');
+const root = process.env.TEAM_TEST_ROOT;
+const finish = () => { if (!fs.existsSync(root + '/release')) return; fs.writeFileSync(root + '/daemon-running', 'new version'); watch.close(); };
+const watch = fs.watch(root, finish);
+fs.writeFileSync(root + '/ready', String(process.pid));
+finish();`)
+  const argv = teamUpdateArgv({ node: process.execPath, cli, home: dir }, 'darwin')
+  const host = spawn(argv[0]!, argv.slice(1), { detached: true, stdio: 'ignore', env: { ...process.env, TEAM_TEST_ROOT: dir } })
+  let updater: number | null = null
+  try {
+    await vi.waitFor(() => expect(existsSync(join(dir, 'ready'))).toBe(true), { timeout: 5000 })
+    updater = Number(readFileSync(join(dir, 'ready'), 'utf8'))
+    try { process.kill(-host.pid!, 'SIGTERM') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+    writeFileSync(join(dir, 'release'), '')
+    await vi.waitFor(() => expect(existsSync(join(dir, 'daemon-running'))).toBe(true), { timeout: 2000 })
+    expect(readFileSync(join(dir, 'daemon-running'), 'utf8')).toBe('new version')
+  } finally {
+    host.kill('SIGKILL')
+    if (updater !== null) { try { process.kill(updater, 'SIGKILL') } catch { /* already finished */ } }
+  }
 })

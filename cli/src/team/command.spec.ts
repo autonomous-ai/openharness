@@ -658,19 +658,6 @@ describe('internal verbs', () => {
     expect(broken.out.join('\n')).toContain('could not check the engines: no home')
   })
 
-  it('__update starts an independent updater only in the macOS Team account', async () => {
-    const startUpdate = vi.fn(async () => {})
-    const f = inTeam({ startUpdate })
-    expect(await teamCommand(['__update'], f.deps)).toBe(0)
-    expect(startUpdate).toHaveBeenCalledWith(config)
-    expect(f.deps.stopDaemon).not.toHaveBeenCalled()
-    for (const over of [{ user: () => 'owner-placeholder' }, { platform: 'win32' as const }, { readConfig: () => null }]) {
-      const refused = inTeam({ startUpdate, ...over })
-      expect(await teamCommand(['__update'], refused.deps)).toBe(1)
-    }
-    expect(startUpdate).toHaveBeenCalledTimes(1)
-  })
-
   it('__start pins the handed sign-in to its redeemed account', async () => {
     const f = inTeam()
     await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
