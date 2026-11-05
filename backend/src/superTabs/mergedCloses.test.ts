@@ -56,6 +56,28 @@ describe('a recorded merge closes a task whose builder is gone (#3510)', () => {
     expect(effects.closedAssignment).toBeUndefined()
   })
 
+  // Aster's re-check of #3259: the first record of an unrelated pull request links it to the task, so a second record (a
+  // retry, a backfill) must still close nothing. Ownership is what the task said itself, which a merge record never writes.
+  it('leaves the task in review when an unrelated pull request\'s merge is recorded twice', () => {
+    const f = mergedFixture()
+    f.removeBuilder()
+    const other = { type: 'conversation.merged' as const, conversationId: f.task, pullRequestUrl: 'https://github.com/acme/app/pull/99' }
+    f.run(other, f.as(f.lead))
+    appendPullRequestUrls(f.group(f.task), ['https://github.com/acme/app/pull/99'])
+    const effects = f.run(other, f.as(f.lead))
+    expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'review' })
+    expect(effects.closedAssignment).toBeUndefined()
+  })
+
+  it('closes on a pull request a check\'s evidence names, as the task\'s own', () => {
+    const f = mergedFixture()
+    const own = 'https://github.com/acme/app/pull/12'
+    f.group(f.task).checks[0]!.evidence = `Passed on ${own} at abc1234`
+    f.removeBuilder()
+    f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: own }, f.as(f.lead))
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'done' })
+  })
+
   it('leaves a live builder\'s task for the builder to close', () => {
     const f = mergedFixture()
     const effects = f.merge()
