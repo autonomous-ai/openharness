@@ -55,6 +55,9 @@ void main() {
       system: system,
       chime: () async => chimes++,
       inFront: () => front,
+      // Told at once, so each rule here is read on its own; the wait is
+      // pinned under fake time below ('a question in front').
+      questionGrace: Duration.zero,
     );
     addTearDown(announcer.dispose);
   });
@@ -416,8 +419,11 @@ void main() {
       expect(system.cancelled, [ref]);
       expect(announcer.unread.kindFor(other), NoticeKind.question);
       expect(announcer.unread.kindFor(elsewhere), NoticeKind.question, reason: 'another machine said nothing of it');
-      // Heard again later, it is news again: it is a question asked anew.
-      expect(ask(), AgentNotice.alert);
+      // Heard again later it is open again, and posted again — but the person
+      // was told of this very request already: no second buzz.
+      expect(ask(), AgentNotice.quiet);
+      expect(announcer.unread.kindFor(ref), NoticeKind.question);
+      expect(system.shown.last.quiet, isTrue);
     });
 
     test('an open list leaves a finished turn\'s mark alone', () {
@@ -440,9 +446,12 @@ void main() {
       expect(chimes, 1);
     });
 
-    test('the dialog moving to its next page is a new question', () {
+    test('the dialog moving to its next page is a new question, posted without a second buzz', () {
       ask();
-      expect(ask(id: 'q2'), AgentNotice.alert);
+      expect(ask(id: 'q2'), AgentNotice.quiet, reason: 'the agent buzzed a moment ago');
+      expect(chimes, 1);
+      expect(announcer.unread.kindFor(ref), NoticeKind.question);
+      expect(system.shown.map((m) => m.quiet), [false, true]);
     });
 
     test('away: one notice, of the question kind, saying the question', () {
@@ -491,7 +500,12 @@ void main() {
         tier: null,
       ), watching: () => false);
       expect(announcer.unread.contains(ref), isFalse);
-      expect(ask(), AgentNotice.alert, reason: 'a new turn may ask it again');
+      expect(
+        ask(),
+        AgentNotice.quiet,
+        reason: 'a new turn may ask it again: marked and posted, but this very dialog buzzed moments ago',
+      );
+      expect(announcer.unread.kindFor(ref), NoticeKind.question);
     });
 
     test('a deleted agent takes its mark and its notice with it', () {
@@ -500,6 +514,313 @@ void main() {
       announcer.forgetAgent(ref);
       expect(announcer.unread.contains(ref), isFalse);
       expect(system.cancelled, [ref]);
+    });
+  });
+
+  // 2026-11-05: a Team machine's approvals ("Approve Bash command: …"), each
+  // answered at its desk in seconds, and dialogs flickering off the pane and
+  // on, buzzed a phone over and over. Three rules keep the first question that
+  // really waits on the person, and drop the rest.
+  group('a question in front: waits out its grace, buzzes once', () {
+    const grace = Duration(seconds: 15);
+    const cooldown = Duration(minutes: 5);
+    const reopen = Duration(minutes: 10);
+    final start = DateTime(2026, 11, 5, 12);
+    const other = (machineId: 'm', agentId: 'b');
+    const otherAgent = (ref: other, name: 'Other', machine: 'MacBook');
+
+    /// The announcer under fake time and a clock that follows it, built
+    /// inside [body]'s zone as its timers must be.
+    void inFakeTime(void Function(FakeAsync time, AgentAnnouncer a) body) {
+      fakeAsync((time) {
+        final a = AgentAnnouncer(
+          system: system,
+          chime: () async => chimes++,
+          inFront: () => front,
+          questionGrace: grace,
+          alertCooldown: cooldown,
+          reopenWindow: reopen,
+          now: () => start.add(time.elapsed),
+        );
+        body(time, a);
+        a.dispose();
+      });
+    }
+
+    AgentNotice ask(
+      AgentAnnouncer a, {
+      String id = 'q1',
+      NoticeAgent who = agent,
+      bool watching = false,
+    }) => a.questionAsked(
+      who,
+      requestId: id,
+      prompt: 'Approve Bash command: npm test',
+      watching: () => watching,
+    );
+
+    List<bool> quietness() => [for (final m in system.shown) m.quiet];
+
+    test('marked at once; it buzzes only once its grace runs out, still open', () {
+      inFakeTime((time, a) {
+        expect(ask(a), AgentNotice.filed);
+        expect(a.unread.kindFor(ref), NoticeKind.question);
+        expect(system.shown, isEmpty);
+        expect(chimes, 0);
+        time.elapse(grace - const Duration(milliseconds: 1));
+        expect(system.shown, isEmpty);
+        time.elapse(const Duration(milliseconds: 1));
+        expect(quietness(), [false]);
+        expect(system.shown.single.body, 'Approve Bash command: npm test');
+        expect(chimes, 1);
+      });
+    });
+
+    test('answered within its grace — at the desk, by an auto mode — it never buzzes', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(const Duration(seconds: 3));
+        a.questionClosed(ref, requestId: 'q1');
+        time.elapse(grace * 2);
+        expect(system.shown, isEmpty);
+        expect(chimes, 0);
+        expect(a.unread.contains(ref), isFalse);
+      });
+    });
+
+    test('a run of approvals answered at the desk in seconds: nothing at all', () {
+      inFakeTime((time, a) {
+        for (var i = 0; i < 10; i++) {
+          ask(a, id: 'q$i');
+          time.elapse(const Duration(seconds: 2));
+          a.questionClosed(ref, requestId: 'q$i');
+        }
+        time.elapse(grace * 2);
+        expect(system.shown, isEmpty);
+        expect(chimes, 0);
+      });
+    });
+
+    test('a newer question replaces the one waiting, and is the one told, once', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(const Duration(seconds: 5));
+        expect(ask(a, id: 'q2'), AgentNotice.filed);
+        time.elapse(const Duration(seconds: 10));
+        expect(system.shown, isEmpty, reason: 'the first one\'s wait was dropped');
+        time.elapse(const Duration(seconds: 5));
+        expect(quietness(), [false]);
+        time.elapse(grace * 2);
+        expect(system.shown, hasLength(1));
+      });
+    });
+
+    test('a dialog flickering off the pane buzzes once, then is only posted again quietly', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        expect(quietness(), [false]);
+        for (var i = 0; i < 5; i++) {
+          a.questionClosed(ref, requestId: 'q1');
+          expect(a.unread.contains(ref), isFalse);
+          time.elapse(const Duration(milliseconds: 1500));
+          expect(ask(a), AgentNotice.quiet);
+          expect(a.unread.kindFor(ref), NoticeKind.question, reason: 'it is open again');
+          time.elapse(const Duration(seconds: 5));
+        }
+        expect(chimes, 1);
+        expect(quietness(), [false, true, true, true, true, true]);
+      });
+    });
+
+    test('a dialog flickering through its grace still buzzes, once, when the grace runs out', () {
+      inFakeTime((time, a) {
+        // Off the pane for 1.5 s every 4.5 s: each close drops the wait, and
+        // each return resumes it rather than starting it over.
+        ask(a);
+        for (var i = 0; i < 3; i++) {
+          time.elapse(const Duration(seconds: 3));
+          a.questionClosed(ref, requestId: 'q1');
+          time.elapse(const Duration(milliseconds: 1500));
+          expect(ask(a), AgentNotice.filed);
+        }
+        expect(system.shown, isEmpty);
+        time.elapse(const Duration(milliseconds: 1500));
+        expect(quietness(), [false]);
+        a.questionClosed(ref, requestId: 'q1');
+        expect(ask(a), AgentNotice.quiet);
+        expect(chimes, 1);
+      });
+    });
+
+    test('one back after its grace ran out while off the pane is told at once', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(const Duration(seconds: 3));
+        a.questionClosed(ref, requestId: 'q1');
+        time.elapse(grace);
+        expect(ask(a), AgentNotice.alert);
+        expect(quietness(), [false]);
+      });
+    });
+
+    test('another question of the agent within the cooldown is posted quietly; after it, it buzzes again', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        a.questionClosed(ref, requestId: 'q1');
+        ask(a, id: 'q2');
+        time.elapse(grace);
+        expect(quietness(), [false, true]);
+        expect(chimes, 1);
+        expect(a.unread.kindFor(ref), NoticeKind.question);
+        time.elapse(cooldown);
+        a.questionClosed(ref, requestId: 'q2');
+        ask(a, id: 'q3');
+        time.elapse(grace);
+        expect(quietness(), [false, true, false]);
+        expect(chimes, 2);
+      });
+    });
+
+    test('the cooldown is the agent\'s own: another agent still buzzes', () {
+      inFakeTime((time, a) {
+        ask(a);
+        ask(a, who: otherAgent);
+        time.elapse(grace);
+        expect(quietness(), [false, false]);
+        expect(system.shown.map((m) => m.agent), [ref, other]);
+        expect(chimes, 2);
+      });
+    });
+
+    test('the same dialog asked again after the reopen window is news again', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        a.questionClosed(ref, requestId: 'q1');
+        time.elapse(reopen + const Duration(seconds: 1));
+        expect(ask(a), AgentNotice.filed);
+        time.elapse(grace);
+        expect(quietness(), [false, false]);
+        expect(chimes, 2);
+      });
+    });
+
+    test('a question open longer than the window is still the same one when it flickers', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        time.elapse(reopen * 2);
+        // Another agent's question is what forgets old ones.
+        ask(a, who: otherAgent);
+        a.questionClosed(ref, requestId: 'q1');
+        expect(ask(a), AgentNotice.quiet);
+      });
+    });
+
+    test('going to the agent within its grace: no buzz after, and it counts as told', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(const Duration(seconds: 5));
+        a.seen(ref);
+        time.elapse(grace * 2);
+        expect(system.shown, isEmpty);
+        expect(chimes, 0);
+        expect(a.unread.contains(ref), isFalse);
+        // Its dialog flickers afterwards: never a buzz for what was seen.
+        a.questionClosed(ref, requestId: 'q1');
+        expect(ask(a), AgentNotice.quiet);
+        expect(chimes, 0);
+      });
+    });
+
+    test('going away within its grace: told at once, while there is time to post it', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(const Duration(seconds: 2));
+        front = false;
+        a.wentAway();
+        expect(quietness(), [false]);
+        expect(system.shown.single.kind, NoticeKind.question);
+        time.elapse(grace * 2);
+        expect(system.shown, hasLength(1), reason: 'told once');
+      });
+    });
+
+    test('going away with nothing waiting does nothing', () {
+      inFakeTime((time, a) {
+        front = false;
+        a.wentAway();
+        expect(system.shown, isEmpty);
+      });
+    });
+
+    test('away: no wait at all', () {
+      inFakeTime((time, a) {
+        front = false;
+        expect(ask(a), AgentNotice.alert);
+        expect(quietness(), [false]);
+        time.elapse(grace * 2);
+        expect(system.shown, hasLength(1));
+      });
+    });
+
+    test('away, a run of approvals: one buzz, then quiet updates of the same notice', () {
+      inFakeTime((time, a) {
+        front = false;
+        for (var i = 0; i < 4; i++) {
+          ask(a, id: 'q$i');
+          a.questionClosed(ref, requestId: 'q$i');
+          time.elapse(const Duration(seconds: 20));
+        }
+        expect(quietness(), [false, true, true, true]);
+      });
+    });
+
+    test('on the agent: a chime at once, with no wait and no notice', () {
+      inFakeTime((time, a) {
+        expect(ask(a, watching: true), AgentNotice.chime);
+        expect(chimes, 1);
+        time.elapse(grace * 2);
+        expect(system.shown, isEmpty);
+        expect(a.unread.count, 0);
+      });
+    });
+
+    test('a deleted agent forgets what it was told: its next question buzzes', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        a.forgetAgent(ref);
+        expect(ask(a), AgentNotice.filed);
+        time.elapse(grace);
+        expect(quietness(), [false, false]);
+      });
+    });
+
+    test('signing out drops a question still waiting, and what was told', () {
+      inFakeTime((time, a) {
+        ask(a);
+        a.reset();
+        time.elapse(grace * 2);
+        expect(system.shown, isEmpty);
+        expect(a.unread.count, 0);
+      });
+    });
+
+    test('disposing leaves no timer behind', () {
+      fakeAsync((time) {
+        final a = AgentAnnouncer(
+          system: system,
+          inFront: () => true,
+          now: () => start.add(time.elapsed),
+        );
+        a.questionAsked(agent, requestId: 'q1', prompt: 'x', watching: () => false);
+        expect(time.pendingTimers, hasLength(1));
+        a.dispose();
+        expect(time.pendingTimers, isEmpty);
+      });
     });
   });
 

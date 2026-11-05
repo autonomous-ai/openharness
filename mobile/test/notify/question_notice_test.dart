@@ -59,4 +59,60 @@ void main() {
       AgentNotice.alert,
     );
   });
+
+  test('the request open on an agent, or none', () {
+    final asked = AskedQuestions()..hear(a, 'q1');
+    expect(asked.openOn(a), 'q1');
+    expect(asked.openOn(b), isNull);
+    asked.hear(a, 'q2');
+    expect(asked.openOn(a), 'q2', reason: 'the next page is the one open');
+    asked.forget(a);
+    expect(asked.openOn(a), isNull);
+  });
+
+  group('never a second buzz for what the person was told', () {
+    test('told already: posted quietly, or nothing on the agent being watched', () {
+      expect(
+        decideQuestionNotice(isNew: true, inFront: true, watching: false, told: true),
+        AgentNotice.quiet,
+      );
+      expect(
+        decideQuestionNotice(isNew: true, inFront: false, watching: true, told: true),
+        AgentNotice.quiet,
+        reason: 'watching only counts in front',
+      );
+      expect(
+        decideQuestionNotice(isNew: true, inFront: true, watching: true, told: true),
+        AgentNotice.none,
+      );
+    });
+
+    test('cooling: what would buzz is posted quietly; a chime on the agent watched stays', () {
+      expect(
+        decideQuestionNotice(isNew: true, inFront: true, watching: false, cooling: true),
+        AgentNotice.quiet,
+      );
+      expect(
+        decideQuestionNotice(isNew: true, inFront: false, watching: false, cooling: true),
+        AgentNotice.quiet,
+      );
+      expect(
+        decideQuestionNotice(isNew: true, inFront: true, watching: true, cooling: true),
+        AgentNotice.chime,
+      );
+    });
+
+    test('a repeat is nothing, whatever was told', () {
+      expect(
+        decideQuestionNotice(isNew: false, inFront: false, watching: false, told: true, cooling: true),
+        AgentNotice.none,
+      );
+    });
+
+    test('quiet marks and posts, and never taps', () {
+      expect(AgentNotice.quiet.marks, isTrue);
+      expect(AgentNotice.quiet.alerts, isTrue);
+      expect(AgentNotice.quiet.chimes, isFalse);
+    });
+  });
 }
