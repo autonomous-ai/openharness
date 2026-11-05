@@ -2153,6 +2153,15 @@ describe('needs.access', () => {
     expect(reasonsFor(excluded, 'Studio')).toContain('No Lamp here. Did you mean Desk lamp?')
     const far = await route([other([entry('Fusion 360')])])
     expect(reasonsFor(far.excluded, 'Studio')).toContain('No Lamp here.')
+    // The nearest of several: a letter off beats a longer name holding it.
+    const near = await route([other([entry('Desk lamp'), entry('Lamb'), entry('Lamps and more')])])
+    expect(reasonsFor(near.excluded, 'Studio')).toContain('No Lamp here. Did you mean Lamb?')
+  })
+
+  it('takes the task\'s access beside the Lead\'s, each name once', async () => {
+    const { excluded } = await route([other([entry('Lamp')])], { needs: { access: ['lamp'] }, requires: { access: ['Lamp', 'Fusion 360'] } })
+    expect(reasonsFor(excluded, 'Studio')).toEqual(expect.arrayContaining(['No Fusion 360 here.']))
+    expect(reasonsFor(excluded, 'Studio').some(r => /No lamp here/i.test(r))).toBe(false)
   })
 
   it('never offers a teammate\'s task the owner\'s unshared own-account entry, nor counts it for the Team account', async () => {
@@ -2167,6 +2176,14 @@ describe('needs.access', () => {
     const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp is shared with teammates.')
+  })
+
+  it('names every shared entry the task needs on the Mac', async () => {
+    const { answer } = await route([mac([entry('Lamp', 'own', { teammates: true }), entry('Fusion 360', 'own', { teammates: true })]), team()],
+      { needs: { access: ['Lamp', 'Fusion 360'] } })
+    for (const row of answer.candidates as Array<{ title: string; notes?: string[] }>) {
+      expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp, Fusion 360 are shared with teammates.')
+    }
   })
 
   it('leaves out an entry waiting for its owner to confirm, and a Team-account entry for the owner\'s own project', async () => {
