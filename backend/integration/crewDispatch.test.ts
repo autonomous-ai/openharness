@@ -226,7 +226,7 @@ describe('the crew dispatch pass', () => {
     // Between the pass's read and its write: a person moves the task to tomorrow.
     const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
     vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
-      await s.execute({ type: 'work.queue', conversationId: s.tasks.Api!, notBefore: '2026-11-07' })
+      await s.execute({ type: 'work.queue', conversationId: s.tasks.Api!, notBefore: '2026-11-07', hold: { kind: 'requester' } })
       return undefined
     })
     await s.store.dispatchCrew(s.tab)

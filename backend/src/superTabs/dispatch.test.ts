@@ -160,7 +160,7 @@ describe('what a free crew member gets', () => {
   it('reads not-before as a day in the project\'s time zone, Vietnam\'s without one', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
     const late = Date.parse('2026-11-05T18:00:00Z') // 01:00 on 11-06 in Vietnam
-    s.run({ type: 'work.queue', conversationId: s.tasks.api, notBefore: '2026-11-06' })
+    s.run({ type: 'work.queue', conversationId: s.tasks.api, notBefore: '2026-11-06', hold: { kind: 'requester' } })
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, late).map(p => titleOf(s, p.conversationId))).toEqual(['Api'])
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, late - 2 * 3_600_000).map(p => titleOf(s, p.conversationId))).toEqual(['Store'])
   })
@@ -181,9 +181,9 @@ describe('what a free crew member gets', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
     s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: s.tasks.board, step: 'Review', checks: [] })
     s.run({ type: 'conversation.archive', conversationId: s.tasks.api, archived: true })
-    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-06' })
+    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-06', hold: { kind: 'requester' } })
     expect(s.picks()).toEqual([])
-    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-05' })
+    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-05', hold: { kind: 'requester' } })
     expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
     holding(s, s.ids.Ash!, s.tasks.store, 'done')
     expect(s.picks()).toEqual([])

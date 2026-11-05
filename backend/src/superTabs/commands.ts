@@ -26,6 +26,7 @@ import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRule
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
+import { checkReason, heldReason, missingReason } from './heldReason.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
@@ -281,8 +282,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
-  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional() }).strict()
-    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.'),
+  // A not-before date holds the task, so it carries its reason (heldReason.ts); a date without one is refused when it is applied.
+  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional(),
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.')
+    .refine(c => c.hold === undefined || typeof c.notBefore === 'string', 'A hold reason goes with a not-before date.'),
   // The lane a task is handed out in (dispatch.ts): one of the lane table's, any case; null for the one its paths choose.
   z.object({ type: z.literal('work.lane'), conversationId: id, lane: z.string().trim().min(1).max(80).nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
@@ -408,7 +412,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
     ask: decisionChoices.extend({ personId: id }).strict().optional(),
     // Its session's token totals by model, read by its host as it finishes (Done, Stopped): the attempt's end (costs/attempts.ts).
-    tokens: tokensByModelSchema.optional() }).strict(),
+    tokens: tokensByModelSchema.optional(),
+    // Why it waits, for blocked and needs_human (heldReason.ts); a status without one is refused when it is applied.
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.hold === undefined || c.status === 'blocked' || c.status === 'needs_human', 'A hold reason goes with blocked or needs_human.'),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
   z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
@@ -2438,8 +2445,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
         for (const [groupId, rank] of placeAfter(siblings, task.id, command.after)) conversation(state, groupId).queueRank = rank
       }
-      if (command.notBefore === null) delete task.notBefore
-      else if (command.notBefore !== undefined) task.notBefore = command.notBefore
+      if (command.notBefore === null) { delete task.notBefore; delete task.hold }
+      else if (command.notBefore !== undefined) {
+        if (!command.hold) missingReason()
+        checkReason(state, task, command.hold, context.now)
+        task.notBefore = command.notBefore
+        task.hold = command.hold
+      }
       break
     }
     case 'work.lane': {
@@ -3834,6 +3846,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'Assign a new attempt to continue this work.')
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
+      const holding = command.status === 'blocked' || command.status === 'needs_human'
+      // Staged (review of #3215): a client from before reasons sends none, so blocked and needs_human take it for now and show
+      // "no reason"; a reason that is sent is still checked. The refusal follows once the CLI sends one.
+      if (holding && command.hold) checkReason(state, group, command.hold, context.now)
       let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
@@ -3861,6 +3877,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       pickUp(assignment)
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
+      // Why it waits lasts as long as the wait: the next status clears it.
+      if (holding) assignment.hold = command.hold
+      else delete assignment.hold
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId)
       // Finished work shows the worker recovered from a task it lost before.
