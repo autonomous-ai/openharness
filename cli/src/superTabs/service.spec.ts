@@ -1235,6 +1235,35 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
   })
 
+  // Amon, 11-05 (#3215): his Mac's entry was moved into the Swarm by the server (backend computerMoves.ts), so this daemon kept
+  // no host record and never started its host: the Team account it should add sat "joining" for good, and nothing was sent.
+  it("starts its Swarm host when the server says one of its Swarms changed, though it keeps no host record", async () => {
+    const heard = new Set<(notice: never) => void>()
+    const start = vi.fn()
+    const core = fakeCore({ account: { onNotice: vi.fn(fn => { heard.add(fn as never); return () => { heard.delete(fn as never) } }) } })
+    const service = superTabService(core, { team: () => false, host: () => ({ machineId: 'machine-1', start, stop: vi.fn() }) as unknown as SuperTabHost })
+    service.port.connected()
+    expect(start).not.toHaveBeenCalled()
+    // The server's word that it pushes names no Swarm: it says nothing of this machine's.
+    for (const fn of heard) fn({ type: 'swarm_host_changed' } as never)
+    expect(start).not.toHaveBeenCalled()
+    for (const fn of heard) fn({ type: 'swarm_host_changed', tabId: 'tab', lastChangedAt: 1 } as never)
+    expect(start).toHaveBeenCalledOnce()
+    service.port.disconnected()
+    expect(heard.size).toBe(0)
+  })
+
+  it('Retry on the row starts a Swarm host that never ran, and the status says whether it runs', async () => {
+    const start = vi.fn(), retryTeamJoins = vi.fn()
+    const service = superTabService(fakeCore(), { team: () => false,
+      host: () => ({ machineId: 'machine-1', start, stop: vi.fn(), teamJoinFailure: () => null, retryTeamJoins }) as unknown as SuperTabHost })
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: false })
+    expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, owner)).toEqual({ ok: true })
+    expect(start).toHaveBeenCalledOnce()
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: true })
+  })
+
   // Amon, 11-05 (#3215): his row read "joining" while this host's join of the Team account kept failing, and only the log said
   // why. This Mac's own Desktop reads the reason, and its Retry tries again at once.
   it("tells this Mac's Desktop why its Team account has not joined, and retries at once when asked", async () => {
@@ -1242,9 +1271,9 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const host = { machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), teamJoinFailure: vi.fn(() => 'Refused: OWNER_REQUIRED'), retryTeamJoins }
     const service = superTabService(fakeCore(), { host: () => host as unknown as SuperTabHost })
     // A host that never ran has nothing to say, and is not started by asking.
-    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null })
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: false })
     await service.requests.super_tabs({ action: 'wake' }, owner)
-    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: 'Refused: OWNER_REQUIRED' })
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: 'Refused: OWNER_REQUIRED', hostRunning: true })
     expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, owner)).toEqual({ ok: true })
     expect(retryTeamJoins).toHaveBeenCalledOnce()
     for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
