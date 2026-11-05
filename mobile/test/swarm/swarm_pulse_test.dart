@@ -553,10 +553,7 @@ void main() {
 
     test('when the oldest ask\'s age next reads differently', () {
       // 14 minutes old: 15m in a minute.
-      expect(
-        swarmPulseNextWake(pulse(pulseData(now)), now),
-        now.add(minute),
-      );
+      expect(swarmPulseNextWake(pulse(pulseData(now)), now), now.add(minute));
       final older = pulseData(now)
         ..['asks']['oldestAt'] = now
             .subtract(const Duration(hours: 2, minutes: 10))

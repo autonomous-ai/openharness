@@ -26,6 +26,31 @@ String swarmPulseAge(Duration age) {
   return '${age.inDays}d';
 }
 
+/// When [pulse], drawn at [now], next reads differently: the soonest of a rule
+/// turning red and the oldest ask's age moving on ([swarmPulseAge]); null
+/// while neither will, so the strip keeps no timer (ENGINEERING 4).
+DateTime? swarmPulseNextWake(SuperTabPulse pulse, DateTime now) {
+  final oldest = pulse.asks.count > 0 ? pulse.asks.oldestAt : null;
+  final times = [
+    ?pulse.nextRedAfter(now),
+    if (oldest != null) now.add(_nextAgeStep(now.difference(oldest))),
+  ];
+  if (times.isEmpty) return null;
+  return times.reduce((a, b) => a.isBefore(b) ? a : b);
+}
+
+/// How long until [age], as [swarmPulseAge] writes it, reads differently.
+Duration _nextAgeStep(Duration age) {
+  if (age.isNegative) return -age;
+  final unit = age < const Duration(hours: 1)
+      ? const Duration(minutes: 1)
+      : age < const Duration(days: 1)
+      ? const Duration(hours: 1)
+      : const Duration(days: 1);
+  return unit -
+      Duration(microseconds: age.inMicroseconds % unit.inMicroseconds);
+}
+
 /// The name the pulse calls [pulse]'s PM by: its agent's name, or "the PM".
 String swarmPulsePmName(SuperTabSnapshot snapshot, SuperTabPulse pulse) =>
     switch (pulse.pmId) {
@@ -63,7 +88,8 @@ _Words _askWords(SuperTabSnapshot snapshot, SuperTabPulse pulse, DateTime now) {
 /// ([showSwarmPulseList]). A part is red once the server's `redAt` for its
 /// rule has come — asks; idle, on Working; lost; held — with a mark and bold
 /// beside its colour; the app holds no threshold. It wakes when the next
-/// `redAt` comes, and each minute so its ages stay true.
+/// `redAt` comes and when the oldest ask's age next reads differently, and
+/// never while nothing it shows will change ([swarmPulseNextWake]).
 class SwarmPulseStrip extends StatefulWidget {
   const SwarmPulseStrip({
     super.key,
@@ -78,20 +104,17 @@ class SwarmPulseStrip extends StatefulWidget {
   /// Opens one of the project's chats, by id: a task from a list.
   final ValueChanged<String> onOpen;
 
-  /// How often its ages are worked out again: they count minutes.
-  static const tick = Duration(minutes: 1);
-
   @override
   State<SwarmPulseStrip> createState() => _SwarmPulseStripState();
 }
 
 class _SwarmPulseStripState extends State<SwarmPulseStrip> {
-  late final Timer _tick;
   late final AppLifecycleListener _lifecycle;
 
-  /// Wakes the strip when the next `redAt` comes ([_wake]).
-  Timer? _red;
-  DateTime? _redAt;
+  /// One timer, for the next time the strip reads differently
+  /// ([swarmPulseNextWake]); none while nothing will.
+  Timer? _wake;
+  DateTime? _wakeAt;
 
   void _redraw() {
     if (mounted) setState(() {});
@@ -100,28 +123,25 @@ class _SwarmPulseStripState extends State<SwarmPulseStrip> {
   @override
   void initState() {
     super.initState();
-    _tick = Timer.periodic(SwarmPulseStrip.tick, (_) => _redraw());
     _lifecycle = AppLifecycleListener(onResume: _redraw);
   }
 
   @override
   void dispose() {
-    _tick.cancel();
-    _red?.cancel();
+    _wake?.cancel();
     _lifecycle.dispose();
     super.dispose();
   }
 
-  /// One timer, for the soonest rule still to turn red.
-  void _wake(SuperTabPulse pulse, DateTime now) {
-    final next = pulse.nextRedAfter(now);
-    if (next == _redAt) return;
-    _red?.cancel();
-    _redAt = next;
-    _red = next == null
+  void _arm(SuperTabPulse? pulse, DateTime now) {
+    final next = pulse == null ? null : swarmPulseNextWake(pulse, now);
+    if (next == _wakeAt) return;
+    _wake?.cancel();
+    _wakeAt = next;
+    _wake = next == null
         ? null
         : Timer(next.difference(now), () {
-            _redAt = null;
+            _wakeAt = null;
             _redraw();
           });
   }
@@ -132,12 +152,11 @@ class _SwarmPulseStripState extends State<SwarmPulseStrip> {
     final snapshot = widget.reader.snapshot;
     final pulse = snapshot?.pulseOf(widget.projectId);
     if (snapshot == null || pulse == null) {
-      _red?.cancel();
-      _red = _redAt = null;
+      _arm(null, clock.now());
       return const SizedBox.shrink();
     }
     final now = clock.now();
-    _wake(pulse, now);
+    _arm(pulse, now);
     void open(SwarmPulseList list) => unawaited(
       showSwarmPulseList(
         context,
