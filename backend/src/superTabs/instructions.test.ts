@@ -445,6 +445,35 @@ describe('an instructions save keeps the rules people gave', () => {
       approvals: [approval('p', { kind: 'person', id: 'peer' }), approval('o', { kind: 'person', id: 'owner' })] }).result.revision).toBe(3)
   })
 
+  // River, 11-05: with the instruction-change line leaving the chat (#3101), the History keeps every line a save dropped, with
+  // its kind and who gave it, and the summary only counts them.
+  it('keeps every dropped line with the revision: its kind, sorted by the PM or worked out, and who gave it', () => {
+    const { f, lead } = pm()
+    const stale = 'The v0.5.40 release waits for Tony\'s phone test on 4 Nov.'
+    const dup = 'No releases between 18:00 and 09:00 Vietnam time.'
+    const odd = 'Agents greet each other in the chat.'
+    const before = doc(leo, tony, quiet, stale, dup, odd)
+    const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'],
+      dropped: [{ text: stale, kind: 'expired' }, { text: dup, kind: 'merged' }, { text: 'A bug that reaches stable', kind: 'expired' }] }), as(lead),
+    { ...stored(before), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
+    expect(effects.instructions!.dropped).toEqual([
+      // A person's rule is one whatever the PM called it.
+      { text: leo, kind: 'rule', people: ['peer'] },
+      { text: stale, kind: 'expired', people: [] },
+      { text: dup, kind: 'merged', people: [] },
+      // Not sorted, and its words are not kept elsewhere: said, never hidden.
+      { text: odd, kind: 'unsorted', people: [] },
+    ])
+    // A line the PM did not sort whose words are still there is merged; a save that drops nothing keeps no list.
+    const both = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and its Tester '
+      + 'both (owner, 2026-11-02; owner, 4 Nov).'
+    const merged = f.run(save(2, doc(both, 'No deploys on Sundays or holidays.'), { askedBy: 'owner' }), as(lead),
+      stored(doc(tony, quiet, 'No deploys on Sundays.', 'No deploys on holidays.'), 2))
+    expect(merged.instructions!.dropped).toEqual([{ text: tony, kind: 'merged', people: ['owner'] }, { text: quiet, kind: 'merged', people: ['owner'] },
+      { text: 'No deploys on Sundays.', kind: 'merged', people: [] }, { text: 'No deploys on holidays.', kind: 'merged', people: [] }])
+    expect(f.run(save(3, `${doc(both)}\n- Tests run first.`, { askedBy: 'owner' }), as(lead), stored(doc(both), 3)).instructions!.dropped).toEqual([])
+  })
+
   // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.
   it('marks a pending daily tidy done on the coordinator\'s save', () => {
     const { f, lead } = pm()

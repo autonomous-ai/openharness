@@ -271,7 +271,8 @@ describe('the daily tidy', () => {
     }
     expect(text).toContain('Restore a person\'s rule that is gone, or ask the person who gave it and keep it until they answer')
     expect(text).toContain('never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done')
-    expect(text).toContain('The save\'s summary lists each dropped line, in a few words, and its kind')
+    expect(text).toContain('List every line you drop with its kind in the save\'s dropped list: the History keeps it with the revision')
+    expect(text).toContain('The save\'s summary only counts them (for example "3 merged, 1 expired")')
     expect(text).toContain('After the save, compare it with the previous revision: every person\'s rule, and who gave it, must still be there')
     expect(text).toContain('The Swarm refuses a save that drops one without that person\'s own approval message')
     expect(text).toContain('counts as done only when its save is made')

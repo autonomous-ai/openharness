@@ -149,6 +149,9 @@ describe('a person\'s rules in a save', () => {
     const peerSaid = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Yes, drop my promote-back rule.', replyTo: null, recipientIds: [] }, peer))
       .result.messageId as string
     expect((await asLead([peerSaid])).result.revision).toBe(3)
+    // The History keeps what the save dropped, with its kind and who gave it (River, 11-05).
+    expect((await store.instructionRevision(owner, tab, 'lead', 3)).dropped).toEqual([{ text: rule, kind: 'rule', people: ['peer'] }])
+    expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped).toEqual([])
     const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'as you approved' } } })
     expect(notices.length).toBe(2)
     for (const notice of notices) {
