@@ -1,5 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, isCrewMember, type CrewDeps } from './crewKeep.js'
+import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
+import { finishedWakes } from './crewTimes.js'
+import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -54,7 +56,7 @@ import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } f
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
-import { deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
+import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
 import { SEED_RULES } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
@@ -69,6 +71,7 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
+import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -2159,6 +2162,7 @@ export class SuperTabStore {
       if (command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped')) {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
+      if (effects.closedAssignment) await closeAssignment(tx, tabId, effects.closedAssignment.assignmentId, effects.closedAssignment.outcome, context.now)
       await recordEvidence(tx, tabId, original, effects.state, context.now)
       const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
@@ -4106,10 +4110,12 @@ export class SuperTabStore {
       // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
       // placed only where a start would be admitted now, Team rules included.
       // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
-      const crew = sweep && state.agents.some(isCrewMember)
+      const crew = sweep && state.agents.some(isCrew)
         ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
-        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : []]
+        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
+        // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
+        ...finishedWakes(state, now)]
       // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
       if (sweep && this.hooks.dispatch && projectsOf(state).some(p => !this.pmWaiting(tabId, state, p, now)
         && dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
@@ -5031,6 +5037,35 @@ export class SuperTabStore {
       }
       await this.save(tx, loaded, state, clock.next())
       return true
+    })
+  }
+
+  /** The release list of [projectId] settled with what the worker read from GitHub (releases.ts settleReleases, task #3405), in
+   *  one write: the tasks a verified release carries are marked released, and a due release step opens for the Integrator.
+   *  It loads the project's pending tasks and open steps only, and writes nothing when nothing changed. Null when the Swarm or
+   *  its project's list is gone. */
+  async settleReleases(tabId: string, projectId: string, facts: ReleaseFacts, given?: ReleaseRules): Promise<SettledReleases | null> {
+    const now = this.now()
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return null
+      // The list names the groups to load: the head alone first, then one load with them.
+      const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
+      const ledger = head?.projects?.find(p => p.id === projectId)?.releases
+      if (!ledger) return null
+      const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
+      const loaded = await loadRow(tx, requireParts(row), { groupIds })
+      const state = cloneData(loaded.state)
+      const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
+      // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.
+      const rules = given ?? (await currentRules(tx, tabId, projectId)).rules
+      const outcome = settleReleases(state, projectId, facts, now, rules)
+      if (!outcome.opened && !outcome.shipped.length && !outcome.messages.length
+        && JSON.stringify(projectsOf(state).find(p => p.id === projectId)?.releases) === before) return outcome
+      const sequences = numberMessages(state, outcome.messages, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, outcome.messages, sequences)
+      return outcome
     })
   }
 

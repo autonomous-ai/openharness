@@ -29,7 +29,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
@@ -1284,6 +1284,47 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries).toEqual({})
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  // Task #3514: on 11-06 Mac 3's Team host failed to save its journal as it handed each delivery over (ENOENT on the rename of
+  // its temporary file). The delivery was left marked as being typed though nothing was typed, so the next pass reported it
+  // interrupted (uncertain) and it was never typed: 58 deliveries to idle agents in two hours.
+  it('types a delivery whose hand-over save failed on the next pass, never reporting it interrupted', async () => {
+    const t = setup()
+    let failOnce = true
+    const write = (file: string, journal: { entries: Record<string, { stage: string }> }) => {
+      if (failOnce && Object.values(journal.entries).some(e => e.stage === 'submitting')) {
+        failOnce = false
+        throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${file}.next' -> '${file}'`), { code: 'ENOENT' })
+      }
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify(journal))
+    }
+    const host = t.open({ write: write as never })
+    await host.tick()
+    // Nothing was typed, and the host said why.
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not hand delivery delivery'))
+    t.wait(1_500)
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts).toEqual([])
+    t.event('delivered')
+    await host.tick()
+    expect(t.receipts).toEqual([expect.objectContaining({ uncertain: false, receipt: expect.stringContaining('delivered') })])
+  })
+
+  it('saves its journal through a temporary file of its own, never one another writer is using', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-journal-')); roots.push(dir)
+    const file = join(dir, 'super-tabs', 'host-machine-1.json')
+    mkdirSync(dirname(file), { recursive: true })
+    // Another writer's save in progress: its temporary file at the shared name.
+    writeFileSync(`${file}.next`, 'theirs')
+    writeJournal(file, { version: 1, entries: {} } as never)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, entries: {} })
+    expect(readFileSync(`${file}.next`, 'utf8')).toBe('theirs')
+    // Its own temporary file does not stay behind.
+    expect(readdirSync(dirname(file)).sort()).toEqual(['host-machine-1.json', 'host-machine-1.json.next'])
   })
 
   it('does not type again after a crash between submission and its native acknowledgement', async () => {
