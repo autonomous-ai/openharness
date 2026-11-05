@@ -10,6 +10,7 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
+import { visibleAccess } from './machineAccess.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -298,7 +299,8 @@ export const reviewsWanted = (task: WorkTask | undefined): number => task?.revie
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
-export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+/** `access`: what the work needs to reach, by the names machines list it under (machineAccess.ts, task #3047). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; access?: string[]; unseenMachines?: number }
 
 /** The machines a reader sees: listed in their visible state, or running an agent they see. */
 export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>
@@ -913,6 +915,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
   if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
   else delete visible.removedMachines
+  // What a machine can reach: its notes and checks only to those section 4 of the design names (machineAccess.ts).
+  for (const pool of visible.machines ?? []) {
+    const access = visibleAccess(state, pool, actor)
+    if (access) pool.access = access
+  }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private

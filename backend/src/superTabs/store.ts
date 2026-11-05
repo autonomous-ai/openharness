@@ -3,6 +3,7 @@ import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
+import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -713,7 +714,7 @@ export class SuperTabStore {
     }
     switch (command.type) {
       case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': case 'machine.projects':
-      case 'machine.ownAccountWork': return refuse()
+      case 'machine.ownAccountWork': case 'machine.access': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -1674,7 +1675,8 @@ export class SuperTabStore {
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork') && command.askedIn) {
+        || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
+        || command.type === 'machine.access') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -3532,6 +3534,8 @@ export class SuperTabStore {
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
       expireRemovals(state, now)
+      // So does an unconfirmed access entry nobody confirmed in a week: the reading writes this machine's part anyway.
+      expireAccess(state, now)
       const stamp = clock.next(), removedIds: string[] = []
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
       // when a task there is lost.
