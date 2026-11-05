@@ -59,7 +59,7 @@ const ENTRIES: readonly SheetEntry[] = [
   T('- `mine`', '`mine`: your tasks, P0 first (the PM sees every open task); run it before acting after a pause.'),
   T('- `task GROUP`', '`task GROUP`: one task whole: brief, checks, assignee, attempts, pull requests.'),
   T('- `messages GROUP', '`messages GROUP [--thread ROOT]`: recent messages of a conversation; a thread whole.'),
-  T('- `message GROUP', '`message GROUP ID`: one exact message.', 'core', 'pg'),
+  T('- `message GROUP', '`message GROUP ID`: one exact message.', 'core', 'peg'),
   T('- `instructions [PROJECT]`', '`instructions [PROJECT]`: your project\'s instructions and notes; read them at start and when told they changed.'),
   T('- `decisions', '`decisions [--answered]`: decisions asked of people.', 'pm', 'p'),
   T('- `costs', '`costs [--days N]`: what routed attempts cost.', 'pm', 'p'),
