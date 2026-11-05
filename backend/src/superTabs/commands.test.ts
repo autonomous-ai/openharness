@@ -6226,3 +6226,124 @@ describe('a start for a project with no repository', () => {
     expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ worktree: true })
   })
 })
+
+describe('a held task carries one of four reasons (HOLD_REASON_MISSING)', () => {
+  const REASONS = {
+    task: (taskNumber: number) => ({ kind: 'task' as const, taskNumber }),
+    person: { kind: 'person' as const, personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' },
+    reset: { kind: 'reset' as const, what: 'quota' as const, at: '2026-11-06T09:00:00.000Z' },
+    requester: { kind: 'requester' as const },
+  }
+  const missing = expect.objectContaining({ code: 'HOLD_REASON_MISSING', status: 400,
+    message: expect.stringMatching(/waits on task #N.*person already asked.*reset.*requester asked for later/s) })
+
+  function queued() {
+    const f = routed()
+    const open = (title: string) => f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: [], requesterId: 'owner' }).result.conversationId as string
+    const [a, b] = [open('Drafts'), open('Sync')] as [string, string]
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    const hold = (conversationId: string, fields: Record<string, unknown>) =>
+      f.run(commandSchema.parse({ type: 'work.queue', conversationId, notBefore: '2026-12-04', ...fields }), f.leadActor)
+    return { f, a, b, task, hold }
+  }
+
+  /** A task whose worker holds an assignment, as an agent reports it. */
+  function working() {
+    const f = routed()
+    const group = f.group()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string
+    const task = () => f.state.conversations.find(g => g.id === group)!
+    task().requesterId = 'owner'
+    const status = (fields: Record<string, unknown>) => f.run(commandSchema.parse({ type: 'work.status', conversationId: group, assignmentId, result: 'Waiting.', ...fields }), f.workerActor)
+    return { f, group, task, status }
+  }
+
+  it('accepts each of the four reasons on a not-before hold, and shows it', () => {
+    const { f, a, b, task, hold } = queued()
+    for (const [name, reason] of Object.entries({ ...REASONS, task: REASONS.task(task(b).number!) })) {
+      hold(a, { hold: reason })
+      expect(task(a).hold, name).toEqual(reason)
+      expect(groupView(task(a), new Set()).held, name).toEqual(reason)
+    }
+  })
+
+  it('refuses a not-before hold with no reason, and names the four kinds', () => {
+    const { f, a, task, hold } = queued()
+    const before = structuredClone(f.state)
+    expect(() => hold(a, {})).toThrow(missing)
+    expect(f.state).toEqual(before)
+    expect(task(a).notBefore).toBeUndefined()
+  })
+
+  it('refuses a reason that is not true: another task that is not there, itself, a stranger, a requester nobody has', () => {
+    const { f, a, task, hold, b } = queued()
+    delete task(b).requesterId
+    const before = structuredClone(f.state)
+    expect(() => hold(a, { hold: REASONS.task(9999) })).toThrow(missing)
+    expect(() => hold(a, { hold: REASONS.task(task(a).number!) })).toThrow(missing)
+    expect(() => hold(a, { hold: { ...REASONS.person, personId: 'nobody' } })).toThrow(missing)
+    expect(() => hold(b, { hold: REASONS.requester })).toThrow(missing)
+    expect(f.state).toEqual(before)
+  })
+
+  it('takes the reason away with the date, and a place alone needs none', () => {
+    const { f, a, b, task, hold } = queued()
+    hold(a, { hold: REASONS.requester })
+    f.run(commandSchema.parse({ type: 'work.queue', conversationId: a, notBefore: null }), f.leadActor)
+    expect(task(a)).not.toHaveProperty('hold')
+    expect(task(a)).not.toHaveProperty('notBefore')
+    f.run(commandSchema.parse({ type: 'work.queue', conversationId: b, after: a }), f.leadActor)
+    expect(task(b).queueRank).toBeDefined()
+  })
+
+  it('refuses a reason sent without a date, or with a kind that is not one of the four', () => {
+    const parse = (fields: Record<string, unknown>) => commandSchema.safeParse({ type: 'work.queue', conversationId: 'task', ...fields }).success
+    expect(parse({ after: null, hold: REASONS.requester })).toBe(false)
+    expect(parse({ notBefore: '2026-12-04', hold: { kind: 'later' } })).toBe(false)
+    expect(parse({ notBefore: '2026-12-04', hold: { kind: 'person', personId: 'owner' } })).toBe(false)
+    expect(parse({ notBefore: '2026-12-04', hold: REASONS.reset })).toBe(true)
+  })
+
+  it('accepts each of the four reasons on blocked and on needs_human, and shows it', () => {
+    const { f, group, task, status } = working()
+    const other = f.group()
+    const reasons = { ...REASONS, task: REASONS.task(f.state.conversations.find(g => g.id === other)!.number!) }
+    for (const held of ['blocked', 'needs_human'] as const) {
+      for (const [name, reason] of Object.entries(reasons)) {
+        status({ status: held, hold: reason })
+        expect(task().assignment!.hold, `${held} ${name}`).toEqual(reason)
+        expect(groupView(task(), new Set()).held, `${held} ${name}`).toEqual(reason)
+      }
+    }
+    expect(group).toBeDefined()
+  })
+
+  it('refuses blocked and needs_human with no reason, and names the four kinds', () => {
+    const { f, task, status } = working()
+    const before = structuredClone(f.state)
+    for (const held of ['blocked', 'needs_human'] as const) expect(() => status({ status: held }), held).toThrow(missing)
+    expect(() => status({ status: 'needs_human', hold: REASONS.task(9999) })).toThrow(missing)
+    expect(f.state).toEqual(before)
+    expect(task().assignment!.status).toBe('working')
+  })
+
+  it('clears the reason with the next status, and takes none on any other status', () => {
+    const { task, status } = working()
+    status({ status: 'blocked', hold: REASONS.reset })
+    status({ status: 'working', result: null })
+    expect(task().assignment).not.toHaveProperty('hold')
+    expect(groupView(task(), new Set())).not.toHaveProperty('held')
+    expect(commandSchema.safeParse({ type: 'work.status', conversationId: 'g', assignmentId: 'a', status: 'working', result: null, hold: REASONS.reset }).success).toBe(false)
+  })
+
+  it('shows a hold from before reasons as no reason, and a task that is not held as nothing', () => {
+    const { f, a, b, task } = queued()
+    task(a).notBefore = '2026-12-04'
+    expect(groupView(task(a), new Set()).held).toEqual({ kind: 'none' })
+    expect(groupView(task(b), new Set())).not.toHaveProperty('held')
+    const { task: blocked, f: g } = working()
+    blocked().assignment!.status = 'blocked'
+    expect(groupView(blocked(), new Set()).held).toEqual({ kind: 'none' })
+    expect(f.state).toBeDefined(); expect(g.state).toBeDefined()
+  })
+})
