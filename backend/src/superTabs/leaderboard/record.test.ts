@@ -78,8 +78,9 @@ describe('who asked for a group', () => {
   it('tells a Lead that opens a build group for nobody to name who asked; never for a named requester, a person or a review', () => {
     const f = fixture(), lead = f.add('lead', 'lead', true)
     f.invitePeer()
+    // Each gives a priority, so the only warning left is who asked (a task without one is told it is P2: task #3117).
     const open = (actor: Actor, extra: Record<string, unknown> = {}) =>
-      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...extra }), actor).result
     const unnamed = open(f.asAgent(lead))
     expect(unnamed).toMatchObject({ requesterUnknown: true, warnings: [expect.stringContaining('Name the person who asked')] })
     for (const result of [open(f.asAgent(lead), { requesterId: 'peer' }), open(owner),
