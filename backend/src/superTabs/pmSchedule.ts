@@ -25,9 +25,24 @@ message names it. This section is not part of the project's document: never save
   person gets that person asked by name, with a default and a time. Ask no agent whether it is stalled: \`mine\` and the
   task's thread show it. Then archive every finished group the Swarm left open: one with no pull request linked, which the
   auto-archive never takes.
+- Every 30 minutes, when a person wrote to you since the last wake: read only what people sent you since then, and save
+  each correction or lasting rule the instructions don't have yet. Don't reread the whole instructions for it.
+- Once a day, when the instructions changed: reread them once and, in one save, merge duplicate lines and drop stale ones,
+  so they get shorter. Keep every rule a person gave and who gave it.
 - When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
   stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
-  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.`
+  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.
+
+What people teach you:
+
+- When a person corrects you or gives a lasting rule ("from now on", "always", "don't", "I told you", "again you forgot",
+  "remember"), save it into the instructions in that same turn, before you answer, naming who said it. Don't ask whether to
+  save it. Then answer, and work by it from then on.
+- Save each rule once, where it belongs, in as few words as it takes. When a save takes the instructions past 150 lines,
+  merge duplicate lines and drop stale ones in that same save.
+- A person telling you again something they already taught you is a repeat: fix what you did against it, and save it only
+  if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
+  digest when the project has no reflection.`
 
 /** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
 export const SCHEDULE_SLOT_MS = 30 * 60_000

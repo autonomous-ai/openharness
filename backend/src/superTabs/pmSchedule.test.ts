@@ -100,7 +100,7 @@ describe('the built-in PM schedule', () => {
 
   // Task #3022 (Ken, 11-05): lamp's PM was taught the same rule three times and forgot it again within the hour.
   it('tells the coordinator to save what a person teaches it in the same turn, naming who said it, without asking', () => {
-    const taught = PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf('What people teach you'))
+    const taught = PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf('What people teach you')).replace(/\s+/g, ' ')
     expect(PM_SCHEDULE_TEXT).toContain('What people teach you')
     for (const words of ['from now on', 'always', 'don\'t', 'I told you', 'again you forgot', 'remember']) expect(taught).toContain(`"${words}"`)
     expect(taught).toContain('save it into the instructions in that same turn, before you answer')
