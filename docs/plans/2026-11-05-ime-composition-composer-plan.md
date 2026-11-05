@@ -9,8 +9,9 @@ never replaces the chat box's value, so the input method and the box keep agreei
 **Architecture:** One small helper in `composer_tags.dart`, `SuperTabComposerWrites`, wraps a box's
 `TextEditingController`. A programmatic write goes through it: with no composing range it applies at once, as today;
 while a range is active it waits and runs once composing ends, recomputed from the box's text then and keeping the
-caret (clamped). The main view's draft sync and its zip-path removal use it; so do the thread box's clear after a sent
-reply and its restore after a refused one. Switching to another conversation or thread still replaces the box at once.
+caret (clamped). The main view's draft sync and its zip-path removal use it. The thread box has no draft sync and
+none of its writes can land mid-composition (Task 2), so it is only tested. Switching to another conversation or
+thread still replaces the box at once.
 
 **Tech Stack:** Flutter (pinned 3.47.2), widget tests with `tester.testTextInput.updateEditingValue` on macOS.
 
@@ -48,10 +49,13 @@ overwritten moves to the end of a composition.
 
 ## Task 2: The thread box keeps a composition the same way
 
-**Files:** the same test file, `desktop/lib/super_tabs/thread_panel.dart`.
+**Files:** the same test file.
 
 - [ ] Test: the same compositions in the thread reply box with controller updates mid-composition.
-- [ ] Code: route the clear after a sent reply and the restore after a refused one through `SuperTabComposerWrites`.
+- [ ] Finding: it passes on main and needs no code. The thread box has no draft sync; its programmatic writes are a
+      thread switch (a deliberate replace), the clear after a sent reply (Enter does not send while composing, and a
+      click on Send takes focus, which ends composing in `EditableText`) and the restore after a refused reply (only
+      into an empty box). The test stays as the regression guard.
 
 ## Task 3: Unchanged behaviour
 
