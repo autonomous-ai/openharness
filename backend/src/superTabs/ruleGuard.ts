@@ -69,23 +69,19 @@ function identifier(state: SuperTabState): (name: string) => string {
   return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
 }
 
-/** Letters and digits only, lower case, spaced as one line: a cheap first look that a capital, emphasis or a wrapped line does
- *  not defeat (review 2 of #3273). */
-const plain = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-
 /**
  * The project's code tasks a save from [before] to [after] would move a person's rule into, as the guard itself reads a move
  * (droppedRules): each task alone, counted open, that holds a rule the save drops, across wrapped lines or as one rule of a
- * line of several. The store reads their pull requests' merges before the save (store.ts pullRequestMergesFor, #3463). A first
- * look keeps only tasks whose brief has a dropped rule's opening words, so a big project runs the matcher on few.
+ * line of several, with the guard's own words (filler words, word endings: review 2 of #3273). The store reads their pull
+ * requests' merges before the save (store.ts pullRequestMergesFor, #3463). It runs only for a save that drops a person's rule,
+ * once per code task: a few dozen in a project.
  */
 export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, before: string, after: string): Conversation[] {
   const identify = identifier(state)
   const lost = droppedRules(before, after, identify)
   if (!lost.length) return []
-  const openings = lost.map(rule => plain(rule.text).split(' ').slice(0, 4).join(' '))
-  return codeTasks(state, project).filter(task => openings.some(words => plain(task.brief).includes(words))
-    && droppedRules(before, after, identify, [{ text: task.brief, people: [], where: task.id, open: true }]).some(rule => rule.movedTo === task.id))
+  return codeTasks(state, project).filter(task =>
+    droppedRules(before, after, identify, [{ text: task.brief, people: [], where: task.id, open: true }]).some(rule => rule.movedTo === task.id))
 }
 
 /**
