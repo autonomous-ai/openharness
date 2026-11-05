@@ -31,14 +31,18 @@ typedef SwarmNoticeTarget = ({
   String? threadId,
 });
 
-/// One notice about what a Swarm asks of the person. [key] names it, so the
-/// same need posted twice replaces itself; [subtitle] says where it is.
+/// One notice about what a Swarm asks of the person. [key] names the
+/// notification it shows in, so the same need posted twice replaces itself,
+/// and so does the server's push for it (task #3248: a thread's replies share
+/// one); [subtitle] says where it is. [quiet] replaces what that notification
+/// showed with no sound, no vibration and no banner.
 typedef SwarmNoticeMessage = ({
   String key,
   String title,
   String subtitle,
   String body,
   SwarmNoticeTarget target,
+  bool quiet,
 });
 
 /// The notification centre's Swarm notices: decisions asked of the person,
@@ -153,11 +157,20 @@ const _swarmPayload = 'swarm:';
 /// The Android channel, iOS thread and iOS category of Swarm notices.
 const _swarmChannel = 'swarm-needs-you';
 
-/// The Swarm channel as Settings ▸ Notifications names it on Android: one source for the channel
-/// made at start ([LocalSystemNotices]) and the notices posted on it.
+/// The Android channel of a quiet push (task #3248; backend `push/sender.ts` SWARM_QUIET_CHANNEL): on
+/// Android the channel, not the push, decides whether it sounds, so this one never does.
+const _swarmQuietChannel = 'swarm-quiet';
+
+/// How Android names the Swarm channel, here and when a notice makes it.
 const _swarmChannelName = 'Swarm needs you';
 const _swarmChannelDescription =
     'A Swarm asks you to decide, tags you, or has work waiting on you.';
+
+/// Android draws an FCM push under its tag with this id (the server tags it with the notice's key), so a
+/// Swarm notice posted under the same tag and id replaces the push, and the other way round.
+const _androidPushId = 0;
+
+bool get _android => defaultTargetPlatform == TargetPlatform.android;
 
 /// `harness/app_badge` — the app icon's count (Swift: `AppBadgeChannel` in `ios/Runner/AppDelegate.swift`).
 const _appBadge = MethodChannel('harness/app_badge');
@@ -185,6 +198,41 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   /// Told when the person has just allowed notices ([requestPermission]): the moment pushes can
   /// start reaching them (`notify/push_tokens.dart`).
   void Function()? onAllowed;
+
+  /// Android: makes the channels pushes are drawn on, before one can arrive (task #3248). Without
+  /// them a push that came before the app's first Swarm notice landed on FCM's default channel, and
+  /// a quiet one would sound. Needs no start of the centre; nothing on iOS, whose pushes have no
+  /// channel.
+  Future<void> preparePush() async {
+    if (!_android) return;
+    try {
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _swarmChannel,
+          _swarmChannelName,
+          description: _swarmChannelDescription,
+          importance: Importance.high,
+        ),
+      );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _swarmQuietChannel,
+          'Swarm, quiet updates',
+          description:
+              'A newer reply in a thread you have not read yet: it replaces the notice already there.',
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
+        ),
+      );
+    } catch (error) {
+      appLog.warn('notify', 'push channels not made', error: error);
+    }
+  }
 
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
@@ -236,39 +284,11 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
       ),
       onDidReceiveNotificationResponse: (response) => _open(response.payload),
     );
-    await _makeSwarmChannel();
     // A notice tapped while the app was not running at all launches it; the
     // tap reaches no callback then, only this.
     final launch = await _plugin.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp ?? false) {
       _open(launch?.notificationResponse?.payload);
-    }
-  }
-
-  /// Android: the Swarm channel, made before a push can reach this phone. The server's push
-  /// (`backend/src/push/fcm.ts`) is a notification Android draws itself on this channel while the
-  /// app is away. A channel the app has not made yet sends it to FCM's own "Misc" channel instead:
-  /// no heads-up, and out of reach of this channel's switch in Settings. The phone registers for
-  /// pushes only after asking whether notices are allowed ([enabled]), which starts this first.
-  ///
-  /// Made at every start: Android keeps the person's own settings for a channel that exists. One
-  /// that cannot be made is logged, and every other notice still works.
-  Future<void> _makeSwarmChannel() async {
-    try {
-      await _plugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
-          ?.createNotificationChannel(
-            const AndroidNotificationChannel(
-              _swarmChannel,
-              _swarmChannelName,
-              description: _swarmChannelDescription,
-              importance: Importance.high,
-            ),
-          );
-    } catch (error) {
-      appLog.warn('notify', 'swarm channel not made', error: error);
     }
   }
 
@@ -397,12 +417,21 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
     }
   }
 
+  /// Where a Swarm notice is in the notification centre: the notification the server's push for the
+  /// same thing uses (task #3248). Android: its key as the tag, with FCM's id. iOS: [swarmNoticeIdFor],
+  /// which the push carries in decimal as its `apns-collapse-id`.
+  ({int id, String? tag}) _swarmPlace(String key) => _android
+      ? (id: _androidPushId, tag: key)
+      : (id: swarmNoticeIdFor(key), tag: null);
+
   @override
   Future<void> showSwarm(SwarmNoticeMessage message) async {
+    final place = _swarmPlace(message.key);
+    final quiet = message.quiet;
     try {
       await _init();
       await _plugin.show(
-        id: swarmNoticeIdFor(message.key),
+        id: place.id,
         title: message.title,
         body: message.body,
         payload: encodeSwarmPayload(message.target),
@@ -416,11 +445,18 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
             subText: message.subtitle,
             // Hidden on a secure lock screen set to hide private content.
             visibility: NotificationVisibility.private,
+            tag: place.tag,
+            // A quiet one replaces what its notification showed, without a sound, a vibration or a
+            // heads-up, as a quiet agent notice does.
+            silent: quiet,
           ),
           iOS: DarwinNotificationDetails(
             subtitle: message.subtitle,
             threadIdentifier: _swarmChannel,
             categoryIdentifier: _swarmChannel,
+            presentSound: quiet ? false : null,
+            presentBanner: quiet ? false : null,
+            interruptionLevel: quiet ? InterruptionLevel.passive : null,
           ),
         ),
       );
@@ -429,11 +465,13 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
     }
   }
 
+  /// Also takes down the push shown in the same notification.
   @override
   Future<void> cancelSwarm(String key) async {
+    final place = _swarmPlace(key);
     try {
       await _init();
-      await _plugin.cancel(id: swarmNoticeIdFor(key));
+      await _plugin.cancel(id: place.id, tag: place.tag);
     } catch (error) {
       appLog.warn('notify', 'swarm cancel failed', error: error);
     }

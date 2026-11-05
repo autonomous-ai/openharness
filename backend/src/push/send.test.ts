@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn() }))
+const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn(), repeats: vi.fn() }))
 vi.mock('./devices.js', () => ({ devicesOf: m.devicesOf, forgetPushDevice: m.forget, markSandbox: m.sandbox }))
+vi.mock('./repeats.js', () => ({ quietRepeats: m.repeats }))
 vi.mock('../lib/metrics.js', () => ({ metrics: { phonePush: m.count } }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn: m.warn, info: m.info, error: m.warn } }))
 import { sendPhoneNotices } from './send.js'
@@ -9,7 +10,7 @@ import type { PhoneNotice, Sender, SendResult } from './sender.js'
 
 const db = { fixture: 'db' } as never
 const notice = (personId: string, key = `reply:tab:${personId}`): PhoneNotice =>
-  ({ personId, key, title: 'Mia replied in a thread', subtitle: 'openharness', body: 'Open Harness to read it.', link: 'swarm:tab/c' })
+  ({ personId, key, title: 'Mia replied in a thread', subtitle: 'openharness', body: 'Open Harness to read it.', link: 'swarm:tab/c', slot: key })
 const phone = (id: string, userId: string, platform: 'ios' | 'android' = 'ios'): PushDevice => ({ id, userId, platform, token: `secret-token-${id}`, sandbox: false })
 const answering = (results: Record<string, SendResult>) => {
   const sent: Array<[string, string]> = []
@@ -18,7 +19,29 @@ const answering = (results: Record<string, SendResult>) => {
 }
 
 describe('sendPhoneNotices (task #2905)', () => {
-  beforeEach(() => vi.resetAllMocks())
+  beforeEach(() => {
+    vi.resetAllMocks()
+    m.repeats.mockImplementation(async (_db: unknown, notices: PhoneNotice[]) => notices)
+  })
+
+  it('sends each notice as its thread\'s repeats make it: quiet where the person has an unread reply there (task #3248)', async () => {
+    m.devicesOf.mockResolvedValue([phone('a1', 'a')])
+    m.repeats.mockImplementation(async (_db: unknown, notices: PhoneNotice[]) => notices.map(n => ({ ...n, quiet: true })))
+    const seen: PhoneNotice[] = []
+    const sender: Sender = { send: async (_device, n) => { seen.push(n); return { outcome: 'sent' } } }
+    await sendPhoneNotices(db, { ios: sender, android: null }, [notice('a')])
+    expect(m.repeats).toHaveBeenCalledWith(db, [notice('a')])
+    expect(seen).toEqual([{ ...notice('a'), quiet: true }])
+  })
+
+  it('still sends, with sound, when the repeats cannot be read, and says so (task #3248)', async () => {
+    m.devicesOf.mockResolvedValue([phone('a1', 'a')])
+    m.repeats.mockRejectedValue(new Error('primary stepped down'))
+    const ios = answering({})
+    await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
+    expect(ios.sent).toEqual([['a1', 'reply:tab:a']])
+    expect(m.warn).toHaveBeenCalledWith('phone push repeats not read', expect.objectContaining({ error: 'primary stepped down' }))
+  })
 
   it('reads the told people\'s phones once and sends each notice to each of its person\'s phones', async () => {
     m.devicesOf.mockResolvedValue([phone('a1', 'a'), phone('a2', 'a', 'android'), phone('b1', 'b')])

@@ -336,6 +336,20 @@ void main() {
     });
   });
 
+  test('a finished turn sounds once until the person goes to the agent; '
+      'the next only replaces it quietly (task #3248)', () {
+    front = false;
+    const other = (ref: (machineId: 'm', agentId: 'b'), name: 'Docs', machine: 'MacBook');
+    announcer.turnEnded(agent, news, watching: () => false);
+    announcer.turnEnded(agent, news, watching: () => false);
+    announcer.turnEnded(other, news, watching: () => false);
+    expect([for (final n in system.shown) (n.agent.agentId, n.quiet)], [('a', false), ('a', true), ('b', false)]);
+
+    announcer.seen(ref);
+    announcer.turnEnded(agent, news, watching: () => false);
+    expect(system.shown.last.quiet, isFalse, reason: 'seen: the next is news again');
+  });
+
   test('an agent is one mark however many turns it finished', () {
     announcer.turnEnded(agent, news, watching: () => false);
     announcer.turnEnded(agent, news, watching: () => false);
