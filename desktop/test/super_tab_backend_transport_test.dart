@@ -337,6 +337,8 @@ void main() {
       ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
       ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
       ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
+      // The project's rules record, read only in Project settings (#3393).
+      ('GET', '/api/super-tabs/tab1/projects/p1/rules'),
       ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),

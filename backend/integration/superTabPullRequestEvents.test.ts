@@ -112,6 +112,33 @@ describe('pull request events', () => {
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker, messageId: { in: rows.map(r => r.id) } } })).toBe(4)
   })
 
+  // Task #3399: a handed task (its PR ready for review, its Engineer free) comes back to its Engineer on red CI or a conflict.
+  it('CI failing or a conflict on a handed task brings it back to its Engineer, in the same attempt, in the message that tells it', async () => {
+    for (const red of [true, false]) {
+      const f = await swarm()
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review', result: `Ready for review: ${f.PR} at abc1234` }, host, f.worker)
+      f.pulls.set(f.PR, red ? f.pull({ checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: f.clock.now + 10_000 }] }) : f.pull({ mergeable: false }))
+      expect(await f.pass()).toBe(1)
+      const work = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!.assignment!
+      expect(work).toMatchObject({ id: f.assignment, agentId: f.worker, status: 'working' })
+      const [told] = await f.told()
+      expect(told!.text).toMatch(red ? /^CI failed on your pull request .* Your task is back with you/ : /merge conflict.* Your task is back with you/)
+      expect(told!.recipientIds).toEqual([f.worker])
+    }
+  })
+
+  it('CI passing on a handed task leaves it with its Reviewers', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull())
+    await f.pass()
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review', result: `Ready for review: ${f.PR} at abc1234` }, host, f.worker)
+    f.pulls.set(f.PR, f.pull({ checkRuns: [{ name: 'build', status: 'completed', conclusion: 'success', completedAt: f.clock.now + 10_000 }], checkSuites: [{ status: 'completed', runs: 1 }] }))
+    expect(await f.pass()).toBe(1)
+    expect((await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!.assignment!.status).toBe('review')
+  })
+
   it('a second pass and a retried write post nothing', async () => {
     const f = await swarm()
     f.pulls.set(f.PR, f.pull())

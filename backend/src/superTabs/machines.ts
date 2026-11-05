@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
-import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
 import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
@@ -735,7 +735,9 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
     blockedBy: led ? canReadProject(state, actor, led)
       ? { projectId: led.id, projectName: led.name } : { reason: "A Product Manager of a project you can't see runs on this machine." } : null,
     agents: visibleAgents.map(a => {
-      const task = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
+      // The task in its hands first, then one it handed over (#3399).
+      const task = state.conversations.find(c => occupiesAgent(c) && c.assignment!.agentId === a.id)
+        ?? state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
       return { id: a.id, name: a.displayName ?? a.name, projectName: projectsOf(state).find(p => p.id === agentProjectId(state, a))?.name ?? '',
         ...(task ? { task: task.title } : {}) }
     }),
