@@ -31,17 +31,23 @@ and re-derives the checks of the task and its steps. liveness.ts drops its text 
 
 ## Design
 
-- growth: `pullRequestHeads` holds one entry per linked pull request (links are already bounded); verdicts as before.
+- growth: `pullRequestHeads` keeps the heads of pull requests the task still links, at most 50, the most recently read
+  (`keepHead`); a verdict on one dropped is unverified, never valid. `stepIds` is capped at 50 (production: at most 14
+  steps on a task, 1.6 on average, 2026-11-05). Verdicts as before.
 - concurrency: written in the same group transaction as the watch's keys (store.ts pullRequestSeen) and `work.check`.
-- read cost: the files read happens once per new head, not per pass; the steps read only then too.
-- scale: 10x pushes means 10x file reads; the pass's log line (`pulls`, `unreadable`) warns first.
-- compatibility: old clients ignore the new fields; Desktop without this change still reads `passedBy`.
-- migration + rollback: none; absent fields read as "counts". Rolling back leaves extra fields nobody reads.
-- audience: the head and patch id come from the server's GitHub App read, never from a client; a checker only states
-  the head it read.
+- read cost: the files are read once per new head (1 to 30 GitHub calls, plus one PR read to pin the head), and again
+  only for a head whose patch could not be read, every 15 minutes. Steps are loaded by key from `stepIds` on a head
+  change only. A second watch read takes done, unarchived tasks (cap 50) by the same index, `workFinished: true`.
+- scale: production on 2026-11-05 had 51 open tasks with 552 links (one task with 369) and 15 done, unarchived tasks
+  with 18 links. 10x pushes means 10x files reads; the pass's warn line (`unreadable`, `unpatched`) shows it first.
+- compatibility: old clients ignore the new fields. An agent's `work.check` without `head` is recorded and counts at no
+  watched head; its result says `counts: false` and what to send. A person's still gets the head watched last.
+- migration + rollback: none. A verdict from before heads counts until its task's pull request is first watched, then
+  needs a new check (rollout note). Rolling back leaves extra fields nobody reads.
+- audience: the head and patch id come from the server's GitHub App read; a checker states only the head it read, whole.
 - identity: N/A because nothing here acts as a person.
-- failure: an unreadable patch is stored as `null` and only an exact head counts; the pass logs unreadable pulls.
-- platforms: backend only, plus one Desktop text line that looks the same on every platform.
+- failure: an unreadable patch is stored as null, so only the exact head counts; the pass logs it and reads it again.
+- platforms: backend, plus one Desktop text line that looks the same on every platform.
 
 ## Review Focus
 
