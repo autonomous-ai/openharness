@@ -247,7 +247,7 @@ describe('built-in Swarm skills', () => {
   it('has every role acknowledge with reactions and post only substance, the Lead adding 🚀 at a merge', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
-      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
+      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}${role === 'lead' ? impact : ''}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
       expect(text.split('## Reactions\n'), `${mode} ${role}`).toHaveLength(2)
       expect(text.split(rocket), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(took), `${mode} ${role}`).toHaveLength(role === 'dev' ? 2 : 1)
@@ -414,7 +414,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}\n${impact.trimEnd()}\n${requestsLast}`)).toBe(true)
   })
   it('gives each Lead skill an impact section right before its requests section, and no other role', () => {
     for (const mode of ['orchestration', 'default'] as const) {
