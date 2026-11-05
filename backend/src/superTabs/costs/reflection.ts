@@ -1,23 +1,13 @@
-/**
- * The nightly routing reflection (Scholes's roadmap, piece 2, 2026-10-30): what one project's routed work cost and how it went
- * in the last day and the last 7 days, the waste, and at most three routing changes for its owner to approve, each with its
- * expected saving. Pure: lib/routingReflection.ts reads the attempts (costs/read.ts costRows), failed starts and evidence, and
- * posts the text. Counts only: engines, models, efforts and kinds of work, never a task's title, a message or an id.
- * Nothing here changes routing: a proposal is advice asked of the owner, with one fixed Routing line (routingLine). A Yes has
- * the coordinator write that line into the project's instructions; the reflection reads them, and a proposal whose line is
- * there is reported with how the last 7 days ran, never asked again (project instructions, phase 4, decision 21). A line
- * approved lately that is not there yet is listed as approved and not in the instructions yet (final review).
- */
+/** Nightly routing proposals for owner Decisions, never a project-chat report. Counts only: engines, models, efforts and
+ * kinds of work, never task titles, messages or IDs. A Yes has the coordinator write the fixed routingLine into the
+ * instructions; proposals whose lines are already there or whose owners answered lately are not asked again. */
 import { stableId, type Conversation } from '../model.js'
-import type { ModelKindEvidence } from '../evidence/store.js'
 import { attemptCost } from './cost.js'
-import { MAX_ROWS, summarizeCosts, type CostRow, type CostSummaryRow } from './read.js'
+import { summarizeCosts, type CostRow, type CostSummaryRow } from './read.js'
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE
 /** At most this many proposals a night (brief). */
 export const MAX_PROPOSALS = 3
-/** Rows of the per-model table the report lists; the rest are counted. */
-const MAX_LINES = 12
 /** A cheaper model is proposed only with this much evidence on each side: fewer first reviews or shipped changes say too
  *  little (review of #2276: 3 and 2 gave confident proposals from a handful of tasks). */
 const MIN_FIRST_REVIEWS = 5
@@ -50,18 +40,11 @@ export interface ReflectionInput {
   groups: Conversation[]
   /** The project's failed starts in the last 7 days. */
   failedStarts: FailedStart[]
-  /** The project's evidence since the week holding 7 days ago: rework rounds and fixes after merge. */
-  evidence: ModelKindEvidence[]
-  /** More attempts than one read takes: only the newest were read. */
-  truncated: boolean
   /** Titles of proposals the owner answered in the last REASK_DAYS days: not proposed again until then. */
   decided?: readonly string[]
   /** The project's instructions as they read now (the built-in template for a project without a document yet): a proposal
-   *  whose routing line (routingLine) is in them is reported, not proposed. */
+   *  whose routing line (routingLine) is in them is not proposed. */
   document: string
-  /** The routing lines of proposals the owner said Yes to in the last REASK_DAYS days (approvedLine), with the local date of
-   *  the answer, and the coordinator's name when the owner left the answer to it: one not in [document] is listed. */
-  approved?: ReadonlyArray<{ line: string; on: string; leftTo?: string }>
 }
 
 type RanOn = Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>
@@ -69,25 +52,13 @@ type RanOn = Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>
 export type Change = { kind: 'cheaper'; taskKind: string; from: RanOn; to: RanOn } | { kind: 'stop'; taskKind: string; from: RanOn }
   | { kind: 'grid'; taskKind: string }
 /** A routing change for the owner: what, why, what it would save a week in dollars (API-equivalent) and hours to ship,
- *  whether its evidence is strong enough to recommend Yes, and how many tasks of its kind the last 7 days ran the old way. */
-export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number; strong: boolean; change: Change
-  ran: { tasks: number; on: string } }
-export interface Reflection {
-  /** The report with no note on its proposals. */
-  text: string
-  proposals: Proposal[]
-  /** The report with a note after each proposal: whether it was asked, and if not, why (store.ts postReflection). */
-  render(note: (p: Proposal) => string | null): string
-}
+ *  and whether its evidence is strong enough to recommend Yes. */
+export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number; strong: boolean; change: Change }
+export interface Reflection { proposals: Proposal[] }
 /** Days an answered proposal is not proposed again. */
 export const REASK_DAYS = 14
 /** The zone of a project that set no digest: the owner's time zone is stored nowhere; the digest's is the one a project sets. */
 export const DEFAULT_TIME_ZONE = 'Asia/Ho_Chi_Minh'
-/** The local date of [at] in [timeZone], or in the default zone for none or one this runtime does not know. */
-export function localDate(at: number, timeZone: string = DEFAULT_TIME_ZONE): string {
-  const format = (zone: string) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at)
-  try { return format(timeZone) } catch { return format(DEFAULT_TIME_ZONE) }
-}
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const usd = (n: number) => `$${n.toFixed(2)}`
 const percent = (rate: number) => `${Math.round(rate * 100)}%`
@@ -98,7 +69,7 @@ const capital = (text: string) => `${text.slice(0, 1).toUpperCase()}${text.slice
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
 
 /** The one fixed Routing line a proposal carries: what a Yes has the coordinator write into the instructions, and what the
- *  reflection looks for there. Models as the report names them. */
+ *  reflection looks for there. */
 export function routingLine(p: Pick<Proposal, 'change'>): string {
   const c = p.change, kind = capital(c.taskKind)
   return c.kind === 'cheaper' ? `${kind} work runs on ${ranOn(c.to)} instead of ${ranOn(c.from)}.`
@@ -107,14 +78,6 @@ export function routingLine(p: Pick<Proposal, 'change'>): string {
 }
 const passed = (r: CostSummaryRow) => `${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)})`
 const atApi = 'a week at API prices'
-
-function line(r: CostSummaryRow): string {
-  return `- ${ranOn(r)}, ${r.kind}: ${plural(r.attempts, 'attempt')}, ${r.shipped} shipped`
-    + (r.medianMinutesToShip !== null ? `, median ${Math.round(r.medianMinutesToShip)} min to ship` : '')
-    + (r.costPerShipped !== null ? `, ${usd(r.costPerShipped)} per shipped change` : '')
-    + (r.firstReviews ? `, first review passed ${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)})` : ', no first review')
-    + (r.stepUps ? `, ${plural(r.stepUps, 'step-up')}` : '')
-}
 
 /** Per kind, the tasks whose grid attempt failed and stepped up: how many, and the grid attempts' hours and cost. Also how
  *  many tasks of the kind started on the grid. A step up is the attempt that carries it (decisions from before project instructions); the grid attempts
@@ -167,7 +130,7 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
         + `${usd(dear.costPerShipped!)} per shipped change at API prices.`
         + (strong ? '' : ` Small samples (${dear.firstReviews} and ${cheap.firstReviews} first reviews): the difference may be chance.`),
       saving: `about ${usd(dollars)} ${atApi}`, dollars, hours: 0, strong,
-      change: { kind: 'cheaper', taskKind: kind, from: pick(dear), to: pick(cheap) }, ran: { tasks: dear.attempts, on: ranOn(dear) } })
+      change: { kind: 'cheaper', taskKind: kind, from: pick(dear), to: pick(cheap) } })
   }
   // A model whose first review clearly fails more often than it passes on a kind of work: even the top of its range is low.
   for (const r of known) {
@@ -179,79 +142,37 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
         + (strong ? '' : ` Only ${r.firstReviews} first reviews.`),
       saving: dollars ? `about ${usd(dollars)} ${atApi} of attempts that failed their first review`
         : `${plural(failed, 'attempt')} a week that failed their first review`, dollars, hours: 0, strong,
-      change: { kind: 'stop', taskKind: r.kind, from: pick(r) }, ran: { tasks: r.attempts, on: ranOn(r) } })
+      change: { kind: 'stop', taskKind: r.kind, from: pick(r) } })
   }
   // A kind whose tasks keep stepping up from the grid.
   for (const [kind, k] of grid) {
     if (kind === 'unspecified' || k.stepped < MIN_GRID_STEP_UPS || k.stepped * 2 < k.tasks) continue
     const hours = tenths(k.hours), dollars = cents(k.dollars), strong = k.tasks >= STRONG_SAMPLE
     found.push({ title: `Start ${kind} work on a subscription model instead of the grid`,
-      why: `${k.stepped} of ${k.tasks} ${kind} tasks started on the grid stepped up after their grid attempt failed.`
+      why: `${k.stepped} of ${k.tasks} ${kind} tasks needed another model after their grid attempt failed.`
         + (strong ? '' : ` Only ${k.tasks} tasks.`),
       saving: `about ${dollars ? `${usd(dollars)} at API prices and ` : ''}${hours} hours to ship a week`, dollars, hours, strong,
-      change: { kind: 'grid', taskKind: kind }, ran: { tasks: k.tasks, on: 'the grid' } })
+      change: { kind: 'grid', taskKind: kind } })
   }
   return found.sort((a, b) => b.dollars - a.dollars || b.hours - a.hours)
 }
 
 const pick = (r: RanOn): RanOn => ({ engine: r.engine, model: r.model, effort: r.effort })
 
-function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, stepUps: number): string {
-  const failed = new Map<string, number>()
-  for (const f of input.failedStarts) failed.set(ranOn(f), (failed.get(ranOn(f)) ?? 0) + 1)
-  const stepped = [...grid].filter(([, k]) => k.stepped)
-  const fromGrid = stepped.reduce((n, [, k]) => n + k.stepped, 0)
-  /** A count over the evidence, with each model and kind that has some, the most first. */
-  const byModel = (count: (m: ModelKindEvidence) => number, one: string, many?: string) => {
-    const has = input.evidence.filter(m => count(m) > 0).sort((x, y) => count(y) - count(x))
-    const total = has.reduce((n, m) => n + count(m), 0)
-    return total ? [`${plural(total, one, many)} (${has.map(m => `${m.engine} ${m.model} ${m.kind}: ${count(m)}`).join(', ')})`] : []
-  }
-  const parts = [
-    ...input.failedStarts.length ? [`${plural(input.failedStarts.length, 'failed start')} (${[...failed].sort((a, b) => b[1] - a[1])
-      .map(([on, n]) => `${on}: ${n}`).join(', ')})`] : [],
-    ...fromGrid ? [`${plural(fromGrid, 'step-up')} after a failed grid attempt (${stepped.map(([kind, k]) => `${kind}: ${k.stepped}, ${tenths(k.hours)} hours`).join('; ')})`] : [],
-    ...stepUps > fromGrid ? [`${plural(stepUps - fromGrid, 'other step-up')}`] : [],
-    ...byModel(m => m.reworkRounds, 'rework round'),
-    ...byModel(m => m.fixesAfterMerge, 'fix after merge', 'fixes after merge'),
-  ]
-  return `Waste in the last 7 days: ${parts.length ? parts.join(', ') : 'none'}.`
-}
-
-/** The night's report, or null when the last day had no attempt and no failed start: then nothing is posted. At most
- *  MAX_PROPOSALS proposals, the largest saving first, leaving out those the owner answered lately; one whose line the
- *  instructions hold is reported with how the last 7 days ran instead. A reworded line is not recognized: proposed again. */
+/** At most MAX_PROPOSALS, the largest saving first, excluding recent answers and lines already in the instructions.
+ * Null when the last day had no attempt or failed start. */
 export function routingReflection(input: ReflectionInput): Reflection | null {
   const since = input.now - DAY
   const dayRows = input.rows.filter(r => r.run.startedAt >= since)
   if (!dayRows.length && !input.failedStarts.some(f => f.at >= since)) return null
-  const week = summarizeCosts(input.rows, input.groups), day = summarizeCosts(dayRows, input.groups)
+  const week = summarizeCosts(input.rows, input.groups)
   const grid = gridStepUps(input.rows, input.now)
   const decided = new Set(input.decided ?? [])
   const all = proposals(week.rows, grid)
-  const written = all.filter(p => input.document.includes(routingLine(p)))
-  // A Yes writes nothing by itself: the coordinator writes the line, and until it is in the instructions each report says so.
-  const pending = (input.approved ?? []).filter((a, i, all) => !input.document.includes(a.line) && all.findIndex(b => b.line === a.line) === i)
-  const proposed = all.filter(p => !written.includes(p) && !decided.has(p.title)).slice(0, MAX_PROPOSALS)
-  const table = [...week.rows].sort((a, b) => b.attempts - a.attempts)
-  const render = (note: (p: Proposal) => string | null) => [
-    'Routing reflection: what routed work cost and how it went. Counts only; routing changes only as the project owner approves.',
-    `Last day: ${plural(day.totals.attempts, 'attempt')}, ${day.totals.shipped} shipped. Last 7 days: ${plural(week.totals.attempts, 'attempt')}, ${week.totals.shipped} shipped.`,
-    'By engine, model and effort, per kind of work (last 7 days; cost is what the tokens would cost on the API):',
-    ...table.slice(0, MAX_LINES).map(line),
-    ...table.length > MAX_LINES ? [`- and ${table.length - MAX_LINES} more`] : [],
-    waste(input, grid, week.totals.stepUps),
-    ...written.map(p => `In the instructions: ${routingLine(p)} The last 7 days ran ${plural(p.ran.tasks, `${p.change.taskKind} task`)} on ${p.ran.on}.`),
-    ...pending.map(a => `Approved ${a.on}${a.leftTo ? ` (left to the ${a.leftTo})` : ''}; not in the instructions yet: ${a.line}`),
-    ...proposed.length ? ['Proposed changes (advice: no rule or setting changes by itself):',
-      ...proposed.map((p, i) => { const n = note(p); return `${i + 1}. ${p.title}: ${p.saving}. ${p.why}${n ? ` ${n}` : ''}` })]
-      : ['No change proposed.'],
-    ...input.truncated ? [`Only the newest ${MAX_ROWS} attempts were read.`] : [],
-  ].join('\n')
-  return { text: render(() => null), proposals: proposed, render }
+  return { proposals: all.filter(p => !input.document.includes(routingLine(p)) && !decided.has(p.title)).slice(0, MAX_PROPOSALS) }
 }
 
-/** The id of a project's report for one local date: one a night, so a second pass or a second worker writes none. */
+/** Stable nightly Decision operation ID; also recognizes report rows posted before reports stopped. */
 export const reflectionMessageId = (tabId: string, projectId: string, on: string): string => stableId('routing-reflection', tabId, projectId, on)
 
 /** The answer that approves a proposal. */
@@ -262,18 +183,11 @@ const YES_WRITES = 'If you say yes, the coordinator writes into Routing, naming 
  *  for an answer or answered lately is told by it (proposalTitle). It says plainly what Yes does: the coordinator writes the
  *  proposal's line into the Routing section of the instructions, naming the owner as who asked (project instructions, phase 4,
  *  decision 21; the template's PM section says so). */
-export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}? Expected saving: ${p.saving}. ${p.why}`,
+export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}?\nWhy: ${p.why} This could save ${p.saving}.`,
   options: ['Yes: the coordinator writes this into the Routing section of the instructions', 'No: keep routing as it is',
     'Not yet: ask again when there is more evidence'],
   recommended: p.strong ? APPROVE : 2,
   // A decision's unblocks is at most 300 characters (decisions.ts decisionChoices); only a model slug that long cuts the line.
   unblocks: cut(`${YES_WRITES}${routingLine(p)}`, 300) })
-/** The routing line an asked proposal's unblocks names (proposalQuestion), or null for a decision asked before it named one.
- *  A line cut to fit loses its ellipsis, so its start is still found in the instructions. */
-export function approvedLine(unblocks: string): string | null {
-  if (!unblocks.startsWith(YES_WRITES)) return null
-  const line = unblocks.slice(YES_WRITES.length)
-  return line.endsWith('…') ? line.slice(0, -1) : line
-}
 /** The proposal a decision asked, by the title its question starts with. */
 export const proposalTitle = (question: string): string => question.slice(0, Math.max(0, question.indexOf('?')))
