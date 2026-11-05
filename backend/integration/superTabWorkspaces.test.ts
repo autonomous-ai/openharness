@@ -597,6 +597,21 @@ describe('a Swarm invitation for someone the Workspace removed', () => {
     expect(await swarmPeople(tab)).toContain(returner.sub)
   })
 
+  it('refuses even an admin\'s invitation sent before the removal, while one sent after it brings them back (#3173)', async () => {
+    const { workspaceId, tab } = await setUp('Sent before removal')
+    // Sent while they were in the Workspace and not yet in this Swarm; the removal leaves only Swarms they are in.
+    const early = (await inviteAs(tab, admin)).json().data.result.inviteId as string
+    await removeReturner(workspaceId)
+    await expect(accept(tab, early)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED', status: 403 })
+    await keptOut(workspaceId, tab)
+
+    const again = await inviteAs(tab, admin)
+    expect(again.statusCode).toBe(200)
+    await accept(tab, again.json().data.result.inviteId as string)
+    expect(await rowOf(workspaceId, returner)).toMatchObject({ removedAt: null, role: 'guest', addedBy: admin.sub })
+    expect(await swarmPeople(tab)).toContain(returner.sub)
+  })
+
   it('lets a person never removed join through a member\'s invitation as today, credited to that member', async () => {
     const { workspaceId, tab } = await setUp('Never removed')
     const created = await inviteAs(tab, member, newcomer.email)
