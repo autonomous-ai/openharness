@@ -64,6 +64,14 @@ describe('makeThumbnail', () => {
     expect(facts?.thumb ? facts.thumb.width <= 300 && facts.thumb.height <= 200 : true).toBe(true)
   })
 
+  it('leaves an animated WebP alone, as a GIF, so it keeps moving in the chat', async () => {
+    const frames = 3, width = 300, height = 200
+    const animated = await sharp(randomBytes(width * height * 3 * frames), { raw: { width, height: height * frames, channels: 3, pageHeight: height } })
+      .webp({ loop: 0, delay: [100, 100, 100] }).toBuffer()
+    expect((await sharp(animated).metadata()).pages).toBe(3)
+    expect(await makeThumbnail(animated)).toBeNull()
+  })
+
   it('answers nothing for what is not a picture it handles', async () => {
     const gif = await sharp(noise(900, 900).data, { raw: noise(900, 900).raw }).gif().toBuffer()
     expect(await makeThumbnail(gif)).toBeNull()

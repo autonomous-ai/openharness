@@ -11,12 +11,16 @@ export const THUMB_LONG_SIDE = 720
 const THUMB_QUALITY = 80
 /** A thumbnail is kept only when it is clearly smaller than the picture it stands for. */
 const WORTH_KEEPING = 0.8
-/** Past this many pixels a picture is not decoded (a small file can claim a huge canvas). */
-export const MAX_THUMB_PIXELS = 64_000_000
-/** Past this long, a thumbnail is given up on; libvips cannot be cancelled, so its slot is held until it ends. */
+/** Past this many pixels a picture is not decoded (a small file can claim a huge canvas). Rotating a picture holds all of it in
+ *  memory: at 40 MP that is up to about 320 MB in the worst case (16-bit with an alpha channel), per decode at once. */
+export const MAX_THUMB_PIXELS = 40_000_000
+/** A caller waits no longer than this for a thumbnail; its decode may run on (libvips cannot be cancelled) and keeps its place. */
 const THUMB_GIVES_UP_MS = 10_000
 /** Thumbnails made at once in one process: each decodes a picture in memory. */
 const AT_ONCE = 2
+/** Pictures that may wait for a place; past this the next gets no thumbnail at once, so a burst of uploads piles up neither
+ *  memory (each waiting picture is held whole) nor time in the upload's answer. */
+const MAX_WAITING = 4
 /** Pictures this server thumbnails, whatever type they were declared as. */
 const FORMATS: ReadonlySet<string> = new Set(['png', 'jpeg', 'webp'])
 
@@ -33,33 +37,51 @@ export interface StoredImage { width: number; height: number; thumb?: { url: str
 /** The thumbnail of the object at [objectKey] is stored beside it: same folder, same random segment. */
 export const thumbKeyOf = (objectKey: string) => `${objectKey}.thumb.webp`
 
-let running = 0
-const waiting: Array<() => void> = []
-async function slot<T>(work: () => Promise<T>): Promise<T> {
-  if (running >= AT_ONCE) await new Promise<void>(resolve => waiting.push(resolve))
-  else running++
-  try { return await work() } finally {
-    const next = waiting.shift()
-    if (next) next(); else running--
-  }
-}
-
 const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 
-/** The picture's size and thumbnail, or null when [bytes] are not a PNG, JPEG or WebP this can read within its limits. */
-export async function makeThumbnail(bytes: Buffer): Promise<ImageFacts | null> {
-  if (!bytes.byteLength) return null
-  try {
-    return await slot(async () => {
-      const timeout = new Promise<null>(resolve => setTimeout(resolve, THUMB_GIVES_UP_MS, null).unref())
-      return Promise.race([thumbnailOf(bytes), timeout])
+export interface ThumbnailerOptions { atOnce?: number; maxWaiting?: number; giveUpMs?: number; decode?: (bytes: Buffer) => Promise<ImageFacts | null> }
+
+/**
+ * Makes thumbnails, a few at a time. A decode keeps its place until it ends, however long it takes: a caller gives up after
+ * `giveUpMs` and gets nothing, but a place is freed only by its decode ending, so `atOnce` is a real limit on memory and CPU. At
+ * most `maxWaiting` wait for a place; a picture arriving past that gets nothing at once (`busy` says so beforehand, so a caller
+ * need not even hold the picture). A caller that gave up before its turn is never decoded.
+ */
+export function createThumbnailer(options: ThumbnailerOptions = {}) {
+  const atOnce = options.atOnce ?? AT_ONCE, maxWaiting = options.maxWaiting ?? MAX_WAITING, giveUpMs = options.giveUpMs ?? THUMB_GIVES_UP_MS
+  const decode = options.decode ?? thumbnailOf
+  let running = 0
+  const waiting: Array<() => void> = []
+  const busy = () => running >= atOnce && waiting.length >= maxWaiting
+
+  async function make(bytes: Buffer): Promise<ImageFacts | null> {
+    if (!bytes.byteLength || busy()) return null
+    let abandoned = false
+    const work = (async () => {
+      // A place passed on by a decode that ended is ours without `running` changing.
+      if (running >= atOnce) await new Promise<void>(resolve => waiting.push(resolve)); else running++
+      try { return abandoned ? null : await decode(bytes) } finally {
+        const next = waiting.shift()
+        if (next) next(); else running--
+      }
+    })().catch(error => {
+      // A decoder's message can quote what it read: only that it failed is logged.
+      logger.warn('[thumbnails] could not read a picture', { error: error instanceof Error ? error.name : 'unknown' })
+      return null
     })
-  } catch (error) {
-    // A decoder's message can quote what it read: only that it failed is logged.
-    logger.warn('[thumbnails] could not read a picture', { error: error instanceof Error ? error.name : 'unknown' })
-    return null
+    let timer: NodeJS.Timeout | undefined
+    const gaveUp = new Promise<null>(resolve => { timer = setTimeout(() => { abandoned = true; resolve(null) }, giveUpMs); timer.unref() })
+    try { return await Promise.race([work, gaveUp]) } finally { clearTimeout(timer) }
   }
+  return { make, busy }
 }
+
+const shared = createThumbnailer()
+/** The picture's size and thumbnail, or null when [bytes] are not a PNG, JPEG or WebP this can read within its limits, or when
+ *  thumbnails are backed up. Never throws. */
+export const makeThumbnail = (bytes: Buffer): Promise<ImageFacts | null> => shared.make(bytes)
+/** Whether the next picture would get no thumbnail for want of a place: a caller then skips holding it. */
+export const thumbnailsBusy = (): boolean => shared.busy()
 
 async function thumbnailOf(bytes: Buffer): Promise<ImageFacts | null> {
   const input = () => sharp(bytes, { limitInputPixels: MAX_THUMB_PIXELS, failOn: 'error' })

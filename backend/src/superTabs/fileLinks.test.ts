@@ -130,6 +130,25 @@ describe('chat file links', () => {
       }
     })
 
+    it('is linked only when it is this very file\'s own thumbnail, never another file of the same Swarm', async () => {
+      const bucket = new MemoryAttachmentStore(() => now)
+      const other = 'super-tabs/tab1/zzz/private-chat-secret.jpg'
+      bucket.objects.set(other, { bytes: Buffer.from('secret'), contentType: 'image/jpeg', contentDisposition: 'inline' })
+      const own = 'super-tabs/tab1/abc/p.jpg'
+      const [read] = await new FileLinks(bucket, base, 'super-tabs').forRows('tab1', [row(
+        picture(own, other, 'elsewhere'),
+        picture(own, 'super-tabs/tab1/zzz/p.jpg.thumb.webp', 'other-folder'),
+        picture(own, 'super-tabs/tab1/abc/q.jpg.thumb.webp', 'other-name'),
+        picture(own, own, 'itself'),
+        picture(own, 'super-tabs/tab1/abc/p.jpg.thumb.webp', 'own'))], now)
+      const byId = Object.fromEntries(read!.attachments.map(a => [a.id, a]))
+      for (const id of ['elsewhere', 'other-folder', 'other-name', 'itself']) {
+        expect(byId[id]!.thumb, id).toBeUndefined()
+        expect(JSON.stringify(byId[id])).not.toContain('private-chat-secret')
+      }
+      expect(byId.own!.thumb?.link).toContain('p.jpg.thumb.webp')
+    })
+
     it('is dropped when what is stored is not a thumbnail', async () => {
       const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(
         { ...picture('super-tabs/tab1/abc/a.jpg', null, 'a'), thumb: { url: 5, width: 'x' } as never },

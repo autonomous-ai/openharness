@@ -32,7 +32,7 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
-import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, type StoredImage } from './thumbnails.js'
+import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsBusy, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
@@ -2285,7 +2285,7 @@ export class SuperTabStore {
     const mime = typeFromHead(row.mime, head!)
     // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.
     let image: StoredImage | null = null
-    if (THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES) {
+    if (THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES && !thumbnailsBusy()) {
       try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
         logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
       }
@@ -2443,7 +2443,8 @@ export class SuperTabStore {
     try {
       const checked = await typed()
       mime = checked.mime
-      const tee = thumbnail && THUMBNAILED_TYPES.has(mime)
+      // A picture is held whole for its thumbnail only when there is room to make one soon (thumbnails.ts).
+      const tee = thumbnail && THUMBNAILED_TYPES.has(mime) && !thumbnailsBusy()
       const body = !tee ? checked.body : Readable.from((async function* () {
         for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
       })())
@@ -2460,8 +2461,10 @@ export class SuperTabStore {
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
     // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
-    const image = thumbnail && held.length ? await thumbnail(objectKey, Buffer.concat(held)).catch(() => null) : null
+    // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
+    const whole = thumbnail && held.length ? Buffer.concat(held) : null
     held.length = 0
+    const image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null
     try {
       return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
         actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
