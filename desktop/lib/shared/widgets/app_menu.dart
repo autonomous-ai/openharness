@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -626,6 +627,7 @@ class _AppDropdownState extends State<AppDropdown> {
   MenuController? _own;
   final _searchFocus = FocusNode(debugLabel: 'Dropdown search');
   final _searchText = TextEditingController();
+  final _pointer = _AppMenuPointer();
   String _query = '';
 
   MenuController get _controller =>
@@ -633,6 +635,7 @@ class _AppDropdownState extends State<AppDropdown> {
 
   @override
   void dispose() {
+    _pointer.dispose();
     _searchFocus.dispose();
     _searchText.dispose();
     super.dispose();
@@ -780,10 +783,23 @@ class _AppDropdownState extends State<AppDropdown> {
               ),
             ),
           ),
-        for (final child in shown)
+        for (final (index, child) in shown.indexed)
           SizedBox(
             width: width,
-            child: _AppMenuRoot(controller: root, glyphs: glyphs, child: child),
+            // The pointer arriving on a row tells the submenu row beside it to
+            // let go ([AppSubmenuItem]).
+            child: MouseRegion(
+              onEnter: (_) => _pointer.enter(index),
+              child: _AppMenuRow(
+                index: index,
+                pointer: _pointer,
+                child: _AppMenuRoot(
+                  controller: root,
+                  glyphs: glyphs,
+                  child: child,
+                ),
+              ),
+            ),
           ),
       ],
       builder: widget.builder,
@@ -844,14 +860,58 @@ class AppSubmenuItem extends StatefulWidget {
 }
 
 class _AppSubmenuItemState extends State<AppSubmenuItem> {
+  /// How long a sibling row may hold the pointer before the submenu lets go:
+  /// the time a hand needs to cut a corner on its way into the submenu, as
+  /// macOS and Slack allow.
+  static const _grace = Duration(milliseconds: 120);
+
   MenuController? _own;
   bool _open = false;
+  Timer? _letGo;
+  _AppMenuRow? _row;
 
   MenuController get _controller =>
       widget.controller ?? (_own ??= MenuController());
 
   void _openMenu() {
+    _letGo?.cancel();
     if (!_controller.isOpen) _controller.open();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final row = _AppMenuRow.maybeOf(context);
+    if (row?.pointer == _row?.pointer) {
+      _row = row;
+      return;
+    }
+    _row?.pointer.removeListener(_pointerMoved);
+    row?.pointer.addListener(_pointerMoved);
+    _row = row;
+  }
+
+  @override
+  void dispose() {
+    _letGo?.cancel();
+    _row?.pointer.removeListener(_pointerMoved);
+    super.dispose();
+  }
+
+  /// The pointer arrived on a row of the panel. On this row it stays; on
+  /// another, the submenu closes unless the pointer reaches it first.
+  void _pointerMoved() {
+    final row = _row;
+    if (row == null) return;
+    if (row.pointer.row == row.index) {
+      _letGo?.cancel();
+      return;
+    }
+    if (!_controller.isOpen) return;
+    _letGo ??= Timer(_grace, () {
+      _letGo = null;
+      if (mounted && _controller.isOpen) _controller.close();
+    });
   }
 
   @override
@@ -868,10 +928,16 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
         widget.onOpen?.call();
       },
       onClose: () {
+        _letGo?.cancel();
+        _letGo = null;
         if (mounted) setState(() => _open = false);
         widget.onClose?.call();
       },
-      children: widget.menuChildren,
+      children: [
+        // Reaching the submenu ends the grace.
+        for (final child in widget.menuChildren)
+          MouseRegion(onEnter: (_) => _letGo?.cancel(), child: child),
+      ],
       child: MouseRegion(
         onHover: (_) => _openMenu(),
         child: AppMenuItem(
@@ -889,6 +955,36 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
       ),
     );
   }
+}
+
+/// Which row of a panel the pointer last arrived on.
+class _AppMenuPointer extends ChangeNotifier {
+  int? row;
+
+  void enter(int index) {
+    row = index;
+    notifyListeners();
+  }
+}
+
+/// A row's place in its panel, handed down so a submenu row can tell when the
+/// pointer is on a sibling.
+class _AppMenuRow extends InheritedWidget {
+  const _AppMenuRow({
+    required this.index,
+    required this.pointer,
+    required super.child,
+  });
+
+  final int index;
+  final _AppMenuPointer pointer;
+
+  static _AppMenuRow? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_AppMenuRow>();
+
+  @override
+  bool updateShouldNotify(_AppMenuRow old) =>
+      index != old.index || pointer != old.pointer;
 }
 
 /// The top menu of an [AppDropdown] chain, handed down to its rows.
