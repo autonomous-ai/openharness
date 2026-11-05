@@ -296,7 +296,8 @@ describe('privacy observer', () => {
     const o = new TeamPrivacyObserver({ config: () => ({ ...teamConfig, statusFile: file }), user: () => 'harnessteam', teamSession: () => false,
       check: () => ({ passed: true, checkedAt: 7 }), writeStatus: writeTeamStatus, now: () => 7 })
     o.observe()
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 } })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 },
+      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
   })
 })
 
