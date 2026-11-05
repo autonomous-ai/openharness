@@ -80,8 +80,8 @@ export const TEMPLATE_WORKFLOW = `## Workflow
 3. Findings and verdicts go straight to the Engineer by name (--to, or a reply), never through the PM. The Engineer
    fixes them and asks the same Reviewer or Tester again in the same step; it adds no new step for a second round. While
    the Engineer fixes them, the Reviewer or Tester stays Working on its step: blocked and needs_human are only for
-   something a person must do. A verdict asking for changes, a Tester's too, carries the line "Ready to merge: No" or
-   "Ready to merge: With fixes", so the step stays with its agent, not moved after 30 quiet minutes.
+   something a person must do. A verdict asking for changes, a Tester's too, is a failed check recorded at the pull
+   request head and base it read, so the step stays with its agent, not moved after 30 quiet minutes.
 4. When the review, and any test, passes, the Engineer sets its task done with the pull request and the evidence: that
    status is how the PM hears, once. Reviewers and Testers are heard through their step's result. No agent sends the PM
    any other message besides a task that needs a person (Workflow 6) or the answer to a question the PM asked: no

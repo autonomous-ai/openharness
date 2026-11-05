@@ -86,6 +86,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
 import type { TrainTaskPull } from './mergeTrain/train.js'
@@ -4958,18 +4959,45 @@ export class SuperTabStore {
    * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
    * a finished task, or a pull request it no longer links, is left alone. The messages posted.
    */
-  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null): Promise<number> {
+  /** [patch]: the patch id the pass read for [watch]'s head when it was new to the task, or read again after GitHub could not
+   *  give it (undefined: not read, null: unreadable). [stepIds]: the task's steps (Conversation.stepIds), loaded even when
+   *  dormant, as a new head re-derives their checks. A done task records its heads and posts nothing (#3394). */
+  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null,
+    stepIds: readonly string[] = [], lookedUp = false): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return 0
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = cloneData(loaded.state)
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...patch === undefined ? [] : stepIds] }), state = cloneData(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       // A task its agent left (no assignment) records what happens, so its next Engineer hears only what is new.
-      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url)
-        || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
-      const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
+      const done = group?.assignment?.status === 'done'
+      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url) || group.assignment?.status === 'cancelled') return 0
+      const now = this.now()
+      // A new head is recorded with its patch id, or a patch read again for it, and the verdicts of the task and its steps
+      // count against it (#3394).
+      // A new base branch counts as a new head (security review of #3218, round 3): the patch id names the branch.
+      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head || known.base !== watch.base
+      const repatched = !newHead && patch !== undefined && known!.patch === null
+      if (newHead || repatched) {
+        // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
+        if (lookedUp && !group.stepIds) {
+          group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
+        }
+        // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
+        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
+          at: patch === undefined ? 0 : now }, group.pullRequestUrls)
+        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+          refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
+        }
+      }
+      if (done) {
+        if (!newHead && !repatched) return 0
+        await this.save(tx, loaded, state, clock.next())
+        return 0
+      }
+      const seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      if (!newHead && !repatched && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)
@@ -4993,6 +5021,32 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /** The task's links moved past a pull request whose head it keeps (review of #3218, round 3): the heads it no longer reads
+   *  (watchedLinks) are dropped, and the checks of the task and its steps, [stepIds] loaded even when dormant, count against
+   *  what is left: a verdict on a dropped one is unverified (checkVerdicts.ts verdictCounts), even with no head left. Whether
+   *  it wrote. */
+  async pullRequestHeadsWatched(tabId: string, groupId: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      if (!group?.pullRequestHeads || group.archived || group.reviewOf) return false
+      const window = new Set(watchedLinks(group.pullRequestUrls ?? []))
+      const kept = Object.fromEntries(Object.entries(group.pullRequestHeads).filter(([url]) => window.has(url)))
+      if (Object.keys(kept).length === Object.keys(group.pullRequestHeads).length) return false
+      group.pullRequestHeads = kept
+      if (lookedUp && !group.stepIds) {
+        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
+      }
+      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, kept)
+      }
+      await this.save(tx, loaded, state, clock.next())
+      return true
     })
   }
 

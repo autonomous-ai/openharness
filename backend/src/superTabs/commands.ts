@@ -81,6 +81,14 @@ import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answe
 import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
+/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
+const STEPS_LISTED = 200
+/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
+ *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
+ *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
+function listStep(task: Conversation, id: string): void {
+  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
+}
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
@@ -442,7 +450,12 @@ export const commandSchema = z.discriminatedUnion('type', [
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
-  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
+  // `head`: the whole commit id of the pull request head the checker read (#3394; never shortened, security review of #3218).
+  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text,
+    head: z.string().regex(/^[0-9A-Fa-f]{40}$/).transform(head => head.toLowerCase()).optional(),
+    // `base`: the branch the checker read the pull request's diff against (security review of #3218, round 5; review round 7):
+    // any branch name, never a space or a control character, as it is printed in terminals.
+    base: z.string().min(1).max(255).regex(/^[^\s\p{Cc}]+$/u).optional() }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -1744,6 +1757,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...stepMark(state, task), step: planned.name,
       assignment: null, lastMessageSequence: 0, checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
+    listStep(task, id)
     message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
     bindTaskCard(step, effects.messages.at(-1)!)
     return step
@@ -2547,6 +2561,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         for (const id of creator) if (!owning.agentIds.includes(id)) owning.agentIds.push(id)
       }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
+        // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
+        ...(!command.reviewOf && !command.audience ? { stepIds: [] } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
@@ -2558,6 +2574,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       })
       stampLane(state.conversations.at(-1)!)
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
+      if (command.reviewOf) listStep(conversation(state, command.reviewOf), operationId)
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
       const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined
       if (noRequester && state.conversations.at(-1)!.ledger) state.conversations.at(-1)!.ledger!.noRequesterReason = noRequester
@@ -3865,8 +3882,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
-      // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
-      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)
+      // A post to an Engineer waiting on this review: its own step then waits for the new revision (liveness.ts waitingForRevision).
+      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, context.now)
       if (actor.kind === 'agent') engineerAnswered(state, group, actor.agentId, recipients, context.now)
       leadActed(group.id, 'post')
       break
@@ -4248,8 +4265,31 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
-      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
-        accountable ? departed : undefined)
+      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read. The
+      // checker names it. A person who named none gets the head the watch read last, as the screen they checked showed it; an
+      // agent's verdict naming none is recorded and counts at no watched head (security review of #3218: a push during the
+      // review would get its pass). Nothing is refused: the result says how the verdict counts and what makes it count.
+      const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const heads = build?.pullRequestHeads, urls = build?.pullRequestUrls ?? []
+      const pullRequest = urls.findLast(url => heads?.[url]) ?? urls.at(-1)
+      const watched = pullRequest ? heads?.[pullRequest]?.head : undefined
+      const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
+      // The base it read against, named as the head is (review of #3218, round 7): no inferred base is known to be the one read.
+      const base = command.base ?? (actor.kind === 'person' && pullRequest ? heads?.[pullRequest]?.base : undefined)
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
+        ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {}, ...head && base ? { base } : {} }, accountable ? departed : undefined, heads)
+      const recorded = check.verdicts!.at(-1)!, counts = recorded.stale === undefined
+      result.counts = counts
+      if (!counts) {
+        const now = recorded.stale ? `It is at ${recorded.stale.slice(0, 7)}.` : 'Its head is not read yet.'
+        const current = pullRequest ? heads?.[pullRequest] : undefined
+        result.next = head && current?.head === head && recorded.base === undefined && current.base !== undefined
+          ? `Name the base branch you read the diff against as base: this verdict counts on no base until then. The pull request merges into ${current.base}.`
+          : head && current?.head === head && recorded.base !== current.base
+          ? `This head was read against ${recorded.base}, and the pull request now merges into ${current.base}: it counts on ${recorded.base} only. If you read it against ${current.base}, send base ${current.base}.`
+          : head ? `This verdict is for ${head.slice(0, 7)}, not the pull request's head. ${now} Check its head and send it as head.`
+          : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. ${now}`
+      }
       const first = !earlier
       // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
       // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
@@ -4266,7 +4306,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (reviewed !== false && run?.firstReview === false && run.grid) reviewFailed(group, run.model ?? 'its grid model', command.evidence)
       // An older skill's working hand-off stops waiting once someone else's verdict finds problems in it: its quiet time counts
       // from now (liveness.ts waitingForReview). Its status stays as its agent set it.
-      if (!command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
+      // A failure counts only at the head it read (#3394, review of #3218): one for a head the pull request has moved past asks
+      // for no changes, and holds nobody waiting.
+      if (counts && !command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
@@ -4279,13 +4321,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         message(task.id, `${task.assignment!.reopened!.why} ${BACK_WITH_YOU}`, [task.assignment!.agentId], null, SYSTEM_ROW)
         recordTaskState(state, task, context.now)
       }
-      if (!command.passed && !byAssignee) reopen(group)
+      // Only a failure that counts (#3394, review of #3218 round 4): one for a head the pull request moved past reopens nothing.
+      if (counts && !command.passed && !byAssignee) reopen(group)
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
-      if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      if (counts && !command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
       // form for a post to carry, and its step waits for the new revision instead of moving after 30 quiet minutes (Ken,
       // 2026-11-04: ~18 of 51 steps moved in two days were waiting on the Engineer's fix).
-      if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
+      if (counts && !command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
         // A handed build goes back to its Engineer (handed.ts, #3399); a build nobody holds waits for its builder to fix what the
