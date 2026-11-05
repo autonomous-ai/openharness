@@ -129,17 +129,32 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
 
 /** The board's pulse of each project the reader sees (pulse.ts, task #3384), as last recorded on its chat: the same from a full
  *  read and from a change poll's light base, which keeps the project chats and their pulse (parts/light.ts). A project with
- *  none recorded yet is left out, and the board draws no strip. */
-function pulses(state: SuperTabState, visible: SuperTabState): Record<string, Pulse> | undefined {
+ *  none recorded yet is left out, and the board draws no strip. Its lists name conversations: a project's reader reads every
+ *  one of them (none is private: pulse.ts counted), each checked again where it is loaded; a Buddy reads only its person's
+ *  own, so it gets the counts alone, the same on every read. */
+function pulses(state: SuperTabState, visible: SuperTabState, actor: Actor, buddy: boolean): Record<string, Pulse> | undefined {
   if (!visible.projects?.length) return undefined
+  const reads = (id: string) => {
+    const group = state.conversations.find(c => c.id === id)
+    return !group || canReadGroup(state, actor, group)
+  }
   const out: Record<string, Pulse> = {}
   for (const seen of visible.projects) {
     const project = state.projects?.find(p => p.id === seen.id)
     const pulse = project && storedPulse(state, project)
-    if (pulse) out[project.id] = pulse
+    if (!pulse) continue
+    out[project.id] = buddy ? countsOnly(pulse) : { ...pulse,
+      asks: { ...pulse.asks, list: pulse.asks.list.filter(ask => reads(ask.conversationId)) },
+      nextUp: { ...pulse.nextUp, conversationIds: pulse.nextUp.conversationIds.filter(reads) },
+      lost: { ...pulse.lost, conversationIds: pulse.lost.conversationIds.filter(reads) },
+      held: { ...pulse.held, list: pulse.held.list.filter(hold => reads(hold.conversationId)) } }
   }
   return out
 }
+
+/** [pulse] without its lists: what a Buddy reader gets. */
+const countsOnly = (pulse: Pulse): Pulse => ({ ...pulse, asks: { ...pulse.asks, list: [] }, working: { ...pulse.working, agentIds: [] },
+  nextUp: { ...pulse.nextUp, conversationIds: [] }, lost: { ...pulse.lost, conversationIds: [] }, held: { ...pulse.held, list: [] } })
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
@@ -159,7 +174,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
-  const pulse = pulses(state, visible)
+  const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
   return {
     ...(pulse ? { pulse } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
