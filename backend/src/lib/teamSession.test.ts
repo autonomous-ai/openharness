@@ -179,6 +179,8 @@ describe('a team session on its own machine', () => {
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions?asAgentId=agent-1', undefined, 'instructions'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions?asAgentId=agent-1', undefined, 'instructionRevisions'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions/3?asAgentId=agent-1', undefined, 'instructionRevision'],
+    // The project's rules record (task #3393): a Team-account PM reads the revision it saves its change on.
+    ['GET', '/api/super-tabs/tab-1/projects/project-1/rules?asAgentId=agent-1', undefined, 'projectRules'],
     // The route's measures and a file over the form's 10 MB (2026-11-03: refused here, so a Team PM routed without the CI hold
     // and a Team Engineer could not attach a big file). Each store method holds the agent to this machine (integration test).
     ['GET', '/api/super-tabs/tab-1/costs?days=7&asAgentId=agent-1', undefined, 'costSummary'],
