@@ -406,7 +406,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
-  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
+  // `head`: the pull request commit the checker read (#3394); without it, the head the task's PR watch last read.
+  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text,
+    head: z.string().regex(/^[0-9A-Fa-f]{7,40}$/).transform(head => head.toLowerCase()).optional() }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -3905,8 +3907,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
-      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
-        accountable ? departed : undefined)
+      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read.
+      const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const heads = build?.pullRequestHeads, urls = build?.pullRequestUrls ?? []
+      const pullRequest = urls.findLast(url => heads?.[url]) ?? urls.at(-1)
+      const head = command.head ?? (pullRequest ? heads?.[pullRequest]?.head : undefined)
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
+        ...head ? { ...pullRequest ? { pullRequest } : {}, head } : {} }, accountable ? departed : undefined, heads)
       const first = !earlier
       // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
       // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
