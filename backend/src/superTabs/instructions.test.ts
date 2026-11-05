@@ -33,11 +33,12 @@ function fixture() {
 }
 
 describe('the built-in template', () => {
-  // Task #3392 (River, 11-05): a new project's PM must be able to add its routing line, so the template keeps 1 KB of room in
-  // its core and every role section within its budget.
-  it('keeps to the size budget, with 1 KB of room in its core', () => {
+  // Task #3392 (River, 11-05): a new project's PM must be able to add its routing lines, and a member a line to the PM's
+  // section, so the template keeps 800 B of room in its core and 200 B in its PM section, every role within its budget.
+  it('keeps to the size budget, with room in its core and its PM section', () => {
     const parts = budgetParts(INSTRUCTIONS_TEMPLATE)
-    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 1024)
+    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 800)
+    expect(parts.find(p => p.part === 'role PM')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role - 200)
     for (const role of parts.filter(p => p.part.startsWith('role '))) expect(role.bytes, role.part).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role)
     expect(parts.filter(p => p.part.startsWith('role ')).map(p => p.part)).toEqual(['role PM', 'role Engineer', 'role Reviewer', 'role Tester'])
   })
@@ -146,9 +147,11 @@ describe('the built-in template', () => {
       'Sets deadlines for today, in hours.',
       'Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.',
       'A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.',
-      'Before answering a message in a task, reads that task\'s state and its latest messages.',
-      'Links every issue and pull request number it names.',
     ]) expect(pm).toContain(line)
+    // Its mechanics live in the Workflow, where they leave the PM's section room (River, review of #3220).
+    const workflow = TEMPLATE_WORKFLOW.replace(/\s+/g, ' ')
+    expect(workflow).toContain('Before answering a message in a task, the PM reads that task\'s state and its latest messages.')
+    expect(workflow).toContain('It tags a person only to answer them or when they must act (an agent\'s owner, to have it act), and links every issue and pull request number it names.')
     // Shared lines name no person (instructions attribution).
     expect(pm).not.toMatch(/\((Ken|Dee|Leo)[,)]/)
   })
@@ -204,8 +207,9 @@ describe('the built-in template', () => {
     // The route lists by machine name with each account's quota (Ken, 2026-11-03) and names no pick; the reason goes with the
     // start or assignment. What the route's rows show is the route's own to say: the template keeps the rule (#3392).
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
-    expect(routing).toContain('- The PM applies this order itself (the route ranks nothing) and gives the rule that chose each start or assignment '
-      + 'as its reason, or the urgency, context or machine need that departs from it; never "idle" or "first in the list".')
+    // Any start or assignment, the Engineer's of its Reviewer and Tester too (review of #3220).
+    expect(routing).toContain('- The PM applies this order itself (the route ranks nothing). Each start or assignment gives as its reason the rule '
+      + 'that chose it, or the urgency, context or machine need that departs from it; never "idle" or "first in the list".')
     expect(routing).not.toContain('The route\'s lines show')
     for (const gone of ['Its order does not rank by quota', 'Picking against it needs a reason in the route\'s override']) expect(routing).not.toContain(gone)
   })
