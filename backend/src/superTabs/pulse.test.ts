@@ -108,6 +108,29 @@ describe('what the PM owes', () => {
     expect(owed()).toEqual([ask])
   })
 
+  // ReviewPulse2's review of #3209: a deleted ask has nothing left to answer, and its link would open a message that is gone.
+  it('is settled when its message is deleted, kept as deleted or not', () => {
+    const { f, post, owed } = setup()
+    const [gone, kept] = [post(null, 'lead', 'Never mind.'), post(null, 'lead', 'Drop this too.')]
+    const remove = (messageId: string, hasReplies: boolean) => f.run({ type: 'message.delete', conversationId: 'lead', messageId } as Command, owner,
+      { messageChange: { messageId, author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies, text: 'x', sequence: 1 } })
+    remove(gone, false)
+    remove(kept, true)
+    expect(owed()).toEqual([])
+  })
+
+  // River, on ReviewPulse2's review of #3209: the asks of a person who left the Swarm are owed to nobody.
+  it('is settled when the person who asked leaves the Swarm', () => {
+    const { f, owed } = setup()
+    const peer = { kind: 'person' as const, userId: 'peer', email: 'peer@example.com' }
+    const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } as Command)
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string } as Command, peer)
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'One ask before I go.', replyTo: null, recipientIds: [] } as Command, peer)
+    expect(owed()).toHaveLength(1)
+    f.run({ type: 'member.remove', userId: 'peer' } as Command)
+    expect(owed()).toEqual([])
+  })
+
   it('is not settled by another agent\'s reply or reaction', () => {
     const { f, post, owed, react } = setup()
     const ask = post(null, 'lead', 'Who reviews #12?')
