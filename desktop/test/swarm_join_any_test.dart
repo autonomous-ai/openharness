@@ -61,6 +61,67 @@ int _firstLoads(SuperTabLaunchFixture f) => [
 ].length;
 
 void main() {
+  test('explicit own-account join skips every Team setup offer', () async {
+    final f = _computer();
+    final notes = <SwarmJoinedMachine>[];
+    final listening = f.app.joinedMachines.listen(notes.add);
+    await f.app.addMachineOnJoin(tabId, role: 'collaborator', ownAccount: true);
+    await pumpEventQueue();
+    expect(_teamOffers(f), isEmpty);
+    expect(f.app.teamSetupLocked, isFalse);
+    expect(notes.single.ownAccount, isTrue);
+    expect(f.connection.server.posts.last['command'], {
+      'type': 'machine.ownAccountWork', 'machineId': 'm', 'allowed': true,
+    });
+    await listening.cancel();
+  });
+
+  test('discovery asks where agents run before adding the computer', () async {
+    final f = _computer();
+    var asked = 0;
+    f.app.chooseJoinAccount = (name) async {
+      expect(_contributions(f), isEmpty);
+      asked++;
+      return true;
+    };
+    await _discover(f);
+    expect(asked, 1);
+    expect(_teamOffers(f), isEmpty);
+    expect(f.connection.server.posts.last['command'], containsPair('allowed', true));
+  });
+
+  test('cancelled choice contributes nothing and starts no setup', () async {
+    final f = _computer();
+    f.app.chooseJoinAccount = (_) async => null;
+    await _discover(f);
+    expect(_contributions(f), isEmpty);
+    expect(_teamOffers(f), isEmpty);
+  });
+
+  test('account change while choosing never contributes or sends consent', () async {
+    final f = _computer();
+    f.app.chooseJoinAccount = (_) async {
+      f.app.currentUser = null;
+      return true;
+    };
+    await _discover(f);
+    expect(_contributions(f), isEmpty);
+    expect(_teamOffers(f), isEmpty);
+  });
+
+  test('refused own-account setting never starts Team setup as an alternative', () async {
+    final f = _computer();
+    f.connection.server.unknownCommand = (c) => c['type'] == 'machine.ownAccountWork';
+    final notes = <SwarmJoinedMachine>[];
+    final listening = f.app.joinedMachines.listen(notes.add);
+    await f.app.addMachineOnJoin(tabId, role: 'collaborator', ownAccount: true);
+    await pumpEventQueue();
+    expect(_teamOffers(f), isEmpty);
+    expect(notes.single.ownAccount, isFalse);
+    expect(notes.single.accountProblem, isNotEmpty);
+    await listening.cancel();
+  });
+
   test('a Swarm first seen through a domain auto-join adds this Mac and offers the Team account, once', () async {
     final f = _computer();
     final notes = <SwarmJoinedMachine>[];
