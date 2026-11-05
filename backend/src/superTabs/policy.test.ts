@@ -50,6 +50,16 @@ describe('the project rules record', () => {
       expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })).toBe(true)
     }
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: Array.from({ length: 51 }, (_, i) => `a${i}/**`) }] } })).toBe(true)
+    // Security review of #3216: at most 4 wildcards a pattern, a double star counting as one, and no run of three stars.
+    const pattern = (glob: string) => refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })
+    for (const glob of ['*a*a*a*a*a', '**/'.repeat(5) + 'z', '**/**/**/**/*.ts', 'a???b?', '***.ts', '*'.repeat(200)]) {
+      expect(pattern(glob), glob).toBe(true)
+    }
+    for (const glob of ['**/*buddy_guard*', '**/*.test.*', 'a/**/b/*.ts', '**/?x*']) expect(pattern(glob), glob).toBe(false)
+    // The backend pause is a part of the release window (review of #3216).
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '08:00', end: '10:00' } } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '17:00', end: '19:00' } } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '09:00', end: '18:00' } } })).toBe(false)
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, test: [{ where: 'Mac', paths: ['desktop/**'] }, { where: 'mac', paths: [] }] } })).toBe(true)
     expect(refused({ ...copy(), mergeTrain: { enabled: 'yes', everyMinutes: 30 } })).toBe(true)
     expect(refused({ ...copy(), caps: Array.from({ length: 51 }, (_, i) => ({ name: `Cap ${i}`, value: i })) })).toBe(true)
@@ -119,6 +129,23 @@ describe('reads and tests a change needs', () => {
     expect(globMatch('a?c.ts', 'a/c.ts')).toBe(false)
     expect(globMatch('**/e2ee/**', 'mobile/lib/e2ee/box.dart')).toBe(true)
     expect(globMatch('docs/a.md', 'docs/aXmd')).toBe(false)
+  })
+
+  // Review of #3216 (minor 2): a saved pattern became a backtracking regex, and many `*` against a long name could stall a
+  // server worker. The matcher's time grows with the name times the pattern, whatever the pattern.
+  it('matches a pattern of many wildcards against a long name quickly', () => {
+    const pattern = '*a'.repeat(40) + '*'
+    const name = 'a'.repeat(5_000) + '/b'
+    const started = performance.now()
+    expect(globMatch(pattern, name)).toBe(false)
+    expect(globMatch('**/' + '*a'.repeat(25) + 'z', 'x/'.repeat(500) + 'a'.repeat(3_000))).toBe(false)
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(globMatch('**/' + '*a'.repeat(3), 'x/yaaa')).toBe(true)
+    expect(globMatch('**', 'any/thing/at.all')).toBe(true)
+    expect(globMatch('**/', 'a/b/')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/b.ts')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/x/y/b.ts')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/x/y/c.ts')).toBe(false)
   })
 
   it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
@@ -208,6 +235,10 @@ describe('who changes the rules', () => {
     expect(code(pm(asked('lead'), { askedIn: personAsked('peer', NOW - RULE_MESSAGE_MS - 1) }))).toBe('RULES_ASKED_IN_REQUIRED')
     // A person who is no member any more.
     expect(code(pm(asked('lead'), { askedIn: personAsked('stranger') }))).toBe('ASKED_BY_UNAVAILABLE')
+    // A person who may only read the project now (security review of #3216).
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(code(pm(asked('lead'), { askedIn: personAsked() }))).toBe('RULES_ASKED_IN_REQUIRED')
+    f.state.people.find(p => p.id === 'peer')!.role = 'collaborator'
     // A message of another project's chat: the PM reads none of it, so the quote is refused as one it cannot see.
     const other = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { conversationId: string }
     expect(code(pm(asked(other.conversationId), { askedIn: personAsked() }))).toBe('NOT_FOUND')
