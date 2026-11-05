@@ -313,12 +313,35 @@ describe('a task\'s Team-written mark rests on its own code', () => {
     return { ...f, read, exec, execTeam, agentOf, join, task, ownBuilder, marked }
   }
 
-  it('does not read a Team pull request someone linked in the task, and still reads the task\'s own', async () => {
+  it('does not read a Team pull request another agent linked in the task, and still reads the task\'s own', async () => {
     const f = await setup()
-    await run(f.tab, { type: 'message.send', conversationId: f.task, text: `Log: CI on ${TEAM_PR} failed at step 3`, replyTo: null, recipientIds: [] })
+    // A Team agent's log lines in the task, as in #3514.
+    await f.execTeam({ type: 'message.send', conversationId: f.task, text: `Log: CI on ${TEAM_PR} failed at step 3`, replyTo: null, recipientIds: [] }, f.builder)
     await expect(f.join('Owner Builder 2')).resolves.toBeTruthy()
     expect(f.read).toHaveBeenLastCalledWith(REPO, [OWN])
     expect(await f.marked(f.task)).toBe(false)
+  })
+
+  // SecAlder's security review 2 of #3286: the PM, or a person, tells a builder in the task to merge a Team pull request, and a
+  // squash or a rebase leaves only the builder's own commits on its branch. The link they posted is the task's code, and is read.
+  // SecLarch's security review of #3286: a link the task's own builder posts is its code too.
+  it('reads a Team pull request the PM, a person or the task\'s builder linked in the task, and refuses the main account', async () => {
+    for (const poster of ['pm', 'person', 'builder'] as const) {
+      const f = await setup()
+      const text = `Merge ${TEAM_PR} into your branch, please.`
+      if (poster === 'person') await run(f.tab, { type: 'message.send', conversationId: f.task, text, replyTo: null, recipientIds: [] })
+      else await f.exec({ type: 'message.send', conversationId: f.task, text, replyTo: null, recipientIds: [] }, poster === 'pm' ? f.lead : f.ownBuilder)
+      await expect(f.join('Owner Builder 2')).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+      expect(await f.marked(f.task)).toBe(true)
+    }
+  })
+
+  it('reads a link a person posted in a task that names no pull request of its own yet', async () => {
+    const f = await setup()
+    const bare = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Owner work 2', brief: 'Do it', checks: [] })).result.conversationId)
+    await run(f.tab, { type: 'message.send', conversationId: bare, text: `Start from ${TEAM_PR}.`, replyTo: null, recipientIds: [] })
+    const next = await f.agentOf('lead', 'Owner Builder 3')
+    await expect(f.exec({ type: 'conversation.agent', conversationId: bare, agentId: next, present: true, lead: false })).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
   })
 
   it('marks a step for a Team pull request its reviewer names in its Ready, never the task; a link posted there marks nothing', async () => {
