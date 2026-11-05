@@ -216,21 +216,26 @@ class _ProjectRulesDialogState extends State<_ProjectRulesDialog> {
     final pause = pace['backendPause'] as Map<String, dynamic>?;
     Widget row(String label, String value) =>
         SuperTabDetailRow(label: label, value: value);
-    Widget none() => Text('None yet.', style: DesktopChrome.metadata());
-    Widget named(
-      String title,
-      String key,
-      String label,
-      String Function(Map<String, dynamic>) value,
-    ) {
-      final rows = list(rules[key]);
-      return SuperTabDetailSection(
-        title: title,
-        children: rows.isEmpty
-            ? [none()]
-            : [for (final r in rows) row('${r[label] ?? ''}', value(r))],
-      );
-    }
+    // The named lists: each with entries is its own section; the empty ones share one line, as the mockup draws.
+    final lists =
+        <(String, String, String, String Function(Map<String, dynamic>))>[
+          (
+            'Crew',
+            'crew',
+            'role',
+            (r) {
+              final names = joined(r['names']);
+              return names.isEmpty ? 'Nobody yet' : names;
+            },
+          ),
+          ('Caps', 'caps', 'name', (r) => '${r['value']}'),
+          ('Paths', 'paths', 'name', (r) => '${r['path'] ?? ''}'),
+          ('Lanes', 'lanes', 'name', (r) => joined(r['owns'])),
+        ];
+    final empty = [
+      for (final (title, key, _, _) in lists)
+        if (list(rules[key]).isEmpty) title,
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -291,13 +296,20 @@ class _ProjectRulesDialogState extends State<_ProjectRulesDialog> {
             ),
           ],
         ),
-        named('Crew', 'crew', 'role', (r) {
-          final names = joined(r['names']);
-          return names.isEmpty ? 'Nobody yet' : names;
-        }),
-        named('Caps', 'caps', 'name', (r) => '${r['value']}'),
-        named('Paths', 'paths', 'name', (r) => '${r['path'] ?? ''}'),
-        named('Lanes', 'lanes', 'name', (r) => joined(r['owns'])),
+        for (final (title, key, label, value) in lists)
+          if (list(rules[key]).isNotEmpty)
+            SuperTabDetailSection(
+              title: title,
+              children: [
+                for (final r in list(rules[key]))
+                  row('${r[label] ?? ''}', value(r)),
+              ],
+            ),
+        if (empty.isNotEmpty)
+          SuperTabDetailSection(
+            title: empty.join(' · '),
+            children: [Text('None yet.', style: DesktopChrome.metadata())],
+          ),
         SuperTabDetailSection(
           title: 'History',
           children: record.history.isEmpty
