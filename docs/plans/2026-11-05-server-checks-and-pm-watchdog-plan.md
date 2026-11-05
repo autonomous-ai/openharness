@@ -43,11 +43,11 @@
 
 **Interfaces:** `SuperTabStore.runTimeChecks(tabId): Promise<number>` (messages written). `startTimeChecks(db, store, everyMs = SWEEP_EVERY_MS): () => void` and `timeCheckSwarms(db, now, limit)`.
 
-- [ ] Integration test: with no PM poll at all, a quiet task, an idle agent and a lost task each produce their notice from `runTimeChecks`, once; a second run writes nothing.
-- [ ] Integration test: the PM's poll alone no longer writes them.
-- [ ] Watch both fail.
-- [ ] Add `runTimeChecks`, the pass and its worker start; remove the two calls from the poll. Point the fixtures that relied on the poll at `runTimeChecks` first.
-- [ ] Run the changed integration files.
+- [x] Integration test: with no PM poll at all, a quiet task, an idle agent and a lost task each produce their notice from `runTimeChecks`, once; a second run writes nothing.
+- [x] Integration test: the PM's poll alone no longer writes them.
+- [x] Watch both fail.
+- [x] Add `runTimeChecks`, the pass and its worker start; remove the two calls from the poll. Point the fixtures that relied on the poll at `runTimeChecks` first.
+- [x] Run the changed integration files.
 
 ## Task 2: the backend records what the PM owes
 
@@ -55,8 +55,8 @@
 
 **Interfaces:** `Project.owed?: { messageId: string; since: number }`. Host row `owed: { messageId, since, restartAfterMs } | null` on the PM's row.
 
-- [ ] Integration test: a person's message to the PM is recorded as owed; the PM's answer clears it; an agent's message never counts; the PM's host row carries it with `restartAfterMs`, another agent's row does not.
-- [ ] Watch it fail, then implement.
+- [x] Integration test: a person's message to the PM is recorded as owed; the PM's answer clears it; an agent's message never counts; the PM's host row carries it with `restartAfterMs`, another agent's row does not.
+- [x] Watch it fail, then implement.
 
 ## Task 3: the host restarts a stuck PM once
 
@@ -64,7 +64,7 @@
 
 **Interfaces:** `SuperTabHostOptions.restartLead?(harnessId)`, default the daemon's `agent_restart`.
 
-- [ ] Spec: owed ask past its time and the PM in one turn that long: restarted once, in place; more polls, still once; `keepLeadAlive` never called while the restart runs or settles, even when the session briefly reads as gone.
-- [ ] Spec: a frozen screen counts the same; an idle PM, an ask not yet due, or a PM that ended a turn recently is never restarted.
-- [ ] Watch them fail, then implement.
-- [ ] Run the host spec and the CLI coverage gate for the Super Tab host.
+- [x] Spec: owed ask past its time and the PM in one turn that long: restarted once, in place; more polls, still once; `keepLeadAlive` never called while the restart runs or settles, even when the session briefly reads as gone.
+- [x] Spec: a frozen screen counts the same; an idle PM, an ask not yet due, or a PM that ended a turn recently is never restarted.
+- [x] Watch them fail, then implement.
+- [x] Run the host spec and the CLI coverage gate for the Super Tab host.
