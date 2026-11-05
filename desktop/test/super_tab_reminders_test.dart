@@ -91,6 +91,27 @@ void main() {
   Finder reminderRow(String messageId) =>
       find.byKey(ValueKey('super-activity-row-reminder:reminder-$messageId'));
 
+  // One slow answer at startup left "Could not load reminders" on Decisions
+  // until the person pressed Retry (DESKTOP-0TFH0OJ, 2026-11-05).
+  testWidgets('a read that fails is tried again by itself, and says so only '
+      'once it has failed twice', (tester) async {
+    final server = _chat()
+      ..state['remindersDigest'] = 'r1'
+      ..failReadsOf = '/reminders';
+    await show(tester, server);
+    final reminders = SuperTabReminders.of(c);
+    expect(reminders.error, isNull);
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump();
+    expect(reminders.error, 'Could not load reminders. Try again.');
+
+    server.failReadsOf = null;
+    await tester.pump(const Duration(seconds: 16));
+    await tester.pump();
+    expect(reminders.error, isNull);
+  });
+
   group('Remind me', () {
     testWidgets('In 20 minutes asks for the time 20 minutes on', (
       tester,
