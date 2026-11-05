@@ -68,6 +68,31 @@ void main() {
       expect(scorecardRows.first.cell(null), '–');
     });
 
+    // Task #3462: crew wake and move times, as median · slowest.
+    test('crew wake and move times as median and slowest', () {
+      expect(scorecardSeconds(null), '–');
+      expect(scorecardSeconds(12), '12s');
+      expect(scorecardSeconds(210), '3m30');
+      expect(scorecardSeconds(300), '5m');
+      String cell(String label, Map<String, dynamic> figures) => scorecardRows
+          .firstWhere((r) => r.label == label)
+          .cell(SuperTabScorecardDay.fromJson(_day('2026-11-05', figures)));
+      final day = {
+        'crewWake': {'count': 3, 'medianSeconds': 12, 'slowestSeconds': 30},
+        'crewMove': {'count': 2, 'medianSeconds': 210, 'slowestSeconds': 300},
+      };
+      expect(cell('Crew wake time', day), '12s · 30s');
+      expect(cell('Crew move time', day), '3m30 · 5m');
+      // None that day, or a day stored before the figure existed.
+      expect(
+        cell('Crew wake time', {
+          'crewWake': {'count': 0, 'medianSeconds': null, 'slowestSeconds': null},
+        }),
+        '–',
+      );
+      expect(cell('Crew move time', {}), '–');
+    });
+
     test('columns are the 7 days back from the newest row', () {
       expect(scorecardColumns('2026-11-05'), [
         '2026-11-05',
