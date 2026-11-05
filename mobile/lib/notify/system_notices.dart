@@ -457,7 +457,7 @@ String encodeSwarmPayload(SwarmNoticeTarget target) =>
         ? '/decision/${Uri.encodeComponent(target.decisionId!)}'
         : ''}';
 
-@visibleForTesting
+/// Also a push's link (`push_registration.dart`), which the server writes the same way.
 SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
   if (payload == null || !payload.startsWith(_swarmPayload)) return null;
   final parts = payload.substring(_swarmPayload.length).split('/');

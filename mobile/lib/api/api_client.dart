@@ -226,6 +226,34 @@ class ApiClient {
     }
   }
 
+  /// `POST /api/push-devices` — keep this phone's push token for the signed-in person, so thread
+  /// replies and tags reach it while the app is closed (task #2905). False when not kept: an older
+  /// backend, or no network.
+  Future<bool> registerPushToken(String platform, String token) async {
+    try {
+      final res = await _dio.post(
+        '/api/push-devices',
+        data: {'platform': platform, 'token': token},
+      );
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// `POST /api/push-devices/drop` — this phone is signing out: its token gets no more pushes.
+  Future<bool> dropPushToken(String platform, String token) async {
+    try {
+      final res = await _dio.post(
+        '/api/push-devices/drop',
+        data: {'platform': platform, 'token': token},
+      );
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// `GET /api/device-keys/seen` — when each key last opened a session, `{pub: ms}`; empty when it
   /// cannot be read. A hint for offering to remove apps not used in a long while.
   Future<Map<String, int>> deviceKeysSeen() async {

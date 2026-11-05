@@ -52,6 +52,7 @@ import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
+import '../notify/push_registration.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -2396,6 +2397,8 @@ class AppNotifier extends ChangeNotifier {
         await log.leave().timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
+    // The same for this phone's push token: the next person's replies never reach it (task #2905).
+    await _push?.signedOut();
     final revision = _invalidateAuthWork();
     signingIn = false;
     signInProvider = null;
@@ -2950,6 +2953,8 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     _deviceLogRegistered = revision;
+    // Replies and tags reach this phone while the app is closed (task #2905): once per sign-in too.
+    unawaited(_startPush());
     final log = _deviceLog;
     if (log == null) return;
     // Normally already begun at the top of [_finishBootstrapSignedIn]; a no-op then.
@@ -3447,6 +3452,38 @@ class AppNotifier extends ChangeNotifier {
 
   ViewerDeviceLog? _deviceLog;
   int? _deviceLogRegistered;
+
+  /// This phone's push token on the server (task #2905). None in a test, which never reaches the
+  /// OS notification centre ([_paneLayout] null, as [agentNotices]).
+  late final PushRegistration? _push = _paneLayout == null
+      ? null
+      : PushRegistration(
+          register: (platform, token) => api.registerPushToken(platform, token),
+          drop: (platform, token) => api.dropPushToken(platform, token),
+          // A tapped push opens as a tapped Swarm notice does (phone_shell.dart).
+          open: (target) {
+            if (agentNotices.system case final SwarmNotices notices) {
+              notices.openedSwarm.value = target;
+            }
+          },
+        );
+  Future<void>? _pushStarted;
+
+  Future<void> _startPush() async {
+    final push = _push;
+    if (push == null) return;
+    await (_pushStarted ??= push.start());
+    await push.signedIn();
+  }
+
+  /// The keys of pushes already in the notification centre: the app does not post them again.
+  /// Empty when it cannot tell within half a second.
+  Future<Set<String>> pushDeliveredKeys() async =>
+      await _push?.deliveredKeys().timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () => const {},
+      ) ??
+      const {};
   int? _deviceLogBegun;
 
   /// What the device log announced (a new device, a removal) while the app was still starting up:
