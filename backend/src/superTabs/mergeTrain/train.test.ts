@@ -10,7 +10,7 @@ const ON = { enabled: true }
 /** A task whose one review step passed at [head] of [url]. */
 function approvedTask(url: string, head: string, reviewers = ['agent:reviewer']): TrainTask {
   const check = (by: string): Check => ({ id: `c-${by}`, description: 'Review', independent: true, evidence: 'ok', passedBy: by,
-    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}` }] as Check['verdicts'] })
+    verdicts: [{ by, passed: true, evidence: 'ok', at: 1, pullRequest: url, head, patch: `patch-${head}` }] as unknown as Check['verdicts'] })
   return {
     checks: [],
     pullRequestHeads: { [url]: { head, patch: `patch-${head}`, at: 1 } },
@@ -141,6 +141,16 @@ describe('the merge train finishes batches', () => {
     }
     expect(swarm.merged.map(m => [m.taskId, m.url])).toEqual([['task-7', a.url], ['task-8', b.url]])
     expect(repo.state.branches.has(batch.headRef)).toBe(false)
+  })
+
+  it('records every member\'s merge even when GitHub fails to take a comment after the squash', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts'])); swarm.approve(repo.addPull(8, ['backend/src/b.ts']))
+    await pass()
+    repo.state.ci.set(repo.batches()[0]!.head, 'success')
+    repo.state.failing.add('comment')
+    await pass()
+    expect(swarm.merged.map(m => m.taskId)).toEqual(['task-7', 'task-8'])
   })
 
   it('never hands the batch pull request to the Swarm, so no task links it or reads it as Team-written', async () => {
