@@ -433,7 +433,7 @@ void main() {
     tester.view.devicePixelRatio = 3;
     tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
     final opened = swarmOpenGitHub;
-    swarmOpenGitHub = (_) async {};
+    swarmOpenGitHub = (_) async => true;
     for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
       final brightness = palette.brightness;
       AppTheme.palette.value = palette;

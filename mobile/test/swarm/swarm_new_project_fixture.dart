@@ -156,6 +156,14 @@ class NewProjectSwarm {
   /// a minute per person (`RATE_LIMITED`).
   bool ownerRateLimited = false;
 
+  /// How many of the next organization checks fail as a server that did not
+  /// answer (503).
+  int ownerFailures = 0;
+
+  /// Runs while New repository's request is out, before it answers: the
+  /// sheet going meanwhile, say.
+  void Function()? whileAsking;
+
   /// Answers New repository's request in place of the server when set:
   /// throws to refuse it.
   FutureOr<Object?> Function(Map<String, dynamic> body)? refuseRepository;
@@ -255,21 +263,35 @@ class NewProjectSwarm {
       'messages': <Object>[],
       'next': null,
     };
-    if (ownerState case final state?) {
-      fake.routes['/api/super-tabs/$id/github/owners/'] = (_) =>
-          ownerRateLimited
-          ? throw const SuperTabFailure(
-              'RATE_LIMITED',
-              'Too many requests.',
-              statusCode: 429,
-            )
-          : {'state': state, 'installUrl': ?installUrl};
-    }
+    // Read at each check: an organization can install Harness meanwhile.
+    fake.routes['/api/super-tabs/$id/github/owners/'] = (_) {
+      final state = ownerState;
+      if (state == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'No route', statusCode: 404);
+      }
+      if (ownerRateLimited) {
+        throw const SuperTabFailure(
+          'RATE_LIMITED',
+          'Too many requests.',
+          statusCode: 429,
+        );
+      }
+      if (ownerFailures > 0) {
+        ownerFailures--;
+        throw const SuperTabFailure(
+          'SERVER_ERROR',
+          'The server did not answer.',
+          statusCode: 503,
+        );
+      }
+      return {'state': state, 'installUrl': ?installUrl};
+    };
     // New repository's request (backend Task 6): the sign-in to go to, and
     // the time that names this attempt; the project waits from then on.
     fake.routes['/api/super-tabs/$id/projects/'] = (body) async {
       if (refuseRepository case final refuse?) return refuse(body!);
       repositoryRequests.add(body!);
+      whileAsking?.call();
       final at = creationAt =
           newProjectNow.subtract(creationAgo).millisecondsSinceEpoch +
           repositoryRequests.length;
