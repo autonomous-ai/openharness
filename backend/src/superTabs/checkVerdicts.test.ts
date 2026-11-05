@@ -190,3 +190,22 @@ describe('a verdict and the base branch it was read against', () => {
     expect(c.passedBy).toBeNull()
   })
 })
+
+// Security review of #3218 (Warden2, round 5), Important 1: retargeted while the review ran, a verdict recorded after learned the
+// new base. A head keeps the base it was first seen at while it stays the same, and a verdict learns that one.
+describe('a verdict recorded after its head was retargeted', () => {
+  it('learns the base its head was first seen at, so it does not count on the new one', () => {
+    const c = check()
+    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, { [PR]: { head: A, patch: 'p-main', at: 2, base: 'main', firstBase: 'evil' } })
+    expect(c.verdicts![0]).toMatchObject({ base: 'evil' })
+    expect(c.verdicts![0]).not.toHaveProperty('patch')
+    expect(c.passedBy).toBeNull()
+  })
+
+  it('counts on the new base when the checker names it as the base it read against', () => {
+    const c = check()
+    recordCheckVerdict(c, { ...verdict('agent:r', true, A), base: 'main' }, undefined, { [PR]: { head: A, patch: 'p-main', at: 2, base: 'main', firstBase: 'evil' } })
+    expect(c.verdicts![0]).toMatchObject({ base: 'main', patch: 'p-main' })
+    expect(c.passedBy).toBe('agent:r')
+  })
+})

@@ -944,3 +944,19 @@ describe('a failure at an old head on a handed task', () => {
     expect(f.group(f.task).assignment).toMatchObject({ status: 'working', reopened: expect.objectContaining({ why: expect.any(String) }) })
   })
 })
+
+// Security review of #3218 (Warden2, round 5): a checker names the base branch it read against, as it names the head.
+describe('a verdict naming its base', () => {
+  it('is recorded with it, and a base must be a branch name', () => {
+    const f = stepsFixture()
+    const PR = 'https://github.com/acme/app/pull/7', A = 'aaaaaaa1111111111111111111111111111111aa'
+    const rev = f.add('rev', f.task)
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base: 'release/1.2', firstBase: 'main' } } })
+    const check = (base: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: true, evidence: 'Read it', head: A, base } as Command, f.as(rev))
+    check('release/1.2')
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base: 'release/1.2', patch: 'p' })
+    expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+    for (const base of ['', 'a b', 'x\ny', 'z'.repeat(256)]) expect(() => check(base)).toThrow()
+  })
+})

@@ -342,6 +342,26 @@ describe('pull request events', () => {
       for (const check of await read()) expect(check.passedBy).not.toBeNull()
     })
 
+    // Security review of #3218 (Warden2, round 5): retargeted while the review ran, the verdict recorded after still counts only
+    // on the base its head was first seen at.
+    it('a verdict recorded after a retarget counts only on the base its head was first seen at', async () => {
+      const f = await swarm()
+      const X = '9999999999999999999999999999999999999999'
+      f.patches.set(`${X}@evil`, 'p-evil').set(`${X}@main`, 'p-main')
+      f.pulls.set(f.PR, f.pull({ head: X, base: 'evil' }))
+      await f.pass()
+      f.pulls.set(f.PR, f.pull({ head: X, base: 'main' }))
+      await f.pass()
+      const reviewer = await f.add(f.task, 'test-host', 'Reviewer')
+      const checkId = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { checks: Array<{ id: string }> }).checks[0]!.id
+      const recorded = await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId, passed: true, evidence: 'Read it', head: X } as Command, host, reviewer)
+      expect(recorded.result).toMatchObject({ counts: false })
+      expect(String(recorded.result.next)).toContain('evil')
+      const data = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { checks: Array<{ passedBy: string | null; verdicts: Array<{ base?: string }> }> }
+      expect(data.checks[0]).toMatchObject({ passedBy: null })
+      expect(data.checks[0]!.verdicts.at(-1)).toMatchObject({ base: 'evil' })
+    })
+
     // Review of #3218 (Ledger, round 3), Important 2: links added later can move a reviewed pull request out of the watch;
     // its head is then no longer read, so its verdicts stop counting, on the task and its steps, though no head was left.
     it('a verdict stops counting once its pull request leaves the links watched', async () => {
