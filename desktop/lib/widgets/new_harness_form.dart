@@ -29,6 +29,7 @@ import 'desktop_chrome.dart';
 import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
+import 'new_repository_dialog.dart';
 import 'engine_identity.dart';
 import 'laid_out_list.dart';
 
@@ -157,6 +158,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     super.initState();
     _observedField = box.field;
     box.addListener(_onBox);
+    box.onNewRepository = _openNewRepository;
     widget.devicePort?.attach(_deviceSnapshot, _deviceAction);
     // The pane colours can change under an open dialog; it wears them too.
     terminalThemeStore.addListener(_onBox);
@@ -205,9 +207,25 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
+  /// New Repository's prompt (task #3374), from Choose repo.
+  Future<void> _openNewRepository() async {
+    final integration = box.integration;
+    final check = integration?.checkRepositoryOwner;
+    if (integration == null || check == null) return;
+    final ask = await showNewRepositoryDialog(
+      context,
+      owners: integration.newRepositoryOwners ?? const [],
+      check: check,
+      initial: box.project.newRepository,
+    );
+    if (!mounted || ask == null) return;
+    box.chooseNewRepository(ask);
+  }
+
   @override
   void dispose() {
     _heldFollow?.cancel();
+    if (box.onNewRepository == _openNewRepository) box.onNewRepository = null;
     widget.devicePort?.detach();
     box.removeListener(_onBox);
     terminalThemeStore.removeListener(_onBox);
@@ -800,6 +818,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     NewHarnessController.browseId,
     NewHarnessController.newProjectId,
     NewHarnessController.repositoryId,
+    NewHarnessController.newRepositoryId,
     NewHarnessController.existingProjectId,
     NewHarnessController.changeMachineId,
     NewHarnessController.linkProfileId,
@@ -847,6 +866,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     if (option.id == NewHarnessController.browseId) {
       unawaited(_browse());
+      return;
+    }
+    if (option.id == NewHarnessController.newRepositoryId) {
+      box.focusField(NewHarnessField.launch);
+      if (widget.desktop) _closeDesktopChooser();
+      unawaited(_openNewRepository());
       return;
     }
     _chooseFolderMachine(option.id);
@@ -1721,6 +1746,35 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                       const SizedBox(height: 12),
                                       _status(),
                                     ],
+                                    if (box.repositoryWaiting) ...[
+                                      const SizedBox(height: 4),
+                                      TextButton(
+                                        key: const ValueKey(
+                                          'new-harness-check-repository',
+                                        ),
+                                        onPressed: () => box
+                                            .integration
+                                            ?.checkRepositoryAgain
+                                            ?.call(),
+                                        child: const Text('Check again'),
+                                      ),
+                                    ] else if (box.newRepositoryNote
+                                        case final note?
+                                        when !choosing &&
+                                            box.error == null &&
+                                            box.status == null) ...[
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        note,
+                                        key: const ValueKey(
+                                          'new-harness-new-repository-note',
+                                        ),
+                                        style: DesktopChrome.text(
+                                          size: 12,
+                                          color: DesktopChrome.muted,
+                                        ),
+                                      ),
+                                    ],
                                     if (box.taskTooLong ||
                                         !box.takesTask &&
                                             box.task.isNotEmpty) ...[
@@ -1823,6 +1877,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         .where((p) => p.isNotEmpty)
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
+    if (box.project.newRepository case final ask?) return '${ask.slug} · new';
     return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
@@ -3011,6 +3066,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   IconData _desktopOptionIcon(NewHarnessOption option) {
     if (option.id == NewHarnessController.newProjectId) {
       return AppIcons.plus;
+    }
+    // The design's ✦: made on GitHub, not found on a machine.
+    if (option.id == NewHarnessController.newRepositoryId) {
+      return AppIcons.sparkles;
     }
     if (option.id == NewHarnessController.browseId ||
         option.id == NewHarnessController.existingProjectId) {
