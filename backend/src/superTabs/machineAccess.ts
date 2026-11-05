@@ -144,6 +144,8 @@ export function changeAccess(state: SuperTabState, actor: Actor, command: Access
   }
   if (command.account !== undefined) fail('INVALID_REQUEST', 'Remove the entry and add it again to move it to the other account.', 400)
   if (command.name !== undefined) {
+    // A shared entry renamed moves its sharing to whatever the new name is: that is sharing anew, the owner's session only.
+    if (entry.teammates && !session && !sameAccessName(command.name, entry.name)) ownerSession('rename an entry shared with teammates')
     if (taken(command.name, entry.account, entry.id)) exists(command.name)
     entry.name = command.name
   }
@@ -170,8 +172,8 @@ const teamEntry = (): never =>
 
 /**
  * What [actor] reads of a Mac's list (design section 4): everyone who sees the machine reads each entry's name, account and
- * state; its `check` only the machine's owner, from their own session; its `note` the owner and agents running on that
- * machine in that entry's account (the Mac for `own`, its Harness Team account's pool for `team`). An agent of the owner on
+ * state; its `check` only the machine's owner, from their own session; its `note` the owner, and once the entry is ok,
+ * agents running on that machine in that entry's account (the Mac for `own`, its Harness Team account's pool for `team`). An agent of the owner on
  * another machine, or the Lead that recorded it, reads neither.
  */
 export function visibleAccess(state: Pick<SuperTabState, 'machines' | 'agents'>, pool: ContributedMachine, actor: Actor): AccessEntry[] | undefined {
@@ -186,7 +188,8 @@ export function visibleAccess(state: Pick<SuperTabState, 'machines' | 'agents'>,
   }
   return pool.access.map(entry => {
     const { check: _check, note, ...rest } = entry
-    return note !== undefined && runsIn(entry) ? { ...rest, note } : rest
+    // What someone other than the owner said is no instruction to the owner's agents until the owner confirms it.
+    return note !== undefined && entry.state === 'ok' && runsIn(entry) ? { ...rest, note } : rest
   })
 }
 
