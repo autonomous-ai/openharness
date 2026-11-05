@@ -3,6 +3,22 @@
 > Task #3403, requested by Dee through Harness. Written by the project's Engineer way of working (docs/plans, test first,
 > one PR, one review): each plan task commits its failing test, then the code that passes it. No Execution Handoff.
 
+## As built (Rowan, 11-05; scope agreed with River in the task)
+
+- **Task 1** as planned, with one change: `answer` is a mode of `message.send` (`answer: true` with `answers`), not a new
+  command type, so it goes through every store path a post goes through (reply context, attachments, owed asks, deliveries).
+  `placeAnswer` turns it into a reply when the ask is inside a thread. The CLI's `answer` subcommand sends it.
+- **Task 3** as planned, narrowed by River's ruling: only another agent's post with no system source waits. A person's
+  message, every system row (stop, cancel, assignment, moved task), and anything to a coordinator or a Buddy go at once.
+  `waitsUntil` is cleared one row at a time by the agent's own `work.status`, and the list row carries `waitsForTurnEnd`
+  by the server's clock.
+- **Task 4** changed: the host can run outside the core's process, so a per-delivery flag in `inCore/deliveries.ts` would
+  not reach the core's idle check. Instead the host asks `core.agents.activity` and holds a waiting row through its existing
+  refused-write path (same claim, local retry each tick, list re-read every 30 s, reclaim every 2 min). Nothing in
+  `cli/src/core` changes.
+- **Task 2** in part: the PM's digest now starts with its owed asks (`inbox.ts owedLines`). The crew-needs section and
+  releasing the inbox at the PM's turn end are a follow-up task built on Relay's #3404 once its code lands (River, 11-05).
+
 **Goal:** The PM gets one inbox per turn and answers each ask once, in its place; crew members get their messages at turn end,
 on a status change or within 15 minutes, never typed mid-task; stop and cancel still go at once.
 
