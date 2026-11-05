@@ -299,15 +299,19 @@ class _ThreadCardState extends State<_ThreadCard> {
           );
     return Row(
       children: [
-        Flexible(
-          child: InkWell(
-            key: ValueKey('super-thread-card-title:$_key'),
-            onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
-            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-            child: title,
+        // The title takes what Unfollow leaves, so every card's Unfollow
+        // ends on one line.
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: InkWell(
+              key: ValueKey('super-thread-card-title:$_key'),
+              onTap: () => widget.onOpenThread(t.conversationId, t.rootId),
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              child: title,
+            ),
           ),
         ),
-        const Spacer(),
         if (attention.followSupported)
           quietDecisionAction(
             key: ValueKey('super-thread-card-unfollow:$_key'),
