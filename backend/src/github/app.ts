@@ -10,6 +10,7 @@ import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
 import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
+import type { PullRequestFile } from '../superTabs/pullRequestPatch.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
@@ -36,6 +37,8 @@ export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
  *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
+/** The most files GitHub lists for a pull request (GET /pulls/{number}/files). */
+export const PULL_FILES_MAX = 3000
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
@@ -643,6 +646,30 @@ export class GitHubApp {
         comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
           login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
       }
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /** A pull request's files with their patches (GET /repos/{owner}/{repo}/pulls/{number}/files), for its patch id
+   *  (superTabs/pullRequestPatch.ts, #3394), read with the watch's token ([PULL_WATCH_PERMISSIONS]) once per new head. Null
+   *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. */
+  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<PullRequestFile[] | null> {
+    const files: PullRequestFile[] = []
+    const text = (value: unknown) => typeof value === 'string' ? value : undefined
+    try {
+      for (let page = 1; files.length < PULL_FILES_MAX; page++) {
+        const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
+        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
+        for (const file of answer.body as Array<Record<string, unknown>>) {
+          const filename = text(file.filename), status = text(file.status), sha = text(file.sha), patch = text(file.patch), previousFilename = text(file.previous_filename)
+          if (!filename || !status || sha === undefined) return null
+          files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
+        }
+        if (answer.body.length < 100) return files
+      }
+      return null
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error
