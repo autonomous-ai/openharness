@@ -194,7 +194,7 @@ void main() {
     final f = SuperTabLaunchFixture();
     final c = await waitingSwarm(f);
     await show(tester, f);
-    await tester.tap(find.byKey(const ValueKey('super-activity')));
+    await tester.tap(find.byKey(const ValueKey('super-decisions')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Nova is waiting on you'));
     await tester.pumpAndSettle();

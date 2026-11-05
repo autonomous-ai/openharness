@@ -91,6 +91,14 @@ Future<SuperTabActivity> load(
 
 final _evening = DateTime(2026, 11, 2, 20, 30);
 
+/// The sidebar's two red numbers together (Decisions and Mentions), and
+/// whether any of its three rows has news: what the Activity row said before
+/// task #2996 split it.
+extension SuperTabActivityTotals on SuperTabActivity {
+  int get count => needsCount + mentionsCount;
+  bool get unread => count > 0 || threadsCount > 0;
+}
+
 void main() {
   group('Needs you', () {
     test('lists the decisions asked of the reader and the agents waiting on '

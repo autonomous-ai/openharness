@@ -1520,15 +1520,15 @@ void main() {
       });
 
       testWidgets(
-        'Activity keeps Needs you, for anyone with or without a Buddy',
+        'Decisions lists what waits on the reader, with or without a Buddy',
         (tester) async {
           final server = buddySwarm();
           server.ask(['Ship it?']);
           final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
 
-          expect(find.text('Needs you'), findsOneWidget);
+          expect(find.text('Decisions'), findsWidgets);
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1551,13 +1551,7 @@ void main() {
         'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
           final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
-          await tester.pumpAndSettle();
-
-          // Tags live in the Mentions tab, not in Needs you.
-          await tester.tap(
-            find.byKey(const ValueKey('super-activity-tab-mentions')),
-          );
+          await tester.tap(find.byKey(const ValueKey('super-mentions')));
           await tester.pumpAndSettle();
 
           expect(find.textContaining('Chat with PM'), findsNothing);

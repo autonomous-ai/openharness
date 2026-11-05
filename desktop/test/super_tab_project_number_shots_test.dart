@@ -9,6 +9,7 @@ import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
