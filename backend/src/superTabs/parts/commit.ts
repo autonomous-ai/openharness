@@ -89,16 +89,16 @@ export function indexesOf(state: SuperTabState) {
   }
 }
 
-/** The project chat whose coordinator [message] reaches, when a person wrote it: the chat itself, any of its threads, or
- *  another chat of its project where it names the coordinator (task #3022, pmSchedule.ts). Who wrote and whom it names,
- *  never its words. A project chat not loaded in this write is left as it is. */
-function coordinatorChat(state: SuperTabState, groupId: string, projectId: string | undefined, message: MessageDraft): Conversation | undefined {
-  if (message.author.kind !== 'person' || message.source) return undefined
+/** Whether [message], in [group], is a person's message to its project's coordinator: anywhere in the project chat, any of its
+ *  threads, or in another chat of the project where it reaches the coordinator (task #3022, pmSchedule.ts). Who wrote and whom
+ *  it reaches, never its words. Marked on [group] itself, which this write already writes (review of #3066, 1). */
+function toCoordinator(state: SuperTabState, group: Conversation, message: MessageDraft): boolean {
+  if (message.author.kind !== 'person' || message.source) return false
   const projects = state.projects ?? [{ id: 'lead', leadConversationId: 'lead' }]
-  const project = projects.find(p => p.leadConversationId === groupId) ?? projects.find(p => p.id === (projectId ?? 'lead'))
-  const home = project && state.conversations.find(c => c.id === project.leadConversationId)
-  if (!home) return undefined
-  return home.id === groupId || (!!home.leadId && message.recipients.includes(home.leadId)) ? home : undefined
+  if (projects.some(p => p.leadConversationId === group.id)) return true
+  const project = projects.find(p => p.id === (group.projectId ?? 'lead'))
+  const coordinator = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+  return !!coordinator && message.recipients.includes(coordinator)
 }
 
 /**
@@ -119,8 +119,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       group.lastMainSequence = sequence
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
-    const home = coordinatorChat(state, group.id, group.projectId, message)
-    if (home) home.heardAt = now
+    if (toCoordinator(state, group, message)) group.heardAt = now
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }

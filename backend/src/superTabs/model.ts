@@ -355,9 +355,9 @@ export interface Conversation {
   /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
    *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
   lastPersonSequence?: number
-  /** On a project chat: when a person last wrote to its project's coordinator, there (threads included) or naming it in another
-   *  chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save what it was taught only after one
-   *  (pmSchedule.ts; task #3022). Absent until then. */
+  /** When a person last wrote to its project's coordinator here: any message in the project chat (threads included), or one
+   *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
+   *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]

@@ -102,8 +102,8 @@ export function scheduleText(project: SwarmProject, slot: number, jobs: readonly
 export interface ScheduledWake { slot: number; jobs: ScheduleJob[]; day: string; revision: number; draft: MessageDraft }
 
 /** The coordinator's slot and its wake, when a slot is due and a job has something to do: the sweep has a task to settle
- *  (sweepDue), a person wrote to the coordinator since its last wake (parts/commit.ts heardAt: who wrote where, never the
- *  words; task #3022), or it is a new local day and the instructions changed since the last tidy. Null otherwise, and then
+ *  (sweepDue), a person wrote to the coordinator since its last wake (parts/commit.ts heardAt on the chat written to: who
+ *  wrote where, never the words; task #3022), or it is a new local day and the instructions changed since the last tidy. Null otherwise, and then
  *  nothing is recorded: a slot written with no wake would move the Swarm's head, and every reader's copy, each 30 minutes
  *  while nothing happened (#2946 review, 1), so the slot stays due and the next poll checks again, in memory over the loaded
  *  state. Null too in a paused Swarm, which stays due until it resumes, or for an agent that leads no project. The caller
@@ -117,10 +117,12 @@ export function scheduleRequest(state: SuperTabState, target: Agent, now: number
   const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
   const day = localNow(zone, now).date
   const revision = project.instructionsRevision ?? 0
-  const heardAt = state.conversations.find(c => c.id === project.leadConversationId)?.heardAt ?? 0
+  // The chats of its project the poll loaded, each marked where a person wrote to the coordinator (parts/commit.ts).
+  const since = schedule?.heardAt ?? 0
+  const heard = state.conversations.some(c => !c.archived && (c.heardAt ?? 0) > since && (c.id === project.leadConversationId || inProject(c, project.id)))
   const jobs: ScheduleJob[] = [
     ...sweepDue(state, project.id, now) ? ['sweep' as const] : [],
-    ...heardAt > (schedule?.heardAt ?? 0) ? ['heard' as const] : [],
+    ...heard ? ['heard' as const] : [],
     // Revision 1 is the project's first document: nothing has been added to it yet.
     ...day !== schedule?.tidiedOn && revision > (schedule?.tidiedRevision ?? 1) ? ['tidy' as const] : [],
   ]
