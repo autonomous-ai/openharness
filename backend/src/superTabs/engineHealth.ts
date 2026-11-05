@@ -72,8 +72,9 @@ export function noteStartFailed(state: SuperTabState, start: AgentStart, now: nu
     return machineSuspensionReason(machine, now)
   }
   if (start.request.gridModel || !engineFailure(start.error!) || active(machine, engine, now)) return null
-  const failures = (machine.engineFailures?.[engine] ?? 0) + 1
   const previous = machine.engineBackoff?.[engine]
+  // A counter from before failure attribution may be a clone/token failure; only the new record proves its cause.
+  const failures = (previous ? machine.engineFailures?.[engine] ?? 0 : 0) + 1
   const cause = engineFailure(start.error!) === 'engine' || (failures > 1 && previous?.cause !== 'sign-in') ? 'engine' : 'sign-in'
   if (failures < SUSPEND_AFTER) {
     machine.engineFailures = { ...machine.engineFailures, [engine]: failures }
