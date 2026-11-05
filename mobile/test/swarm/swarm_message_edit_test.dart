@@ -227,6 +227,68 @@ void main() {
     });
   });
 
+  testWidgets('your Buddy proposal offers Delete without Edit', (tester) async {
+    await pump(tester, backend([
+      message('m1', 1, text: 'Please fix the menu', source: {
+        'kind': 'buddy-proposal', 'personId': me,
+      }),
+    ]));
+    await tester.longPress(find.text('Please fix the menu'));
+    await tester.pumpAndSettle();
+    expect(delete, findsOneWidget);
+    expect(edit, findsNothing);
+  });
+
+  for (final author in ['person-ann', 'agent-builder']) {
+    testWidgets('$author Buddy proposal offers neither action', (tester) async {
+      await pump(tester, backend([
+        message('m1', 1, text: 'Please fix the menu', author: author, source: {
+          'kind': 'buddy-proposal', 'personId': me,
+        }),
+      ]));
+      await tester.longPress(find.text('Please fix the menu'));
+      await tester.pumpAndSettle();
+      expect(delete, findsNothing);
+      expect(edit, findsNothing);
+    });
+  }
+
+  for (final source in [
+    {'kind': 'buddy-proposal', 'personId': 'person-ann'},
+    {'kind': 'buddy-proposal'},
+    {'kind': 'task-line', 'personId': me},
+  ]) {
+    testWidgets('source cannot authorize owner deletion: $source', (tester) async {
+      await pump(tester, backend([
+        message('m1', 1, text: 'Please fix the menu', source: source),
+      ]));
+      await tester.longPress(find.text('Please fix the menu'));
+      await tester.pumpAndSettle();
+      expect(delete, findsNothing);
+      expect(edit, findsNothing);
+    });
+  }
+
+  testWidgets('your Buddy proposal in a thread offers Delete without Edit', (tester) async {
+    final root = message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1');
+    final reply = message('m2', 2, text: 'Please fix the menu', thread: 'm1', replyTo: 'm1', source: {
+      'kind': 'buddy-proposal', 'personId': me,
+    });
+    final fake = backend([root, reply], threads: [line('m1', 1, 2)]);
+    fake.routes['$messages?thread=m1'] = (_) => {
+      'messages': [reply, root], 'next': null, 'threads': <Object>[],
+    };
+    await pump(tester, fake);
+    await tester.tap(key('swarm-thread-line-m1'));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.descendant(
+      of: key('swarm-thread-messages'), matching: find.text('Please fix the menu'),
+    ));
+    await tester.pumpAndSettle();
+    expect(delete, findsOneWidget);
+    expect(edit, findsNothing);
+  });
+
   group('Edit message', () {
     testWidgets('opens the text in a field; Save sends message.edit and the '
         'chat shows the new text, edited', (tester) async {
