@@ -4,4 +4,5 @@ import 'image_cache.dart';
 const kDefaultShelfBytes = 64 * 1024 * 1024;
 
 /// A browser has no Harness home: memory, gone with the page.
-SuperTabImageShelf defaultImageShelf() => MemoryImageShelf();
+SuperTabImageShelf defaultImageShelf({Map<String, String>? environment}) =>
+    MemoryImageShelf();

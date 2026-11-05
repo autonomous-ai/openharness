@@ -9,13 +9,20 @@ import 'image_cache.dart';
 /// A computer keeps its chat pictures on disk, up to the cache's cap.
 const kDefaultShelfBytes = kSuperTabImageCacheBytes;
 
-/// `~/.harness/desktop-app/image-cache/`.
-SuperTabImageShelf defaultImageShelf() => DirectoryImageShelf(
-  Directory(
-    '${HarnessFileStore.defaultDirectoryPath()}'
-    '${Platform.pathSeparator}image-cache',
-  ),
-);
+/// `~/.harness/desktop-app/image-cache/`; memory where nothing names a home
+/// folder, so signing out never stops at a cache with nowhere to be.
+SuperTabImageShelf defaultImageShelf({Map<String, String>? environment}) {
+  try {
+    return DirectoryImageShelf(
+      Directory(
+        '${HarnessFileStore.defaultDirectoryPath(environment: environment)}'
+        '${Platform.pathSeparator}image-cache',
+      ),
+    );
+  } on StateError {
+    return MemoryImageShelf();
+  }
+}
 
 /// The chat's pictures in a folder of their own, kept to this user (0700, each
 /// file 0600 from its first byte) since they are the account's content. Each
@@ -43,9 +50,16 @@ class DirectoryImageShelf implements SuperTabImageShelf {
       await for (final entry in directory.list()) {
         if (entry is! File) continue;
         final name = entry.uri.pathSegments.last;
-        // A write a stop left half done: never a picture.
+        // A write half done: never a picture. One a stop left is removed;
+        // one under way in this window or another (a minute is far longer
+        // than any write) is left to finish.
         if (name.endsWith(_part)) {
-          await _delete(entry);
+          try {
+            final age = DateTime.now().difference(await entry.lastModified());
+            if (age > const Duration(minutes: 1)) await _delete(entry);
+          } on FileSystemException {
+            // Renamed into place meanwhile.
+          }
           continue;
         }
         try {

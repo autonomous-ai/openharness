@@ -302,6 +302,7 @@ void main() {
     test('signing out clears them, and their shapes', () async {
       await signedInBefore('machine-a', 'ada');
       final again = await open('machine-a');
+      await superTabImageCache.keep('a1', Uint8List(8), const Size(4, 3));
       expect(await superTabImageCache.read('a1'), isNotNull);
 
       await again.app.logout();

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -112,9 +113,80 @@ class SuperTabImageCache {
 
   Future<void>? _listed;
 
-  /// Done once the shelf has been listed, so [shapeOf] knows what an earlier
-  /// launch kept.
-  Future<void> get ready => _listed ??= _list();
+  /// Done once the shelf has been listed (and, at launch, [claim]ed), so
+  /// [shapeOf] knows what an earlier launch kept.
+  Future<void> get ready => _listed ??= _serial(_list);
+
+  /// The shelf's writes, clears and claims, one after another: a clear waits
+  /// for a write under way, then takes it too.
+  Future<void>? _tail;
+
+  Future<T> _serial<T>(Future<T> Function() work) {
+    // Chained from the caller's own zone: a finished future made elsewhere
+    // would run the work in the zone that made it.
+    final next = switch (_tail) {
+      null => Future<T>.sync(work),
+      final tail => tail.then((_) => work()),
+    };
+    _tail = next.then((_) {}, onError: (Object _) {});
+    return next;
+  }
+
+  /// Whose pictures these are: the CLI's machine id they were kept under, the
+  /// one id that proves an account with no network (as `ProfileCache` keeps
+  /// it). Not a picture's name, so never listed, shown or evicted.
+  static const _ownerName = 'owner';
+
+  /// At launch: the pictures stay only when [owner], the machine id the CLI is
+  /// signed in under now (null: signed out), is the one they were kept under.
+  /// A sign-out this app never saw (in a terminal, while it was closed, or a
+  /// clear that failed) leaves them to this, and so does another account
+  /// signing in on this computer. Reads wait for it.
+  Future<void> claim(String? owner) => _listed = _serial(() async {
+    try {
+      final mark = await _shelf.read(_ownerName);
+      final was = mark == null ? null : utf8.decode(mark, allowMalformed: true);
+      final pictures = (await _shelf.list()).any(
+        (entry) => entry.name != _ownerName,
+      );
+      if (owner == null || (was != owner && (was != null || pictures))) {
+        _forgetAll();
+        await _shelf.clear();
+      }
+      if (owner != null && was != owner) {
+        await _shelf.write(_ownerName, utf8.encode(owner));
+      }
+    } catch (error) {
+      appLog.warn(
+        'super-tabs',
+        'image cache not claimed: ${error.runtimeType}',
+      );
+    }
+    await _list();
+  });
+
+  /// A sign-in this session proved [owner]: what it keeps is its, at the next
+  /// launch too. Pictures under another owner are not adopted but cleared.
+  Future<void> owned(String owner) => _serial(() async {
+    try {
+      final mark = await _shelf.read(_ownerName);
+      final was = mark == null ? null : utf8.decode(mark, allowMalformed: true);
+      if (was == owner) return;
+      if (was != null) {
+        _forgetAll();
+        await _shelf.clear();
+      }
+      await _shelf.write(_ownerName, utf8.encode(owner));
+    } catch (error) {
+      appLog.warn('super-tabs', 'image cache not owned: ${error.runtimeType}');
+    }
+  });
+
+  void _forgetAll() {
+    _generation++;
+    _kept.clear();
+    _total = 0;
+  }
 
   /// A file id that can name a file anywhere, and its thumbnail (#3177):
   /// nothing that can leave the folder or clash with `~`.
@@ -186,19 +258,23 @@ class SuperTabImageCache {
     Size shape, {
     int? generation,
   }) async {
-    if (generation != null && generation != _generation) return;
+    final began = generation ?? _generation;
+    if (began != _generation) return;
     if (!_plainId.hasMatch(fileId) || bytes.length > capBytes) return;
     await ready;
-    if (generation != null && generation != _generation) return;
     final name = '$fileId~${shape.width.round()}x${shape.height.round()}';
     try {
-      final old = _kept[fileId];
-      await _shelf.write(name, bytes);
-      if (old != null && old.name != name) await _shelf.delete(old.name);
-      _forget(fileId);
-      _kept[fileId] = (name: name, shape: shape, bytes: bytes.length);
-      _total += bytes.length;
-      if (_total > capBytes) await _evict();
+      await _serial(() async {
+        // Cleared while this waited its turn: nothing of it is kept.
+        if (began != _generation) return;
+        final old = _kept[fileId];
+        await _shelf.write(name, bytes);
+        if (old != null && old.name != name) await _shelf.delete(old.name);
+        _forget(fileId);
+        _kept[fileId] = (name: name, shape: shape, bytes: bytes.length);
+        _total += bytes.length;
+        if (_total > capBytes) await _evict();
+      });
     } catch (error) {
       appLog.warn(
         'super-tabs',
@@ -212,15 +288,16 @@ class SuperTabImageCache {
   Future<void> _evict() async {
     final entries = await _shelf.list()
       ..sort((a, b) => a.usedAt.compareTo(b.usedAt));
-    var total = entries.fold<int>(0, (sum, entry) => sum + entry.bytes);
-    for (final entry in entries) {
+    final pictures = [
+      for (final entry in entries)
+        if (_named.firstMatch(entry.name) case final named?) (entry, named[1]!),
+    ];
+    var total = pictures.fold<int>(0, (sum, p) => sum + p.$1.bytes);
+    for (final (entry, fileId) in pictures) {
       if (total <= capBytes) break;
       await _shelf.delete(entry.name);
       total -= entry.bytes;
-      final named = _named.firstMatch(entry.name);
-      if (named != null && _kept[named[1]!]?.name == entry.name) {
-        _forget(named[1]!);
-      }
+      if (_kept[fileId]?.name == entry.name) _forget(fileId);
     }
   }
 
@@ -241,11 +318,9 @@ class SuperTabImageCache {
 
   /// Every picture gone, and their shapes: signing out.
   Future<void> clear() async {
-    _generation++;
-    _kept.clear();
-    _total = 0;
+    _forgetAll();
     try {
-      await _shelf.clear();
+      await _serial(_shelf.clear);
     } catch (error) {
       appLog.warn(
         'super-tabs',

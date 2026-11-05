@@ -103,6 +103,7 @@ import '../core/harness_file_store.dart';
 import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
+import '../super_tabs/image_cache.dart' show superTabImageCache;
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
@@ -7993,6 +7994,9 @@ class AppNotifier extends ChangeNotifier {
     if (viewer != null) return;
     final machineId = authStatus.loggedIn ? authStatus.machineId : null;
     _provenMachineId = machineId;
+    // The chat's pictures are tied the same way (task #3178): a sign-out this
+    // app never saw, or another account on this computer, clears them here.
+    unawaited(superTabImageCache.claim(machineId));
     _keptProfileId = null;
     _profileConfirmed = false;
     final kept = machineId == null ? null : await _profileCache.read(machineId);
@@ -8033,6 +8037,7 @@ class AppNotifier extends ChangeNotifier {
       _keptProfileId = profile.id;
     }
     await _profileCache.write(machineId, profile);
+    unawaited(superTabImageCache.owned(machineId));
   }
 
   /// Saves the signed-in person's own account name (Profile, task #2654) and
