@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { AgentStart } from './model.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
-import { ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
+import { ownerAccount, ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
 import { visibilityChanged } from './parts/commit.js'
 
 // Task #3073 (Diego, 11-05): a private project's owner who leaves the Swarm, or is removed, loses it, and the project stays
@@ -214,5 +214,20 @@ describe('a private project left with no member', () => {
     try { f.run({ type: 'project.delete', projectId: x.projectId }) } catch (error) { message = (error as Error).message }
     expect(message).toMatch(/still starting/)
     expect(message).not.toMatch(/Secret/)
+  })
+})
+
+// Self-review of #3082: an agent still working in a project nobody owns asks for its GitHub token or prepares a start, and the
+// store looks its owner's account up. '' is no ObjectId: Prisma throws on it (P2023), a 500, where the token is refused by name.
+describe('the account of a project\'s owner', () => {
+  const users = { findUnique: async ({ where }: { where: { id: string } }) => {
+    if (!/^[0-9a-f]{24}$/.test(where.id)) throw new Error('Malformed ObjectID')
+    return { name: 'Olive', email: 'olive@example.com' }
+  } }
+  it('is looked up for an owned project and is nobody for one nobody owns, without a lookup', async () => {
+    const f = setup(), x = f.create(p)
+    expect(await ownerAccount(users, { ...projectOf(f.state, x.projectId), ownerId: '200000000000000000000001' })).toEqual({ name: 'Olive', email: 'olive@example.com' })
+    f.run({ type: 'member.remove', userId: 'p' })
+    expect(await ownerAccount(users, projectOf(f.state, x.projectId))).toBeNull()
   })
 })
