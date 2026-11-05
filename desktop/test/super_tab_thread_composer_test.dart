@@ -685,6 +685,24 @@ void main() {
       expect(saved['lead'], 'message-1');
     });
 
+    test('a saved legacy root outside the chat page restores open', () async {
+      final server = threaded()..messagePage = 1;
+      server.messages.first.remove('thread');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThreads': {'lead': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.threadOnScreen, 'message-1');
+      expect(c.threadMessages('message-1').first.id, 'message-1');
+    });
+
     test('a saved thread whose root is gone restores closed', () async {
       final server = threaded();
       final c = server.controller(
