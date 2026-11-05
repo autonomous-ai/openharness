@@ -1,9 +1,7 @@
 /**
- * The merge train's numbers (task #3402), in one place until the project rules record (task #3393) holds them: the train is
- * off until a project switches it on (River, 2026-11-05: merging someone's repository by itself would surprise them), and
- * runs every 10 minutes once on.
+ * The merge train's fixed numbers (task #3402). Its switch, interval and the reads a change needs are the project's rules
+ * record (superTabs/policy.ts, task #3475): edited by people without a release, shared with the review steps.
  */
-export const TRAIN_DEFAULTS = Object.freeze({ enabled: false, everyMinutes: 10 })
 
 /** Branches the train builds batches on. Nothing else in a repository may use this prefix. */
 export const TRAIN_BRANCH_PREFIX = 'harness-train/'
@@ -23,20 +21,3 @@ export const TRAIN_PROJECTS = 50
 export const FAST_LANE: readonly RegExp[] = [/^docs\//, /\.md$/i]
 /** Paths the train's token may not change (it has no `workflows` permission): GitHub would refuse the merge. */
 export const NOT_MERGEABLE_BY_TOKEN = /^\.github\/workflows\//
-
-/**
- * Where each area of the review table lives in the repository, by the table's own area names (task #3393's seed). Until the
- * table maps its areas to paths, these patterns do; they err wide, as a pull request that needs one more read than it got
- * only waits, and one merged with too few cannot be taken back (River, 2026-11-05: fail closed on the review table).
- */
-export const REVIEW_AREAS: ReadonlyArray<{ area: string; paths: RegExp }> = [
-  { area: 'Sign-in', paths: /(^|\/)(auth|login|sign_?in|signin|session)[^/]*$|^backend\/src\/middlewares\//i },
-  { area: 'Tokens', paths: /token|^backend\/src\/github\//i },
-  { area: 'Encryption', paths: /crypt|cipher|secret|credential|key(s|chain)?\b/i },
-  { area: 'Access', paths: /access|permission|audience|membership/i },
-  { area: 'Buddy guard', paths: /guard/i },
-  { area: 'Device links', paths: /device|harness_?links|pairing|join_?link/i },
-  { area: 'Deletion', paths: /purge|delet|cleanup|sweep|prune/i },
-]
-/** Reads an area above needs while the project has no review table. */
-export const SECURITY_READS = 2
