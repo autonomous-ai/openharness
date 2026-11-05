@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attributedRules, droppedRules, personKey } from './instructionsDiff.js'
+import { attributedRules, droppedRules, personKey, repeatedRules } from './instructionsDiff.js'
 
 // Task #3151 (Ken, 11-05, from lamp): a PM's tidy from revision 70 to 71 dropped Leo's rule and the "(0xken15, 4 Nov)" of a
 // rule it kept, and nothing checked the save.
@@ -103,5 +103,60 @@ describe('droppedRules', () => {
     const same = (a: string, b: string) => [a, b].every(n => ['ken', '0xken15'].includes(n.toLowerCase()))
     expect(droppedRules(doc(tony), doc(tony.replace('0xken15', 'Ken')), name => same(name, 'ken') ? 'ken' : name)).toEqual([])
     expect(why(doc(tony), doc(tony.replace('0xken15', 'Dee')))).toEqual([[['0xken15'], 'unattributed']])
+  })
+})
+
+// Task #3283 (Leo, 11-05, from lamp): Faye saved a rule the document already had as if it were new, which hid that it had
+// skipped it. A repeat is the same words in the same order, whatever its case, punctuation, list marker or attribution.
+describe('repeatedRules', () => {
+  const rule = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const doc = (...lines: string[]) => ['# Project instructions', '', '## Rules', '', ...lines.map(l => `- ${l}`)].join('\n')
+  const before = doc(rule, 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+  const repeats = (...added: string[]) => repeatedRules(before, [before, ...added.map(l => `- ${l}`)].join('\n'))
+
+  it('finds a line added word for word, and quotes the existing line', () => {
+    expect(repeats(rule)).toEqual([{ added: rule, existing: rule }])
+  })
+
+  it('finds it through case, punctuation, a new attribution, plurals and filler words', () => {
+    const reworded = 'every phone-app task runs on Tony\'s Mac first: its engineer and its tester both! (Faye, 11-05)'
+    expect(repeats(reworded)).toEqual([{ added: reworded, existing: rule }])
+    expect(repeats('Every phone app tasks run on Tony\'s Mac first, the Engineer and the Tester both.')).toHaveLength(1)
+  })
+
+  it('finds a rewrapped or renumbered copy', () => {
+    const wrapped = before + '\n1. Every phone app task runs on\n   Tony\'s Mac first, its Engineer and\n   its Tester both.'
+    expect(repeatedRules(before, wrapped)).toHaveLength(1)
+  })
+
+  it('does not find a rule changed in substance', () => {
+    expect(repeats('Every phone app task runs on Tony\'s Mac first, its Engineer but not its Tester.')).toEqual([])
+    expect(repeats('No releases between 18:00 and 10:00 Vietnam time (owner, 2026-11-02).')).toEqual([])
+    expect(repeats('Releases between 18:00 and 09:00 Vietnam time are fine (owner, 2026-11-02).')).toEqual([])
+    expect(repeats('Never run a phone app task on Tony\'s Mac first, its Engineer and its Tester both.')).toEqual([])
+    expect(repeats('Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both, unless urgent.')).toEqual([])
+  })
+
+  it('does not treat unchanged, moved, reworded-in-place or removed lines as repeats', () => {
+    expect(repeatedRules(before, before)).toEqual([])
+    const [first, second] = before.split('\n').slice(4)
+    expect(repeatedRules(before, [...before.split('\n').slice(0, 4), second, first].join('\n'))).toEqual([])
+    // Rewording a line in place leaves one copy; so does replacing a line with the same words under a new attribution.
+    expect(repeatedRules(before, before.replace('(owner, 4 Nov)', '(owner, 5 Nov)'))).toEqual([])
+    expect(repeatedRules(before, before.replace('Tony\'s Mac first', 'TONY\'S MAC FIRST'))).toEqual([])
+    expect(repeatedRules(before, doc('every phone app task runs on tony\'s mac first, its engineer and its tester both (Faye, 11-05).'))).toEqual([])
+  })
+
+  it('does not hold short lines, headings, or a plain line repeated under another section', () => {
+    const base = '# Project\n\n## Engineer\n\n- Pushes its branch as it goes and opens a draft pull request.\n- Tests pass.\n'
+    expect(repeatedRules(base, base + '- Tests pass.\n\n## Engineer notes\n\n## Engineer\n')).toEqual([])
+    expect(repeatedRules(base, base + '\n## Reviewer\n\n- Pushes its branch as it goes and opens a draft pull request.\n')).toEqual([])
+    expect(repeatedRules(base, base + '- Pushes its branch as it goes and opens a draft pull request.\n')).toHaveLength(1)
+  })
+
+  it('finds an attributed rule repeated in another section', () => {
+    const base = '# Project\n\n## PM\n\n- Decides, never asks the owner to choose (Ken, 2026-11-04).\n'
+    const added = '- Decides, never asks the owner to choose (Faye, 11-05).'
+    expect(repeatedRules(base, `${base}\n## Reviewer\n\n${added}\n`)).toEqual([{ added: added.slice(2), existing: 'Decides, never asks the owner to choose (Ken, 2026-11-04).' }])
   })
 })
