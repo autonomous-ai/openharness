@@ -202,12 +202,12 @@ export class DeviceLogStore {
     return next
   }
 
-  /** Keep `file` — the log of an account this machine is leaving — to restore if it comes back. */
-  archive(file: DevLogFile): void {
+  /** Keep the departing log for an ordinary sign-in; Team switches discard it, including an older archived copy. */
+  archive(file: DevLogFile, { forget = false }: { forget?: boolean } = {}): void {
     if (!file.state) return
     const all = this.archived()
     delete all[file.state.acct]
-    all[file.state.acct] = trimmed(file)
+    if (!forget) all[file.state.acct] = trimmed(file)
     const accts = Object.keys(all)
     for (const acct of accts.slice(0, Math.max(0, accts.length - DEVLOG_ARCHIVED))) delete all[acct]
     this.writeJson(this.archiveFile, all)

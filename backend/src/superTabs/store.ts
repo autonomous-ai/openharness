@@ -2639,7 +2639,9 @@ export class SuperTabStore {
     if (group && !sessionReadsRow(reader, group, state)(message)) return undefined
     if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
     const author = message.author as { kind?: string; id?: string } | null
+    const source = message.source as { kind?: unknown; personId?: unknown } | null
     const target: MessageChangeTarget = { messageId: message.id, author: { kind: String(author?.kind ?? ''), id: String(author?.id ?? '') },
+      proposalOwnerId: source?.kind === 'buddy-proposal' && typeof source.personId === 'string' ? source.personId : undefined,
       plain: message.source == null, deleted: !!message.deletedAt, hasFiles: Array.isArray(message.attachments) && message.attachments.length > 0,
       hasReplies: false, text: message.text, sequence: message.sequence }
     // Only an author's delete reads further; anyone else is refused on the row alone.
@@ -2660,7 +2662,12 @@ export class SuperTabStore {
     const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true, mentions: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
-    if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [{ q: { _id: { $in: files }, tabId }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true }] })
+    // A proposal can carry its owner's chat files without owning them (#3322 security review): expire only this row's
+    // uploads, and release only its forwarding claim. The original chat message must keep its file through the sweep.
+    if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [
+      { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
+      { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
+    ] })
     // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
     // the reply's for every member it could have told.
     const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
@@ -2673,9 +2680,10 @@ export class SuperTabStore {
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
-      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it.
+      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it. A deleted Buddy proposal's
+      // goal and scope must go too (#3322): they can repeat its text, and its source would still make it an open proposal.
       await tx.$runCommandRaw({ update: 'SuperTabMessage', updates: [{ q: { _id: row.id, tabId }, u: { $set: { text: DELETED_TEXT, mentions: [],
-        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '' } } }] })
+        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '', source: '' } } }] })
       // Its own thread's summary drops the people only this root tagged.
       await refreshThreads(tx, tabId, row.conversationId, [row.id])
       return

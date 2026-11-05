@@ -411,7 +411,7 @@ class SuperTabController extends ChangeNotifier {
       openedThread = root == null ? null : (conversationId: to, root: root);
       threadTarget = null;
       _threadUnshown = root != null;
-      _reopenThread = root != null;
+      _reopenThread = false;
     }
   }
 
@@ -4019,7 +4019,10 @@ class SuperTabController extends ChangeNotifier {
         _before.removeWhere((id, _) => !allowed.contains(id));
         _readAt.removeWhere((id, _) => removed.contains(id));
         if (!allowed.contains(selectedId)) {
-          selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
+          _moveView(
+            to: next.projects.firstOrNull?.leadConversationId ?? 'lead',
+          );
+          if (openedThread != null) unawaited(loadThread());
         }
         selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
@@ -5520,6 +5523,20 @@ class SuperTabController extends ChangeNotifier {
       // level message is its own thread's root.
       openThread(_threadOf(conversationId, replyTo) ?? replyTo ?? id);
     }
+    return result;
+  }
+
+  /// Sends [message], which names a box's files already [uploaded], as
+  /// [send] sends its own: they leave their box only once the server takes
+  /// the message, so a refused or unanswered one keeps them there, and a
+  /// refusal of the files themselves sends them up again next time.
+  Future<Map<String, dynamic>?> sendWithUploads(
+    Map<String, dynamic> message,
+    Map<HarnessAttachment, String> uploaded,
+  ) async {
+    _uploaded.addAll(uploaded);
+    final result = await command(message);
+    _forgetRefusedUploads(result);
     return result;
   }
 

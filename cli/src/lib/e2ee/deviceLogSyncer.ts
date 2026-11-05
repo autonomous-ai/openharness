@@ -383,6 +383,12 @@ export class DeviceLogSyncer {
     return local === null || file.owner === local.epoch
   }
 
+  private archiveDeparting(file: DevLogFile): void {
+    const epoch = this.deps.signIn()?.epoch ?? ''
+    // Team agents must not inherit the departing owner's device names, keys or trust decisions.
+    this.deps.store.archive(file, { forget: epoch.startsWith('team:') || epoch.startsWith('adopted:team:') })
+  }
+
   /** `file`, with every key a fork suspended in another account's kept log, and active in this one,
    *  suspended (and new) here as well: it is not trusted either way, so the list says so — and "It's
    *  mine" lifts it, everywhere (a review of this list does not: it never showed that suspension). */
@@ -566,9 +572,9 @@ export class DeviceLogSyncer {
       }
       if (reset) {
         if (now) {
-          // What the account left behind trusted goes with its log, and comes back with it.
+          // Ordinary sign-ins keep the departing trust and log; Team sign-ins discard them.
           this.deps.switchAccount?.(now.acct, got.acct)
-          this.deps.store.archive(latest)
+          this.archiveDeparting(latest)
         }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
@@ -1024,12 +1030,12 @@ export class DeviceLogSyncer {
       // The joined point never moves up past the reviewed head: a shorter list (rolled back, or
       // another account's) must leave every key added to it from here on news.
       const joinedSeq = Math.min(base.joinedSeq ?? base.notifiedUpTo, next.head.seq)
-      // The reviewed list is another account's: the one this machine leaves is kept, as on a sign-in
+      // The reviewed list is another account's: the departing log follows the same policy as a sign-in
       // (and what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
       // goes on from where it was.
       if (file.state && !same) {
         this.deps.switchAccount?.(file.state.acct, next.acct)
-        this.deps.store.archive(file)
+        this.archiveDeparting(file)
       }
       const { joining: _j, ...rest } = base
       const reviewed: DevLogFile = this.carrySuspensions({

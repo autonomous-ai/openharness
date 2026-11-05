@@ -5,17 +5,12 @@ import 'package:flutter/foundation.dart';
 import '../state/harness_attachments.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'attachment_upload.dart' show kSuperTabAttachmentMaxFiles;
 import 'voice_take.dart';
 
 /// The name a voice message's clip is uploaded under: what an older app shows
 /// for it, as a file (the phone's swarmVoiceFileName).
 const superTabVoiceFileName = 'Voice message.wav';
-
-/// What the composer says when a voice message went without its words.
-const superTabVoiceOverLimit =
-    "Sent without words: today's voice limit is used";
-const superTabVoiceNotTranscribed =
-    "Sent without words: they couldn't be heard";
 
 /// What it says when the clip's read got no answer; the take is kept.
 const superTabVoiceNoAnswer = "Not sent · couldn't reach the server";
@@ -51,16 +46,28 @@ extension SuperTabVoiceSend on SuperTabController {
     required String lang,
   }) async {
     if (!canWrite) return (sent: false, notice: null);
-    if (saving || hasPendingAction) {
+    if (saving || uploading || hasPendingAction) {
       return (sent: false, notice: superTabVoiceBusy);
     }
-    final String id;
-    try {
-      final answer = await uploadFile(
-        conversationId,
-        HarnessAttachment(superTabVoiceFileName, wav),
+    final owner = root == null
+        ? attachments(conversationId)
+        : threadAttachments(conversationId, root);
+    final attached = owner.files;
+    if (attached.length >= kSuperTabAttachmentMaxFiles) {
+      return (
+        sent: false,
+        notice: 'Attach at most 9 files with a voice message.',
       );
-      id = superTabMap(answer['attachment'])['id'] as String;
+    }
+    final ids = <String>[];
+    try {
+      for (final file in [
+        ...attached,
+        HarnessAttachment(superTabVoiceFileName, wav),
+      ]) {
+        final answer = await uploadFile(conversationId, file);
+        ids.add(superTabMap(answer['attachment'])['id'] as String);
+      }
     } on SuperTabFailure catch (failure) {
       return (sent: false, notice: failure.message);
     } on TimeoutException {
@@ -68,31 +75,31 @@ extension SuperTabVoiceSend on SuperTabController {
     } on Object {
       return (sent: false, notice: superTabVoiceNoAnswer);
     }
-    final read = await _readVoice(id, lang);
+    final read = await _readVoice(ids.last, lang);
     final voice = read.voice;
     if (voice == null) return (sent: false, notice: read.refused);
-    if (saving || hasPendingAction) {
+    if (saving || uploading || hasPendingAction) {
       return (sent: false, notice: superTabVoiceBusy);
     }
     // Answered or not, the message is now the chat's: a lost answer or a
-    // refusal shows it there with Retry, under the same receipt.
-    await command({
-      'type': 'message.send',
-      'conversationId': conversationId,
-      'text': '',
-      'replyTo': root,
-      'recipientIds': const <String>[],
-      'attachmentIds': [id],
-      if (oneBuddy) 'oneBuddy': true,
-    });
-    return (
-      sent: true,
-      notice: voice.transcribed
-          ? null
-          : voice.failure == 'limit'
-          ? superTabVoiceOverLimit
-          : superTabVoiceNotTranscribed,
+    // refusal shows it there with Retry, under the same receipt. The attached
+    // files stay in the composer until the server takes it, as a typed
+    // message's do.
+    await sendWithUploads(
+      {
+        'type': 'message.send',
+        'conversationId': conversationId,
+        'text': '',
+        'replyTo': root,
+        'recipientIds': const <String>[],
+        'attachmentIds': ids,
+        if (oneBuddy) 'oneBuddy': true,
+      },
+      {for (final (i, file) in attached.indexed) file: ids[i]},
     );
+    // Nothing to say once sent: a voice message plays only, and never has
+    // words to go without (anh Dee, 2026-11-04).
+    return (sent: true, notice: null);
   }
 
   /// Has the server read the uploaded clip [attachmentId] as a voice message,

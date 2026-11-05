@@ -886,9 +886,11 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
     // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: "I\'ll post this as you: …", and wait for their ok.')
+    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
     expect(text).toContain('"text":"the line they okayed, or their own words"')
-    expect(text).toContain('Only what follows "I\'ll post this as you:" in your message counts as shown')
+    expect(text).toContain('Quotes around that line are required')
+    expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
+    expect(text).toContain('If an unquoted line is refused, show it again in quotes and wait for a new ok')
     expect(text).toContain('in full, never cut, as their own message, with no reply from you in the chat')
     expect(text).not.toContain('Short name (at most 80 characters)')
     expect(text).not.toContain('with your full proposal as the first reply in its thread')

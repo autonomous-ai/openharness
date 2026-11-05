@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
-import type { RelaySeen } from './relayRecovery.js'
-import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
+import { RECOVER_AFTER_MS, RELAY_RESTORED, RelayRecovery, type RelaySeen } from './relayRecovery.js'
+import { capScreen, limitOf, modelFailing, signedOut, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
@@ -344,6 +344,67 @@ describe('a Team agent stranded on its owner\'s relay (task #3106)', () => {
     const t = setup({ screen: () => ({ ok: false, error: 'gone' }), relay })
     await t.host.tick([row()])
     expect(relay.seen).not.toHaveBeenCalled()
+  })
+})
+
+// Task #3301: a CLI release restarted the owner's daemon and its relay, and Team Claude agents launched in the gap, or still
+// holding a token the relay no longer took, showed Claude Code's signed-out notice and sat there until a person came (Quince,
+// 2026-11-05: "Not logged in · Please run /login"). The watch knew only a relay that does not answer at all.
+describe('a Team agent signed out of its owner\'s relay (task #3301)', () => {
+  const GRANT = { url: 'http://127.0.0.1:41002', token: 'c'.repeat(43) }
+  const NOT_LOGGED_IN = '⏺ I will run the tests.\n\n  ⎿  Not logged in · Please run /login\n\n❯ \n  ? for shortcuts'
+  const UNAUTHORIZED = '⏺ Reading the brief.\n  ⎿  API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}} · Please run /login\n❯ '
+  const BACK = '⏺ Carrying on with the task.\n❯ '
+
+  function recovering(screen: string, over: { grant?: () => typeof GRANT | null } = {}) {
+    let text = screen
+    const restart = vi.fn(async (_h: string) => { text = BACK; return { ok: true as const } })
+    let t!: ReturnType<typeof setup>
+    const recovery = new RelayRecovery({ grant: over.grant ?? (() => GRANT), answers: async () => true, restart,
+      input: (h, typed) => t.core.superTabs!.input(h, typed, ['Enter']), now: () => t.now(), log: vi.fn() })
+    t = setup({ screen: () => ({ ok: true, text, hold: null }), relay: recovery })
+    return { t, restart }
+  }
+  // The relay recovery is not awaited by the watch (a restart takes up to a minute): let it settle.
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  for (const [name, screen] of [['Not logged in', NOT_LOGGED_IN], ['API Error: 401', UNAUTHORIZED]] as const) {
+    it(`relaunches an agent showing "${name}" onto the current grant, then tells it to carry on`, async () => {
+      // The Team daemon restarted mid-session too: a new watch and recovery, which never restarted this agent.
+      const { t, restart } = recovering(screen)
+      await t.host.tick([row()]); await settle()
+      expect(restart).not.toHaveBeenCalled()
+      t.wait(RECOVER_AFTER_MS); await t.host.tick([row()]); await settle()
+      expect(restart).toHaveBeenCalledExactlyOnceWith('h1')
+      t.wait(15_000); await t.host.tick([row()]); await settle()
+      expect(t.core.superTabs!.input).toHaveBeenCalledExactlyOnceWith('h1', RELAY_RESTORED, ['Enter'])
+    })
+  }
+
+  it('relaunches nothing while no grant reads: the held relaunch waits for it (team/relay.ts NO_CLAUDE_RELAY)', async () => {
+    const { t, restart } = recovering(NOT_LOGGED_IN, { grant: () => null })
+    await t.host.tick([row()]); t.wait(RECOVER_AFTER_MS); await t.host.tick([row()]); await settle()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('knows Claude Code\'s and Codex\'s own signed-out notices near the prompt', () => {
+    for (const line of ['  ⎿  Not logged in · Please run /login', '⎿  API Error: 401 {"type":"error","error":{"type":"authentication_error"}} · Please run /login',
+      '  ⎿  Invalid API key · Please run /login', '  ⎿  OAuth token has expired · Please run /login', '■ unexpected status 401 Unauthorized: Missing bearer authentication']) {
+      expect(signedOut(`⏺ work\n\n${line}\n❯ `), line).toBe(true)
+    }
+    expect(modelFailing(NOT_LOGGED_IN)).toBe(false)
+  })
+
+  it('never reads the agent\'s own words, a tool\'s output or an old notice far up the screen as signed out', () => {
+    // An agent working on this very bug writes and prints these lines: restarting it would cost its turn.
+    expect(signedOut('⏺ Quince showed "Not logged in · Please run /login" after the update.\n❯ ')).toBe(false)
+    expect(signedOut('  The brief says API Error: 401 is not recovered.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ Bash(echo "Not logged in · Please run /login")\n  ⎿  Not logged in · Please run /login\n❯ ')).toBe(false)
+    expect(signedOut(`  ⎿  Not logged in · Please run /login\n${'line\n'.repeat(30)}❯ `)).toBe(false)
+    // A reply that starts with the phrase is still the agent's own words, Claude Code's "⏺" or Codex's "•" (security review 2).
+    expect(signedOut('⏺ Not logged in users are sent to /login, so the relay never sees them.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ API Error: 401 comes from the relay when its token is stale.\n❯ ')).toBe(false)
+    expect(signedOut('• Invalid API key is what Codex prints for a stale relay token.\n› ')).toBe(false)
   })
 })
 
