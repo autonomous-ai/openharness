@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
-import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -2430,6 +2430,11 @@ describe('the route answer an agent reads (task #3294)', () => {
     // The folder a start takes is said once when every machine shares it (a live route: 23 machines, one folder of 85 characters).
     expect(printed.cwd).toBe('/absolute/repo/on/that/machine')
     expect(lines[0]!.line).toMatch(/· fits 62% · resets 5d$/)
+    // A note is its first clause, long enough to keep the name or the cause it carries (review of #3169).
+    expect(noteClause(PM_ACCOUNT_NOTE(['lamp (Faye)', 'computer (Sage)']))).toBe('This account runs the PM of lamp (Faye) and computer (Sage)')
+    expect(noteClause('Its last start failed while preparing the project folder. The start has the details; this does not suspend the engine.'))
+      .toBe('Its last start failed while preparing the project folder')
+    expect(noteClause('x'.repeat(100))).toBe(`${'x'.repeat(71)}…`)
     // A note is its first clause; the record for Details keeps it whole.
     expect(lines[1]!.line).toMatch(/· Machine fit: its 3 agents use 61% of the CPU$/)
   })
@@ -2441,7 +2446,8 @@ describe('the route answer an agent reads (task #3294)', () => {
     expect(routeAnswer(answer, { fullInstructions: true }).instructions).toMatchObject({ revision: 74, text: document, notes: ['Release Amon\'s hotfix first.'] })
     // A revision already read is not sent again; an older one is.
     const read = routeAnswer(answer, { instructionsRead: 74 }).instructions as Record<string, unknown>
-    expect(read).toEqual({ revision: 74, unchanged: expect.stringContaining('revision 74') })
+    // Its notes still come: adding one does not change the revision (review of #3169).
+    expect(read).toEqual({ revision: 74, unchanged: expect.stringContaining('revision 74'), notes: ['Release Amon\'s hotfix first.'] })
     expect(routeAnswer(answer, { instructionsRead: 73 }).instructions).toMatchObject({ revision: 74, routing })
     // The whole text wins over a revision read.
     expect(routeAnswer(answer, { fullInstructions: true, instructionsRead: 74 }).instructions).toMatchObject({ text: document })
@@ -2486,6 +2492,9 @@ describe('the route answer an agent reads (task #3294)', () => {
     expect(routingSection('## Routing\nonly')).toBe('## Routing\nonly')
     expect(routingSection('# Routing\nTop\n# Next')).toBe('# Routing\nTop')
     expect(routingSection('## Roles\nRouting is mentioned, not a heading.\n### Routing notes\nn')).toBeNull()
+    // A shell comment in a fenced block is not a heading (review of #3169), nor a Routing heading inside one.
+    expect(routingSection('## Routing\n```sh\n# start it\nharness start\n```\nafter\n## Rules\nx')).toBe('## Routing\n```sh\n# start it\nharness start\n```\nafter')
+    expect(routingSection('```\n## Routing\n```\n## Roles\nr')).toBeNull()
   })
 })
 

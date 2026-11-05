@@ -915,3 +915,4 @@ export function routeAnswer(answer: Json, options: { fullInstructions?: boolean;
   return printed
 }
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
+export const noteClause = (note: string) => note
