@@ -20,7 +20,7 @@ export const PURGE_RETRY_MS = 6 * 60 * 60 * 1000
 export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabMention', 'superTabReaction', 'superTabActivity', 'superTabChatSetting', 'superTabReminder', 'superTabReadMark',
   'superTabThreadMark', 'superTabThread', 'superTabOpenProposal', 'superTabDecision', 'superTabOperation', 'superTabNativeContext', 'superTabDelivery', 'superTabReceipt',
   'superTabRun', 'superTabAttempt', 'superTabRouteDecision', 'superTabModelEvidence', 'superTabModelRecent', 'superTabStopReceipt',
-  'superTabRoleText', 'superTabInstructions', 'superTabInstructionsRevision', 'superTabPmNote', 'superTabConfiguration', 'superTabTerminalRequest',
+  'superTabRoleText', 'superTabInstructions', 'superTabInstructionsRevision', 'superTabProjectRules', 'superTabPmNote', 'superTabConfiguration', 'superTabTerminalRequest',
   'gitHubRepositoryApproval', 'gitHubApprovalRefusal', 'swarmHead', 'swarmMember', 'swarmGroup', 'swarmAgent', 'swarmMachine', 'swarmStart',
   'swarmProgress'] as const
 
