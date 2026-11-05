@@ -384,7 +384,7 @@ class PersonalProjects extends ChangeNotifier {
       },
       if (view.arrangedKey case final key? when key.startsWith(prefix))
         'arrangedKey': key,
-      if (view.gridColumns case final columns?) 'gridColumns': columns,
+      'gridColumns': ?view.gridColumns,
     };
     // What this computer kept is read first, so the save keeps it.
     final account = c.accountId;
