@@ -184,6 +184,30 @@ describe('a reopened crew session', () => {
     expect(never.log.mock.calls.filter(([line]) => /gave up/i.test(String(line)))).toHaveLength(1)
   })
 
+  // Review 2 of #3222: after a second crash the restored history shows the first continue; the composer is empty, so it is
+  // typed again, never an Enter on an empty prompt.
+  it('types the continue again when only the history shows it, never a bare Enter', async () => {
+    const t = setup({ working: () => false })
+    t.show(`❯ ${CREW_CONTINUE}\n\n⏺ Picking the task up again.\n\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  ? for shortcuts`)
+    t.keeper.reopened('h1')
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, 'Enter'])
+  })
+
+  // Review 2 of #3222: a terminal gone for a moment keeps the continue owed while the roster names the crew member.
+  it('keeps the continue owed while its terminal is away for a moment', async () => {
+    let away = true
+    const t = setup({ working: () => false })
+    vi.mocked(t.core.agents.terminalAvailable).mockImplementation(() => !away)
+    t.keeper.reopened('h1')
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([])
+    away = false
+    t.wait(CREW_LOOK_MS)
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, 'Enter'])
+  })
+
   it('is told nothing when it holds no task here', async () => {
     const t = setup({ working: () => false, owns: () => false })
     t.keeper.reopened('h1')
