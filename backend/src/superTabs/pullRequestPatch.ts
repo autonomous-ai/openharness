@@ -3,7 +3,8 @@
  * the same, so a verdict read at one head still counts at a plain rebase or a main merge that leaves that diff unchanged
  * (checkVerdicts.ts). Read from GitHub's per-file patches of the pull request, which compare its head with its merge base.
  * Where a hunk starts is left out, as main's changes elsewhere in a file move it; every line of the hunk, context included,
- * is kept, so a change near the pull request's lines makes a new id (the safe side: the verdict then needs a new read).
+ * and the section its header names are kept, so a change near the pull request's lines makes a new id (the safe side: the
+ * verdict then needs a new read).
  */
 import { createHash } from 'node:crypto'
 
@@ -18,7 +19,9 @@ export interface PullRequestFile {
   sha: string
 }
 
-const HUNK = /^@@ [^@]* @@.*$/gm
+/** A hunk header's positions: only at the start of a line split at a line feed, so a CR, U+2028 or U+2029 inside a line of
+ *  the file never starts one (security review of #3218). Its section heading after them is kept. */
+const HUNK = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/
 
 /** The patch id of a pull request's [files] (any order), or null for none. */
 export function patchId(files: readonly PullRequestFile[]): string | null {
@@ -26,7 +29,7 @@ export function patchId(files: readonly PullRequestFile[]): string | null {
   const hash = createHash('sha256')
   for (const file of [...files].sort((a, b) => a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0)) {
     hash.update(`${file.status}\0${file.previousFilename ?? ''}\0${file.filename}\0`)
-    hash.update(file.patch === undefined ? `blob ${file.sha}` : file.patch.replace(HUNK, '@@'))
+    hash.update(file.patch === undefined ? `blob ${file.sha}` : file.patch.split('\n').map(line => line.replace(HUNK, '@@')).join('\n'))
     hash.update('\0\0')
   }
   return hash.digest('hex')

@@ -19,7 +19,7 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '210000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '210000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const HEAD = 'abc1234def5678'
+const HEAD = 'abc1234def5678abc1234def5678abc1234def56'
 const MINUTE = 60_000
 
 beforeAll(async () => {
@@ -183,7 +183,7 @@ describe('pull request events', () => {
   describe('a verdict at a head', () => {
     const reviewed = async () => {
       const f = await swarm()
-      const HEAD2 = 'bbbbbbb2222222', HEAD3 = 'ccccccc3333333'
+      const HEAD2 = 'bbbbbbb2222222bbbbbbb2222222bbbbbbb22222', HEAD3 = 'ccccccc3333333ccccccc3333333ccccccc33333'
       f.patches.set(HEAD, 'p1').set(HEAD2, 'p1').set(HEAD3, 'p2')
       f.pulls.set(f.PR, f.pull())
       await f.pass()
@@ -196,8 +196,8 @@ describe('pull request events', () => {
       const group = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).data as unknown as
         { checks: Array<{ id: string; passedBy: string | null; verdicts?: Array<{ head?: string; patch?: string; stale?: string }> }> }
       const taskCheck = (await group(f.task)).checks[0]!.id, stepCheck = (await group(step)).checks[0]!.id
-      await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right' } as Command, host, reviewer)
-      await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in' } as Command, host, tester)
+      await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right', head: HEAD } as Command, host, reviewer)
+      await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in', head: HEAD } as Command, host, tester)
       const read = async () => [(await group(f.task)).checks[0]!, (await group(step)).checks[0]!]
       return { f, HEAD2, HEAD3, read }
     }
@@ -234,7 +234,7 @@ describe('pull request events', () => {
 
     it('a head whose patch cannot be read counts only verdicts at that very head', async () => {
       const { f, read } = await reviewed()
-      f.pulls.set(f.PR, f.pull({ head: 'ddddddd4444444' }))
+      f.pulls.set(f.PR, f.pull({ head: 'ddddddd4444444ddddddd4444444ddddddd44444' }))
       await f.pass()
       for (const check of await read()) expect(check.passedBy).toBeNull()
     })

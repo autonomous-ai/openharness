@@ -406,9 +406,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
-  // `head`: the pull request commit the checker read (#3394); without it, the head the task's PR watch last read.
+  // `head`: the whole commit id of the pull request head the checker read (#3394; never shortened, security review of #3218).
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text,
-    head: z.string().regex(/^[0-9A-Fa-f]{7,40}$/).transform(head => head.toLowerCase()).optional() }).strict(),
+    head: z.string().regex(/^[0-9A-Fa-f]{40}$/).transform(head => head.toLowerCase()).optional() }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -3907,13 +3907,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
-      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read.
+      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read. The
+      // checker names it. A person who named none gets the head the watch read last, as the screen they checked showed it; an
+      // agent's verdict naming none is recorded and counts at no watched head (security review of #3218: a push during the
+      // review would get its pass). Nothing is refused: the result says how the verdict counts and what makes it count.
       const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
       const heads = build?.pullRequestHeads, urls = build?.pullRequestUrls ?? []
       const pullRequest = urls.findLast(url => heads?.[url]) ?? urls.at(-1)
-      const head = command.head ?? (pullRequest ? heads?.[pullRequest]?.head : undefined)
+      const watched = pullRequest ? heads?.[pullRequest]?.head : undefined
+      const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
       const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
-        ...head ? { ...pullRequest ? { pullRequest } : {}, head } : {} }, accountable ? departed : undefined, heads)
+        ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {} }, accountable ? departed : undefined, heads)
+      const recorded = check.verdicts!.at(-1)!
+      result.counts = recorded.stale === undefined
+      if (!result.counts) {
+        result.next = head ? `This verdict is for ${head.slice(0, 7)}; the pull request is at ${recorded.stale!.slice(0, 7)}. Check that head and send it as head.`
+          : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. It is at ${recorded.stale!.slice(0, 7)}.`
+      }
       const first = !earlier
       // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
       // first line, and who cleared it. A checker's name from before verdicts kept one is not known.

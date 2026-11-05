@@ -37,11 +37,16 @@ export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
  *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
-/** The most files GitHub lists for a pull request (GET /pulls/{number}/files). */
-export const PULL_FILES_MAX = 3000
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
+/** The most files GitHub lists for a pull request (GET /pulls/{number}/files). */
+export const PULL_FILES_MAX = 3000
+/** The `ref` of a GitHub contents link (`.../contents/PATH?ref=SHA`), or undefined. */
+function refOf(url: unknown): string | undefined {
+  if (typeof url !== 'string') return undefined
+  try { return new URL(url).searchParams.get('ref') ?? undefined } catch { return undefined }
+}
 const PUSH_ORIGINS_KEPT = 1000
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
@@ -656,7 +661,7 @@ export class GitHubApp {
    *  (superTabs/pullRequestPatch.ts, #3394), read with the watch's token ([PULL_WATCH_PERMISSIONS]) once per new head. Null
    *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. With
    *  [head], null too unless the pull request's head is still that one once the files are read: a push in between would
-   *  give a newer head's files to the older head. */
+   *  give a newer head's files to the older head; and unless each file listed is [head]'s (its contents link's ref). */
   async pullRequestFiles(repository: GitHubRepository, number: number, token: string, head?: string): Promise<PullRequestFile[] | null> {
     const files: PullRequestFile[] = []
     const text = (value: unknown) => typeof value === 'string' ? value : undefined
@@ -667,6 +672,9 @@ export class GitHubApp {
         for (const file of answer.body as Array<Record<string, unknown>>) {
           const filename = text(file.filename), status = text(file.status), sha = text(file.sha), patch = text(file.patch), previousFilename = text(file.previous_filename)
           if (!filename || !status || sha === undefined) return null
+          // Each file listed is [head]'s (security review of #3218): a push and a push back between pages, or a diff GitHub has
+          // not recomputed yet, would list another head's.
+          if (head !== undefined && refOf(file.contents_url)?.toLowerCase() !== head.toLowerCase()) return null
           files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
         }
         if (answer.body.length < 100) {

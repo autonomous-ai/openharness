@@ -12,16 +12,24 @@ import type { Check, CheckVerdict, PullRequestHead } from './model.js'
 /** Each linked pull request's head as the PR watch last read it (Conversation.pullRequestHeads). */
 export type PullRequestHeads = Readonly<Record<string, PullRequestHead>>
 
-/** Whether [head] names [full]: the same commit, written in full or shortened (seven characters at least). */
-const sameHead = (full: string, head: string) => head.length >= 7 && full.toLowerCase().startsWith(head.toLowerCase())
+/** Whether [head] is [full]: the whole commit id, never a shortening a commit could be ground to share (security review of
+ *  #3218). */
+const sameHead = (full: string, head: string) => full.toLowerCase() === head.toLowerCase()
 
-/** Whether [verdict] counts against [heads]: one with no head, or on a pull request no head is known for, counts as verdicts
- *  always did; otherwise only at that head, or at a head whose patch id is its own. A patch nobody could read (null) matches
- *  nothing, so only the exact head counts there. */
+/** The head a verdict's pull request is at now: its own pull request's, or for one recorded with none (from before heads,
+ *  or before the task linked one), whichever its task's watch has read. */
+const currentHead = (verdict: CheckVerdict, heads: PullRequestHeads | undefined): PullRequestHead | undefined =>
+  verdict.pullRequest ? heads?.[verdict.pullRequest] : Object.values(heads ?? {})[0]
+
+/** Whether [verdict] counts against [heads]. While no head of its pull request is watched, it counts as verdicts always did.
+ *  Then only at the head it names, or at a head whose patch id is its own; a patch nobody could read (null) matches nothing,
+ *  so only that exact head counts there. A verdict naming no head counts at none (security review of #3218: the head watched
+ *  last may be a push nobody read), so one from before heads needs a new check once its pull request is watched. */
 export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | undefined): boolean {
-  const current = verdict.pullRequest && verdict.head ? heads?.[verdict.pullRequest] : undefined
+  const current = currentHead(verdict, heads)
   if (!current) return true
-  return sameHead(current.head, verdict.head!) || (!!verdict.patch && current.patch === verdict.patch)
+  if (!verdict.head) return false
+  return sameHead(current.head, verdict.head) || (!!verdict.patch && current.patch === verdict.patch)
 }
 
 /** [verdict] at a head whose patch id is known learns it: from [known] when that is the head it read. */
@@ -37,7 +45,7 @@ export function deriveCheck(check: Check, heads: PullRequestHeads | undefined): 
   const verdicts = check.verdicts ?? []
   for (const verdict of verdicts) {
     if (verdictCounts(verdict, heads)) delete verdict.stale
-    else verdict.stale = heads![verdict.pullRequest!]!.head
+    else verdict.stale = currentHead(verdict, heads)!.head
   }
   const live = verdicts.filter(v => v.stale === undefined)
   const failed = live.findLast(v => !v.passed), passed = live.findLast(v => v.passed)
@@ -69,7 +77,7 @@ export function refreshChecks(checks: readonly Check[], url: string, previous: P
   for (const check of checks) {
     if (!check.verdicts?.length) continue
     for (const verdict of check.verdicts) {
-      if (verdict.pullRequest !== url) continue
+      if (verdict.pullRequest !== url || !verdict.head) continue
       learnPatch(verdict, previous)
       learnPatch(verdict, heads[url])
     }

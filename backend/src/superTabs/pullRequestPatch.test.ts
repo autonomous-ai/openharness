@@ -11,7 +11,7 @@ const parser = '@@ -10,3 +10,4 @@ export function parse()\n context\n-old\n+new\
 
 describe('a patch id', () => {
   it('ignores where hunks start, and the order files come in', () => {
-    const moved = parser.replace('@@ -10,3 +10,4 @@ export function parse()', '@@ -42,3 +45,4 @@ function parse()')
+    const moved = parser.replace('@@ -10,3 +10,4 @@ export function parse()', '@@ -42,3 +45,4 @@ export function parse()')
     expect(patchId([file('a.ts', parser), file('b.ts', '@@ -1 +1 @@\n-x\n+y')]))
       .toBe(patchId([file('b.ts', '@@ -1 +1 @@\n-x\n+y'), file('a.ts', moved)]))
   })

@@ -243,9 +243,9 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
   /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
    *  (#2656). Absent on verdicts given before. */
   name?: string
-  /** The task's pull request it read and that pull request's head commit then (Dee, #3394): the head the checker named, else
-   *  the one its PR watch last read. It counts only while that is the head, or the head's patch is the same
-   *  (checkVerdicts.ts verdictCounts). Absent when no head was known: it counts as verdicts always did. */
+  /** The task's pull request it read and that pull request's head commit then (Dee, #3394): the whole commit id the checker
+   *  named; for a person who named none, the one the PR watch last read. It counts only while that is the head, or the head's
+   *  patch is the same (checkVerdicts.ts verdictCounts); with no head, only while no head of its pull request is watched. */
   pullRequest?: string
   head?: string
   /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
