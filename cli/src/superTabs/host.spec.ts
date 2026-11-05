@@ -5983,6 +5983,22 @@ describe('a crew member at rest', () => {
     expect(drop).toHaveBeenCalledTimes(2)
     drop.mockRestore()
   })
+  it('a woken member whose folder is coming back is not reopened until it is there (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    let finish!: (value: 'restored') => void
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    await t.poll()
+    await t.poll(10_000)
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    finish('restored')
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    restore.mockRestore()
+  })
   it('a member woken and put to sleep again is closed again', async () => {
     const rows = [crewRow({ asleep: { since: 1 } })]
     const t = lifeFixture(rows)
