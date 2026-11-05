@@ -133,13 +133,13 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
 }
 
 /** One assignment the dispatch makes. */
-export interface Pick { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }
+export interface DispatchPick { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }
 
 /** What each free crew member of [projectId] gets in one pass: its first candidate no other member took first. Nothing while
  *  the Swarm is paused. */
-export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number): Pick[] {
+export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number): DispatchPick[] {
   if (state.paused) return []
-  const open = openTasks(state, projectId, now), taken = new Set<string>(), picks: Pick[] = []
+  const open = openTasks(state, projectId, now), taken = new Set<string>(), picks: DispatchPick[] = []
   for (const member of freeCrew(state, projectId, rules, now)) {
     const next = candidatesFor(state, member, rules, now, open).find(c => !taken.has(c.group.id))
     if (!next) continue
