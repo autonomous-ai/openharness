@@ -1275,6 +1275,32 @@ void main() {
       expect(projects.panesFor(c, api.leadConversationId), [p.api2]);
     });
 
+    test('the list works out every hidden project in one pass, with the same '
+        'answer as asking each (review of #3073)', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api');
+      expect(projects.hiddenIn(c), isEmpty);
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      expect(projects.hiddenIn(c), {api.id});
+      for (final project in c.snapshot!.projects) {
+        expect(
+          projects.hidden(c, project.id),
+          projects.hiddenIn(c).contains(project.id),
+          reason: project.name,
+        );
+      }
+      // A machine with one of the panes not listed yet: nothing hides.
+      f.app.machineStates['m']!
+        ..agentsListedOnce = false
+        ..agentLoadStatus = AgentLoadStatus.loading;
+      expect(projects.hiddenIn(c), isEmpty);
+    });
+
     test(
       'a tab\'s project hides once its panes with no repo are closed',
       () async {
