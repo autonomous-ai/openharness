@@ -12,6 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { EXPIRED_UPLOAD, MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { DELETED_TEXT } from '../src/superTabs/messageEdits.js'
+import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { poolRows } from './hostRows.test-support.js'
 import { profiled } from './plans.test-support.js'
 
@@ -215,6 +216,11 @@ describe('message.delete', () => {
     const updates = entries.filter(e => e.ns.endsWith('.SuperTabAttachment'))
     expect(updates.length).toBeGreaterThan(0)
     expect(updates.filter(e => /COLLSCAN/.test(String(e.planSummary)))).toEqual([])
+    await sweepUnsentAttachments(db, { store: f.files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' },
+      new Date(Date.now() + 48 * 3_600_000), { chunk: 100, chunks: 1, pauseMs: 0 })
+    expect(await db.superTabAttachment.findUnique({ where: { id: handed } })).toMatchObject({ usedBy: ask })
+    expect(await f.files.read(kept.objectKey)).toEqual(Buffer.from('owner-note.txt'))
+    expect(await db.superTabAttachment.findUnique({ where: { id: owned } })).toBeNull()
   })
 
   it('removes a message with no replies: its row, reactions, Activity, open deliveries and files', async () => {
