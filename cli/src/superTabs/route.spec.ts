@@ -42,6 +42,15 @@ describe('assessment', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { cwd: 'relative' } })).toContain('absolute')
     expect(parseAssessment(null)).toContain('difficulty')
   })
+  // Task #3047: what the work needs to reach, by the names machines list it under.
+  it('parses needs.access, trimmed and once each, and explains a bad one', () => {
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { access: [' Lamp ', 'Lamp', 'Fusion  360'] } }))
+      .toMatchObject({ needs: { access: ['Lamp', 'Fusion 360'] } })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { access: [] } })).not.toHaveProperty('needs.access')
+    for (const access of ['Lamp', [''], ['x'.repeat(61)], [3]]) {
+      expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { access } }), JSON.stringify(access)).toContain('needs.access')
+    }
+  })
   it('parses the task\'s kind', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'ui' })).toMatchObject({ kind: 'ui' })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'UI work' })).toContain('kind')

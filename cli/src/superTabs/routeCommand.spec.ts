@@ -2110,3 +2110,117 @@ describe('routing by measured cost and results', () => {
       warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is shown without it.']) })
   })
 })
+
+// Task #3047, phase 1 of docs/design/2026-11-05-machine-access.md: a task names what it needs to reach, and the route leaves
+// out every machine and account that does not have it, with why. The backend refuses those starts too (machineAccess.ts).
+describe('needs.access', () => {
+  const reading = () => ({ receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
+    tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] })
+  const entry = (name: string, account: 'own' | 'team' = 'own', extra: Record<string, unknown> = {}) =>
+    ({ id: `e${name.length}${account}`, name, account, state: 'ok', addedBy: 'mate', addedAt: '2026-11-05T00:00:00.000Z', ...extra })
+  /** Mate's Mac, with its Harness Team account (healthy), and the list on the Mac's own entry. */
+  const mac = (access?: unknown[]) => ({ machineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/mate/swarm', engines: ['claude'], paused: false,
+    contributorId: 'mate', observation: reading(), teamWork: { allowed: true }, ...(access ? { access } : {}) })
+  const team = () => ({ machineId: 'm1-team', hostMachineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/team/swarm', engines: ['claude'], paused: false,
+    contributorId: 'mate', observation: reading(), teamWork: { allowed: true } })
+  /** The project owner's own machine. */
+  const other = (access?: unknown[]) => ({ machineId: 'm9', name: 'Studio', scope: 'swarm', cwd: '/owner/swarm', engines: ['claude'], paused: false,
+    contributorId: 'owner', observation: reading(), teamWork: { allowed: true }, ...(access ? { access } : {}) })
+  const people = [{ id: 'owner', name: 'Ken' }, { id: 'mate', name: 'Gray' }]
+  async function route(machines: Record<string, unknown>[], { needs = { access: ['Lamp'] } as Record<string, unknown>, requires, members = [] as unknown[], ownerId = 'owner' }:
+    { needs?: Record<string, unknown>; requires?: Record<string, unknown>; members?: unknown[]; ownerId?: string } = {}) {
+    const groups = conversations().map(g => g.id === 'g1' && requires ? { ...g, task: { requires } } : g)
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members, conversations: groups, machines, people,
+      projects: [{ id: 'lead', ownerId, repository: { repositoryUrl: 'https://github.com/example/project' } }] } },
+      policy: { policy, warnings: [] }, machines: [] } } })
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, opener())
+    const decision = s.mock.calls.find(c => c[0].action === 'command')?.[0].command.decision
+    return { answer, candidates: (decision?.candidates ?? []) as Array<{ machineId: string; kind: string; title: string; notes?: string[] }>,
+      excluded: (decision?.excluded ?? answer.excluded ?? []) as Array<{ title: string; reason: string }> }
+  }
+  const reasonsFor = (excluded: Array<{ title: string; reason: string }>, name: string) => excluded.filter(e => e.title.includes(name)).map(e => e.reason)
+
+  it('leaves out a machine without it, from needs.access or from the task\'s requires.access, names matched without case', async () => {
+    for (const ask of [{ needs: { access: ['  lamp '] } }, { needs: {}, requires: { access: ['Lamp'] } }]) {
+      const { candidates, excluded } = await route([mac([entry('Lamp', 'team')]), team(), other()], ask)
+      expect([...new Set(candidates.filter(c => c.kind === 'new').map(c => c.machineId))], JSON.stringify(ask)).toEqual(['m1-team'])
+      expect(reasonsFor(excluded, 'Studio'), JSON.stringify(ask)).toContain(`No ${ask.requires ? 'Lamp' : 'lamp'} here.`)
+    }
+  })
+
+  it('suggests the closest name it saw when nothing matches', async () => {
+    const { excluded } = await route([other([entry('Desk lamp')])], { ownerId: 'owner' })
+    expect(reasonsFor(excluded, 'Studio')).toContain('No Lamp here. Did you mean Desk lamp?')
+    const far = await route([other([entry('Fusion 360')])])
+    expect(reasonsFor(far.excluded, 'Studio')).toContain('No Lamp here.')
+    // The nearest of several: a letter off beats a longer name holding it.
+    const near = await route([other([entry('Desk lamp'), entry('Lamb'), entry('Lamps and more')])])
+    expect(reasonsFor(near.excluded, 'Studio')).toContain('No Lamp here. Did you mean Lamb?')
+  })
+
+  it('takes the task\'s access beside the Lead\'s, each name once', async () => {
+    const { excluded } = await route([other([entry('Lamp')])], { needs: { access: ['lamp'] }, requires: { access: ['Lamp', 'Fusion 360'] } })
+    expect(reasonsFor(excluded, 'Studio')).toEqual(expect.arrayContaining(['No Fusion 360 here.']))
+    expect(reasonsFor(excluded, 'Studio').some(r => /No lamp here/i.test(r))).toBe(false)
+  })
+
+  it('never offers a teammate\'s task the owner\'s unshared own-account entry, nor counts it for the Team account', async () => {
+    const { answer, excluded } = await route([mac([entry('Lamp')]), team()])
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(excluded.map(e => e.reason)).toContain('Lamp is in Gray\'s own account, not shared with teammates.')
+  })
+
+  it('offers the Mac itself, in its owner\'s account and saying so, when its owner shared that entry and the task names it', async () => {
+    const { answer, candidates } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()], { needs: {}, requires: { access: ['Lamp'] } })
+    expect([...new Set(candidates.filter(c => c.kind === 'new').map(c => c.machineId))]).toEqual(['m1'])
+    const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp is shared with teammates.')
+  })
+
+  // Security review 2: the start keeps a teammate's task on the Mac only for access its task names (backend teamMachineFor), so
+  // a route asked with needs.access alone never offers the owner's account: it would start in the Team account.
+  it('offers a shared own-account entry only to a task that names it, as the start places it', async () => {
+    const { candidates, excluded } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()])
+    expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
+    expect(excluded.map(e => e.reason)).toContain('Lamp is shared from Gray\'s own account only with tasks that name it in their access.')
+  })
+
+  it('notes a production system on every candidate that would use one', async () => {
+    const { answer } = await route([mac([entry('Prod DB read-only', 'team', { production: true })]), team()], { needs: { access: ['Prod DB read-only'] } })
+    const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain('Prod DB read-only is a production system: writes still need a person\'s go.')
+    const plain = await route([mac([entry('Lamp', 'team')]), team()])
+    expect(JSON.stringify(plain.answer)).not.toContain('production system')
+  })
+
+  it('names every shared entry the task needs on the Mac', async () => {
+    const { answer } = await route([mac([entry('Lamp', 'own', { teammates: true }), entry('Fusion 360', 'own', { teammates: true })]), team()],
+      { needs: {}, requires: { access: ['Lamp', 'Fusion 360'] } })
+    for (const row of answer.candidates as Array<{ title: string; notes?: string[] }>) {
+      expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp, Fusion 360 are shared with teammates.')
+    }
+  })
+
+  it('leaves out an entry waiting for its owner to confirm, and a Team-account entry for the owner\'s own project', async () => {
+    const waiting = await route([mac([entry('Lamp', 'team', { state: 'unconfirmed' })]), team()])
+    expect(waiting.excluded.map(e => e.reason)).toContain('Lamp on MacBook Pro is waiting for Gray to confirm.')
+    const own = await route([mac([entry('Lamp', 'team')]), team()], { ownerId: 'mate' })
+    expect(own.excluded.map(e => e.reason)).toContain('Lamp is in the Harness Team account on MacBook Pro, which runs only teammates\' work.')
+  })
+
+  it('leaves out a member on a machine without it too', async () => {
+    const member = { id: 'a1', name: 'Multiply', machineId: 'm9', harnessId: 'h1', contributorId: 'owner', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }
+    const { candidates, excluded } = await route([mac([entry('Lamp', 'team')]), team(), other()], { members: [member] })
+    expect(candidates.some(c => c.kind === 'member')).toBe(false)
+    expect(reasonsFor(excluded, 'Multiply')).toContain('No Lamp here.')
+  })
+
+  it('adds nothing to a start\'s requirements, which older hosts read strictly', async () => {
+    const { answer } = await route([mac([entry('Lamp', 'team')]), team()])
+    const requirements = String(answer.next).match(/"requirements":\{[^}]*\}/g) ?? []
+    expect(requirements.length).toBeGreaterThan(0)
+    for (const r of requirements) expect(r).not.toContain('access')
+  })
+})
