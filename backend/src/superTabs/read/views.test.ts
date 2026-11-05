@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from '../leads.test-support.js'
 import * as store from '../parts/index.js'
 import { readerView } from './views.js'
+import { projectLightGroup, lightSelect } from '../parts/lightSelect.js'
+import { recordPulse } from '../pulse.js'
 import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
 import type { Actor } from '../model.js'
 
@@ -228,5 +230,22 @@ describe('the pulse on the read', () => {
     expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('owed')
     const owners = readerView(parts, owner, NOW, { teamMachines: [] })
     expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
+  })
+
+  // Hugo's review of #3209: a change poll reads the light base (parts/light.ts: the project chats and running work, light
+  // fields only), so a pulse derived from it lost the asks and Next up the first full read showed.
+  it('is the same from a change poll\'s light base as from a full read', () => {
+    const { s } = scene()
+    s.edit(state => {
+      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
+      recordPulse(state, NOW - MINUTE)
+    })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const light = { ...parts, ...lightSelect({ ...parts, groups: parts.groups.map(projectLightGroup) }, { groups: 'working' }), machines: parts.machines }
+    const full = readerView(parts, peer, NOW, { teamMachines: [] }).derived.pulse!
+    const pilot = Object.keys(full)[0]!
+    expect(full[pilot]!.asks.count).toBe(1)
+    expect(full[pilot]!.nextUp.count).toBeGreaterThan(0)
+    expect(readerView(light as never, peer, NOW, { teamMachines: [] }).derived.pulse).toEqual(full)
   })
 })
