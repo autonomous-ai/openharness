@@ -83,7 +83,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3884,7 +3884,7 @@ export class SuperTabStore {
         // Every row of the page refused: no digest, and still seen.
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: 0, cancelled: refused }))
       }
-      // The built-in schedule (pmSchedule.ts), only when the sweep has something to do: its slot is recorded in this same write,
+      // The built-in schedule (pmSchedule.ts), only when one of its jobs is due: its slot is recorded in this same write,
       // woken or held back, so two racing polls wake the coordinator once. Its lines go into the update request, else the notice
       // digest, so the PM gets one turn; none while its last wake is still unread, so a PM deep in a long turn finds one, not one
       // per slot.
@@ -3909,8 +3909,9 @@ export class SuperTabStore {
           placed = 'own'
           wakeId = scheduled.draft.id
         }
-        project.schedule = { lastSlot: scheduled.slot, ...wakeId ? { wakeId } : {} }
-        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed }))
+        // Held back, only its slot: the people and tidy jobs stay due for the next one (pmSchedule.ts recordWake).
+        recordWake(project, scheduled, this.now(), open ? null : wakeId!)
+        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)

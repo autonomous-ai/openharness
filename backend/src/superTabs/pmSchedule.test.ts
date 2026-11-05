@@ -152,6 +152,9 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
 
   it('tidies once a local day, and only when the instructions changed since the last tidy', () => {
     const state = busy()
+    // A project's first document (revision 1) has changed from nothing worth tidying.
+    project(state).instructionsRevision = 1
+    expect(wake(state)).toBeNull()
     project(state).instructionsRevision = 3
     const first = wake(state)!
     expect(first.jobs).toEqual(['tidy'])
