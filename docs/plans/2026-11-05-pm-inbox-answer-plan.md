@@ -28,12 +28,16 @@
     question, the options, the one recommended; `crewNeedOf` reads crew-need rows and needs_human rows), then the notices.
   - People's messages and crew needs to a PM are gathered only when its machine reports `turnInbox`, which its host sends
     once it sends the PM's turn. An older host is unchanged: nothing more is gathered for it, so nothing is delayed.
-  - With `?turn=idle|busy` on the PM's list read, the inbox is due at idle when anything is gathered, or once its oldest row
-    is TURN_END_WAIT_MS old. A read with no turn keeps the 5-minute notice clock, and on a `turnInbox` machine it puts the
-    people's messages and crew needs it gathered back in the queue in that same read.
-  - An idle read with something gathered skips the fast answer (one indexed read), so the inbox goes in the read after the
+  - Each row gathered for the inbox records its section on the delivery (`inboxSection`: people or crew), so neither the
+    release nor the requeue reads a message for it.
+  - With `?turn=idle|busy` on the PM's list read, the inbox is due once its oldest row is TURN_END_WAIT_MS old, whatever the
+    turn. At idle it is also due at once when a person's message or a crew need waits, and notices alone keep the 5-minute
+    digest clock, which batches them (Relay's review). A read with no turn keeps the 5-minute clock, and on a `turnInbox`
+    machine it puts the people's messages and crew needs it gathered back in the queue in that same read.
+  - A read whose gathered rows are due skips the fast answer (one indexed read), so the inbox goes in the read after the
     turn ends. The host reads the PM's list on the tick its turn ends. It waits at most 200 ms for the core's activity read,
-    one at a time per PM, so a slow core never holds the machine's deliveries.
+    one at a time per PM and only on the tick that started it, so a slow core never holds the machine's deliveries.
+  - Rollback: `SuperTabDelivery.inboxSection` is optional, with no migration; older code ignores it.
   - The inbox stays the digest message with its stable id, so it is written once.
 
 **Goal:** The PM gets one inbox per turn and answers each ask once, in its place; crew members get their messages at turn end,
