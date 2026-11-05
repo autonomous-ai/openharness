@@ -106,6 +106,7 @@ import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
+import '../super_tabs/join_seen.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
@@ -1951,6 +1952,16 @@ class AppNotifier extends ChangeNotifier {
           currentUser?.id == null) {
         return;
       }
+      // However the person joined, this computer is added once to each Swarm
+      // new here (task #3160).
+      _addMachineWhereNew(
+        [for (final tab in tabs) tab.id],
+        {
+          for (final swarm in swarms)
+            if (swarm.superTabId case final id?) id,
+          ...hidden,
+        },
+      );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
       // restart has no open view to take its name from.
@@ -2701,6 +2712,23 @@ class AppNotifier extends ChangeNotifier {
   Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
   final _joinAdding = <String>{};
 
+  /// The Swarms the join's add already ran or was decided for, per account on
+  /// this computer (super_tabs/join_seen.dart). Null without a local store:
+  /// nothing is added that could not be remembered.
+  SwarmJoinSeen? get _joinRecord {
+    final store = localStore;
+    if (store == null) return null;
+    if (!identical(store, _joinSeen?.store)) _joinSeen = SwarmJoinSeen(store);
+    return _joinSeen;
+  }
+
+  SwarmJoinSeen? _joinSeen;
+  Future<void>? _joinPass;
+
+  /// The pass discovery started last, for tests to wait on.
+  @visibleForTesting
+  Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
+
   /// A Swarm [tabId] just joined at this computer, as [role]: adds this
   /// computer to it with Add machine's defaults (super_tabs/join_machine.dart),
   /// then offers the Harness Team account, the one step macOS asks a password
@@ -2712,6 +2740,43 @@ class AppNotifier extends ChangeNotifier {
     bool alreadyMember = false,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
+    await _addMachineToSwarm(tabId);
+  }
+
+  /// Swarm discovery's list ([listed]), however each was joined: a domain
+  /// auto-join, a Workspace-open join, a join on the phone or the web
+  /// (Scholes, 2026-11-05, task #3160). The join's add runs once for each
+  /// Swarm new here; [knownHere], the Swarms open or hidden on this computer,
+  /// are taken as seen the first time. One pass at a time: a discovery while
+  /// one runs leaves its list to the next.
+  void _addMachineWhereNew(List<String> listed, Set<String> knownHere) {
+    final record = _joinRecord;
+    final account = currentUser?.id;
+    if (_joinPass != null ||
+        record == null ||
+        account == null ||
+        _teamAccountHere() == null) {
+      return;
+    }
+    _joinPass = () async {
+      try {
+        final fresh = await record.fresh(account, listed, knownHere: knownHere);
+        for (final tabId in fresh) {
+          if (_disposed || currentUser?.id != account) return;
+          await _addMachineToSwarm(tabId);
+        }
+      } catch (error) {
+        appLog.info('super-tabs', 'joined Swarms not checked: $error');
+      } finally {
+        _joinPass = null;
+      }
+    }();
+  }
+
+  /// The join's add for one Swarm this account is in. The person's role is
+  /// read from the Swarm itself: a viewer's Swarm is neither added nor
+  /// recorded, so it is asked about again; an owner's is recorded and left.
+  Future<void> _addMachineToSwarm(String tabId) async {
     final here = _teamAccountHere();
     final accountId = currentUser?.id;
     if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
@@ -2723,6 +2788,14 @@ class AppNotifier extends ChangeNotifier {
       final c = await superTabs.open(tabId);
       if (!current()) return;
       await c.refresh();
+      if (!current()) return;
+      final role = c.snapshot?.people
+          .where((p) => p.id == accountId)
+          .firstOrNull
+          ?.role;
+      if (role == null || role == 'viewer') return;
+      await _joinRecord?.mark(accountId, tabId);
+      if (role != 'collaborator') return;
       final note =
           await SwarmJoinMachine(
             machineRequest: superTabMachineRequest,
