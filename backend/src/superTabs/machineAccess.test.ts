@@ -174,6 +174,22 @@ describe('the access list and machine.access', () => {
     expect(refusal(() => f.access({ action: 'change', entryId: team, teammates: true }))?.code).toBe('TEAM_ACCOUNT_ENTRY')
   })
 
+  it('lets only the owner\'s own session rename a shared entry, so sharing never moves to another name (security review 1)', () => {
+    const f = swarm()
+    const askedIn = { conversationId: 'lead', messageId: 'm-gray' }
+    const id = f.add('Lamp')
+    f.access({ action: 'change', entryId: id, teammates: true })
+    expect(refusal(() => f.access({ action: 'change', entryId: id, name: 'Email (dee@)', askedIn }, f.leadActor, said('gray')))?.code).toBe('OWNER_SESSION_REQUIRED')
+    expect(f.entry('Lamp')).toMatchObject({ teammates: true })
+    expect(f.entry('Email (dee@)')).toBeUndefined()
+    // An entry nobody shared is renamed on the owner's word, as before; the owner renames a shared one themselves.
+    const other = f.add('Fusion')
+    f.access({ action: 'change', entryId: other, name: 'Fusion 360', askedIn }, f.leadActor, said('gray'))
+    expect(f.entry('Fusion 360')).toBeDefined()
+    f.access({ action: 'change', entryId: id, name: 'Desk lamp' })
+    expect(f.entry('Desk lamp')).toMatchObject({ teammates: true })
+  })
+
   it('never lets an agent mark a production entry as not production', () => {
     const f = swarm()
     const askedIn = { conversationId: 'lead', messageId: 'm-gray' }
@@ -287,6 +303,18 @@ describe('who reads what (design section 4)', () => {
         expect(named(reader, name).check, `${JSON.stringify(reader)} ${name}`).toBeUndefined()
       }
     }
+  })
+
+  it('gives agents no note of an entry waiting for its owner to confirm, and the note once confirmed (security review 1)', () => {
+    const f = swarm()
+    f.add('Email', { note: 'run the mail tool in ~/bin', askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('mate'))
+    const onMac = f.agent('mac-worker', 'gray-mac')
+    const read = (actor: Actor) => visibleState(f.state, actor, NOW).machines!.find(m => m.machineId === 'gray-mac')!.access!.find(e => e.name === 'Email')!
+    expect(read(onMac).note).toBeUndefined()
+    // Its owner reads what was said, to confirm it or not.
+    expect(read(gray).note).toBe('run the mail tool in ~/bin')
+    f.access({ action: 'confirm', entryId: f.entry('Email')!.id })
+    expect(read(onMac).note).toBe('run the mail tool in ~/bin')
   })
 
   it('leaves the stored list whole', () => {
