@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { stepsOf } from './steps.js'
+import { SEED_RULES } from './policy.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const opus: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -24,9 +25,9 @@ function fixture() {
   const dev = add('dev', task, 'Engineer')
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!
-  const ready = (files: string[] | null, head = 'abc1234', fileContext = true) => run({ type: 'work.status', conversationId: task,
+  const ready = (files: string[] | null, head = 'abc1234', fileContext = true, extra: Partial<CommandContext> = {}) => run({ type: 'work.status', conversationId: task,
     assignmentId: group(task).assignment!.id, status: 'review', result: `Ready: ${PR}` } as Command, as(dev),
-    fileContext ? { pullRequestFiles: { urls: [PR], head, files } } : {})
+    fileContext ? { pullRequestFiles: { urls: [PR], head, files }, ...extra } : extra)
   const steps = () => stepsOf(state, task).map(step => ({ name: step.step, agent: step.assignment?.agentId ?? null, status: step.assignment?.status ?? null }))
   return { run, as, add, lead, task, dev, group, ready, steps, tick: (ms: number) => { now += ms }, get state() { return state } }
 }
@@ -117,6 +118,13 @@ describe('a handed task opens its review steps', () => {
     f.ready(null)
     expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2'])
     expect(stepsOf(f.state, f.task)[0]!.brief).toMatch(/could not be read/i)
+  })
+
+  it('plans by the project\'s saved rules, read with the files', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    f.ready(['docs/a.md'], 'abc1234', true, { projectRules: { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, defaultReads: 2 } } })
+    expect(f.steps().map(s => s.name)).toEqual(['Review 1', 'Review 2'])
   })
 
   it('opens nothing when no pull request files were read, as before', () => {

@@ -1,23 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { globMatch, REVIEW_TABLE, reviewPlan, sharedFiles, type ReviewTable } from './reviewTable.js'
+import { SEED_RULES, type ProjectRules } from './policy.js'
+import { reviewPlan, sharedFiles } from './reviewTable.js'
 
-const names = (files: string[] | null, table?: ReviewTable) => reviewPlan(files, table).map(step => step.name)
-
-describe('globMatch', () => {
-  it('matches ** across folders, * and ? within one, ignoring case', () => {
-    expect(globMatch('**/*auth*', 'backend/src/routes/Auth.ts')).toBe(true)
-    expect(globMatch('**/*auth*', 'auth.ts')).toBe(true)
-    expect(globMatch('desktop/**', 'desktop/lib/a/b.dart')).toBe(true)
-    expect(globMatch('desktop/*', 'desktop/lib/b.dart')).toBe(false)
-    expect(globMatch('docs/?.md', 'docs/a.md')).toBe(true)
-    expect(globMatch('cli/**', 'backend/cli/x.ts')).toBe(false)
-  })
-
-  it('reads a dot or a bracket in a glob as itself', () => {
-    expect(globMatch('**/a.ts', 'x/aXts')).toBe(false)
-    expect(globMatch('**/[a].ts', 'x/[a].ts')).toBe(true)
-  })
-})
+const names = (files: string[] | null, rules?: ProjectRules) => reviewPlan(files, rules).map(step => step.name)
 
 describe('reviewPlan', () => {
   it('gives a docs-only change one read', () => {
@@ -51,16 +36,17 @@ describe('reviewPlan', () => {
     expect(plan[0]!.unread).toBe(true)
   })
 
-  it('reads its numbers from the table it is given', () => {
-    const table: ReviewTable = { defaultReads: 2, rows: [{ area: 'Billing', reads: 3, paths: ['billing/**'] }], test: [] }
-    expect(names(['a.ts'], table)).toEqual(['Review 1', 'Review 2'])
-    expect(names(['billing/x.ts'], table)).toEqual(['Security review 1', 'Security review 2', 'Security review 3'])
+  it('reads its numbers from the project rules it is given', () => {
+    const rules: ProjectRules = { ...SEED_RULES, reviews: { defaultReads: 2, rows: [{ area: 'Billing', reads: 3, paths: ['billing/**'] }],
+      test: [{ where: 'Staging', paths: ['web/**'] }], untested: ['**/*.md'] } }
+    expect(names(['a.ts'], rules)).toEqual(['Review 1', 'Review 2'])
+    expect(names(['billing/x.ts'], rules)).toEqual(['Security review 1', 'Security review 2', 'Security review 3'])
+    expect(reviewPlan(['web/a.ts'], rules).at(-1)).toMatchObject({ name: 'Test', where: ['Staging'] })
+    expect(names(['web/a.md'], rules)).toEqual(['Review 1', 'Review 2'])
   })
 
-  it('keeps one table, the seed of the project rules record', () => {
-    expect(REVIEW_TABLE.defaultReads).toBe(1)
-    expect(REVIEW_TABLE.rows.map(row => [row.area, row.reads])).toEqual(
-      ['Sign-in', 'Tokens', 'Encryption', 'Access', 'Buddy guard', 'Device links', 'Deletion'].map(area => [area, 2]))
+  it('reads the project rules seed when given none', () => {
+    expect(reviewPlan(['backend/src/routes/auth.ts'])).toEqual(reviewPlan(['backend/src/routes/auth.ts'], SEED_RULES))
   })
 })
 
