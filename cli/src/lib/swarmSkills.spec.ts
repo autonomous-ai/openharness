@@ -148,9 +148,11 @@ describe('built-in Swarm skills', () => {
     + '- When the project\'s instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.\n'
     + '- An urgent case means telling the owner first, at once and with the reason; it never means taking over.\n'
     + '- Setting priorities is not doing the owner\'s job: ask for the order you want, and never reorder, stop or restart their work yourself.\n\n'
-  // The quota section (Dee, 2026-11-05; task #3180): the Lead's alone, in both modes, right after the named-owner section.
-  const quota = '## Spending a person\'s quota\n'
-    + '- You may spend a requester\'s own account quota on that person\'s own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.\n\n'
+  // The quota section (Ken and Dee, 2026-11-05; replaces #3180's 10% ask): the Lead's alone, in both modes, right after the
+  // named-owner section. Never ask about quota; only an account a PM runs on stops taking work, below 20% of its week.
+  const quota = '## Quota\n'
+    + '- Never ask anyone about quota or whose account to use: pick by your project\'s Routing and go. Quota is information, never a reason to hold work.\n'
+    + '- An account any project\'s PM runs on (the route notes it) takes no new work while it has less than 20% of its week left. Every other account is used without asking.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -451,12 +453,14 @@ describe('built-in Swarm skills', () => {
       }
     }
   })
-  it('lets each Lead, and no other role, spend a requester\'s own quota on their task above 10% of the week, and ask below it', () => {
+  // Dee, 11-05: asking a person about quota is bad UX ("why restrict, why ask"); Ken kept one line: a PM's account below 20%.
+  it('tells each Lead, and no other role, never to ask about quota, and to keep an account a PM runs on below 20% free of new work', () => {
     for (const mode of ['orchestration', 'default'] as const) {
       const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
-      for (const part of ['## Spending a person\'s quota', 'a requester\'s own account quota on that person\'s own task without asking', 'more than 10% of its week left', 'Below 10%, ask the person, with your recommendation']) expect(lead).toContain(part)
+      for (const part of ['## Quota', 'Never ask anyone about quota or whose account to use', 'less than 20% of its week left', 'Every other account is used without asking']) expect(lead).toContain(part)
+      for (const gone of ['10% of its week', 'ask the person, with your recommendation', '## Spending a person']) expect(lead).not.toContain(gone)
       for (const role of ['dev', 'review', 'buddy'] as const) {
-        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Spending a person')
+        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Quota')
       }
     }
   })
