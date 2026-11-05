@@ -141,7 +141,9 @@ describe('the merge train finishes batches', () => {
     const batch = repo.batches()[0]!
     repo.state.ci.set(batch.head, 'success')
     await pass()
-    expect(repo.state.squashes).toEqual([expect.objectContaining({ number: batch.number, title: expect.stringContaining(`(#${batch.number})`) })])
+    expect(repo.state.squashes).toEqual([expect.objectContaining({ number: batch.number })])
+    // The form main's batches use, which the release watch (#3405) reads: the originals before the batch's own number.
+    expect(repo.state.squashes[0]!.title).toBe(`Merge batch 11-05 train-1510: #7 #8 (#${batch.number})`)
     const commit = repo.state.squashes[0]!.sha
     expect(repo.state.pulls.get(7)!.state).toBe('closed')
     expect(repo.state.pulls.get(8)!.state).toBe('closed')
@@ -152,6 +154,16 @@ describe('the merge train finishes batches', () => {
     }
     expect(swarm.merged.map(m => [m.taskId, m.url])).toEqual([['task-7', a.url], ['task-8', b.url]])
     expect(repo.state.branches.has(batch.headRef)).toBe(false)
+  })
+
+  it('titles a batch of one in the same form', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    await pass()
+    const batch = repo.batches()[0]!
+    repo.state.ci.set(batch.head, 'success')
+    await pass()
+    expect(repo.state.squashes[0]!.title).toBe(`Merge batch 11-05 train-1510: #7 (#${batch.number})`)
   })
 
   it('records every member\'s merge even when GitHub fails to take a comment after the squash', async () => {
