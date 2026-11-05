@@ -3067,6 +3067,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (option.id == NewHarnessController.newProjectId) {
       return AppIcons.plus;
     }
+    // The design's ✦: made on GitHub, not found on a machine.
+    if (option.id == NewHarnessController.newRepositoryId) {
+      return AppIcons.sparkles;
+    }
     if (option.id == NewHarnessController.browseId ||
         option.id == NewHarnessController.existingProjectId) {
       return AppIcons.folderOpen;
