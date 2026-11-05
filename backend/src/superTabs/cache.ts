@@ -410,13 +410,14 @@ const stampKey = (tabId: string) => `swarm:stamp:${tabId}`
  * When it comes back with an older value (a snapshot, a lagging replica), reads see that older stamp again until the next
  * bump of each scope moves it above them all; held entries live at most CACHE_MAX_AGE_MS meanwhile. In milliseconds, a
  * burst of bumps ran ahead of the clock and a loss within that millisecond handed a stamp out again (review of #2456). A first bump starts the stamps it does not name one
- * below the clock. Stamps are compared only for equality: the jump from older millisecond stamps is one more change.
+ * below the clock, every host's stamp too, so a machine report's record from before a lost key never holds again (review
+ * of #3119). Stamps are compared only for equality: the jump from older millisecond stamps is one more change.
  */
 const BUMP = `local t = redis.call('time')
 local now = tonumber(t[1]) * 1000000 + tonumber(t[2])
 if redis.call('exists', KEYS[1]) == 0 then
   local first = string.format('%.0f', now - 1)
-  redis.call('hset', KEYS[1], 'main', first, 'machine', first, 'hosted', first)
+  redis.call('hset', KEYS[1], 'main', first, 'machine', first, 'hosted', first, 'host:*', first)
 end
 local main = redis.call('hget', KEYS[1], 'main')
 if main ~= redis.call('hget', KEYS[1], 'hosted') then redis.call('hset', KEYS[1], 'uncovered', main) end

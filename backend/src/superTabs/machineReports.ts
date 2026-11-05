@@ -46,7 +46,8 @@ export interface ReportRecord {
  */
 export function recordHolds(record: ReportRecord, now: HostStamp): boolean {
   if (now.main === record.stamp) return true
-  return !!record.hosts && now.hosted === now.main && now.uncovered <= record.stamp
+  // A Swarm whose stamps Redis lost reads 0 everywhere: nothing says what changed since (review of #3119).
+  return !!record.hosts && now.main > 0 && now.hosted === now.main && now.uncovered <= record.stamp
     && now.host === record.hosts.host && now.all === record.hosts.all
 }
 

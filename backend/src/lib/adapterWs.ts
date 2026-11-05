@@ -98,7 +98,7 @@ const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 // How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
 // heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
 // Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. The floor starts from the row's own
-// stamp, so a connect stamps only when that is due too (#2676); close always writes.
+// stamp, so a connect stamps only when that is due too (#2676); a close at most once a minute (MACHINE_CLOSE_FLOOR_MS).
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
 // A close stamps the exact "offline since", unless the row was stamped less than this ago: a looping adapter reconnects every
 // few seconds, and each close rewrote the row (task #3119, Ken's prod scan of 11-05: `Machine.update` by adapter-ws slow 31
