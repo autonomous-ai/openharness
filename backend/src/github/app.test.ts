@@ -631,3 +631,20 @@ describe('watching a pull request', () => {
     expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
   })
 })
+
+describe('what installation tokens may never carry (task #1788)', () => {
+  it('installation tokens never ask for administration or repository creation', async () => {
+    const app = await import('./app.js')
+    const sets = Object.entries(app).filter(([name]) => name.endsWith('_PERMISSIONS')) as Array<[string, Record<string, string>]>
+    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS', 'PREPARE_PERMISSIONS']))
+    for (const [, permissions] of sets) {
+      for (const never of app.NEVER_ON_INSTALLATION_TOKENS) expect(Object.keys(permissions)).not.toContain(never)
+    }
+    const { github, app: gh } = setup()
+    github.installed.set('acme/app', 91)
+    for (const never of app.NEVER_ON_INSTALLATION_TOKENS) {
+      await expect(gh.createToken(91, repo, { [never]: 'write', metadata: 'read' })).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS_FORBIDDEN' })
+    }
+    expect(github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+  })
+})
