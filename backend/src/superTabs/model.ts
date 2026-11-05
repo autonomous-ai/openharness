@@ -66,6 +66,9 @@ export interface Agent {
   workDecision?: 'awaiting' | 'keep' | 'stop'
   /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
   keptAt?: number
+  /** A crew member (task #3397, crew.ts): the role it fills, the lane it takes work in (task #3400, dispatch.ts), when and by
+   *  whom it was marked. Declared the same in both tasks' branches; the second to merge drops its copy. */
+  crew?: { role: string; lane?: string; at: number; by: string }
   /** When its last idle spell began, once its coordinator was told of it (tidy.ts idleNotices): one notice per spell. */
   idleNoticedAt?: number
   /** Set while its stop was the server's idle stop, written before project instructions (phase 4: idle agents are a notice),
@@ -414,6 +417,9 @@ export interface Conversation {
   /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
    *  owned paths choose. */
   lane?: string
+  /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
+   *  merge conflict. The next assignment clears it. */
+  pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
