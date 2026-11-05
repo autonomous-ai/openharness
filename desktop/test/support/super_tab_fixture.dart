@@ -103,6 +103,7 @@ class SwarmPartsBackend {
           'mentionsWaiting',
           'decisionsWaiting',
           'decisionsDigest',
+          'promptsWaiting',
           'otherProjectsWork',
           'githubApp',
           'readMarks',
@@ -188,6 +189,8 @@ class SwarmPartsBackend {
       'decisionsWaiting': state['decisionsWaiting'],
     if (state['decisionsDigest'] != null)
       'decisionsDigest': state['decisionsDigest'],
+    if (state['promptsWaiting'] != null)
+      'promptsWaiting': state['promptsWaiting'],
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
@@ -543,6 +546,14 @@ class ConversationServer {
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
+  // Each agent's screen as an `agent.screen` request reads it (backend
+  // terminal.ts): absent, its host answers that it failed.
+  final screens = <String, String>{};
+  // `agent.screen` is refused, as mayDrive refuses a reader who may not read
+  // the terminal (a Harness Team account's agent, for anyone but its owner).
+  bool refuseScreens = false;
+  // The screen requests sent, by request id, with their agent.
+  final screenRequests = <String, String>{};
   final posts = <Map<String, dynamic>>[];
 
   /// Notification settings sent (backend chatSettings.ts), in order; while
@@ -1382,6 +1393,16 @@ class ConversationServer {
       } else if (command['type'] == 'message.delete') {
         output['changed'] = true;
         output['kept'] = deleteMessage(command['messageId'] as String);
+      } else if (command['type'] == 'agent.screen') {
+        if (refuseScreens) {
+          throw const SuperTabFailure(
+            'TERMINAL_PRIVATE',
+            'Only its project\'s owner reads its screen.',
+            statusCode: 403,
+          );
+        }
+        screenRequests[operationId] = command['agentId'] as String;
+        output['requestId'] = operationId;
       } else if (command['type'] == 'decision.answer') {
         final id = command['decisionId'] as String;
         if (command['delegate'] == true) {
@@ -1816,6 +1837,19 @@ class ConversationServer {
       throw StateError('Offline');
     }
     final uri = Uri.parse(path);
+    // A screen request's answer (backend store.ts terminalResult).
+    if (uri.pathSegments.length > 2 &&
+        uri.pathSegments[uri.pathSegments.length - 2] == 'terminal') {
+      final id = uri.pathSegments.last;
+      final agentId = screenRequests.remove(id);
+      if (agentId == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      final text = screens[agentId];
+      return text == null
+          ? {'requestId': id, 'ok': false, 'error': 'Its machine is offline.'}
+          : {'requestId': id, 'ok': true, 'text': text};
+    }
     if (uri.pathSegments.length > 5 &&
         uri.pathSegments[3] == 'projects' &&
         uri.pathSegments[5] == 'instructions') {
