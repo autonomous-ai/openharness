@@ -199,6 +199,9 @@ it('keeps a crew member with no open group, past the lapse, and names it among t
   expect([...retainedHarnesses(dir, now)].sort()).toEqual(['pm', 'standing'])
   // A crew mark is not a Lead's: a stop still reaches it (leadSwitch.ts mayBeLead).
   expect(mayBeLead(dir, 'standing')).toBe(false)
+  // Security review 1 of #3222: one whose stop is asked for is no crew the core may reopen.
+  retainContributions(dir, 'machine', [crewRow('standing', { stopRequested: true }), row('pm', { lead: true })], now)
+  expect([...retainedLeads(dir)]).toEqual(['pm'])
   retainContributions(dir, 'machine', [row('standing', { active: false }), row('pm', { lead: true })], now)
   expect([...retainedHarnesses(dir, now)]).toEqual(['pm'])
   expect([...retainedLeads(dir)]).toEqual(['pm'])

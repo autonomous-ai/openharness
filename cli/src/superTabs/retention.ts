@@ -102,7 +102,8 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
     // agent's buddyOf, set when a person adds their Buddy); a row that ends it carries no agent record, so it is no Buddy.
     if (identifier(object(agent.buddyOf).personId)) buddies.add(agent.harnessId)
     if (row.lead === true) leads.add(agent.harnessId)
-    else if (isCrewRow(row)) crew.add(agent.harnessId)
+    // One whose stop is asked for is no crew the core may reopen (security review 1 of #3222).
+    else if (isCrewRow(row) && row.stopRequested !== true) crew.add(agent.harnessId)
     else if (row.active === false && !buddies.has(agent.harnessId)) continue
     ids.add(agent.harnessId)
   }

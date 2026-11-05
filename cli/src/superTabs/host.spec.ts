@@ -4577,9 +4577,14 @@ describe('keeping a crew member alive', () => {
       if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows, { tabs: ['tab'], assignments: [{ tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }] }) } }
       return { status: 200, body: { data: [] } }
     }
-    ;(t.core as any).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), inputIfScreen: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })),
-      input: vi.fn(async (_id: string, text: string) => { typed.push(text); return { ok: true as const } }) }
+    let screen = '❯ '
+    ;(t.core as any).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: screen, hold: null })),
+      input: vi.fn(async (_id: string, text: string) => { typed.push(text); screen = `❯ ${text}`; return { ok: true as const } }),
+      inputIfScreen: vi.fn(async (_id: string, keys: string[], seen: string) => {
+        if (seen !== screen) return { ok: false as const, error: 'SCREEN_CHANGED' }
+        typed.push(keys.join(' ')); screen = '❯ '; return { ok: true as const }
+      }) }
     return typed
   }
 
@@ -4593,9 +4598,9 @@ describe('keeping a crew member alive', () => {
     t.live(true)
     await t.poll(1_000)
     await t.poll(1_000)
-    expect(typed).toEqual([CREW_CONTINUE])
+    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
     await t.poll(2 * 60_000)
-    expect(typed).toEqual([CREW_CONTINUE])
+    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
     expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
   })
 
