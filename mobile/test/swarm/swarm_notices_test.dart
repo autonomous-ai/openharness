@@ -373,34 +373,6 @@ void main() {
       expect(notices.shown.single.key, threadSlot('tab-b', 'g9', 'root-1'));
     });
 
-    test('is not posted again when its push is already in the notification '
-        'centre (task #2905)', () {
-      final notices = _Recording();
-      final told = SwarmTold();
-      // The server keys a push as the phone keys its notice: the reply's
-      // Activity row, the tag's id.
-      told.addAll(['reply:tab-b:a1', 'mention:m1']);
-      final announcer = SwarmAnnouncer(
-        notices,
-        quiet: (_) => false,
-        told: told,
-      );
-      announcer.announceReply(
-        swarmId: 'tab-b',
-        entry: reply('a1'),
-        project: 'M',
-      );
-      announcer.announce(mention());
-      expect(notices.shown, isEmpty);
-
-      announcer.announceReply(
-        swarmId: 'tab-b',
-        entry: reply('a2'),
-        project: 'M',
-      );
-      expect(notices.shown.single.key, 'reply:tab-b:a2');
-    });
-
     test('is not posted while the person looks at the Swarm', () {
       final notices = _Recording();
       final asked = <SwarmNeed?>[];

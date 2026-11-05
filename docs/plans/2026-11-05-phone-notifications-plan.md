@@ -60,16 +60,16 @@ simulator push; the production backend's APNs sandbox key for the iPhone (a deve
 
 **Interfaces:** none new.
 
-- [ ] Reply push: the thread's starter, the quoted message's author, a person tagged earlier in the thread and a person
+- [x] Reply push: the thread's starter, the quoted message's author, a person tagged earlier in the thread and a person
       who replied are told; the author never; a muted chat, an unfollowed thread and a person who cannot read the chat
       never; a reply that tags someone tells them by the tag alone; an agent's reply is worded with the agent's name;
       a Swarm line in a thread tells only the starter and the quoted author; a top-level message and a reaction tell
       nobody. Each notice: key `reply:<swarm>:<row>`, title, the project as subtitle, `Open Harness to read it.`, and
       the link to the reply in its thread.
-- [ ] Tag push: a tag in the chat links the message; a tag in a reply only in its thread links that thread; a reply
+- [x] Tag push: a tag in the chat links the message; a tag in a reply only in its thread links that thread; a reply
       also sent to the chat links the message in the chat; one's own tag is dropped; an agent's tag is worded with its
       name; a tag held for a quiet chat is not pushed; key `mention:<row>`.
-- [ ] Run: `npx vitest run --config vitest.super-tabs.config.ts integration/superTabActivity.test.ts`.
+- [x] Run: `npx vitest run --config vitest.super-tabs.config.ts integration/superTabActivity.test.ts`.
 
 ## Task 2: The whole server path, write to Apple's request
 
@@ -77,7 +77,7 @@ simulator push; the production backend's APNs sandbox key for the iPhone (a deve
 
 **Interfaces:** none new; `sendPhoneNotices` with `apnsSender` and `fcmSender` over a recording transport.
 
-- [ ] A registered iPhone and Android phone of the starter; a reply's write ends in one APNs request and one FCM
+- [x] A registered iPhone and Android phone of the starter; a reply's write ends in one APNs request and one FCM
       message: the alert's title, subtitle and body, `thread-id` and `category` `swarm-needs-you`, `key` and `link`; the
       author's own phone gets nothing; nothing written in the chat is in either request.
 
@@ -85,9 +85,9 @@ simulator push; the production backend's APNs sandbox key for the iPhone (a deve
 
 **Files:** `mobile/lib/notify/system_notices.dart` (and its test), `mobile/android/...` only if needed.
 
-- [ ] Android: the `swarm-needs-you` channel exists before a push can arrive (made when notices start), so a push is
+- [x] Android: the `swarm-needs-you` channel exists before a push can arrive (made when notices start), so a push is
       never drawn on FCM's default channel. Failing test first: the channel is created at start, before any Swarm notice.
-- [ ] Any red test of Tasks 1, 2 or 4: its failing test, then its fix.
+- [x] Any red test of Tasks 1, 2 or 4: its failing test, then its fix.
 
 ## Task 4: Phone end to end: a push to a closed app, and its tap
 
@@ -95,7 +95,7 @@ simulator push; the production backend's APNs sandbox key for the iPhone (a deve
 `LocalSystemNotices` and `PushChannel`), `mobile/integration_test/push_e2e/` (XCUITest runner, `simctl push` payload,
 the script that runs it and keeps its screenshots).
 
-- [ ] Simulator: the app is not running; `xcrun simctl push` delivers a reply push whose `link` names a thread of the
+- [x] Simulator: the app is not running; `xcrun simctl push` delivers a reply push whose `link` names a thread of the
       scripted Swarm; the runner taps the notification on the springboard; the app starts and shows that thread.
       Also: with the app in front, the same push is not drawn.
 - [ ] Tony's iPhone 14 (after asking that it is free): a development build, signed in to Tony's account; the app closed;
@@ -109,5 +109,12 @@ the script that runs it and keeps its screenshots).
 `backend/src/push/sender.ts`, their tests, `backend/integration/superTabActivity.test.ts`, `mobile/lib/notify/`,
 `mobile/lib/swarm/swarm_notices.dart`, `docs/phone-notifications.md`.
 
-- [ ] Each change of who is told or how repeats collapse, as Tony approved it: a failing test first, then the code.
+- [x] Each change of who is told or how repeats collapse, as Tony approved it: a failing test first, then the code.
 - [ ] The table updated to the new rule; two security reviews requested (it changes who receives a push).
+
+## Status (2026-11-05 17:45)
+
+Tasks 1 to 3 and 5 are built and green. Task 1's audience lines were rewritten to the rule Tony approved: a person who
+only replied, and Swarm lines, are no longer pushed. Task 4's simulator run passes
+(`mobile/integration_test/push_e2e/run.sh`). The iPhone run is next. Then Task 5's table update is done, and the two
+security reviews are requested with the PR.
