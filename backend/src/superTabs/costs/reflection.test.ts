@@ -186,8 +186,8 @@ describe('the nightly routing reflection', () => {
     const text = routingReflection(seededWeek())!.render(p => p.title === UI ? 'Asked of the project owner.' : null)
     expect(text).toContain(`1. ${UI}: about $12.00 a week at API prices of attempts that failed their first review. Its first review passed 0 of 6 (0%); `
       + 'even the top of its 95% range is 39%. Only 6 first reviews. Asked of the project owner.')
-    expect(text.split('\n')).toContain('3. Start docs work on a subscription model instead of the grid: about 3 hours to ship a week. 3 of 3 docs tasks started on '
-      + 'the grid stepped up after their grid attempt failed. Only 3 tasks.')
+    expect(text.split('\n')).toContain('3. Start docs work on a subscription model instead of the grid: about 3 hours to ship a week. 3 of 3 docs tasks '
+      + 'needed another model after their grid attempt failed. Only 3 tasks.')
   })
 
   it('proposes nothing from too few first reviews, shipped changes or grid step-ups', () => {

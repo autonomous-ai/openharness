@@ -249,14 +249,22 @@ describe('the nightly routing reflection', () => {
   it('keeps active nights without a proposal silent in every Swarm, preserving costs and old reports', async () => {
     for (const fixture of [await swarm(), await swarm()]) {
       await fixture.ship()
-      await fixture.execute({ type: 'message.send', conversationId: 'lead', text: 'Routing reflection: an old report.', replyTo: null })
+      const old = await fixture.execute({ type: 'message.send', conversationId: 'lead', text: 'Routing reflection: an old report.', replyTo: null })
+      const oldId = reflectionMessageId(fixture.tab, 'lead', '2026-10-29')
+      await db.superTabMessage.update({ where: { id: String(old.result.messageId) }, data: {
+        id: oldId, source: { kind: 'routing-reflection', projectId: 'lead', on: '2026-10-29' },
+      } })
       const messages = await db.superTabMessage.findMany({ where: { tabId: fixture.tab } })
       const costs = await fixture.store.costSummary(host, fixture.tab, 7, fixture.lead)
       fixture.clock.now = NIGHT
+      expect(await fixture.store.postReflection(fixture.tab, 'lead', '2026-10-29')).toBe('already')
       expect(await fixture.store.postReflection(fixture.tab, 'lead', '2026-10-30')).toBe('empty')
       expect(await db.superTabMessage.findMany({ where: { tabId: fixture.tab } })).toEqual(messages)
       expect(await db.superTabDecision.count({ where: { tabId: fixture.tab } })).toBe(0)
       expect((await fixture.store.costSummary(host, fixture.tab, 7, fixture.lead)).totals).toEqual(costs.totals)
+      expect((await fixture.store.messages(owner, fixture.tab, 'lead', { messageId: oldId })).messages).toEqual([
+        expect.objectContaining({ id: oldId, text: 'Routing reflection: an old report.' }),
+      ])
     }
   })
 
