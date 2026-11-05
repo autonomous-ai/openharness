@@ -430,6 +430,9 @@ class SuperTabConversation {
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
       priority = row['priority'] as String?,
+      handOutLane = row['handOutLane'] is String
+          ? row['handOutLane'] as String
+          : null,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -495,6 +498,11 @@ class SuperTabConversation {
   /// taskPriority.ts, task #3117); null on a step, a chat and a task from
   /// before it. Read here for the phone's Tasks view to come.
   final String? priority;
+
+  /// The lane the crew dispatch hands this task out in (backend read/views.ts
+  /// `handOutLane`, task #3400; desktop model.dart). Null when no lane owns it,
+  /// on a chat or a step, and from an older server.
+  final String? handOutLane;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
@@ -566,6 +574,10 @@ class SuperTabConversation {
   final Map<String, dynamic>? leadAction;
 }
 
+/// The zone a project's day is read in when its digest names none (backend
+/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -589,6 +601,10 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      timeZone = switch (row['digest']) {
+        {'timeZone': final String zone} when zone.isNotEmpty => zone,
+        _ => superTabDefaultTimeZone,
+      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -601,6 +617,10 @@ class SuperTabProject {
           if (entry is Map && entry['id'] is String) entry['id'] as String,
       };
   final String id, name, ownerId, leadConversationId;
+
+  /// The zone its day is read in, read as the desktop's model reads it (its
+  /// digest's, else [superTabDefaultTimeZone]); the phone shows no lanes yet.
+  final String timeZone;
 
   /// The person's messages the server keeps for this project's Lead: a
   /// Personal Swarm's chat with none, whose Lead their computer starts

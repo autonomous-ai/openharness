@@ -428,6 +428,9 @@ class SuperTabConversation {
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
       priority = row['priority'] as String?,
+      handOutLane = row['handOutLane'] is String
+          ? row['handOutLane'] as String
+          : null,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
@@ -536,6 +539,11 @@ class SuperTabConversation {
   /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
   final String? priority;
 
+  /// The lane the crew dispatch hands this task out in (backend read/views.ts
+  /// `handOutLane`, task #3400): its PM's, else its owned paths'. Null when
+  /// no lane owns it, on a chat or a step, and from an older server.
+  final String? handOutLane;
+
   /// The day before which its work may not start, a promise the PM keeps
   /// ("remove the preview route after Dec 4"); null when there is none.
   final DateTime? notBefore;
@@ -549,6 +557,10 @@ class SuperTabConversation {
   /// The Product Manager's last action on its task (`kind`, `at`).
   final Map<String, dynamic>? leadAction;
 }
+
+/// The zone a project's day is read in when its digest names none (backend
+/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
@@ -573,6 +585,10 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      timeZone = switch (row['digest']) {
+        {'timeZone': final String zone} when zone.isNotEmpty => zone,
+        _ => superTabDefaultTimeZone,
+      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -581,6 +597,11 @@ class SuperTabProject {
         row['repositoryCreation'],
       );
   final String id, name, ownerId, leadConversationId;
+
+  /// The zone its day is read in, as the server reads it for the crew
+  /// dispatch and the morning digest: its digest's, else
+  /// [superTabDefaultTimeZone] (backend dispatch.ts `openTasks`).
+  final String timeZone;
 
   /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
   final String skillMode;
