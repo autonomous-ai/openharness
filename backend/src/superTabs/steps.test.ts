@@ -813,3 +813,49 @@ describe('an Engineer waiting on its own steps', () => {
     expect(f.group(id).liveness).toMatchObject({ state: 'waiting', why: 'review' })
   })
 })
+
+// Dee, #3394: a verdict records the pull request head it read, and counts only at that head or one with the same patch.
+describe('a verdict at a pull request head', () => {
+  const PR = 'https://github.com/acme/app/pull/7'
+  const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+  const watched = () => {
+    const f = stepsFixture()
+    const reviewer = f.add('reviewer', f.task)
+    // What the task's PR watch read last (store.ts pullRequestSeen).
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p1', at: 1 } } })
+    const check = (group: string, passed: boolean, head?: string) => f.run({ type: 'work.check', conversationId: group,
+      assignmentId: f.group(group).assignment!.id, checkId: f.group(group).checks[0]!.id, passed, evidence: 'Read it', ...head ? { head } : {} } as Command,
+    f.as(reviewer))
+    return { f, reviewer, check }
+  }
+
+  it('records the head its task\'s PR watch last read, with its patch', () => {
+    const { f, check } = watched()
+    check(f.task, true)
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+    expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+  })
+
+  it('on a step, records its task\'s pull request head', () => {
+    const { f, reviewer, check } = watched()
+    const step = f.step('Review', f.as(f.dev), f.task, [{ description: 'Diff reads right', independent: true }])
+    f.run({ type: 'conversation.agent', conversationId: step, agentId: reviewer, present: true, lead: false })
+    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    check(step, true)
+    expect(f.group(step).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+  })
+
+  it('records the head the checker names; an older one does not count', () => {
+    const { f, check } = watched()
+    check(f.task, true, B.slice(0, 7).toUpperCase())
+    const read = f.group(f.task).checks[0]!
+    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: 'bbbbbbb', stale: A })
+    expect(read.verdicts!.at(-1)).not.toHaveProperty('patch')
+    expect(read).toMatchObject({ passedBy: null, evidence: null })
+  })
+
+  it('takes a head only as a commit id', () => {
+    const { f, check } = watched()
+    for (const head of ['abc', 'not-a-sha!', 'g'.repeat(40), 'a'.repeat(41)]) expect(() => check(f.task, true, head)).toThrow()
+  })
+})
