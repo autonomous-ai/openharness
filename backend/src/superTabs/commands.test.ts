@@ -6320,13 +6320,27 @@ describe('a held task carries one of four reasons (HOLD_REASON_MISSING)', () => 
     expect(group).toBeDefined()
   })
 
-  it('refuses blocked and needs_human with no reason, and names the four kinds', () => {
+  it('takes blocked and needs_human with no reason for now, shows no reason, and still refuses a reason that is not true', () => {
     const { f, task, status } = working()
+    for (const held of ['blocked', 'needs_human'] as const) {
+      status({ status: held })
+      expect(task().assignment!.status, held).toBe(held)
+      expect(groupView(task(), new Set()).held, held).toEqual({ kind: 'none' })
+    }
     const before = structuredClone(f.state)
-    for (const held of ['blocked', 'needs_human'] as const) expect(() => status({ status: held }), held).toThrow(missing)
     expect(() => status({ status: 'needs_human', hold: REASONS.task(9999) })).toThrow(missing)
     expect(f.state).toEqual(before)
-    expect(task().assignment!.status).toBe('working')
+  })
+
+  it('refuses a reason whose time has passed, and a task that is a step', () => {
+    const { f, a, task } = queued()
+    const now = Date.parse('2026-11-05T00:00:00.000Z')
+    const hold = (reason: Record<string, unknown>) => f.run(commandSchema.parse({ type: 'work.queue', conversationId: a, notBefore: '2026-12-04', hold: reason }), f.leadActor, { now })
+    expect(() => hold({ ...REASONS.person, defaultAt: '2026-11-04T00:00:00.000Z' })).toThrow(missing)
+    expect(() => hold({ ...REASONS.reset, at: '2026-11-04T00:00:00.000Z' })).toThrow(missing)
+    hold({ ...REASONS.reset, at: '2026-11-06T00:00:00.000Z' })
+    const step = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: a, step: 'Review', checks: [] }).result.conversationId as string
+    expect(() => hold(REASONS.task(task(step).number!))).toThrow(missing)
   })
 
   it('clears the reason with the next status, and takes none on any other status', () => {
