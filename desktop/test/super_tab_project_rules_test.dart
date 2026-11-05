@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/project_rules.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
@@ -123,7 +124,9 @@ Future<void> _openRules(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
   await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const ValueKey('super-project-setting-Project rules')));
+  await tester.tap(
+    find.byKey(const ValueKey('super-project-setting-Project rules')),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -178,16 +181,28 @@ void main() {
       ]) {
         expect(find.text(text), findsWidgets, reason: text);
       }
-      expect(find.textContaining('River for dee · 2 hours ago'), findsOneWidget);
+      expect(
+        find.textContaining('River for dee · 2 hours ago'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Revision 2 · '), findsOneWidget);
       // Read only: nothing to type into or save.
-      expect(find.byType(TextField), findsNothing);
-      expect(find.widgetWithText(FilledButton, 'Save'), findsNothing);
+      final dialog = find.byType(SuperTabDetailDialog);
+      expect(
+        find.descendant(of: dialog, matching: find.byType(TextField)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.byType(FilledButton)),
+        findsNothing,
+      );
       await c.flush();
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   }
 
-  testWidgets('a project with no save shows the built-in rules', (tester) async {
+  testWidgets('a project with no save shows the built-in rules', (
+    tester,
+  ) async {
     final server = _swarm({
       'projectId': 'lead',
       'revision': 0,

@@ -58,6 +58,7 @@ import 'file_links.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'instructions_panel.dart';
+import 'project_rules.dart';
 import 'model.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
@@ -1789,6 +1790,13 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = c.snapshot?.projectFor(group.id);
       if (project != null) {
         await showSuperTabInstructions(context, c, project.id);
+      }
+      return;
+    }
+    if (action == 'rules') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) {
+        await showSuperTabProjectRules(context, c, project.id);
       }
       return;
     }
@@ -3879,6 +3887,8 @@ class _SuperTabViewState extends State<SuperTabView>
             repository?['cwd'] as String? ??
             'Not set',
       ),
+      // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
+      row('Project rules', 'rules'),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&

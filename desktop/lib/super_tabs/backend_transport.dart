@@ -27,7 +27,9 @@ final _swarmRoute = RegExp(
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id|messages/$_id/reminder)'
   '|projects/$_id/(?:github|github/approve'
-  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
+  '|instructions(?:/revisions(?:/[0-9]+)?)?'
+  // The project's rules record, read in Project settings (#3393).
+  '|rules)'
   '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
