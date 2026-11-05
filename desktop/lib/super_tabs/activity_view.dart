@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -11,7 +10,7 @@ import '../widgets/laid_out_list.dart';
 import 'activity.dart';
 import 'activity_rows.dart';
 import 'attention.dart';
-import 'avatar_art.dart';
+import 'page_rows.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
@@ -19,7 +18,6 @@ import 'identity.dart' show superTabPersonName;
 import 'machine_status.dart' show superTabAgoShort;
 import 'model.dart';
 import 'notifications.dart';
-import 'private_project_lock.dart';
 import 'reminders.dart';
 
 enum _Tab { needs, mentions, threads }
@@ -460,7 +458,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final decision = need.decision;
     if (decision == null) {
       final project = _snapshot?.projectFor(need.conversationId);
-      return _ActivityRow(
+      return SuperTabPageRow(
         key: ValueKey('super-activity-row-${need.id}'),
         avatarName: need.title,
         who: need.title,
@@ -486,7 +484,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         decision.pmTakesOver &&
         created != null &&
         now.difference(created) < const Duration(days: 8);
-    return _ActivityRow(
+    return SuperTabPageRow(
       key: ValueKey('super-activity-row-${need.id}'),
       avatarName: decision.askerName,
       who: decision.askerName,
@@ -511,7 +509,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final name = reminder.authorName?.trim() ?? '';
     final who = name.isEmpty ? 'Reminder' : name;
     final text = _oneLine(reminder.text);
-    return _ActivityRow(
+    return SuperTabPageRow(
       key: ValueKey('super-activity-row-reminder:${reminder.id}'),
       avatarName: who,
       who: who,
@@ -601,7 +599,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         ..._byDay<SuperTabMentionRow>(rows, (r) => r.newest.createdAt, (row) {
           final m = row.newest;
           final name = author(m);
-          return _ActivityRow(
+          return SuperTabPageRow(
             key: ValueKey('super-activity-row-mention:${m.id}'),
             avatarName: name,
             who: name,
@@ -672,7 +670,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
             (t) => _threadRow(t, unread: false),
           ),
           if (a.attention.canReadMore)
-            _ReadMore(
+            SuperTabReadMore(
               key: const ValueKey('super-activity-threads-more'),
               onShown: a.attention.readMore,
             ),
@@ -692,7 +690,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final project = _snapshot?.projectFor(t.conversationId);
     final subject = threadSubject(t.rootText);
     final root = _oneLine(t.rootText);
-    return _ActivityRow(
+    return SuperTabPageRow(
       key: ValueKey('super-activity-row-thread:${t.key}'),
       unread: unread && a.attention.isNew(t),
       avatarName: author.isEmpty ? subject : author,
@@ -798,377 +796,3 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   );
 }
 
-/// One row, Slack's way: an unread dot, an avatar, who and where and when,
-/// then a preview and whatever hangs under it. Every row is unread but a
-/// read thread's (Threads lists those below the new ones): it has no dot, a
-/// regular muted name and a faint preview. Hover actions float at the
-/// right, over the time.
-class _ActivityRow extends StatefulWidget {
-  const _ActivityRow({
-    super.key,
-    this.unread = true,
-    required this.avatarName,
-    required this.who,
-    this.where,
-    this.privateWhere = false,
-    this.forThread = false,
-    this.repliedBy,
-    required this.trailing,
-    this.trailingWarn = false,
-    this.preview,
-    this.previewStrong = false,
-    this.previewLines = 1,
-    this.previewLead,
-    this.more,
-    this.extra,
-    this.actions = const [],
-    required this.onTap,
-  });
-  final bool unread;
-  final String avatarName, who, trailing;
-  final String? where;
-
-  /// The project is private: its lock stands for the #.
-  final bool privateWhere;
-
-  /// A thread's meta reads `{repliedBy} replied · # project` (or the project
-  /// alone with no replier) in place of `in # project`.
-  final bool forThread;
-  final String? repliedBy;
-  final bool trailingWarn;
-  final String? preview;
-  final bool previewStrong;
-  final int previewLines;
-
-  /// How many leading characters of [preview] are a name, shown stronger.
-  final int? previewLead;
-
-  final String? more;
-  final Widget? extra;
-  final List<({String label, VoidCallback run})> actions;
-  final VoidCallback onTap;
-
-  @override
-  State<_ActivityRow> createState() => _ActivityRowState();
-}
-
-class _ActivityRowState extends State<_ActivityRow> {
-  bool _hovered = false;
-
-  /// The row has keyboard focus, on it or on one of its actions: they show
-  /// for someone who cannot hover.
-  bool _focused = false;
-
-  bool get _hasProject => widget.where?.isNotEmpty ?? false;
-
-  String get _lead => !widget.forThread
-      ? 'in'
-      : widget.repliedBy == null
-      ? ''
-      : '${widget.repliedBy} replied';
-
-  /// Whether the row has meta to show: a project, or who replied.
-  bool get _hasWhere => _hasProject || (widget.forThread && _lead.isNotEmpty);
-
-  Widget _where() {
-    final style = DesktopChrome.metadata();
-    final where = widget.where;
-    final lead = _lead;
-    final join = lead.isEmpty ? '' : (widget.forThread ? ' · ' : ' ');
-    if (where == null || where.isEmpty) {
-      return Text(
-        lead,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
-    if (!widget.privateWhere) {
-      return Text(
-        '$lead$join# $where',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
-    return Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(text: '$lead$join'),
-          WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: PrivateProjectLock(size: 12, color: style.color),
-          ),
-          TextSpan(text: ' $where'),
-        ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: style,
-    );
-  }
-
-  Widget _preview() {
-    final text = widget.preview;
-    if (text == null) return const SizedBox.shrink();
-    final strong = widget.previewStrong;
-    // Unread in the foreground, read faint: muted read too close to faint to
-    // tell apart (Diego, #2887).
-    final base = DesktopChrome.control(
-      color: strong || widget.unread
-          ? DesktopChrome.foreground
-          : grid.AppPalette.textFaint,
-    ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
-    final lead = widget.previewLead;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const SizedBox(height: 1),
-        Text.rich(
-          TextSpan(
-            style: base,
-            children: [
-              if (lead != null) ...[
-                TextSpan(
-                  text: text.substring(0, lead),
-                  style: TextStyle(color: DesktopChrome.foreground),
-                ),
-                TextSpan(text: text.substring(lead)),
-              ] else
-                TextSpan(text: text),
-            ],
-          ),
-          maxLines: widget.previewLines,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final unread = widget.unread;
-    final whoStyle = DesktopChrome.control(
-      color: unread ? DesktopChrome.foreground : DesktopChrome.muted,
-    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
-    final actions = widget.actions;
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.controlGap,
-        vertical: grid.AppDesktop.listRowGap,
-      ),
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        // Focus on the row or on any action in it: the actions stay while
-        // someone tabs to them.
-        child: Focus(
-          canRequestFocus: false,
-          skipTraversal: true,
-          onFocusChange: (focused) => setState(() => _focused = focused),
-          child: Stack(
-            children: [
-              Material(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: widget.onTap,
-                  hoverColor: grid.AppSurface.hoverFill,
-                  focusColor: grid.AppSurface.hoverFill,
-                  child: Semantics(
-                    label: unread ? 'New' : null,
-                    // The hover actions, for a screen reader that cannot hover.
-                    customSemanticsActions: {
-                      for (final action in actions)
-                        CustomSemanticsAction(label: action.label): action.run,
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: grid.AppDesktop.controlGap,
-                        vertical: grid.AppDesktop.controlGap,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: grid.AppDesktop.controlGap,
-                            child: unread
-                                ? Column(
-                                    mainAxisAlignment: MainAxisAlignment.start,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 13),
-                                      DecoratedBox(
-                                        key: const ValueKey(
-                                          'super-activity-dot',
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: DesktopChrome.accent,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: const SizedBox.square(
-                                          dimension: 7,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(width: grid.AppDesktop.controlGap),
-                          SuperTabAvatarFace(
-                            identity: widget.avatarName,
-                            name: widget.avatarName,
-                            size: 32,
-                            radius: 8,
-                          ),
-                          const SizedBox(width: grid.AppDesktop.controlGap + 4),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    // The name and channel share what the time
-                                    // leaves: loose Flexibles beside a Spacer left
-                                    // the time floating mid-row (review shots).
-                                    Expanded(
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            flex: 3,
-                                            child: Text(
-                                              widget.who,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: whoStyle,
-                                            ),
-                                          ),
-                                          if (_hasWhere) ...[
-                                            const SizedBox(width: 6),
-                                            Flexible(flex: 2, child: _where()),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(
-                                      width: grid.AppDesktop.controlGap,
-                                    ),
-                                    Text(
-                                      widget.trailing,
-                                      maxLines: 1,
-                                      style: DesktopChrome.metadata(
-                                        color: widget.trailingWarn
-                                            ? grid.AppPalette.warn
-                                            : grid.AppPalette.textFaint,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                _preview(),
-                                if (widget.more != null) ...[
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    widget.more!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: DesktopChrome.metadata(
-                                      color: DesktopChrome.accent,
-                                    ),
-                                  ),
-                                ],
-                                ?widget.extra,
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if ((_hovered || _focused) && actions.isNotEmpty)
-                Positioned(
-                  right: grid.AppDesktop.controlGap,
-                  top: 4,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: grid.AppDesktop.surface,
-                      borderRadius: BorderRadius.circular(
-                        DesktopChrome.rowRadius,
-                      ),
-                      border: Border.all(color: DesktopChrome.rim),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (final action in actions)
-                          InkWell(
-                            onTap: action.run,
-                            borderRadius: BorderRadius.circular(
-                              DesktopChrome.rowRadius,
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: grid.AppDesktop.controlGap,
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    action.label,
-                                    style: DesktopChrome.metadata(
-                                      color: DesktopChrome.foreground,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 3),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The end of the read threads while there are more: built only once the list
-/// scrolls to it, it asks for the next page.
-class _ReadMore extends StatefulWidget {
-  const _ReadMore({super.key, required this.onShown});
-
-  final Future<void> Function() onShown;
-
-  @override
-  State<_ReadMore> createState() => _ReadMoreState();
-}
-
-class _ReadMoreState extends State<_ReadMore> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(widget.onShown());
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.all(grid.AppDesktop.groupGap),
-    child: Center(
-      child: SizedBox.square(
-        dimension: 16,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
-    ),
-  );
-}
