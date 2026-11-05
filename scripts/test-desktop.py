@@ -21,6 +21,12 @@ validation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
 
 LOADER_ERROR = "Unable to connect to flutter_tester process: WebSocketException: Invalid WebSocket upgrade request"
+# Measured per-file durations that shards are balanced by (task #3458); refreshed by scripts/desktop-test-durations.py.
+DURATIONS = Path(__file__).with_name("desktop-test-durations.json")
+# A shard's time estimate: its files' durations over its workers, times a slow runner's margin, plus Flutter's startup.
+# Measured on four runs (11-05): the same files summed 6,662 s on one runner and 8,036 s on another.
+SLOW_RUNNER = 1.15
+STARTUP_SECONDS = 20
 
 
 def default_workers():
@@ -158,9 +164,46 @@ def shard_pair(value):
     return index, total
 
 
-def partition(files, shard):
+def load_durations(path=DURATIONS):
+    """The measured seconds per desktop-relative test file; empty when the file is missing or unreadable, which splits
+    by equal weights (round-robin) rather than failing a run."""
+    try:
+        files = json.loads(Path(path).read_text()).get("files", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(files, dict):
+        return {}
+    return {path: float(seconds) for path, seconds in files.items()
+            if isinstance(path, str) and isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0}
+
+
+def duration_key(path):
+    """A test file as the durations file names it: relative to desktop/, whether given absolute or relative."""
+    text = str(path)
+    at = text.rfind("/desktop/test/")
+    return text[at + len("/desktop/"):] if at >= 0 else text
+
+
+def file_weights(files, durations):
+    """Each file's measured seconds; a file never measured (a new one) counts as the median of the measured ones."""
+    known = sorted(durations.values())
+    median = known[len(known) // 2] if len(known) % 2 else (sum(known[len(known) // 2 - 1:len(known) // 2 + 1]) / 2 if known else 1.0)
+    return {path: durations.get(duration_key(path), median) for path in files}
+
+
+def partition(files, shard, durations=None):
+    """INDEX/TOTAL of [files], balanced by measured durations: longest first, each to the least-loaded shard (the lowest
+    index on a tie). Every runner computes the same split from the same inventory and durations file. With equal weights
+    it is round-robin by the sorted inventory, as before."""
     index, total = shard
-    selected = files[index - 1::total]
+    weights = file_weights(files, load_durations() if durations is None else durations)
+    order = sorted(range(len(files)), key=lambda i: (-weights[files[i]], i))
+    loads, assigned = [0.0] * total, [[] for _ in range(total)]
+    for i in order:
+        target = min(range(total), key=lambda s: (loads[s], s))
+        loads[target] += weights[files[i]]
+        assigned[target].append(i)
+    selected = [files[i] for i in sorted(assigned[index - 1])]
     if not selected:
         raise ValueError("shard has no test files; reduce the shard count")
     return selected
