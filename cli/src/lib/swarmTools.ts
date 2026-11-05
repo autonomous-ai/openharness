@@ -45,7 +45,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 ## Reactions
 - \`react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off]\` acknowledges without a post, as Slack bots do. EMOJI: eyes (👀) when you start on a message addressed to you, check (✅) when you have done what it asked, rocket (🚀) when its work merged; also thumbs_up, tada, heart, laugh. \`--off\` takes yours back (take the 👀 back, then react ✅).
 - A reaction tells the people in the chat and wakes nobody; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Commands (JSON)
 \`command OPERATION_ID JSON\` sends one command. The JSON is one argument; when it holds quotes, put - in its place and send it on stdin:
