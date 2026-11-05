@@ -74,7 +74,8 @@ def check(kind, now, last, config, urgent=None):
         paced = last.astimezone(zone) + timedelta(minutes=minutes)
         if paced > earliest:
             earliest = paced
-            reasons.append(f"the last {kind} release was at {_stamp(last, zone)} and {kind} releases keep {minutes} minutes apart")
+            reasons.append(f"the last {kind} release was at {_stamp(last, zone)} and {kind} releases keep {minutes} minutes apart, "
+                           f"until {_stamp(paced, zone)}")
     if not (start <= local_now.time() < end):
         reasons.insert(0, f"it is outside {shown}")
     elif in_pause(local_now):
@@ -88,8 +89,6 @@ def check(kind, now, last, config, urgent=None):
         if moved == allowed_at:
             break
         allowed_at = moved
-    if reasons == [] and allowed_at > local_now:
-        reasons.append(f"the pace ends outside {shown}")
     allowed = allowed_at == local_now
 
     if urgent is not None:
@@ -129,6 +128,12 @@ def last_release_time(repo, kind, exclude_tag=None):
     return newest
 
 
+def tagged_at(repo, tag):
+    """When an annotated tag was made, or None for a lightweight tag (its date is the commit's, which anyone can set)."""
+    stamp = _git(repo, "tag", "-l", "--format=%(taggerdate:unix)", tag).strip()
+    return datetime.fromtimestamp(int(stamp), tz=timezone.utc) if stamp else None
+
+
 def urgent_reason_of_tag(repo, tag):
     body = _git(repo, "tag", "-l", "--format=%(contents)", tag)
     found = URGENT_LINE.search(body)
@@ -152,6 +157,12 @@ def main(argv=None):
     urgent = args.urgent
     if urgent is None and args.from_tag:
         urgent = urgent_reason_of_tag(args.repo, args.from_tag)
+    if args.from_tag:
+        # A workflow that waited in the CI queue starts after the release was made. A tag made a moment ago is judged
+        # when it was made, so a release tagged at 17:55 is not refused at 18:04; an older tag is judged by the clock.
+        made = tagged_at(args.repo, args.from_tag)
+        if made is not None and timedelta(0) <= now - made <= timedelta(minutes=config.get("tagGraceMinutes", 0)):
+            now = made
     last = None
     if args.kind == "backend" and config.get("releasePace", {}).get("backendEveryMinutes"):
         last = last_release_time(args.repo, args.kind, args.exclude_tag)

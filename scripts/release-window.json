@@ -1,5 +1,6 @@
 {
   "releaseWindow": {"start": "09:00", "end": "18:00", "timeZone": "Asia/Ho_Chi_Minh"},
   "releasePace": {"backendEveryMinutes": 120, "backendPause": {"start": "09:00", "end": "10:00"}},
+  "tagGraceMinutes": 30,
   "kinds": ["backend", "cli", "desktop", "web"]
 }
