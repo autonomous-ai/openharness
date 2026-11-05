@@ -248,14 +248,29 @@ class PersonalProjects extends ChangeNotifier {
   /// now. Nothing about it changes on the server, so its chat is there when a
   /// pane of it opens again. Never while a machine holding one of their panes
   /// has not said what runs there yet: that pane may be this project's.
-  bool hidden(SuperTabController c, String projectId) {
-    if (!eligible(c)) return false;
+  bool hidden(SuperTabController c, String projectId) =>
+      hiddenIn(c).contains(projectId);
+
+  /// Every project of [c] that leaves the project list now ([hidden]), in
+  /// one walk of the person's panes, so the list asks once per draw, not once
+  /// per row (ENGINEERING §4, review of #3073): a project made for panes
+  /// whose repos have none of them open, the same answer as [panesFor] being
+  /// empty for it.
+  Set<String> hiddenIn(SuperTabController c) {
+    if (!eligible(c)) return const {};
     final known = _known[c.accountId]?[c.tabId];
-    if (known == null || !known.containsValue(projectId)) return false;
-    final project = c.snapshot!.projectById(projectId);
-    if (project == null) return false;
-    if (_unresolvedPanes(app)) return false;
-    return panesFor(c, project.leadConversationId).isEmpty;
+    if (known == null || known.isEmpty || _unresolvedPanes(app)) {
+      return const {};
+    }
+    final shown = {for (final entry in personalPanes(app)) ?known[entry.repo]};
+    final snapshot = c.snapshot!;
+    return {
+      for (final id in known.values)
+        if (id != null &&
+            !shown.contains(id) &&
+            snapshot.projectById(id) != null)
+          id,
+    };
   }
 
   /// A pane of the person's on a machine that has not listed its agents yet.
