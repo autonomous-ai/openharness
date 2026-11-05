@@ -2029,8 +2029,16 @@ export class SuperTabStore {
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
         ], repositoryUrl)
-        // Its own code's sources alone, never a post: what GitHub's push read covers for its Team-written mark (task #3554).
-        appendCodePullRequestUrls(group, [group.brief, group.title, ...group.checks.map(check => check.evidence), group.assignment?.result], repositoryUrl)
+        // Its own code's sources: what GitHub's push read covers for its Team-written mark (task #3554). In a task, a post by a
+        // person, the project's PM or the task's own builder names its code too: where a builder is told what to merge, or links
+        // its own pull request (security reviews of #3286). Another agent's post (a Team reviewer's verdict, log lines) or one in a
+        // step, the project chat or a private chat never does (River's ruling on #3462 and #3514).
+        const task = !group.reviewOf && !group.kind && !group.audience && !projectsOf(effects.state).some(p => p.leadConversationId === group.id)
+        const codePosts = task ? shown.filter(message => message.conversationId === group.id && (message.author.kind === 'person'
+          || message.author.id === group.assignment?.agentId
+          || (message.author.kind === 'agent' && ledProject(effects.state, message.author.id)?.id === groupProject(effects.state, group).id)))
+          .map(message => message.text) : []
+        appendCodePullRequestUrls(group, [group.brief, group.title, ...group.checks.map(check => check.evidence), group.assignment?.result, ...codePosts], repositoryUrl)
         cleanPullRequestLinks(group, repositoryUrl)
       }
       if (command.type === 'agent.rebind') {

@@ -8,6 +8,11 @@ record of a bot's push on the task's own pull requests. A link to another pull r
 its steps (a reviewer's verdict, log lines, a batch) no longer marks it. On 11-06 that blocked main-account agents from
 #3462 and #3514, which they had built themselves (River's ruling in #3554).
 
+**As built after the security reviews (SecAlder, SecLarch):** in a task itself, a post by a person, the project's PM or
+the task's own assignee is a code source too: that is where a builder is told what to merge, and a squash or a rebase of a
+Team pull request leaves only the builder's own commits on its branch, which GitHub's read cannot tell from its own. Another
+agent's post (a Team reviewer's verdict, log lines), or any post in a step, the project chat or a private chat, never is.
+
 **Architecture:** Today every message shown in a conversation adds the full pull request links in its text to that
 conversation's `pullRequestUrls` (store.ts execute). The push read before an assignment, a start or a Ready
 (store.ts `pushOriginFor`) asks GitHub about all of them, and for a step about the task's too. A step's Team answer marks
