@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../core/github_repository.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
@@ -14,12 +18,40 @@ import 'project_visibility.dart';
 const _gap = DesktopChrome.controlGap;
 const _halfGap = _gap / 2;
 
+/// How many branches a repository has, by `git ls-remote --heads` with this
+/// computer's own git login, or null when it could not be reached. One with
+/// none has no commit yet.
+typedef RepositoryBranchCount = Future<int?> Function(String url);
+
+Future<int?> _branchCount(String url) async {
+  try {
+    final result = await Process.run(
+      'git',
+      ['ls-remote', '--heads', '--', url],
+      // Never a prompt for a password nobody sees, and only GitHub's ways in.
+      environment: {
+        'GIT_TERMINAL_PROMPT': '0',
+        'GIT_ALLOW_PROTOCOL': 'https:ssh',
+      },
+    ).timeout(const Duration(seconds: 20));
+    if (result.exitCode != 0) return null;
+    return '${result.stdout}'
+        .split('\n')
+        .where((l) => l.trim().isNotEmpty)
+        .length;
+  } on Object {
+    return null;
+  }
+}
+
 /// A project's details, read only: its description, repository, coordinator and whether teammates' agents can
-/// push there, in the shared details frame (Ken, 2026-10-28).
+/// push there, in the shared details frame (Ken, 2026-10-28). Its owner can share a repository from the Repository
+/// row while none is set (task #3211): other machines then clone it instead of starting in an empty folder.
 Future<void> _showProjectDetails(
   BuildContext context,
   SuperTabController c,
   SuperTabProject project,
+  RepositoryBranchCount branches,
 ) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(
@@ -50,11 +82,24 @@ Future<void> _showProjectDetails(
               ),
               SuperTabDetailRow(
                 label: 'Repository',
-                child: SelectableText(
-                  current?.repository?['repositoryUrl'] as String? ??
-                      current?.repository?['cwd'] as String? ??
-                      'Not set',
-                  style: DesktopChrome.control(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SelectableText(
+                      current?.repository?['repositoryUrl'] as String? ??
+                          current?.repository?['cwd'] as String? ??
+                          'Not set',
+                      style: DesktopChrome.control(),
+                    ),
+                    if (current != null &&
+                        current.ownerId == c.accountId &&
+                        current.repository?['repositoryUrl'] == null)
+                      TextButton(
+                        onPressed: () =>
+                            _shareRepository(context, c, current, branches),
+                        child: const Text('Share repository'),
+                      ),
+                  ],
                 ),
               ),
               SuperTabDetailRow(
@@ -120,14 +165,15 @@ Future<void> showProjectAction(
   BuildContext context,
   SuperTabController c,
   SuperTabProject project,
-  String action,
-) async {
+  String action, {
+  RepositoryBranchCount? branches,
+}) async {
   if (action == 'delete') {
     await _deleteProject(context, c, project);
     return;
   }
   if (action == 'details') {
-    await _showProjectDetails(context, c, project);
+    await _showProjectDetails(context, c, project, branches ?? _branchCount);
     return;
   }
   var name = project.name;
@@ -353,6 +399,120 @@ Future<void> _deleteProject(
                     ),
                 ],
               ),
+            );
+          },
+        ),
+      ),
+    ),
+  );
+}
+
+/// The owner shares the project's GitHub repository (task #3211): checked on
+/// this computer to have a commit, since other machines clone and branch from
+/// it, then sent as the address any machine can use.
+Future<void> _shareRepository(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+  RepositoryBranchCount branches,
+) async {
+  var address = '';
+  String? problem;
+  var busy = false;
+  await showAppDialog<void>(
+    context: context,
+    builder: (context) => SuperTabDialogScope(
+      controller: c,
+      projectId: project.id,
+      requireWrite: true,
+      child: StatefulBuilder(
+        builder: (context, update) => ListenableBuilder(
+          listenable: c,
+          builder: (context, _) {
+            Future<void> share() async {
+              final repository = GitHubRepository.parse(address);
+              if (repository == null) {
+                update(
+                  () => problem = 'Enter a GitHub repository, such as https://github.com/owner/repository.',
+                );
+                return;
+              }
+              update(() {
+                busy = true;
+                problem = null;
+              });
+              final count = await branches(repository.url);
+              if (!context.mounted) return;
+              if (count == null || count == 0) {
+                update(() {
+                  busy = false;
+                  problem = count == null
+                      ? 'This computer can’t reach ${repository.slug} on GitHub. Check the address, and that you can open the repository with your GitHub account.'
+                      : '${repository.slug} has no commits yet. Add one, for example a README, then share it.';
+                });
+                return;
+              }
+              final result = await c.command({
+                'type': 'project.repository',
+                'projectId': project.id,
+                'repositoryUrl': repository.shareableUrl,
+              });
+              if (!context.mounted) return;
+              if (result != null) {
+                Navigator.pop(context);
+              } else {
+                update(() => busy = false);
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Share repository'),
+              content: SizedBox(
+                width: 400,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Agents on other machines clone this repository instead of starting in an empty folder. It needs at least one commit.',
+                      style: DesktopChrome.text(),
+                    ),
+                    const SizedBox(height: _gap),
+                    TextField(
+                      autofocus: true,
+                      enabled: !busy,
+                      decoration: const InputDecoration(
+                        hintText: 'https://github.com/owner/repository',
+                      ),
+                      onChanged: (value) => update(() {
+                        address = value;
+                        problem = null;
+                      }),
+                      onSubmitted: (_) => busy ? null : share(),
+                    ),
+                    if (problem ?? c.operationError case final shown?) ...[
+                      const SizedBox(height: _gap),
+                      Text(shown, style: DesktopChrome.metadata()),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: busy ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed:
+                      busy ||
+                          c.saving ||
+                          c.hasPendingAction ||
+                          address.trim().isEmpty
+                      ? null
+                      : share,
+                  child: const Text('Share'),
+                ),
+              ],
             );
           },
         ),

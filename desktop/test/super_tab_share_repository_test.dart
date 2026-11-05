@@ -85,11 +85,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('offers Share repository to the owner of a project with none, and to nobody else', (tester) async {
-    await mount(tester);
-    expect(find.text('/Users/vie/outreach'), findsOneWidget);
-    expect(find.text('Share repository'), findsOneWidget);
-  });
+  testWidgets(
+    'offers Share repository to the owner of a project with none, and to nobody else',
+    (tester) async {
+      await mount(tester);
+      expect(find.text('/Users/vie/outreach'), findsOneWidget);
+      expect(find.text('Share repository'), findsOneWidget);
+    },
+  );
 
   testWidgets('offers nothing to another member', (tester) async {
     await mount(tester, accountId: 'peer');
@@ -102,39 +105,65 @@ void main() {
     expect(find.text('Share repository'), findsNothing);
   });
 
-  testWidgets('refuses a repository with no commit in plain words, and sends nothing', (tester) async {
-    await mount(tester);
-    await tester.tap(find.text('Share repository'));
-    await tester.pumpAndSettle();
-    branches = 0;
-    await share(tester, 'vie/outreach');
-    expect(checked, ['https://github.com/vie/outreach.git']);
-    expect(find.text('vie/outreach has no commits yet. Add one, for example a README, then share it.'), findsOneWidget);
-    expect(sent.where((c) => c['type'] == 'project.repository'), isEmpty);
-  });
+  testWidgets(
+    'refuses a repository with no commit in plain words, and sends nothing',
+    (tester) async {
+      await mount(tester);
+      await tester.tap(find.text('Share repository'));
+      await tester.pumpAndSettle();
+      branches = 0;
+      await share(tester, 'vie/outreach');
+      expect(checked, ['https://github.com/vie/outreach.git']);
+      expect(
+        find.text(
+          'vie/outreach has no commits yet. Add one, for example a README, then share it.',
+        ),
+        findsOneWidget,
+      );
+      expect(sent.where((c) => c['type'] == 'project.repository'), isEmpty);
+    },
+  );
 
-  testWidgets('refuses an address that is not GitHub before running git, and one this computer cannot reach', (tester) async {
-    await mount(tester);
-    await tester.tap(find.text('Share repository'));
-    await tester.pumpAndSettle();
-    await share(tester, 'https://gitlab.com/vie/outreach');
-    expect(find.text('Enter a GitHub repository, such as https://github.com/owner/repository.'), findsOneWidget);
-    expect(checked, isEmpty);
-    branches = null;
-    await share(tester, 'vie/outreach');
-    expect(find.textContaining('can’t reach vie/outreach on GitHub'), findsOneWidget);
-    expect(sent.where((c) => c['type'] == 'project.repository'), isEmpty);
-  });
+  testWidgets(
+    'refuses an address that is not GitHub before running git, and one this computer cannot reach',
+    (tester) async {
+      await mount(tester);
+      await tester.tap(find.text('Share repository'));
+      await tester.pumpAndSettle();
+      await share(tester, 'https://gitlab.com/vie/outreach');
+      expect(
+        find.text(
+          'Enter a GitHub repository, such as https://github.com/owner/repository.',
+        ),
+        findsOneWidget,
+      );
+      expect(checked, isEmpty);
+      branches = null;
+      await share(tester, 'vie/outreach');
+      expect(
+        find.textContaining('can’t reach vie/outreach on GitHub'),
+        findsOneWidget,
+      );
+      expect(sent.where((c) => c['type'] == 'project.repository'), isEmpty);
+    },
+  );
 
-  testWidgets('shares a repository with a commit as the address any machine can use, and closes', (tester) async {
-    await mount(tester);
-    await tester.tap(find.text('Share repository'));
-    await tester.pumpAndSettle();
-    branches = 2;
-    await share(tester, 'git@github.com:vie/outreach.git');
-    expect(sent.where((c) => c['type'] == 'project.repository'), [
-      {'type': 'project.repository', 'projectId': 'lead', 'repositoryUrl': 'git@github.com:vie/outreach.git'},
-    ]);
-    expect(find.widgetWithText(FilledButton, 'Share'), findsNothing);
-  });
+  testWidgets(
+    'shares a repository with a commit as the address any machine can use, and closes',
+    (tester) async {
+      await mount(tester);
+      await tester.tap(find.text('Share repository'));
+      await tester.pumpAndSettle();
+      branches = 2;
+      await share(tester, 'git@github.com:vie/outreach.git');
+      expect(sent.where((c) => c['type'] == 'project.repository'), [
+        {
+          'type': 'project.repository',
+          'projectId': 'lead',
+          'repositoryUrl': 'git@github.com:vie/outreach.git',
+        },
+      ]);
+      expect(find.widgetWithText(FilledButton, 'Share'), findsNothing);
+    },
+  );
 }
