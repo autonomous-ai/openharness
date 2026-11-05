@@ -136,6 +136,7 @@ class ProjectSidebar extends StatelessWidget {
     int badge = 0,
     Widget? trailing,
     bool? unread,
+    bool quiet = false,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
@@ -182,13 +183,15 @@ class ProjectSidebar extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       // A row that reads or not ([unread] given) is drawn as
                       // conversations are: muted when read, full strength
-                      // and bold when not.
+                      // and bold when not. A [quiet] row is muted the same
+                      // way but never bold (Decisions, Mentions).
                       style:
                           SwarmType.sidebar(
                             compact: compact,
                             medium: selected,
                             color:
-                                onTap == null || (unread == false && !selected)
+                                onTap == null ||
+                                    ((unread == false || quiet) && !selected)
                                 ? grid.SidebarInk.inkMuted
                                 : grid.SidebarInk.ink,
                           ).copyWith(
@@ -676,6 +679,8 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
+    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
+    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
     return Material(
       // The page's color: the rule at its edge is what separates them. A
       // theme may give the sidebar its own (Plum's plum).
@@ -709,16 +714,20 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                   ),
                 // Three rows, each one thing, in anh Dee's order (11-05, task
-                // #2996): only Decisions and Mentions are ever red.
+                // #2996): only Decisions and Mentions are ever red, and each
+                // is grey while nothing waits (task #3128). The Swarm
+                // switcher stands apart from them by a control gap.
                 if (onPage case final onPage?) ...[
+                  if (app != null && onNewSwarm != null)
+                    const SizedBox(height: DesktopChrome.controlGap),
                   _navigationRow(
                     key: 'super-decisions',
                     label: 'Decisions',
                     icon: AppIcons.flag,
                     onTap: () => onPage(SwarmPage.decisions),
                     selected: page == SwarmPage.decisions,
-                    badge:
-                        activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0,
+                    badge: decisions,
+                    quiet: decisions == 0,
                   ),
                   _navigationRow(
                     key: 'super-mentions',
@@ -726,10 +735,8 @@ class ProjectSidebar extends StatelessWidget {
                     icon: AppIcons.atSign,
                     onTap: () => onPage(SwarmPage.mentions),
                     selected: page == SwarmPage.mentions,
-                    badge:
-                        activity?.mentionsCount ??
-                        snapshot?.mentionsWaiting ??
-                        0,
+                    badge: mentions,
+                    quiet: mentions == 0,
                   ),
                   _threadsRow(onPage),
                 ],
