@@ -213,18 +213,19 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     expect(find().requesterId).toBe('owner')
   })
 
-  it('names nobody, and says so, when the proposal\'s person left the Swarm or no longer reads the project; the group still opens', () => {
+  it('is refused naming the requester when the proposal\'s person left the Swarm or no longer reads the project, and opens once the PM names one (task #3389)', () => {
     for (const lose of [(f: ReturnType<typeof setup>) => { f.state.people = f.state.people.filter(p => p.id !== 'peer') },
       (f: ReturnType<typeof setup>) => { f.state.projects!.find(p => p.id === f.app.projectId)!.visibility = 'private' }]) {
       const f = setup(), sent = f.propose()
       lose(f)
-      const created = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
-        checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id } as Command, agentActor(f.pm),
+      const open = (extra: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
+        checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id, ...extra } as Command, agentActor(f.pm),
         { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
-      const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
-      expect(group.requesterId).toBeUndefined()
+      expect(() => open()).toThrow(expect.objectContaining({ code: 'TASK_CONTRACT_MISSING', message: expect.stringContaining('requester') }))
+      const opened = open({ requesterId: 'owner' }).result.conversationId
+      const group = f.state.conversations.find(c => c.id === opened)!
+      expect(group.requesterId).toBe('owner')
       expect(group.ledger?.proposal).toEqual({ buddyId: 'buddy', messageId: sent.id })
-      expect(created.result).toMatchObject({ requesterUnknown: true, warnings: [expect.stringContaining('Name the person who asked')] })
     }
   })
 
