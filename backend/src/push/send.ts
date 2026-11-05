@@ -17,7 +17,8 @@ const AT_ONCE = 8
 export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
   const keys = pushKeysFromEnv(env)
   const senders = { ios: keys.apns && apnsSender(keys.apns), android: keys.fcm && fcmSender(keys.fcm) }
-  logger.info('phone push', { ios: senders.ios ? 'on' : 'off: no APNs key', android: senders.android ? 'on' : 'off: no FCM service account' })
+  const ios = !keys.apns ? 'off: no APNs key' : keys.apns.sandbox ? 'on, Xcode builds too' : 'on, but Xcode builds skipped: no APNs sandbox key'
+  logger.info('phone push', { ios, android: senders.android ? 'on' : 'off: no FCM service account' })
   return senders
 }
 
@@ -51,6 +52,7 @@ export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, 
         if (result.outcome === 'gone') await forgetPushDevice(db, device.id)
         if (result.outcome === 'sandbox') await markSandbox(db, device.id)
         if (result.outcome === 'failed') logger.warn('phone push failed', { platform: device.platform, reason: result.reason })
+        if (result.outcome === 'unconfigured') logger.warn('phone push skipped', { platform: device.platform, reason: result.reason })
       }
     }
     await Promise.all(Array.from({ length: Math.min(AT_ONCE, sends.length) }, lane))

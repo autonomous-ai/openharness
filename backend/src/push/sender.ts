@@ -7,8 +7,9 @@ import type { PushDevice } from './devices.js'
  */
 export interface PhoneNotice { personId: string; key: string; title: string; subtitle: string; body: string; link: string }
 
-/** sent; gone: the token is dead, forget it; sandbox: taken by Apple's sandbox host, send there from now on; failed. */
-export type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed'
+/** sent; gone: the token is dead, forget it; sandbox: taken by Apple's sandbox host, send there from now on; failed;
+ *  unconfigured: the server has no key for where it would go (Apple's sandbox host), so nothing was sent and the token is kept. */
+export type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed' | 'unconfigured'
 /** `reason` is Apple's or Google's word for it, or `timeout`: never the token. */
 export interface SendResult { outcome: SendOutcome; reason?: string }
 

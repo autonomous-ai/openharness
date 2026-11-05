@@ -17,7 +17,8 @@ import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 // The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
-import 'package:flutter/widgets.dart' show StringCharacters;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -52,6 +53,8 @@ import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
+import '../notify/push_channel.dart';
+import '../notify/push_tokens.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -1312,6 +1315,7 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
+    PushTokens? pushTokens,
     MachineCache? machineCache,
     KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
@@ -1381,6 +1385,7 @@ class AppNotifier extends ChangeNotifier {
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
     _initDeviceLog();
+    _initPush(pushTokens, paneLayoutStore);
   }
 
   /// Which build this phone's reports come from ([ProductMeasurement.context]): the public release
@@ -1815,6 +1820,9 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
+        // The session ended while the app was closed (revoked from another device): the OS stops
+        // delivering this account's pushes to the phone. The backend drop fails without a session.
+        if (_push case final push?) unawaited(push.forgetIfTold(api));
         currentUser = null;
         status = AppStatus.unauthenticated;
         notifyListeners();
@@ -2040,6 +2048,7 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_deviceLog?.signedInAs(id));
           _keepAccount(id);
         }
+        _syncPush();
         notifyListeners();
       }
     } catch (error) {
@@ -2087,6 +2096,9 @@ class AppNotifier extends ChangeNotifier {
     // who had just pressed Sign out. The sign-out finishes the job itself.
     if (_leftByHand) return;
     _invalidateAuthWork();
+    // As on a sign-out here ([_endSession]): no lock-screen notice of this account after it. The
+    // backend drop fails without a session; the OS one still stops delivery.
+    if (_push case final push?) unawaited(push.forget(api));
     currentUser = null;
     signingIn = false;
     signInProvider = null;
@@ -2399,6 +2411,12 @@ class AppNotifier extends ChangeNotifier {
     if (_deviceLog case final log?) {
       try {
         await log.leave().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
+    // So does where to push to it: no notice of this account reaches a phone signed out of it.
+    if (_push case final push?) {
+      try {
+        await push.forget(api).timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
     final revision = _invalidateAuthWork();
@@ -3586,6 +3604,57 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('devices: could not save the dismissal: $error');
       _failedDismissals.addAll([...?pubs, ?pub]);
     }
+  }
+
+  // -- where to push to this phone (notify/push_tokens.dart) ---------------------------------------
+
+  /// Null in a test and in the sample, which never reach the OS, and on the web, which has no push.
+  PushTokens? _push;
+  AppLifecycleListener? _pushLifecycle;
+
+  void _initPush(PushTokens? given, PaneLayoutStore? paneLayoutStore) {
+    final push = _push =
+        given ??
+        (kIsWeb || kUnderTest || paneLayoutStore == null
+            ? null
+            : PushTokens(
+                channel: PushChannel(),
+                storage: paneLayoutStore.storage,
+                allowed: () => noticesEnabled(agentNotices.system),
+              ));
+    if (push == null) return;
+    // Before the shell is up, so the push that launched the app is waiting for it as a tapped
+    // notice is.
+    push.channel.listen(
+      onOpened: (data) => openPushed(data, agentNotices.system),
+      onChanged: _syncPush,
+    );
+    if (agentNotices.system case final LocalSystemNotices notices) {
+      notices.onAllowed = _syncPush;
+    }
+    // Back from the phone's Settings, where notices may have been turned on or off.
+    _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
+  }
+
+  /// Tells the backend where to push to this phone while signed in: once the account is known, when
+  /// notices are allowed, when the OS hands over a new address, and back in the app.
+  void _syncPush() {
+    final push = _push;
+    final account = swarmAccountId;
+    if (push == null || _disposed || _signingOut != null || account == null) {
+      return;
+    }
+    final revision = _authRevision;
+    unawaited(
+      push.sync(
+        account: account,
+        api: api,
+        current: () =>
+            _authWorkCurrent(revision) &&
+            _signingOut == null &&
+            status == AppStatus.authenticated,
+      ),
+    );
   }
 
   void _initDeviceLog() {
@@ -11862,6 +11931,8 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
+    _pushLifecycle?.dispose();
+    _push?.channel.close();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

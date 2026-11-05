@@ -1,5 +1,6 @@
 import '../measurement/product_measurement.dart';
 import '../measurement/task_feedback.dart';
+
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -83,6 +84,7 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
+import 'package:harness_mobile/swarm/swarm_home_root.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
@@ -822,11 +824,29 @@ class _TerminalPageState extends State<TerminalPage>
     setState(() => _facts = facts);
   }
 
+  SwarmHomeChoice? _swarmHome;
+
+  void _swarmHomeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Back to Swarm Home, while this terminal is what Swarm Home's agent opened: the terminal is the
+  /// root page then, so no pop can leave it. Null with Swarm off, with Swarm Home showing, and
+  /// outside the shell.
+  VoidCallback? get _backToSwarm {
+    final home = _swarmHome;
+    if (home == null || !home.harnessOverSwarm) return null;
+    return PhoneShellScope.maybeOf(context)?.onShowSwarm;
+  }
+
   @override
   void initState() {
     super.initState();
     if (kTypingTrace) typingEvent('switch: terminal page mounted');
     WidgetsBinding.instance.addObserver(this);
+    // Not a dependency (the scope never notifies): the shell's own choice of root is what changes.
+    _swarmHome = PhoneShellScope.maybeOf(context)?.home
+      ?..addListener(_swarmHomeChanged);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     // A session already taking input when the page comes ticks nothing to raise from.
@@ -902,6 +922,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
+    _swarmHome?.removeListener(_swarmHomeChanged);
     _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
     final session = widget.notifier
@@ -2847,8 +2868,11 @@ class _TerminalPageState extends State<TerminalPage>
                                   // terminal drew** — see `reconnecting` above. Then the
                                   // screen stays and only [_Reconnecting] lies over it.
                                   if (reconnecting)
-                                    const Positioned.fill(child: _Reconnecting())
-                                  else if (session != null && !session.hasScreen)
+                                    const Positioned.fill(
+                                      child: _Reconnecting(),
+                                    )
+                                  else if (session != null &&
+                                      !session.hasScreen)
                                     Positioned.fill(child: placeholder),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
@@ -2946,6 +2970,9 @@ class _TerminalPageState extends State<TerminalPage>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             TerminalTitle(
+                              backInset: _backToSwarm == null
+                                  ? 0
+                                  : _BackToSwarm.inset,
                               sample: SampleMode.maybeOf(context) != null,
                               name:
                                   agent?.displayName ?? _cachedAgentName ?? '',
@@ -3001,6 +3028,25 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     ),
+                    // The way back to Swarm, for a terminal opened from it. ⚠️ The terminal is
+                    // then the ROOT page, so there is nothing under it to pop and iOS has no
+                    // system back: the only way out was the dim Swarm mark in the title, which
+                    // folds away with it while the history is read. This stays, outside the slide.
+                    if (_backToSwarm case final toSwarm?) ...[
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        child: _BackToSwarm(onBack: toSwarm),
+                      ),
+                      if (defaultTargetPlatform == TargetPlatform.iOS)
+                        Positioned(
+                          top: 0,
+                          bottom: 0,
+                          left: 0,
+                          width: _BackToSwarm.edge,
+                          child: _EdgeBack(onBack: toSwarm),
+                        ),
+                    ],
                     // ⚠️ No `[42/1380]` at the top right while reading back, by the owner's
                     // call (2026-09-27): "we don't need the scrolling indicator". The history
                     // scrolls like any list; scrolling down is the way back to the stream.
@@ -3242,9 +3288,11 @@ class _TerminalPageState extends State<TerminalPage>
               PhoneSheetAction(
                 icon: LucideIcons.messageSquareText300,
                 label: 'Rate task outcome',
-                onTap: () => showTaskFeedback(context,
+                onTap: () => showTaskFeedback(
+                  context,
                   choice: () => widget.notifier.api.productUsageSettings(),
-                  send: widget.notifier.api.productUsageFeedback),
+                  send: widget.notifier.api.productUsageFeedback,
+                ),
               ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
@@ -3999,7 +4047,8 @@ class _ReconnectingState extends State<_Reconnecting> {
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
           duration: still ? Duration.zero : const Duration(milliseconds: 180),
-          builder: (context, fade, child) => Opacity(opacity: fade, child: child),
+          builder: (context, fade, child) =>
+              Opacity(opacity: fade, child: child),
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -5040,6 +5089,64 @@ class _SampleEndCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The way back to Swarm Home over the terminal's top left corner: a chevron, as iOS draws back on
+/// a pushed page, on the terminal's own ground so the output never reads through it. It sits
+/// outside the header's slide, so it is there while the history is read back too.
+class _BackToSwarm extends StatelessWidget {
+  const _BackToSwarm({required this.onBack});
+
+  final VoidCallback onBack;
+
+  /// Room the title leaves for it: what its box takes, less the gutter the title keeps anyway,
+  /// so the name starts where the box ends and no letter is under it.
+  static const inset = TtyBackButton.width - Tty.origin;
+
+  /// The width of the iOS edge swipe's strip ([_EdgeBack]).
+  static const edge = 20.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tty.ground,
+        borderRadius: const BorderRadius.only(bottomRight: Radius.circular(14)),
+      ),
+      child: TtyBackButton(onPressed: onBack),
+    );
+  }
+}
+
+/// iOS's edge swipe back: a drag from the left edge that goes far enough, or is flung. A strip
+/// only [_BackToSwarm.edge] wide, so the terminal keeps every other touch. Android has no such
+/// swipe and is not given one: its system back is the shell's.
+class _EdgeBack extends StatefulWidget {
+  const _EdgeBack({required this.onBack});
+
+  final VoidCallback onBack;
+
+  @override
+  State<_EdgeBack> createState() => _EdgeBackState();
+}
+
+class _EdgeBackState extends State<_EdgeBack> {
+  double _dragged = 0;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    key: const ValueKey('terminal-edge-back'),
+    behavior: HitTestBehavior.translucent,
+    onHorizontalDragStart: (_) => _dragged = 0,
+    onHorizontalDragUpdate: (details) => _dragged += details.delta.dx,
+    onHorizontalDragEnd: (details) {
+      if (_dragged > 80 || (details.primaryVelocity ?? 0) > 700) {
+        HapticFeedback.selectionClick();
+        widget.onBack();
+      }
+    },
+  );
 }
 
 /// Find's hold on the back gesture — see `_TerminalPageState._findBack`.

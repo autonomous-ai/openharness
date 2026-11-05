@@ -9,9 +9,11 @@ import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
+import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
+import 'backlog.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
@@ -27,7 +29,12 @@ import 'local_time_zone.dart';
 import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
-typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
+typedef _EarlyRead = ({
+  String query,
+  Future<Map<String, dynamic>> page,
+  // Running since the page was asked for, so its wait is measured whole.
+  Stopwatch clock,
+});
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
@@ -3168,6 +3175,23 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Sets task [taskId]'s priority for everyone (backend `work.priority`,
+  /// task #3117): null once done, else why it was refused. Only a person or
+  /// the project's PM may; an older server refuses the command as unknown.
+  Future<String?> setTaskPriority(
+    String taskId,
+    SuperTabTaskPriority priority,
+  ) async {
+    final done = await command({
+      'type': 'work.priority',
+      'conversationId': taskId,
+      'priority': priority.badge,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves the reader's one Buddy onto [gridModel], a model shared in the
   /// Swarm, or back to their own subscription when null (backend
   /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
@@ -3807,8 +3831,10 @@ class SuperTabController extends ChangeNotifier {
     // A conversation the state already has takes its answer as it comes, so
     // a reply shows without waiting for the state.
     final messagesRead = early != null && snapshot != null
-        ? (_readMessages(earlyId, early: (query: earlyQuery!, page: early))
-            ..ignore())
+        ? (_readMessages(
+            earlyId,
+            early: (query: earlyQuery!, page: early, clock: took),
+          )..ignore())
         : null;
     try {
       final heldSaved = _parts != null && stateReads == 0;
@@ -3822,6 +3848,7 @@ class SuperTabController extends ChangeNotifier {
       _graceEnd?.cancel();
       _firstReadRetry?.cancel();
       stateReads++;
+      speedMarks.launch('swarm state read');
       // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
       // backend, which the sidebar's ages and the machines' states otherwise only hint at.
       appLog.debug(
@@ -3959,7 +3986,7 @@ class SuperTabController extends ChangeNotifier {
             : _readMessages(
                 selectedId,
                 early: selectedId == earlyId && early != null
-                    ? (query: earlyQuery!, page: early)
+                    ? (query: earlyQuery!, page: early, clock: took)
                     : null,
               ));
       } else {
@@ -4741,6 +4768,9 @@ class SuperTabController extends ChangeNotifier {
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
     final generation = _heldGeneration[id];
+    // A first page asked for beside the state has been out since then.
+    final readClock = early?.clock ?? (Stopwatch()..start());
+    var requestMs = 0;
     // How far the Swarm's state said the conversation went when this read
     // was asked for.
     final askedUpTo = snapshot!.conversation(id)!.lastMessageSequence;
@@ -4761,6 +4791,7 @@ class SuperTabController extends ChangeNotifier {
               (Object _) => request('GET', '${_messagesPath(id)}$query'),
             )
           : await request('GET', '${_messagesPath(id)}$query');
+      requestMs = readClock.elapsedMilliseconds;
       final arrived =
           !older &&
           !holding &&
@@ -4978,6 +5009,16 @@ class SuperTabController extends ChangeNotifier {
       if (!same || settled) {
         if (id == selectedId) _viewVersion++;
         _changed();
+      }
+      // Speed marks (task #3176): a chat opening and each page read back; a
+      // poll for new messages is not one of them.
+      if (older || replacing || (tail == null && incoming.isNotEmpty)) {
+        speedMarks.messages(
+          kind: older ? 'older' : 'latest',
+          rows: incoming.length,
+          requestMs: requestMs,
+          totalMs: readClock.elapsedMilliseconds,
+        );
       }
     } catch (failure) {
       if (!older) _settleHeld(id, read: false);

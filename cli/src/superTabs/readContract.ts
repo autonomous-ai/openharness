@@ -33,6 +33,8 @@ export interface Derived {
   machines: Record<string, Json>
   /** A Lead agent only. */
   otherProjectsWork?: Json[]
+  /** A project agent only: the account each project's PM runs on (backend superTabs/model.ts pmAccounts). */
+  pmAccounts?: Json[]
   /** A person only. */
   mentionsWaiting?: number
   /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */

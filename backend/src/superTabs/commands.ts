@@ -5,7 +5,7 @@ import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
-import { agentWrittenNameOf, setName } from './personNames.js'
+import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -60,6 +60,7 @@ import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, 
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING } from './pmSchedule.js'
+import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -69,6 +70,9 @@ const NO_REASON = 'No reason given.'
 const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** What an older client's policy, skill-set, role or rule-removal save answers: accepted, kept nowhere (project instructions,
  *  phase 4, decision 3). The old rules, policy rows and role texts stay in place, unread. */
+/** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
+export const SWARM_INVITATION_MS = 7 * 86_400_000
+
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
@@ -236,6 +240,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('work.teamWritten'), conversationId: id }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
+    // How urgent the task is (taskPriority.ts); without one it is P2, and the reply says so.
+    priority: z.enum(TASK_PRIORITIES).optional(),
     // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
     // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
     step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
@@ -248,6 +254,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
+  // A task's priority, changed by the PM or a person (taskPriority.ts); each change writes a line into the task.
+  z.object({ type: z.literal('work.priority'), conversationId: id, priority: z.enum(TASK_PRIORITIES) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
@@ -2202,6 +2210,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.audience) pmChatClosed()
       const leadId = conversation(state, project.leadConversationId).leadId
       if (command.step && !command.reviewOf) fail('INVALID_REQUEST', 'A step belongs to a task: name the task with reviewOf.', 400)
+      // A step and a private chat are no tasks of their own, so they carry no priority (taskPriority.ts).
+      const prioritized = !command.step && !command.audience
+      if (command.priority && !prioritized) fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: leave it out of a step or a private chat.', 400)
+      // A hotfix jumps every queue, so of the agents only the PM marks one (River, task #3117).
+      if (command.priority === 'P0' && actor.kind === 'agent' && ledProject(state, actor.agentId)?.id !== project.id) {
+        fail('PRIORITY_P0', 'Only the PM or a person sets P0. Give this task P1, P2 or P3.', 403)
+      }
       if (command.reviewOf) {
         // A task links to another task of its own project, a linked one included, and to nothing else: the project chat, a
         // Buddy chat, a private chat, the Leads conversation and other projects' tasks read as missing, archived or not, so the
@@ -2239,6 +2254,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // A Team agent's own task is Team-written from its first line, and a step keeps its task's mark (teamWritten.ts, audit H2).
         ...((command.reviewOf ? teamWrittenTask(state, conversation(state, command.reviewOf)) : creator.some(id => onTeamAccount(state, agent(state, id)))) ? { teamWritten: true as const } : {}),
         ...(command.step ? { step: command.step } : {}),
+        ...(prioritized ? { priority: command.priority ?? (proposal ? proposalPriority(proposalNamed(context.proposal)?.source?.priority) : DEFAULT_PRIORITY) } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })
@@ -2252,6 +2268,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind === 'agent' && !requesterId && !command.reviewOf) {
         result.requesterUnknown = true
         result.warnings = [REQUESTER_UNKNOWN]
+      }
+      if (prioritized) {
+        result.priority = state.conversations.at(-1)!.priority
+        if (!command.priority && !proposal) result.warnings = [...result.warnings as string[] ?? [], PRIORITY_DEFAULTED]
       }
       if (brief) {
         message(operationId, brief, [], null, SYSTEM_ROW)
@@ -2309,6 +2329,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (command.notBefore === null) delete task.notBefore
       else if (command.notBefore !== undefined) task.notBefore = command.notBefore
+      break
+    }
+    case 'work.priority': {
+      chatOnly(command.conversationId)
+      coordinatorOrPerson(state, actor, command.conversationId)
+      const task = open(state, command.conversationId)
+      const project = groupProject(state, task)
+      if (task.id === project.leadConversationId || task.kind || task.audience || task.step) {
+        fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: name a task, not a chat or a step.', 400)
+      }
+      // A task from before priorities reads as its title marks it, as every client shows it.
+      const previous: TaskPriority = task.priority ?? titlePriority(task.title) ?? DEFAULT_PRIORITY
+      task.priority = command.priority
+      if (previous === command.priority) break
+      const name = actor.kind === 'person' ? shownNameOf(state, actor.userId) ?? 'Someone'
+        : agentDisplayName(state.agents, actor.agentId) ?? state.agents.find(a => a.id === actor.agentId)?.name ?? 'An agent'
+      message(task.id, priorityLine(name, command.priority, previous), [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.merged': {
@@ -3203,7 +3240,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (context.inviteeRemoved) fail('WORKSPACE_ROLE_REQUIRED', `This person was removed from the ${WORKSPACE_LABEL}. Only its owners and admins can invite them back.`, 403)
       state.invitations = state.invitations.filter(i => i.email !== email)
       state.invitations.push({ id: operationId, email, role: command.role, conversationId: landing,
-        expiresAt: context.now + 7 * 86_400_000, ...(actor.kind === 'person' ? { invitedBy: actor.userId } : {}) })
+        expiresAt: context.now + SWARM_INVITATION_MS, ...(actor.kind === 'person' ? { invitedBy: actor.userId } : {}) })
       result.inviteId = operationId
       break
     }

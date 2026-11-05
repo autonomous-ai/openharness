@@ -9,6 +9,8 @@ const IN_CORE = ['adoption', 'agents', 'attention', 'cards', 'deliveries', 'laun
 const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts', 'src/superTabs/routePlugins.ts', 'src/superTabs/shortCommand.ts', ...IN_CORE,
   // The routing plug-ins (routePlugins.ts), one line each.
   'src/superTabs/routeCheapFirst.ts', 'src/superTabs/routeMeasured.ts', 'src/superTabs/windowPull.ts', 'src/superTabs/machineFit.ts',
+  // Whose PM an account runs (Ken, 11-05).
+  'src/superTabs/pmAccounts.ts',
 ]
 export default defineConfig({
   test: {

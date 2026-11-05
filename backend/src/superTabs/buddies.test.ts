@@ -750,6 +750,20 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(open('Desktop keeps drafts offline.').brief).toBe('Desktop keeps drafts offline.')
   })
 
+  it('gives a task opened from it the proposal\'s priority on the one P0-P3 scale, unless the PM gives one (task #3117)', () => {
+    const { f, propose } = asked()
+    const root = propose().messages[0]!
+    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+    const open = (fields: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
+      brief: '', checks: [], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+    // Its Buddy said high: a P1, with no warning that none was given.
+    const opened = open()
+    expect(opened).toMatchObject({ priority: 'P1' })
+    expect(opened.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
+    expect(group(f, opened.conversationId as string).priority).toBe('P1')
+    expect(group(f, open({ priority: 'P0' }).conversationId as string).priority).toBe('P0')
+  })
+
   it('counts as shown only the Buddy\'s own lines in the ask\'s lane, since its owner\'s previous message', () => {
     const me = { kind: 'agent' as const, id: 'buddy' }, owner = { kind: 'person' as const, id: 'peer' }
     const row = (id: string, author: { kind: 'person' | 'agent'; id: string }, text: string, extra: Record<string, unknown> = {}) =>
