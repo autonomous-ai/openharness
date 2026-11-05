@@ -52,7 +52,7 @@ describe('a Buddy\'s status', () => {
     expect(status).toEqual({
       project: { name: 'App', chat: 'app-chat' }, chat: 'buddy-chat', since: null, more: 0,
       archived: 'Archived tasks the PM has reported on are left out: read them with status --archived.',
-      tasks: [{ conversationId: 'offline', number: 12, title: 'Offline sync', status: 'needs_human', note: 'Ship it behind a flag?', owns: ['desktop/lib/sync'],
+      tasks: [{ conversationId: 'offline', number: 12, title: 'Offline sync', priority: 'P2', status: 'needs_human', note: 'Ship it behind a flag?', owns: ['desktop/lib/sync'],
         agents: [{ name: 'Ada', role: 'Product Manager', state: 'present' }, { name: 'Echo', role: 'Engineer', state: 'needs_human' },
           { name: 'Reviewer', role: 'Reviewer', state: 'down' }],
         checks: [{ description: 'Edits survive a restart', passed: false }, { description: 'Specs pass', passed: true }],
@@ -62,6 +62,14 @@ describe('a Buddy\'s status', () => {
     })
     expect(JSON.stringify(status)).not.toMatch(/owner-mac|studio|peer-mac|whole brief/)
     expect(prs.asked).toEqual([[pr(12)]])
+  })
+
+  // Task #3117: its person asks what is urgent; a step carries no priority of its own.
+  it('says each task\'s priority, a legacy title\'s marker as one, and none for a step', async () => {
+    const groups = [{ ...offline, priority: 'P0', pullRequestUrls: [] }, { ...offline, id: 'legacy', number: 13, title: 'Fix login (high)', pullRequestUrls: [] },
+      { ...offline, id: 'review', number: 14, title: 'Review', reviewOf: 'offline', step: 'Review', pullRequestUrls: [] }]
+    const status = await buddyStatus(input(swarm(groups), { offline: 3, legacy: 2, review: 1 }), { pullRequests: reader().read, decisions: decisions() })
+    expect((status.tasks as Array<Record<string, unknown>>).map(t => [t.conversationId, t.priority])).toEqual([['offline', 'P0'], ['legacy', 'P1'], ['review', undefined]])
   })
 
   it('marks the tasks that changed since its last read, newest first; shows one archived until its report, and leaves out dormant ones', async () => {

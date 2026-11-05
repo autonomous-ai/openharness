@@ -106,6 +106,13 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(named.touches, 'group', 'lead')).toBe(true)
   })
 
+  it('makes a priority change meet a change of who is PM on the project\'s chat (task #3117)', () => {
+    const f = swarm()
+    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [] }, f.agentActor(f.lead)).effects.result.conversationId as string
+    const changed = f.run({ type: 'work.priority', conversationId: id, priority: 'P0' }, f.agentActor(f.lead))
+    expect(has(changed.touches, 'group', 'lead')).toBe(true)
+  })
+
   it('makes an answer to waiting work meet a change to whom it waits on', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'conversation.requester', conversationId: a.id, personId: 'owner' })
