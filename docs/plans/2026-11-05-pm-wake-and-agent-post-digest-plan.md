@@ -12,7 +12,9 @@ every wake and the "Every wake: reread the instructions whole" line from the bui
 every agent, the PM included, when its instructions change and names the file to read again
 (`cli/src/lib/swarmInstructionsSkill.ts` noticeOf), so a wake reads only what changed. (2) `noticeDigest.ts` gains
 `gatheredMessage(state, draft)`, which `store.ts writeMessages` calls in place of `gatheredNotice(source)`: what was
-gathered before, plus a plain post (no source) by an agent that is not a Buddy and attaches no file. The digest's
+gathered before, plus an agent's post that is not a Buddy's and attaches no file. `message.send` marks its draft `post`
+(never stored), since the server also writes notices under an agent's name with no source (a confirmed stop) and those
+keep going at once. The digest line of a post names who wrote it. The digest's
 release, cancels, 30-minute settle and other-account marks already work per delivery and take these rows unchanged.
 
 **Tech Stack:** TypeScript, Prisma on MongoDB, vitest (unit), vitest with a loopback replica set (integration).
@@ -73,12 +75,15 @@ non-goal "Gathering agents' or people's posts" this task reverses for agents' po
 ### Task 2: Agents' posts to the PM arrive in one digest; a person's message is immediate
 
 **Files:**
-- Modify: `backend/src/superTabs/noticeDigest.ts`, `backend/src/superTabs/store.ts` (writeMessages)
-- Test: `backend/src/superTabs/noticeDigest.test.ts`, `backend/integration/superTabNoticeDigest.test.ts`
+- Modify: `backend/src/superTabs/noticeDigest.ts`, `backend/src/superTabs/store.ts` (writeMessages, releasableNotices),
+  `backend/src/superTabs/model.ts` (MessageDraft.post), `backend/src/superTabs/commands.ts` (message.send)
+- Test: `backend/src/superTabs/noticeDigest.test.ts`, `backend/integration/superTabNoticeDigest.test.ts`, and the existing
+  integration tests named in Step 5
 
 **Interfaces:**
-- Produces: `gatheredMessage(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source' | 'attachments'>): boolean`
-  in `noticeDigest.ts`; `gatheredNotice(source)` stays for its other callers and tests.
+- Produces: `gatheredMessage(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source' | 'attachments' | 'post'>): boolean`
+  and `agentPost(state, row)` (a stored row by a non-Buddy agent with no source, for the line's author) in `noticeDigest.ts`;
+  `MessageDraft.post?: true`; `noticeLine(..., otherAccount, from?: string)`. `gatheredNotice(source)` stays.
 
 - [ ] **Step 1: Failing unit tests** in `noticeDigest.test.ts`: `gatheredMessage` is true for an agent's plain post, false
   for a person's, a Buddy's, an agent's with attachments, and an agent's `agent-only` row; true for every source
@@ -88,5 +93,9 @@ non-goal "Gathering agents' or people's posts" this task reverses for agents' po
   message ids and both rows end `digested`; a person's `message.send` in the lead chat is `queued` at once; an agent's
   post to another agent is `queued`; a status row written before rows said their status (`{ kind: 'system' }`) still goes at once.
 - [ ] **Step 3:** Run both files; they fail. Commit (red).
-- [ ] **Step 4:** Add `gatheredMessage`; call it in `writeMessages`.
-- [ ] **Step 5:** Both files pass, with `pmSchedule.test.ts` and `superTabPmSchedule.test.ts`. Commit.
+- [ ] **Step 4:** Add `gatheredMessage`; call it in `writeMessages`; name a post's author in `releasableNotices`.
+- [ ] **Step 5:** Existing tests that claimed or counted an agent's post to the coordinator one by one point at an agent
+  that is not the coordinator (Team audit M3 marks, claim concurrency, Tidy, Liveness); the digest test of another
+  account's worker also marks a post.
+- [ ] **Step 6:** Both files pass, with `pmSchedule.test.ts`, `superTabPmSchedule.test.ts`, `superTabLiveness.test.ts`,
+  `superTabTeam.test.ts`, `superTabTidy.test.ts` and `superTabs.test.ts`. Commit.

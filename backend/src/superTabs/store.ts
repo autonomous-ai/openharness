@@ -90,7 +90,7 @@ import { STATUS_LABELS,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
-import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
+import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
@@ -3007,7 +3007,7 @@ export class SuperTabStore {
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
-        const gathered = gatheredNotice(message.source) && !!ledProject(state, recipient)
+        const gathered = gatheredMessage(state, message) && !!ledProject(state, recipient)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
@@ -4147,7 +4147,11 @@ export class SuperTabStore {
         continue
       }
       const otherAccount = allowed && !!message && await this.otherAccount(tx, state, coordinator, message, accounts)
-      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount) })
+      // A post's line names who wrote it (#3387); a notice is in the server's own words.
+      const poster = message && allowed && agentPost(state, { author: message.author as unknown as Author, source: message.source as MessageDraft['source'] })
+        ? (message.author as unknown as Author) : null
+      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount,
+        poster ? poster.displayName ?? poster.name : undefined) })
     }
     return { notices, refused }
   }

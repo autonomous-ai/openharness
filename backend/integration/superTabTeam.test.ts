@@ -1123,8 +1123,12 @@ describe('a message from an agent of another account (audit M3)', () => {
     const tester = await startTeam(f, 'Tester')
     const helper = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
       name: 'Helper', configuration: config, lead: false })).result.agentId)
-    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
-    return { ...f, tester, helper }
+    // The owner's agent leading the task, not the project's coordinator: agents' posts to the coordinator wait for its digest,
+    // which marks them there (#3387), while these tests read the mark a host's claim carries.
+    const lead = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
+      name: 'Owner Lead', configuration: config, lead: false })).result.agentId)
+    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: lead, present: true, lead: true })
+    return { ...f, lead, tester, helper }
   }
   /** What an ordinary sign-in connecting as the Team computer does to its account row (lib/adapterWs.ts), after the send,
    *  which the team session could no longer make. */

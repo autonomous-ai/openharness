@@ -51,21 +51,24 @@ describe('which messages are gathered', () => {
   const agents = { agents: [{ id: 'worker' }, { id: 'buddy', buddyOf: 'person-1' }] } as unknown as SuperTabState
   const by = (kind: 'agent' | 'person', id = 'worker') => ({ kind, id, name: id, membershipGeneration: 'g' })
   it('an agent\'s post', () => {
-    expect(gatheredMessage(agents, { author: by('agent') })).toBe(true)
+    expect(gatheredMessage(agents, { author: by('agent'), post: true })).toBe(true)
     expect(agentPost(agents, { author: by('agent') })).toBe(true)
   })
+  it('never a notice the server writes under an agent\'s name with no source, such as a confirmed stop', () => {
+    expect(gatheredMessage(agents, { author: by('agent') })).toBe(false)
+  })
   it('never a person\'s message, nor a Buddy\'s post, which carries its person\'s words', () => {
-    expect(gatheredMessage(agents, { author: by('person', 'person-1') })).toBe(false)
-    expect(gatheredMessage(agents, { author: by('agent', 'buddy') })).toBe(false)
+    expect(gatheredMessage(agents, { author: by('person', 'person-1'), post: true })).toBe(false)
+    expect(gatheredMessage(agents, { author: by('agent', 'buddy'), post: true })).toBe(false)
   })
   it('never an agent\'s post with files, which a digest line cannot carry', () => {
     const attachments = [{ id: 'file' }] as never
-    expect(gatheredMessage(agents, { author: by('agent'), attachments })).toBe(false)
-    expect(gatheredMessage(agents, { author: by('agent'), attachments: [] })).toBe(true)
+    expect(gatheredMessage(agents, { author: by('agent'), attachments, post: true })).toBe(false)
+    expect(gatheredMessage(agents, { author: by('agent'), attachments: [], post: true })).toBe(true)
   })
   it('never an agent\'s row of a kind that goes at once, and every notice gatheredNotice takes', () => {
     for (const kind of ['agent-only', 'pair-loop', 'terminal-alert', 'buddy-proposal', 'system']) {
-      expect(gatheredMessage(agents, { author: by('agent'), source: { kind } })).toBe(false)
+      expect(gatheredMessage(agents, { author: by('agent'), source: { kind }, post: true })).toBe(false)
       expect(agentPost(agents, { author: by('agent'), source: { kind } })).toBe(false)
     }
     for (const source of [{ kind: 'idle' }, { kind: 'system', status: 'done' }, { kind: 'agent-only', notice: 'skills' }]) {

@@ -5332,18 +5332,22 @@ describe('Swarm parts under concurrent writes', () => {
     expect(c.attempts).toBe(contexts.length * 4)
   })
 
-  it('lets a Lead\'s host claim its deliveries while the Lead posts, without a conflict between them', async () => {
-    const { tab, lead } = await fixture()
+  // An agent of four tasks stands in for the coordinator: agents' posts to the coordinator wait for its digest (#3387),
+  // which no host claims.
+  it('lets an agent\'s host claim its deliveries while it posts, without a conflict between them', async () => {
+    const { tab } = await fixture()
+    const { group: own, worker: hub } = await workGroup(tab, 'Hub')
     const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
     for (const { group, worker } of groups) {
-      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [lead] }, host, worker)
+      await run(tab, { type: 'conversation.agent', conversationId: group, agentId: hub, present: true, lead: false })
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [hub] }, host, worker)
     }
-    const waiting = await store.deliveries(host, tab, lead)
+    const waiting = await store.deliveries(host, tab, hub)
     expect(waiting.length).toBeGreaterThanOrEqual(6)
     const c = counted()
     await Promise.all([
-      ...waiting.map(d => c.store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: randomUUID() })),
-      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Planning.', replyTo: null, recipientIds: [] } }, lead),
+      ...waiting.map(d => c.store.delivery(host, tab, hub, d.id, { type: 'claim', claimId: randomUUID() })),
+      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: own, text: 'Planning.', replyTo: null, recipientIds: [] } }, hub),
     ])
     expect(c.attempts).toBe(waiting.length + 1)
   })
@@ -5379,19 +5383,22 @@ describe('Swarm parts under concurrent writes', () => {
   })
 
   it('serializes a claim against revoking an agent sender', async () => {
-    const { tab, lead } = await fixture()
+    const { tab } = await fixture()
     const { group, worker } = await workGroup(tab, 'Revoked')
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [lead] }, host, worker)
-    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
+    // Another agent of the task hears it: an agent's post to the coordinator waits for its digest (#3387), which no host claims.
+    const reader = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Reader', configuration: config, lead: false })).result.agentId)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the reader.', replyTo: null, recipientIds: [reader] }, host, worker)
+    const delivery = (await store.deliveries(host, tab, reader)).find(d => d.authorId === worker)!
     await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
       reason: 'Withdrawing the worker' })
     const results = await Promise.allSettled([
-      store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }),
+      store.delivery(host, tab, reader, delivery.id, { type: 'claim', claimId: randomUUID() }),
       run(tab, { type: 'agent.remove', agentId: worker }),
     ])
     expect(results[1]!.status).toBe('fulfilled')
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
-    expect((await store.deliveries(host, tab, lead)).map(d => d.id)).not.toContain(delivery.id)
+    expect((await store.deliveries(host, tab, reader)).map(d => d.id)).not.toContain(delivery.id)
   })
 
   it('serializes a claim against removing its receiving agent', async () => {
