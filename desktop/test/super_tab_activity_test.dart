@@ -551,7 +551,7 @@ void main() {
 
   group('sidebar', () {
     for (final brightness in Brightness.values) {
-      testWidgets('Mentions counts the tag; a '
+      testWidgets('Mentions is bold with the tag; a '
           'muted chat is greyed with its mark and no number ($brightness)', (
         tester,
       ) async {
@@ -564,9 +564,13 @@ void main() {
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
         expect(inRow('super-mentions', find.text('Mentions')), findsOneWidget);
-        // Mentions counts the unread tag (#2887); the muted chat's own row
-        // carries no number.
-        expect(inRow('super-mentions', find.text('1')), findsOneWidget);
+        // Mentions is bold for the unread tag (#2887) and carries no number
+        // (task #3128); the muted chat's own row carries none either.
+        expect(inRow('super-mentions', find.text('1')), findsNothing);
+        expect(
+          rowText(tester, 'super-mentions', 'Mentions').style?.fontWeight,
+          grid.AppFont.semibold,
+        );
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -830,8 +834,8 @@ void main() {
       expect(activity.count, 1);
     });
 
-    testWidgets('before the tags and decisions are read, the sidebar counts '
-        'the server\'s waiting ones', (tester) async {
+    testWidgets('before the tags and decisions are read, the sidebar shows '
+        'the server\'s waiting ones bold', (tester) async {
       final server = withAgent();
       server.state['mentionsWaiting'] = 4;
       server.state['decisionsWaiting'] = 2;
@@ -839,8 +843,18 @@ void main() {
       server.failMentions = true;
       final c = await openHere(server);
       await pumpSidebar(tester, c);
-      expect(inRow('super-decisions', find.text('2')), findsOneWidget);
-      expect(inRow('super-mentions', find.text('4')), findsOneWidget);
+      for (final (row, label) in [
+        ('super-decisions', 'Decisions'),
+        ('super-mentions', 'Mentions'),
+      ]) {
+        expect(
+          rowText(tester, row, label).style?.fontWeight,
+          grid.AppFont.semibold,
+          reason: row,
+        );
+      }
+      expect(inRow('super-decisions', find.text('2')), findsNothing);
+      expect(inRow('super-mentions', find.text('4')), findsNothing);
       await close(tester, c);
     });
 
