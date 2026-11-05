@@ -1,4 +1,8 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity_view.dart';
@@ -9,10 +13,28 @@ import 'package:harness/super_tabs/message_row.dart'
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
 import 'super_tab_tasks_view_test.dart' show tasksServer;
 
-/// The "<agent> needs you" bar under a chat and the Tasks count in its header
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_NEEDS_YOU_SHOTS'];
+final _picture = GlobalKey();
+
+Future<void> shot(WidgetTester tester, String name) async {
+  if (shots == null) return;
+  await tester.runAsync(() async {
+    final boundary =
+        _picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(shots!).create(recursive: true);
+    await File('$shots/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
+/// The "needs you" bar under a chat and the Tasks count in its header
 /// (task #3017: Leo's "can't be clicked", Dee's badge on the icon's corner).
 /// The reader is `owner`; the task is the fixture's `offline` group.
 Finder bar() => find.byKey(const ValueKey('super-needs-human-builder'));
@@ -41,7 +63,7 @@ ConversationServer server({
     'agentId': 'builder',
     'status': status,
     'result': 'Which device should I test?',
-    if (askedOf != null) 'askedOf': askedOf,
+    'askedOf': ?askedOf,
   };
   if (liveness != null) group['liveness'] = liveness;
   return server;
@@ -71,10 +93,14 @@ Future<SuperTabController> show(
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller();
   addTearDown(c.dispose);
+  final before = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = before);
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: brightness),
+      builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
           controller: c,
@@ -95,6 +121,10 @@ Future<SuperTabController> show(
 }
 
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
+
   group('who the bar shows for', () {
     testWidgets('a task blocked on CI shows no bar', (tester) async {
       await show(tester, server(status: 'blocked'));
@@ -126,6 +156,13 @@ void main() {
       await show(tester, server(askedOf: 'owner'));
       expect(find.text('Builder needs you'), findsOneWidget);
     });
+
+    for (final brightness in Brightness.values) {
+      testWidgets('looks right in ${brightness.name}', (tester) async {
+        await show(tester, server(askedOf: 'owner'), brightness: brightness);
+        await shot(tester, 'needs-you-bar-${brightness.name}');
+      });
+    }
 
     testWidgets('a question nobody is named for, from an older backend, '
         'still shows it', (tester) async {
@@ -211,6 +248,7 @@ void main() {
         expect(badge.left, lessThan(icon.right));
         expect(badge.right, greaterThan(icon.right - 4));
         expect(badge.top, lessThan(icon.top + 6));
+        await shot(tester, 'tasks-badge-${brightness.name}');
         expect(
           tester
               .widget<SuperTabCountBadge>(
