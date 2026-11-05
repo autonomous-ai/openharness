@@ -1,3 +1,4 @@
+import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -434,6 +435,35 @@ describe('contributed machine executor', () => {
       withEngines(f)
       await f.machine.tick()
       expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    // Task #3106: Kay's Mac read Claude as signed in for its Team account while the owner's relay refused every request, as
+    // the readiness looked only for the relay's file. Routing kept sending work there, and each start lost its task.
+    it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.ownerSignIn }
+      const relayHealth = vi.fn(async () => health)
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      health = { ok: true }
+      f.advance(); await machine.tick()
+      // Within the minute the relay's answer is kept for: still read as it was.
+      expect(readings(f)[1]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      f.step(60_000); await machine.tick()
+      expect(readings(f).at(-1)!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+      // The engines themselves were probed once: only the relay is asked again.
+      expect(probes(f)).toHaveLength(1)
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    it('never asks the relay on a machine without one', async () => {
+      const f = fixture()
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(relayHealth).not.toHaveBeenCalled()
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -2601,6 +2631,14 @@ describe('the allowance a machine reports', () => {
     f.request.mockImplementation(answer({ outcome: 'signedOut' }))
     await f.machine.tick()
     expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
+  it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.ownerSignIn })
   })
 
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
