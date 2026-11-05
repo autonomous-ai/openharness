@@ -408,7 +408,9 @@ class _Action extends StatelessWidget {
                 children: [
                   Icon(icon, size: 20, color: ink),
                   const SizedBox(width: AppSpace.m),
-                  Text(label, style: AppType.body(color: ink)),
+                  Expanded(
+                    child: Text(label, style: AppType.body(color: ink)),
+                  ),
                 ],
               ),
             ),
