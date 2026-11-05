@@ -216,6 +216,24 @@ describe('a task a Team agent worked on', () => {
     expect(sent.result.notReached).not.toContain('team-other')
   })
 
+  // Security review of #3199: with the barred id gone, the post fell back to the task's assignee, or to the author it replies to,
+  // and reached the very agent it was said not to reach.
+  it('does not fall back to the barred agent: its assignee, or the author of the message it answers', () => {
+    const f = swarm(), task = f.group(), engineer = f.member('main-engineer', 'mac'), team = f.member('team-reviewer', 'mac-team')
+    f.run({ type: 'work.assign', conversationId: task, agentId: engineer })
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: team, present: true, lead: false })
+    // Marked by GitHub's push record: the main-account Engineer is still assigned and in the group.
+    f.state.conversations.find(c => c.id === task)!.teamWritten = true
+    const asTeam: Actor = { kind: 'agent', agentId: team, machineOwnerId: 'owner' }
+    const sent = f.run({ type: 'message.send', conversationId: task, text: 'Please test again.', replyTo: null, recipientIds: [engineer] }, asTeam)
+    expect(sent.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([])
+    expect(sent.result.notReached).toContain('main-engineer')
+    const replied = f.run({ type: 'message.send', conversationId: task, text: 'And again.', replyTo: 'earlier', recipientIds: [engineer] }, asTeam,
+      { reply: { id: 'earlier', conversationId: task, author: { kind: 'agent', id: engineer, name: 'main-engineer' } } as never })
+    expect(replied.messages.find(m => m.text === 'And again.')!.recipients).toEqual([])
+    expect(replied.result.notReached).toContain('main-engineer')
+  })
+
   it('does not change a post in a task no Team agent wrote: the main-account agent is named and joins as before', () => {
     const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), integrator = f.member('main-integrator', 'mac')
     f.run({ type: 'work.assign', conversationId: task, agentId: builder })
