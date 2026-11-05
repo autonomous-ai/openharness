@@ -27,7 +27,7 @@ export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'priority',
+  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'mergeSeen', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'priority',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt', 'assignment.changesRequestedAt', 'assignment.toldEngineerAt',
     'assignment.handoffs', 'assignment.verdicts'],
 } as const

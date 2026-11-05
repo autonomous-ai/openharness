@@ -86,7 +86,7 @@ import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
-  pullRequestLinks,
+  projectPullRequestUrl, pullRequestLinks,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -4685,6 +4685,12 @@ export class SuperTabStore {
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
+      // What GitHub said merged in its project's repository, as this read saw it: what a person's rule moved into this task
+      // waits for (ruleGuard.ts rulePlaces, #3392). A link elsewhere, or a step's, is not this task's merge.
+      const repositoryUrl = groupProject(state, group).repository?.repositoryUrl
+      const merged = finished && githubRepository(repositoryUrl) ? Object.keys(checked)
+        .filter(url => checked[url] === 'merged' && projectPullRequestUrl(url, repositoryUrl) !== null) : []
+      if (merged.length) group.mergeSeen = { ...group.mergeSeen, ...Object.fromEntries(merged.map(url => [url, now])) }
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true
