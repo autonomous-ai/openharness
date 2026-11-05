@@ -248,6 +248,7 @@ describe('a task a Team agent worked on', () => {
     const { tab } = await fixture()
     const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
     const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
     Object.assign(state.conversations.find(c => c.id === joined)!, { teamWritten: true, pullRequestUrls: ['https://github.com/acme/app/pull/3154'] })
     await saveState(tab, state)
     const review = await step(tab, joined)
@@ -255,10 +256,29 @@ describe('a task a Team agent worked on', () => {
     const read = vi.fn(async () => 'clean' as const)
     const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
     await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } })).resolves.toBeTruthy()
-    expect(read).toHaveBeenCalledWith(null, ['https://github.com/acme/app/pull/3154'])
+    expect(read).toHaveBeenCalledWith('https://github.com/acme/app', ['https://github.com/acme/app/pull/3154'])
     const stored = await storedState(tab)
     expect(stored.conversations.find(c => c.id === joined)?.teamWritten).toBeUndefined()
     expect(stored.conversations.find(c => c.id === review)?.teamWritten).toBeUndefined()
+  })
+
+  // Security review 2 of #3304: the reader reads only the project's own repository's pull requests, and answers clean for none.
+  it('keeps a stored mark when the clean read covered no pull request of the project\'s repository', async () => {
+    const { tab } = await fixture()
+    const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
+    const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    state.conversations.find(c => c.id === joined)!.teamWritten = true
+    await saveState(tab, state)
+    const review = await step(tab, joined)
+    // Recorded as stored, under a name the project's repository no longer matches.
+    const later = await storedState(tab)
+    later.conversations.find(c => c.id === joined)!.pullRequestUrls = ['https://github.com/acme/old-app/pull/3154']
+    await saveState(tab, later)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: async () => 'clean' })
+    await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } }))
+      .rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect((await storedState(tab)).conversations.find(c => c.id === joined)?.teamWritten).toBe(true)
   })
 })
 
