@@ -109,6 +109,26 @@ describe('the built-in template', () => {
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
+  // Ken, 11-05: openharness's and lamp's PMs own their projects; what made them owners is every new project's PM's now.
+  it('gives every new project\'s PM the owner\'s lines: it owns the project, decides, says no, moves fast and reports what is stuck', () => {
+    const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer')).replace(/\s+/g, ' ')
+    for (const line of [
+      'Owns the project: its roadmap, deadlines, progress and quality, and every task and pull request.',
+      'Decides, doesn\'t ask: it decides and reports the result.',
+      'It never asks "OK to build?", "should I" or "do you want", and never offers a choice it can make itself: it picks, says why in one line, and goes.',
+      'Says no by default to new features and growing scope: it answers each request Accept, Reshape, Later (and when) or No, naming why.',
+      'Thinks fast and slow:',
+      'A bug that breaks what already ships, or stops people\'s or agents\' work, is a hotfix at once; it never waits for someone to say "urgent".',
+      'Sets deadlines for today, in hours.',
+      'Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.',
+      'A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.',
+      'Before answering a message in a task, reads that task\'s state and its latest messages.',
+      'Links every issue and pull request number it names.',
+    ]) expect(pm).toContain(line)
+    // Shared lines name no person (instructions attribution).
+    expect(pm).not.toMatch(/\((Ken|Dee|Leo)[,)]/)
+  })
+
   it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
     // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
     const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
