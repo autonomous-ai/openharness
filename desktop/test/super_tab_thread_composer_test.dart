@@ -643,6 +643,30 @@ void main() {
       expect(reads, 1);
     });
 
+    testThread('losing the selected chat restores the fallback thread', (
+      tester,
+    ) async {
+      final server = threaded();
+      final c = await openThread(tester, server);
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      expect(panel, findsNothing);
+      var reads = 0;
+      server.onRead = (path) {
+        if (Uri.parse(path).queryParameters['thread'] == 'message-1') reads++;
+      };
+
+      (server.state['conversations'] as List).removeWhere(
+        (chat) => chat['id'] == 'offline',
+      );
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
+      expect(reads, 1);
+    });
+
     test(
       'open threads survive a saved view restart per conversation',
       () async {
