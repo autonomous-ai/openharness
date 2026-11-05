@@ -19,7 +19,6 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
-import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore;
