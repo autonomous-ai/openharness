@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """RELEASE_WINDOW: refuse a release outside the release window or too soon after the last one.
 
-The numbers (zone, window, pace per kind) are in release-window.json beside this file.
+The numbers are in release-window.json beside this file, in the shape of the project rules record's releaseWindow and
+releasePace (window start/end/zone, backend pace in minutes, and the backend's pause inside the window: no backend
+release 09:00-10:00 VN, Ken 2026-11-05).
 
   release-window.py --kind backend                      # the release scripts, before they tag
   release-window.py --kind backend --urgent "P0: ..."   # a P0 at night; prints the line to post in the chat
@@ -53,23 +55,41 @@ def check(kind, now, last, config, urgent=None):
         raise ValueError("now must carry a time zone")
     if kind not in config["kinds"]:
         raise ValueError(f"unknown release kind {kind!r}; expected one of {', '.join(config['kinds'])}")
-    zone = ZoneInfo(config["timeZone"])
-    start, end = _clock(config["windowStart"]), _clock(config["windowEnd"])
+    window, pace = config["releaseWindow"], config.get("releasePace", {})
+    zone = ZoneInfo(window["timeZone"])
+    start, end = _clock(window["start"]), _clock(window["end"])
     local_now = now.astimezone(zone)
+    shown = f"{window['start']}-{window['end']}"
+
+    pause = pace.get("backendPause") if kind == "backend" else None
+    pause_start, pause_end = (_clock(pause["start"]), _clock(pause["end"])) if pause else (None, None)
+    minutes = pace.get("backendEveryMinutes") if kind == "backend" else None
+
+    def in_pause(moment):
+        return pause is not None and pause_start <= moment.time() < pause_end
 
     earliest = local_now
     reasons = []
-    pace = config.get("minMinutesBetween", {}).get(kind)
-    if pace and last is not None:
-        paced = last.astimezone(zone) + timedelta(minutes=pace)
+    if minutes and last is not None:
+        paced = last.astimezone(zone) + timedelta(minutes=minutes)
         if paced > earliest:
             earliest = paced
-            reasons.append(f"the last {kind} release was at {_stamp(last, zone)} and {kind} releases keep {pace} minutes apart")
-    allowed_at = _next_opening(earliest, start, end)
+            reasons.append(f"the last {kind} release was at {_stamp(last, zone)} and {kind} releases keep {minutes} minutes apart")
     if not (start <= local_now.time() < end):
-        reasons.insert(0, f"it is outside {config['windowStart']}-{config['windowEnd']}")
-    elif allowed_at > earliest:
-        reasons.append(f"the pace ends outside {config['windowStart']}-{config['windowEnd']}")
+        reasons.insert(0, f"it is outside {shown}")
+    elif in_pause(local_now):
+        reasons.insert(0, f"backend releases pause {pause['start']}-{pause['end']}")
+    # Settle on the first instant that is in the window and out of the pause (moving one can land in the other).
+    allowed_at = earliest
+    while True:
+        moved = _next_opening(allowed_at, start, end)
+        if in_pause(moved):
+            moved = datetime.combine(moved.date(), pause_end, tzinfo=moved.tzinfo)
+        if moved == allowed_at:
+            break
+        allowed_at = moved
+    if reasons == [] and allowed_at > local_now:
+        reasons.append(f"the pace ends outside {shown}")
     allowed = allowed_at == local_now
 
     if urgent is not None:
@@ -83,8 +103,8 @@ def check(kind, now, last, config, urgent=None):
     if allowed:
         return Verdict(True, local_now, "ok", None, None)
     message = (
-        f"RELEASE_WINDOW: a {kind} release is refused at {_stamp(now, zone)} {config['timeZone']}: "
-        f"{'; '.join(reasons)}. Next allowed: {_stamp(allowed_at, zone)} {config['timeZone']}. "
+        f"RELEASE_WINDOW: a {kind} release is refused at {_stamp(now, zone)} {window['timeZone']}: "
+        f"{'; '.join(reasons)}. Next allowed: {_stamp(allowed_at, zone)} {window['timeZone']}. "
         f'A P0 releases now with --urgent "<reason>".'
     )
     return Verdict(False, allowed_at, message, None, None)
@@ -133,7 +153,7 @@ def main(argv=None):
     if urgent is None and args.from_tag:
         urgent = urgent_reason_of_tag(args.repo, args.from_tag)
     last = None
-    if config.get("minMinutesBetween", {}).get(args.kind):
+    if args.kind == "backend" and config.get("releasePace", {}).get("backendEveryMinutes"):
         last = last_release_time(args.repo, args.kind, args.exclude_tag)
 
     try:

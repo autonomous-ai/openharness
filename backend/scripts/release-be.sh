@@ -9,8 +9,8 @@
 #   ./scripts/release-be.sh --allow-older  # a rollback: older code under a higher version
 #   ./scripts/release-be.sh --urgent "P0: why"  # a P0 outside 09:00-18:00 VN or within 2 h of the last release
 #
-# Refused with RELEASE_WINDOW (scripts/release-window.py) outside 09:00-18:00 Asia/Ho_Chi_Minh and within 2 hours of the
-# last backend release; the refusal names the next allowed time. --urgent records its reason on the tag.
+# Refused with RELEASE_WINDOW (scripts/release-window.py) outside 10:00-18:00 Asia/Ho_Chi_Minh (09:00-10:00 is the morning peak) and within
+# 2 hours of the last backend release; the refusal names the next allowed time. --urgent records its reason on the tag.
 #
 # Pushing the tag is the whole point: ../.github/workflows/production-be-build.yaml triggers on
 # `vX.Y.Z_backend` tags and builds Dockerfile.k8s -> autonomous-code-be.
