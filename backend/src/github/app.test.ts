@@ -636,6 +636,16 @@ describe('watching a pull request', () => {
     expect(github.calls.filter(c => c.path === '/repos/acme/app/pulls/12/files')).toHaveLength(2)
   })
 
+  // Review of #3394: a push between the watch's read and the files read would give a newer head's patch to the older head.
+  it('answers no files when the pull request\'s head is no longer the one asked about', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    github.files.set('acme/app#12', [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }])
+    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toHaveLength(1)
+    expect(await app.pullRequestFiles(repo, 12, token, 'fffffff0000000')).toBeNull()
+  })
+
   it('answers no files when GitHub cannot list them, or lists as many as it ever lists (it may have left some out)', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
