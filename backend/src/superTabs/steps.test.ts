@@ -259,7 +259,7 @@ describe('a step closes with its task', () => {
 
   it('cancelling an unassigned task closes its steps', () => {
     const f = stepsFixture()
-    const other = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Write docs.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Write docs.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     const id = f.step('Review', f.as(f.lead), other)
     f.run({ type: 'work.cancel', conversationId: other, assignmentId: 'current', reason: 'Not needed' } as Command, f.as(f.lead))
     expect(f.group(other).archived).toBe(true)
@@ -509,7 +509,7 @@ describe('the PM is not told what a step\'s agent says to its task', () => {
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
-    const other = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     const dev2 = f.add('dev2', other)
     f.run({ type: 'work.assign', conversationId: other, agentId: dev2 }, f.as(f.lead))
     const second = f.step('Review', f.as(dev2), other)

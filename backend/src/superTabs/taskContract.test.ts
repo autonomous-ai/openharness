@@ -38,7 +38,7 @@ describe('the task contract: what an agent says when it opens a task', () => {
   })
 
   it.each([
-    ['goal', { brief: undefined, task: undefined }],
+    ['goal', { brief: '' }],
     ['goal', { brief: '   ' }],
     ['checks', { checks: [] }],
     ['priority', { priority: undefined }],
@@ -50,8 +50,8 @@ describe('the task contract: what an agent says when it opens a task', () => {
 
   it('names every missing field at once, with an example of a whole create', () => {
     const f = fixture()
-    expect(() => f.create({ checks: [] })).toThrow(refusal(['goal', 'checks', 'priority', 'requester']))
-    expect(() => f.create({ checks: [] })).toThrow(expect.objectContaining({ message: expect.stringContaining('"type":"conversation.create"') }))
+    expect(() => f.create({ brief: '', checks: [] })).toThrow(refusal(['goal', 'checks', 'priority', 'requester']))
+    expect(() => f.create({ brief: '', checks: [] })).toThrow(expect.objectContaining({ message: expect.stringContaining('"type":"conversation.create"') }))
   })
 
   it('refuses the PM (the project\'s coordinator) the same way', () => {

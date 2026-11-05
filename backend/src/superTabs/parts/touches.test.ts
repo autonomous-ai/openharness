@@ -97,7 +97,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     const f = swarm()
     const invited = f.run({ type: 'invite.create', email: 'peer@example.com', role: 'collaborator', conversationId: 'lead' }).effects.result.inviteId as string
     f.run({ type: 'invite.accept', inviteId: invited }, { kind: 'person', userId: 'peer', email: 'peer@example.com' })
-    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], requesterId: 'peer' },
+    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'peer' },
       f.agentActor(f.lead))
     expect(has(opened.touches, 'member', 'peer')).toBe(true)
     const id = opened.effects.result.conversationId as string
@@ -108,7 +108,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
 
   it('makes a priority change meet a change of who is PM on the project\'s chat (task #3117)', () => {
     const f = swarm()
-    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [] }, f.agentActor(f.lead)).effects.result.conversationId as string
+    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.agentActor(f.lead)).effects.result.conversationId as string
     const changed = f.run({ type: 'work.priority', conversationId: id, priority: 'P0' }, f.agentActor(f.lead))
     expect(has(changed.touches, 'group', 'lead')).toBe(true)
   })

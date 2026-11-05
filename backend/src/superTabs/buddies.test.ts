@@ -785,7 +785,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
     const open = (brief: string) => {
-      const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [], proposalMessageId: root.id },
+      const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id },
         agentActor(f.pm), context).result.conversationId
       return group(f, id as string)
     }
@@ -798,7 +798,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
     const open = (fields: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
-      brief: '', checks: [], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+      brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
     // Its Buddy said high: a P1, with no warning that none was given.
     const opened = open()
     expect(opened).toMatchObject({ priority: 'P1' })

@@ -21,7 +21,7 @@ export function stepsFixture() {
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const lead = add('pm', 'lead', true)
   const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.',
-    checks: [{ description: 'Signs in offline', independent: true }] }, as(lead)).result.conversationId as string
+    checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
   const dev = add('dev', task)
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>

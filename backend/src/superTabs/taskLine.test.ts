@@ -25,7 +25,7 @@ function fixture() {
     author: { kind: 'person' as const, id: 'owner', name: owner.email, membershipGeneration: state.people[0]!.generation } })
   /** A task the PM opens for the owner's message [ask]: its thread is the task's (taskLine.ts). */
   const group = (title = 'Offline drafts', extra: Record<string, unknown> = {}, ask = 'ask') => run({ type: 'conversation.create', title,
-    brief: 'Keep drafts.', checks: [], requestMessageId: ask, ...extra } as Command, as(pm), { request: request(ask) } as Partial<CommandContext>)
+    brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: ask, ...extra } as Command, as(pm), { request: request(ask) } as Partial<CommandContext>)
     .result.conversationId as string
   const task = (id: string) => state.conversations.find(c => c.id === id)!
   const status = (id: string, worker: string, value: 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped', result: string | null = null,
@@ -40,8 +40,8 @@ describe('ordinary task messages and progress replies', () => {
   // own conversation, never as a row under its requester's name or the PM's.
   it('posts nothing in the project chat for a task no message asked for, whoever opens it', () => {
     const f = fixture()
-    for (const [actor, extra] of [[owner, {}], [f.as(f.pm), { requesterId: 'owner' }], [f.as(f.pm), {}]] as const) {
-      const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], ...extra } as Command, actor)
+    for (const [actor, extra] of [[owner, {}], [f.as(f.pm), { requesterId: 'owner' }]] as const) {
+      const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', ...extra } as Command, actor)
       const id = created.result.conversationId as string
       expect(created.messages.filter(m => m.conversationId !== id)).toEqual([])
       expect(f.task(id).cards?.line).toBeUndefined()
@@ -54,9 +54,9 @@ describe('ordinary task messages and progress replies', () => {
 
   it('names each task in the thread of the message that asked for it, and several tasks may share that message', () => {
     const f = fixture()
-    const first = f.run({ type: 'conversation.create', title: 'Phone shows who answered', brief: 'Show who answered.', checks: [], requestMessageId: 'ask' } as Command,
+    const first = f.run({ type: 'conversation.create', title: 'Phone shows who answered', brief: 'Show who answered.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
       f.as(f.pm), { request: f.request() } as Partial<CommandContext>)
-    const second = f.run({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [], requestMessageId: 'ask' } as Command,
+    const second = f.run({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
       f.as(f.pm), { request: f.request() } as Partial<CommandContext>)
     for (const [created, title] of [[first, 'Phone shows who answered'], [second, 'Desktop shows who answered']] as const) {
       const id = created.result.conversationId as string
@@ -106,7 +106,7 @@ describe('ordinary task messages and progress replies', () => {
       .map(m => (m.source as { ask?: string } | undefined)?.ask)
 
     it('is on it from the brief to the merge, then shipped', () => {
-      const f = fixture(), first = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: 'ask' } as Command,
+      const f = fixture(), first = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
         f.as(f.pm), { request: f.request() } as Partial<CommandContext>)
       const id = first.result.conversationId as string, root = f.task(id).cards!.line!.messageId
       expect(marks(first, root)).toEqual(['on-it'])
@@ -131,7 +131,7 @@ describe('ordinary task messages and progress replies', () => {
       const f = fixture(), generation = f.state.people[0]!.generation
       const request = { id: 'ask', conversationId: 'lead', author: { kind: 'person' as const, id: 'owner', name: owner.email, membershipGeneration: generation },
         source: null, replyTo: null }
-      const id = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [], requestMessageId: 'ask' } as Command,
+      const id = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
         f.as(f.pm), { request } as Partial<CommandContext>).result.conversationId as string
       const builder = f.add('Kai', id)
       expect(marks(f.status(id, (f.run({ type: 'work.assign', conversationId: id, agentId: builder }), builder), 'review', 'Ready.'), 'ask')).toEqual(['on-it'])
@@ -173,7 +173,7 @@ describe('ordinary task messages and progress replies', () => {
     const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
     expect(f.state.conversations.find(c => c.id === chat)!.leadId ?? null).toBeNull()
-    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: 'quiet-ask' } as Command,
+    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'quiet-ask' } as Command,
       owner, { request: f.request('quiet-ask', chat) } as Partial<CommandContext>).result.conversationId as string
     const root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
@@ -202,7 +202,7 @@ describe('ordinary task messages and progress replies', () => {
 
   it('links a proposal root instead of posting a second opening message, and adds no brief under the proposal', () => {
     const f = fixture()
-    const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], proposalMessageId: 'proposal' }, f.as(f.pm),
+    const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', proposalMessageId: 'proposal' }, f.as(f.pm),
       { proposal: { id: 'proposal', conversationId: 'lead', author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation },
         source: { kind: 'buddy-proposal', personId: 'owner', buddyId: 'former-buddy' } } })
     expect(f.lines(created)).toEqual([])
@@ -215,7 +215,7 @@ describe('ordinary task messages and progress replies', () => {
     const generation = f.state.people[0]!.generation
     const request = { id: 'ask', conversationId: 'lead', author: { kind: 'person' as const, id: 'owner', name: owner.email, membershipGeneration: generation },
       source: null, replyTo: null }
-    const created = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [], requestMessageId: 'ask' } as Command,
+    const created = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
       f.as(f.pm), { request } as Partial<CommandContext>)
     const id = created.result.conversationId as string
     expect(created.messages.filter(m => m.conversationId === 'lead' && !m.thread)).toEqual([])
@@ -257,7 +257,7 @@ describe('ordinary task messages and progress replies', () => {
 
     it('reacts on a Buddy\'s proposal that a task was opened from', () => {
       const f = fixture()
-      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], proposalMessageId: 'proposal' }, f.as(f.pm),
+      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', proposalMessageId: 'proposal' }, f.as(f.pm),
         { proposal: { id: 'proposal', conversationId: 'lead', author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation },
           source: { kind: 'buddy-proposal', personId: 'owner', buddyId: 'former-buddy' } } }).result.conversationId as string
       const builder = f.add('Kai', id)
@@ -267,7 +267,7 @@ describe('ordinary task messages and progress replies', () => {
 
     it('reacts nowhere for a task no message asked for', () => {
       const f = fixture()
-      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [] }).result.conversationId as string
+      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2' }).result.conversationId as string
       const builder = f.add('Kai', id), seq = chatSeq(f)
       expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder }).reactions ?? []).toEqual([])
       f.status(id, builder, 'done', `Checks passed: ${PR}`)
@@ -287,7 +287,7 @@ describe('ordinary task messages and progress replies', () => {
     ]
     for (const index of [0, 1, 2, 3, 4]) {
       const f = fixture()
-      expect(() => f.run({ type: 'conversation.create', title: 'Who answered', brief: '', checks: [], requestMessageId: 'ask' } as Command, f.as(f.pm),
+      expect(() => f.run({ type: 'conversation.create', title: 'Who answered', brief: '', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command, f.as(f.pm),
         { request: cases(f)[index] } as Partial<CommandContext>)).toThrow(expect.objectContaining({ code: 'REQUEST_UNKNOWN' }))
     }
   })
@@ -304,7 +304,7 @@ describe('ordinary task messages and progress replies', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
-    const parent = f.run({ type: 'conversation.create', projectId: project, title: 'Hidden work', brief: 'Hidden.', checks: [], requestMessageId: 'secret-ask' } as Command,
+    const parent = f.run({ type: 'conversation.create', projectId: project, title: 'Hidden work', brief: 'Hidden.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'secret-ask' } as Command,
       owner, { request: f.request('secret-ask', chat) } as Partial<CommandContext>).result.conversationId as string
     expect(f.task(parent).cards?.line).toEqual({ messageId: 'secret-ask', conversationId: chat })
     const step = f.run({ type: 'conversation.create', projectId: project, title: 'Review', step: 'Review', reviewOf: parent, brief: 'Review.', checks: [] })

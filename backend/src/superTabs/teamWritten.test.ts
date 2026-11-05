@@ -60,7 +60,7 @@ describe('a task a Team agent worked on', () => {
 
   it('is marked when a Team agent opens it or is added to it', () => {
     const f = swarm()
-    const opened = f.group({}, { kind: 'agent', agentId: f.member('team-a', 'mac-team'), machineOwnerId: 'owner' })
+    const opened = f.group({ checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, { kind: 'agent', agentId: f.member('team-a', 'mac-team'), machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === opened)!.teamWritten).toBe(true)
     const added = f.group()
     f.run({ type: 'conversation.agent', conversationId: added, agentId: f.member('team-b', 'mac-team'), present: true, lead: false })

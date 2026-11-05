@@ -27,7 +27,7 @@ function fixture() {
     name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
-    run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result.conversationId as string
+    run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...actor.kind === 'agent' ? { requesterId: 'owner' } : {}, ...extra }), actor).result.conversationId as string
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
   /** The owner's Buddy chat in the Swarm's project, as adding a Buddy opens it: the one private chat (buddies.ts). */
   const buddyChat = () => {
@@ -68,26 +68,17 @@ describe('who asked for a group', () => {
     expect(f.group(id).requesterId).toBe('peer')
   })
 
-  it('leaves the requester unknown when a Lead names nobody, rather than guessing', () => {
-    const f = fixture(), lead = f.add('lead', 'lead', true)
-    const id = f.create(f.asAgent(lead))
-    expect(f.group(id).requesterId).toBeUndefined()
-    expect(f.group(id).ledger).toEqual({ askedAt: 1_000 })
-  })
-
-  it('tells a Lead that opens a build group for nobody to name who asked; never for a named requester, a person or a review', () => {
+  it('refuses a Lead that names nobody, rather than guessing, and asks nobody of a person or a review (task #3389)', () => {
     const f = fixture(), lead = f.add('lead', 'lead', true)
     f.invitePeer()
-    // Each gives a priority, so the only warning left is who asked (a task without one is told it is P2: task #3117).
+    expect(() => f.create(f.asAgent(lead), { requesterId: undefined })).toThrow(expect.objectContaining({ code: 'TASK_CONTRACT_MISSING' }))
+    // A person opens it for themselves, and a review is a step of the task: neither names anyone and neither is refused.
     const open = (actor: Actor, extra: Record<string, unknown> = {}) =>
       f.run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...extra }), actor).result
-    const unnamed = open(f.asAgent(lead))
-    expect(unnamed).toMatchObject({ requesterUnknown: true, warnings: [expect.stringContaining('Name the person who asked')] })
-    for (const result of [open(f.asAgent(lead), { requesterId: 'peer' }), open(owner),
-      open(f.asAgent(lead), { reviewOf: unnamed.conversationId as string, title: 'Review: Offline editing' })]) {
-      expect(result.requesterUnknown).toBeUndefined()
-      expect(result.warnings).toBeUndefined()
-    }
+    const named = open(f.asAgent(lead), { requesterId: 'peer' })
+    for (const result of [named, open(owner)]) expect(result.warnings).toBeUndefined()
+    expect(open(f.asAgent(lead), { reviewOf: named.conversationId as string, title: 'Review: Offline editing', priority: undefined }).conversationId)
+      .toEqual(expect.any(String))
   })
 
   it('refuses a requester who is not a member of the Swarm', () => {

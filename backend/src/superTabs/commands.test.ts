@@ -1961,7 +1961,7 @@ describe('any agent of the project', () => {
   it('lets any agent of the project run the task commands', () => {
     const { f, engineer, E } = project(), A = f.worker
     const group = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
-      checks: [{ description: 'Reconnect preserves the edits.', independent: false }] }, E).result.conversationId as string
+      checks: [{ description: 'Reconnect preserves the edits.', independent: false }], priority: 'P2', requesterId: 'owner' }, E).result.conversationId as string
     const task = () => f.state.conversations.find(c => c.id === group)!
     f.run({ type: 'work.define', conversationId: group, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] }, E)
     expect(f.run({ type: 'route.record', conversationId: group, decision: record() } as Command, E).result.routeDecisionId).toEqual(expect.any(String))
@@ -2625,7 +2625,7 @@ describe('an agent joining a task by a post or by opening it', () => {
 
   it('checks the team access of an agent that opens a task, which it would be in', () => {
     const { f, mate, mine } = teammate()
-    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [] } as Command
+    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' } as Command
     const groups = f.state.conversations.length
     expect(() => f.run(create, as(mate))).toThrow(refused)
     expect(f.state.conversations).toHaveLength(groups)
@@ -4115,7 +4115,7 @@ describe('other projects\' work for Leads', () => {
     const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
     const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
     const overlaps = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
-    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
+    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks, priority: 'P2', requesterId: 'owner' }, as(lead))
     const group = created.result.conversationId as string
     const text = `"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change desktop/lib/super_tabs/roster.dart.`
     // The acting Lead created the overlap and is not told again; the other project's Lead hears it in its own project chat.
@@ -4916,14 +4916,14 @@ describe('checks are information', () => {
 
   it('creates, defines and assigns a task with no checks', () => {
     const f = routed()
-    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, f.leadActor).result.conversationId as string
+    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, owner).result.conversationId as string
     expect(f.state.conversations.find(c => c.id === group)!.checks).toEqual([])
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
     expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
-    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
+    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, owner).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
       .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
@@ -5904,8 +5904,10 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
   function prioritized() {
     const f = routed()
     const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    // An agent's task says its check, priority and who asked (taskContract.ts); a step carries no priority, a person's defaults.
     const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
-      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.', checks: [], ...fields }), actor)
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.',
+        checks: [{ description: 'Done', independent: false }], ...actor.kind === 'agent' && !fields.reviewOf ? { priority: 'P2', requesterId: 'owner' } : {}, ...fields }), actor)
     const set = (conversationId: string, priority: string) => commandSchema.parse({ type: 'work.priority', conversationId, priority })
     return { f, task, create, set }
   }
@@ -5921,7 +5923,7 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
 
   it('gives a task created without one P2, and the reply says so', () => {
     const { task, create } = prioritized()
-    const created = create()
+    const created = create({}, owner)
     expect(task(created.result.conversationId as string).priority).toBe('P2')
     expect(created.result).toMatchObject({ priority: 'P2',
       warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })
