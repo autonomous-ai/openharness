@@ -43,6 +43,8 @@ describe('the GitHub App reader of merge times', () => {
       'https://github.com/acme/app/pull/9', 'https://github.com/other/app/pull/1'])
     expect(read).toEqual({ 'https://github.com/acme/app/pull/7': Date.parse('2026-11-06T03:00:00Z') })
     expect(app.createToken).toHaveBeenCalledTimes(1)
+    // Read-only: pull requests and metadata, nothing else.
+    expect(app.createToken).toHaveBeenCalledWith(11, expect.objectContaining({ fullName: 'acme/app' }), { pull_requests: 'read', metadata: 'read' })
     expect(app.revoke).toHaveBeenCalledTimes(1)
     expect(app.revoke).toHaveBeenCalledWith('secret-token')
     // Each read it could not make says so, by repository, number and status, never with the token.
@@ -50,6 +52,23 @@ describe('the GitHub App reader of merge times', () => {
     expect(lines.filter(line => line.includes('merge time not read'))).toHaveLength(3)
     expect(lines.some(line => line.includes('acme/app') && line.includes('"number":9') && line.includes('"status":502'))).toBe(true)
     expect(lines.some(line => line.includes('other/app') && line.includes('"number":1'))).toBe(true)
+    expect(lines.some(line => line.includes('secret-token'))).toBe(false)
+    warn.mockRestore()
+  })
+})
+
+describe('a token the reader could not revoke', () => {
+  it('says so, by repository, without the token', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger)
+    const app = {
+      installation: vi.fn(async () => 11),
+      createToken: vi.fn(async () => ({ token: 'secret-token' })),
+      get: vi.fn(async () => ({ status: 200, body: { merged_at: null } })),
+      revoke: vi.fn(async () => { throw new Error('GitHub 500') }),
+    }
+    expect(await appPullRequestMerges(app as never)(['https://github.com/acme/app/pull/7'])).toEqual({ 'https://github.com/acme/app/pull/7': null })
+    const lines = warn.mock.calls.map(call => JSON.stringify(call))
+    expect(lines.some(line => line.includes('not revoked') && line.includes('acme/app'))).toBe(true)
     expect(lines.some(line => line.includes('secret-token'))).toBe(false)
     warn.mockRestore()
   })

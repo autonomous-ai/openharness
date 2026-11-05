@@ -842,7 +842,17 @@ describe('an instructions save may move a person\'s rule', () => {
     const moved = codeTask(f, leo)
     expect(tasksHoldingMoves(f.state, project, doc(pair), doc(quiet)).map(t => t.id)).toEqual([moved.id])
     expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo, quiet))).toEqual([])
-    expect(other.id).toBeDefined()
+    // The unrelated task is never named.
+    expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id)).not.toContain(other.id)
+  })
+
+  // Review 2 of #3273: the first look reads words as the guard does, whatever their case or the formatting around them.
+  it('names a task that carries the rule in other capitals or with emphasis', () => {
+    const { f } = pm()
+    const shouted = codeTask(f, 'NO releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+    const emphasised = codeTask(f, '**No releases** between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+    const project = projectsOf(f.state)[0]!
+    expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id).sort()).toEqual([shouted.id, emphasised.id].sort())
   })
 
   // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the

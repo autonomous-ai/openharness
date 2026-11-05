@@ -528,7 +528,7 @@ describe('a rule moved into a code task', () => {
   const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
   /** A Swarm whose project's repository is acme/app, tidying off, its instructions keeping peer's rule; a store whose GitHub
    *  says what [merges] holds; and a code task carrying the rule, linking PR. */
-  async function moved(carried = leo) {
+  async function moved(carried = leo, repositoryUrl = 'https://github.com/acme/app') {
     const merges: Record<string, number | null> = {}, read: string[][] = []
     const github = new SuperTabStore(db, () => now, null, { pullRequestMerges: async (_env, _tab, _project, urls) => {
       read.push(urls)
@@ -538,7 +538,7 @@ describe('a rule moved into a code task', () => {
     await invite(tab)
     await swarmTransaction(db, async tx => {
       const head = await tx.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } }), data = head.data as { projects?: Array<{ id: string }> }
-      const repository = { machineId: 'test-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+      const repository = { machineId: 'test-host', cwd: '/repo', repositoryUrl }
       await tx.swarmHead.update({ where: { id: head.id }, data: { version: head.version + 1, data: (data.projects
         ? { ...data, projects: data.projects.map(p => p.id === 'lead' ? { ...p, repository } : p) } : { ...data, project: repository }) as object } })
       noteChange(tx, tab, 'main')
@@ -568,6 +568,14 @@ describe('a rule moved into a code task', () => {
     // Merged after: the person's save drops the line, though no archive pass ever ran.
     m.merges[PR] = m.briefAt + 60_000
     expect((await m.drop()).result).toMatchObject({ revision: 3 })
+  })
+
+  // Review 2 of #3273: a project whose repository is not on GitHub has no GitHub merge of its own; a GitHub link frees nothing.
+  it('frees nothing for a project whose repository is not on GitHub, whatever a linked GitHub pull request did', async () => {
+    const m = await moved(leo, 'https://gitlab.com/acme/app')
+    m.merges[PR] = m.briefAt + 60_000
+    await expect(m.drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
+    expect(m.read).toEqual([])
   })
 
   // Review 1 of #3273: the brief wraps the rule as the instructions wrap theirs, at 120 columns.
