@@ -45,7 +45,11 @@ Map<String, dynamic> routeRow({
 /// The decision's record as the backend keeps it. A record from before
 /// floors went still carries `floor` and `notes`, which nothing shows; with
 /// [revision] null, a record from before it named the instructions revision.
-Map<String, dynamic> decision({String? overrideTo, int? revision = 7}) => {
+Map<String, dynamic> decision({
+  String? overrideTo,
+  int? revision = 7,
+  List<Map<String, dynamic>> excluded = const [],
+}) => {
   'id': 'd1',
   'conversationId': 'offline',
   'record': {
@@ -66,7 +70,7 @@ Map<String, dynamic> decision({String? overrideTo, int? revision = 7}) => {
         'title': 'New agent · Codex low · mac',
       },
     ],
-    'excluded': const [],
+    'excluded': excluded,
     'floor': 3,
     'notes': true,
     'pick': 'c0',
@@ -219,6 +223,130 @@ void main() {
       expect(server.posts, isEmpty);
     });
   }
+
+  // Task #3292 (Ken, 2026-11-05): Details printed one line per excluded
+  // machine × agent × model, about a hundred lines before what the route
+  // weighed. The record's rows keep the CLI's titleOf title and the reason.
+  const offline = 'Machine is offline or unreachable.';
+  const gridSecurity =
+      'Grid limits: Security-sensitive work (a security kind or high risk) '
+      'never runs on a model on the Swarm\'s grid.';
+  List<Map<String, dynamic>> rowsOn(
+    String machine,
+    String reason, {
+    int count = 1,
+    String runs = 'Claude opus high',
+  }) => [
+    for (var i = 0; i < count; i++)
+      {'title': 'New agent · $runs $i · $machine', 'reason': reason},
+  ];
+  Future<void> openDetails(
+    WidgetTester tester,
+    List<Map<String, dynamic>> excluded,
+  ) async {
+    final server = ConversationServer();
+    server.routeDecisions['d1'] = decision(excluded: excluded);
+    await tester.pumpWidget(
+      rowOf(SuperTabMessage.fromJson(routeRow()), controller(server)),
+    );
+    await tester.tap(find.text('Details'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('an offline machine with 17 excluded rows is one line', (
+    tester,
+  ) async {
+    await openDetails(tester, rowsOn('Mac 4', offline, count: 17));
+    final line = find.text('Unavailable: Mac 4 — $offline');
+    expect(line, findsOneWidget);
+    expect(find.textContaining('Unavailable'), findsOneWidget);
+    // The candidates come first.
+    expect(
+      tester.getTopLeft(find.text('Considered')).dy,
+      lessThan(tester.getTopLeft(line).dy),
+    );
+    expect(
+      tester
+          .getTopLeft(
+            find.text('New agent · Codex low · mac — Codex, cheapest'),
+          )
+          .dy,
+      lessThan(tester.getTopLeft(line).dy),
+    );
+  });
+
+  testWidgets('the security grid limit shows once per decision', (
+    tester,
+  ) async {
+    await openDetails(tester, [
+      for (final machine in ['Mac 3', 'MacBook-Pro-8', 'Tony\'s Mac'])
+        ...rowsOn(
+          machine,
+          gridSecurity,
+          count: 10,
+          runs: 'Claude on Kimi K3 (local)',
+        ),
+    ]);
+    expect(find.textContaining('Grid limits'), findsOneWidget);
+    expect(
+      find.text(
+        'Unavailable on Mac 3, MacBook-Pro-8 and Tony\'s Mac — $gridSecurity',
+      ),
+      findsOneWidget,
+    );
+    // Those machines offered their other candidates: no line of their own.
+    expect(find.textContaining('Unavailable: '), findsNothing);
+  });
+
+  // Review of #3167: "Required tool missing: git." reads like a rule but is a
+  // machine fact; a line said once must still say where.
+  testWidgets('a reason said once names its machines', (tester) async {
+    const git = 'Required tool missing: git.';
+    await openDetails(tester, [
+      ...rowsOn('Mac 3', git, count: 2),
+      ...rowsOn('Gray.local', git),
+    ]);
+    expect(
+      find.text('Unavailable on Mac 3 and Gray.local — $git'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Unavailable'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await openDetails(tester, [
+      for (final machine in ['A', 'B', 'C', 'D', 'E']) ...rowsOn(machine, git),
+    ]);
+    expect(
+      find.text('Unavailable on A, B, C and 2 more machines — $git'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('each machine keeps its own line and up to four reasons', (
+    tester,
+  ) async {
+    await openDetails(tester, [
+      ...rowsOn('Mac 4', offline, count: 3),
+      ...rowsOn('Linux box', offline, count: 2),
+      for (final r in ['A.', 'B.', 'C.', 'B.', 'D.', 'E.'])
+        ...rowsOn('Studio · Mac', r),
+      // A rule's reason on one machine only is that machine's.
+      ...rowsOn('Mac 3', gridSecurity, runs: 'Claude on Kimi K3 (local)'),
+      {'title': 'Named model', 'reason': 'No model is called Kimi.'},
+      {'title': 'Named model', 'reason': 'No model is called Kimi.'},
+      {'title': 'Custom row', 'reason': 'Something else.'},
+    ]);
+    for (final line in [
+      'Unavailable: Mac 4 — $offline',
+      'Unavailable: Linux box — $offline',
+      'Unavailable: Studio · Mac — A. B. C. D. (and 1 more)',
+      'Unavailable: Mac 3 — $gridSecurity',
+      'Unavailable: Named model — No model is called Kimi.',
+      'Unavailable: Custom row — Something else.',
+    ]) {
+      expect(find.text(line), findsOneWidget, reason: line);
+    }
+    expect(find.textContaining('Unavailable'), findsNWidgets(6));
+  });
 
   testWidgets('shows what a route relied on, never floors', (tester) async {
     for (final (revision, line) in [
