@@ -88,11 +88,11 @@ import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
-  pullRequestLinks,
+  projectPullRequestUrl, pullRequestLinks,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
-import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
+import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
@@ -1489,9 +1489,10 @@ export class SuperTabStore {
   /**
    * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
    * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
-   * nothing to read, or this reader cannot read that task: the command then refuses as it would.
+   * nothing to read, or this reader cannot read that task: the command then refuses as it would. `pulls` are the pull requests
+   * it read (none for a branch): a clean read clears only a mark it covered (teamWritten.ts applyPushOrigin, #3304).
    */
-  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<PushOrigin | undefined> {
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[] } | undefined> {
     const hook = this.hooks.pushOrigin
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
       request?: { branchRef?: unknown; conversationId?: unknown } } | null
@@ -1507,7 +1508,7 @@ export class SuperTabStore {
           const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
         })
-        return repositoryUrl === undefined ? undefined : await this.hooks.branchPushOrigin(repositoryUrl, branch)
+        return repositoryUrl === undefined ? undefined : { origin: await this.hooks.branchPushOrigin(repositoryUrl, branch), pulls: [] }
       }
       const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
       if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
@@ -1522,13 +1523,16 @@ export class SuperTabStore {
         return { repositoryUrl, urls: [...new Set(urls)], step: !!group.reviewOf }
       })
       if (!facts) return undefined
-      if (facts.urls.length) return await hook(facts.repositoryUrl, facts.urls)
+      // Only what the reader reads covers a mark: the project's own repository's pull requests (pushOrigin.ts projectPushOrigin),
+      // which answers clean for none of them (security review 2 of #3304).
+      const read = githubRepository(facts.repositoryUrl) ? facts.urls.flatMap(url => projectPullRequestUrl(url, facts.repositoryUrl) ?? []) : []
+      if (facts.urls.length) return { origin: await hook(facts.repositoryUrl, facts.urls), pulls: read }
       // A step reads or runs a branch, and with no pull request named nothing shows whose. It may name one in a sentence no read
       // can parse, and then its agent runs `gh pr checkout` itself (security review 2 of #2559).
-      return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? 'unknown' : undefined
+      return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? { origin: 'unknown', pulls: [] } : undefined
     } catch (error) {
       if (error instanceof SuperTabError) return undefined
-      return 'unknown'
+      return { origin: 'unknown', pulls: [] }
     }
   }
 
@@ -1849,7 +1853,7 @@ export class SuperTabStore {
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
-      if (pushOrigin) context.pushOrigin = pushOrigin
+      if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls })
       if (repositoryReach) context.repositoryReach = repositoryReach
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
@@ -3023,7 +3027,7 @@ export class SuperTabStore {
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
-        const gathered = gatheredNotice(message.source) && !!ledProject(state, recipient)
+        const gathered = gatheredMessage(state, message) && !!ledProject(state, recipient)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
@@ -4230,7 +4234,11 @@ export class SuperTabStore {
         continue
       }
       const otherAccount = allowed && !!message && await this.otherAccount(tx, state, coordinator, message, accounts)
-      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount) })
+      // A post's line names who wrote it (#3387); a notice is in the server's own words.
+      const poster = message && allowed && agentPost(state, { author: message.author as unknown as Author, source: message.source as MessageDraft['source'] })
+        ? (message.author as unknown as Author) : null
+      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount,
+        poster ? poster.displayName ?? poster.name : undefined) })
     }
     return { notices, refused }
   }

@@ -340,9 +340,13 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
-  /** A Harness Team agent worked on this task, or GitHub shows the app's bot pushed to its branch: its code runs only in a
-   *  Team account (teamWritten.ts, audit H2). Set once and never cleared. */
+  /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
+   *  only in a Team account (teamWritten.ts, audit H2). */
   teamWritten?: true
+  /** What set [teamWritten] (#3304): `assigned` (a Team agent given the task) and `branch` (a bot's push on a branch a start
+   *  named) are never cleared; `pushed` names the pull requests GitHub showed a bot's push among, and only a clean read of all
+   *  of them clears it. Absent on a mark from before #3304, which a join may have set. */
+  teamWrittenBy?: { kind: 'assigned' | 'branch' } | { kind: 'pushed'; pulls: string[] }
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -609,6 +613,9 @@ export interface MessageDraft {
   mentions?: string[]
   /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
   holdMentions?: true
+  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
+   *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
+  post?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */

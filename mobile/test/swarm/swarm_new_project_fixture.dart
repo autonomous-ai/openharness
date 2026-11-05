@@ -146,6 +146,60 @@ class NewProjectSwarm {
     statusCode: 403,
   );
 
+  /// What the server's organization check answers for every owner (backend
+  /// routes/superTabs.ts `github/owners/:owner`, task #3373): null for a
+  /// server without the route, which answers 404.
+  String? ownerState;
+  String? installUrl;
+
+  /// The organization check answers 429, as the server does past 30 checks
+  /// a minute per person (`RATE_LIMITED`).
+  bool ownerRateLimited = false;
+
+  /// How many of the next organization checks fail as a server that did not
+  /// answer (503).
+  int ownerFailures = 0;
+
+  /// Runs while New repository's request is out, before it answers: the
+  /// sheet going meanwhile, say.
+  void Function()? whileAsking;
+
+  /// The sign-in link the server answers with, for the request at [at]:
+  /// GitHub's by default.
+  String Function(int at) authorizeUrlFor = (at) =>
+      'https://github.com/login/oauth/authorize?state=s$at';
+
+  /// Answers New repository's request in place of the server when set:
+  /// throws to refuse it.
+  FutureOr<Object?> Function(Map<String, dynamic> body)? refuseRepository;
+
+  /// Each New repository request's body, in order.
+  final repositoryRequests = <Map<String, dynamic>>[];
+
+  /// The time the last New repository request answered with, and how long
+  /// before [newProjectNow] its requests say they were asked.
+  int? creationAt;
+  Duration creationAgo = Duration.zero;
+
+  /// GitHub's callback came back for the project [projectId]'s last request:
+  /// its `repositoryCreation` reads [state] in every read from now on.
+  void finishCreation(
+    String projectId,
+    String state, {
+    String? repositoryUrl,
+    bool? reachable,
+    String? reason,
+  }) {
+    final row = projects.firstWhere((p) => p['id'] == projectId);
+    row['repositoryCreation'] = {
+      ...row['repositoryCreation'] as Map<String, dynamic>,
+      'state': state,
+      'repositoryUrl': ?repositoryUrl,
+      'reachable': ?reachable,
+      'reason': ?reason,
+    };
+  }
+
   /// Answers a command in place of the Swarm when it returns non-null:
   /// throws to refuse it, or a future to hold its answer.
   FutureOr<Object?>? Function(Map<String, dynamic> command)? answer;
@@ -213,6 +267,49 @@ class NewProjectSwarm {
     fake.routes['/api/super-tabs/$id/conversations/'] = (_) => {
       'messages': <Object>[],
       'next': null,
+    };
+    // Read at each check: an organization can install Harness meanwhile.
+    fake.routes['/api/super-tabs/$id/github/owners/'] = (_) {
+      final state = ownerState;
+      if (state == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'No route', statusCode: 404);
+      }
+      if (ownerRateLimited) {
+        throw const SuperTabFailure(
+          'RATE_LIMITED',
+          'Too many requests.',
+          statusCode: 429,
+        );
+      }
+      if (ownerFailures > 0) {
+        ownerFailures--;
+        throw const SuperTabFailure(
+          'SERVER_ERROR',
+          'The server did not answer.',
+          statusCode: 503,
+        );
+      }
+      return {'state': state, 'installUrl': ?installUrl};
+    };
+    // New repository's request (backend Task 6): the sign-in to go to, and
+    // the time that names this attempt; the project waits from then on.
+    fake.routes['/api/super-tabs/$id/projects/'] = (body) async {
+      if (refuseRepository case final refuse?) return refuse(body!);
+      repositoryRequests.add(body!);
+      whileAsking?.call();
+      final at = creationAt =
+          newProjectNow.subtract(creationAgo).millisecondsSinceEpoch +
+          repositoryRequests.length;
+      final made = projects.lastWhere((p) => p['name'] == 'New project');
+      made['repositoryCreation'] = {
+        'owner': body['owner'],
+        'name': body['name'],
+        'private': body['private'],
+        'by': me,
+        'at': at,
+        'state': 'waiting',
+      };
+      return {'authorizeUrl': authorizeUrlFor(at), 'at': at};
     };
     fake.routes['/api/super-tabs/$id/commands'] = (body) async {
       sent.add(body!);
