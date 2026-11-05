@@ -401,6 +401,10 @@ describe('a Team agent signed out of its owner\'s relay (task #3301)', () => {
     expect(signedOut('  The brief says API Error: 401 is not recovered.\n❯ ')).toBe(false)
     expect(signedOut('⏺ Bash(echo "Not logged in · Please run /login")\n  ⎿  Not logged in · Please run /login\n❯ ')).toBe(false)
     expect(signedOut(`  ⎿  Not logged in · Please run /login\n${'line\n'.repeat(30)}❯ `)).toBe(false)
+    // A reply that starts with the phrase is still the agent's own words, Claude Code's "⏺" or Codex's "•" (security review 2).
+    expect(signedOut('⏺ Not logged in users are sent to /login, so the relay never sees them.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ API Error: 401 comes from the relay when its token is stale.\n❯ ')).toBe(false)
+    expect(signedOut('• Invalid API key is what Codex prints for a stale relay token.\n› ')).toBe(false)
   })
 })
 
