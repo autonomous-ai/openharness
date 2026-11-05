@@ -2,7 +2,7 @@
 
 **Goal:** When a Buddy's model switch is refused by the Buddy guard, its owner reads why in plain words ("Start your Buddy
 again to switch its model") instead of `its computer could not switch it (SWARM_SKILL_FAILED)`, and Desktop offers a
-one-click Start again.
+one-click Start again once a switch has failed for that reason.
 **Architecture:** The switch relaunches the Buddy through the daemon's `agent_retarget`; the relaunch's launch overrides
 (cli/src/lib/launchOverrides.ts) run `prepareBuddyFolder` (cli/src/lib/swarmSkills.ts), whose guard throws one of two fixed
 sentences, and return `SWARM_SKILL_FAILED` with that sentence as the detail. `refusal()` in cli/src/superTabs/buddyModel.ts
@@ -34,10 +34,18 @@ with no execution handoff.
 - [ ] Watch it fail, commit.
 - [ ] `refusal()` reads the detail of a `SWARM_SKILL_FAILED` answer for the two sentences. Test passes, commit.
 
-### 2. Desktop offers Start again before a switch (after Scholes's yes)
-**Files:** desktop/lib/super_tabs/buddies.dart, desktop/test/
-- [ ] Failing widget test: a Swarm Buddy bar whose Buddy's owner isn't recorded shows "Start your Buddy again to switch its
-      model." with a Start again button that calls `addBuddy` for its machine and engine, and no model picker.
+### 2. Desktop offers Start again after a failed switch (Scholes approved the mockup; PM's scope ruling, 11-05)
+**Files:** desktop/lib/super_tabs/buddies.dart, desktop/test/super_tab_buddy_model_test.dart
+**Scope:** the Desktop files only. The machine does not report a missing owner record before a switch: Desktop shows the
+offer once a switch has failed for that reason (River: it only affects Buddies started before 0.5.40, which isn't worth
+more surface).
+**Signal:** the newest system line by the current Buddy agent in its Swarm Buddy chat is the backend's
+"Couldn't switch your Buddy: Start your Buddy again to switch its model…" (task 1's words), and no switch is under way.
+A later line by that agent (a success, another failure) settles it, and a Buddy started again is a new agent, so a line
+written by an earlier Buddy never shows the offer.
+**Start again:** a running Buddy refuses a second start (backend BUDDY_EXISTS), so it is removed and then started on the
+same machine and engine, which is the replacement a down Buddy's Start again already does. Its chat and its name stay.
+- [ ] Failing widget test: the bar shows "Start your Buddy again to switch its model." with Start again, which sends
+      buddy.remove then buddy.create for its machine and engine; the offer is gone for the new Buddy. Not shown for
+      another reason, after a later line, while a switch is under way, or for a line by an earlier Buddy.
 - [ ] Watch it fail, commit; build the row; test passes, commit.
-- The signal Desktop reads for "owner not recorded" is decided with the PM in the task (it needs the Buddy's machine to
-  report it, outside this task's files today).

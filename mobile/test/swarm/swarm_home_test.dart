@@ -904,7 +904,7 @@ void main() {
       );
     });
 
-    testWidgets('a project with a task-chat tag stays bold without a number; '
+    testWidgets('a project with a task-chat tag stays quiet without a number; '
         'the rest are quiet; each on one line, with no people and no time', (
       tester,
     ) async {
@@ -913,7 +913,7 @@ void main() {
 
       const mobileRow = 'swarm-project-$tab-$project';
       const webRow = 'swarm-project-$tab-$web';
-      expect(weightOf(tester, mobileRow, 'Mobile'), AppFont.semibold);
+      expect(weightOf(tester, mobileRow, 'Mobile'), isNot(AppFont.semibold));
       expect(inside(mobileRow, find.byType(SwarmTags)), findsNothing);
       expect(find.bySemanticsLabel(RegExp('1 mention')), findsNothing);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
@@ -940,31 +940,35 @@ void main() {
       semantics.dispose();
     });
 
-    testWidgets('a project with a chat read since is bold, with a dot and no '
-        'count', (tester) async {
-      final fake = backend();
-      final host = await pump(tester, fake);
-      moveOn(fake, {
-        webLead: {
-          ...groupData(
-            webLead,
-            title: 'Web',
-            agentIds: ['agent-cleo'],
-            leadId: 'agent-cleo',
-            lastMessageSequence: 1,
-          ),
-          'projectId': web,
-        },
-      });
-      await host.session!.inbox.refresh();
-      await tester.pumpAndSettle();
+    testWidgets(
+      'a person writing in the project chat makes it bold, with a dot and no '
+      'count',
+      (tester) async {
+        final fake = backend();
+        final host = await pump(tester, fake);
+        moveOn(fake, {
+          webLead: {
+            ...groupData(
+              webLead,
+              title: 'Web',
+              agentIds: ['agent-cleo'],
+              leadId: 'agent-cleo',
+              lastMessageSequence: 1,
+            ),
+            'projectId': web,
+            'lastPersonSequence': 1,
+          },
+        });
+        await host.session!.inbox.refresh();
+        await tester.pumpAndSettle();
 
-      const webRow = 'swarm-project-$tab-$web';
-      expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
-      expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
-      expect(inside(webRow, find.textContaining('@')), findsNothing);
-      expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
-    });
+        const webRow = 'swarm-project-$tab-$web';
+        expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
+        expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
+        expect(inside(webRow, find.textContaining('@')), findsNothing);
+        expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
+      },
+    );
 
     testWidgets('projects newest first, the time off the row', (tester) async {
       final now = DateTime.utc(2026, 10, 29, 10);
@@ -1313,8 +1317,8 @@ void main() {
       );
       expect(
         weightOf(tester, 'swarm-project-$tab-$project', 'Mobile'),
-        AppFont.semibold,
-        reason: 'the tag waiting on the person makes it bold',
+        isNot(AppFont.semibold),
+        reason: 'a task tag keeps it listed without bolding its project chat',
       );
     });
 

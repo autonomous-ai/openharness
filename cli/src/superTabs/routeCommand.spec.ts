@@ -1408,6 +1408,50 @@ describe('routing contributed capacity', () => {
       expect(JSON.stringify(reasons(both.answer))).not.toMatch(/suspended|Suspended/)
     })
 
+    it('leaves out all new starts, including grid models, during a machine cooldown', async () => {
+      const grid = 'swarm-0123456789ab', pool = swarm()
+      pool.machineSuspended = 'This machine is suspended for new work: its last 2 starts timed out. It is offered again after 30 minutes.'
+      pool.observation.localModels = [{ grid, model: 'qwen3' }]
+      const { answer } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } }, kind: 'tests' })
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(answer).some(row => row.reason.includes('This machine is suspended'))).toBe(true)
+      delete pool.machineSuspended
+      expect((await runPool(pool, false, {}, project)).answer.ok).toBe(true)
+    })
+
+    it.each([
+      ['Could not clone the repository at /private/project.', 'repository'],
+      ['The Harness server answered without a GitHub token for this project.', 'GitHub'],
+      ['The project folder does not exist: /private/project.', 'folder'],
+      ['The repository has no commits.', 'commit'],
+      ['Required tool gh is not installed.', 'tool'],
+      ["This machine's ChatGPT account (private-account) does not offer gpt-6-astra; choose another model.", 'model'],
+      ["This machine held the agent's launch for 3 minutes and stopped it: Waiting to confirm the selected executable’s permission flags.", 'permission'],
+    ])('notes setup failures while keeping the engine available: %s', async (error, category) => {
+      const { answer, s } = await runPool(swarm(), false, {}, project, { state: { starts: [
+        { id: 'failed', requestedAt: Date.now(), error, request: { machineId: 'm1', engine: 'claude', conversationId: 'group' } },
+      ] } })
+      expect(answer.ok).toBe(true)
+      const candidates = answer.candidates as Array<{ notes: string[] }>
+      expect(candidates.some(row => (row.notes ?? []).some(note => note.includes(category)))).toBe(true)
+      const recordedText = JSON.stringify(recorded(s).command.decision)
+      expect(recordedText).not.toContain('/private/project')
+      expect(recordedText).not.toContain('private-account')
+    })
+
+    it('drops setup notes after a later success or 30 minutes, without noting another engine', async () => {
+      const failed = { requestedAt: Date.now(), error: 'The project folder does not exist.', request: { machineId: 'm1', engine: 'claude' } }
+      for (const starts of [
+        [{ ...failed, requestedAt: Date.now() - 30 * 60_000 }],
+        [failed, { ...failed, harnessId: 'created', error: null }],
+        [{ ...failed, request: { machineId: 'm1', engine: 'codex' } }],
+      ]) {
+        const { answer } = await runPool(swarm(), false, {}, project, { state: { starts } })
+        expect(answer.ok).toBe(true)
+        expect(JSON.stringify(answer.candidates)).not.toContain('Its last start failed while preparing')
+      }
+    })
+
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]

@@ -169,7 +169,7 @@ void main() {
   });
 
   test('a reply only in a thread leaves a read chat and its project as they '
-      'were; a message in the main stream still makes them bold', () async {
+      'were; a main-stream task message makes only its chat bold', () async {
     final r = await rig();
     await moveOn(r, {
       'g1': {
@@ -189,9 +189,7 @@ void main() {
     });
 
     expect(chat(r, 'g1'), (bold: true, tags: 0));
-    expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 0, hasWaitingTag: false),
-    });
+    expect(swarmProjectNews(r.reader, r.asks), isEmpty);
   });
 
   test("a chat the Lead tagged the person in is bold with the count of the "
@@ -227,7 +225,7 @@ void main() {
     r.reader.readMarks!.markRead(leadChat, 4);
     await settle();
     expect(swarmProjectNews(r.reader, r.asks)[project], (
-      bold: true,
+      bold: false,
       tags: 0,
       hasWaitingTag: true,
     ));
@@ -239,25 +237,23 @@ void main() {
     );
   });
 
-  test('a project is bold while its project chat or open work is unread, '
-      'without counting tags in task chats', () async {
+  test('a project is bold for people in its own chat, while task tags '
+      'only keep it under the filters', () async {
     final r = await rig(tags: [mentionRow('t1'), mentionRow('t2')]);
 
     expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 0, hasWaitingTag: true),
+      project: (bold: false, tags: 0, hasWaitingTag: true),
     });
 
     final quiet = await rig();
     await moveOn(quiet, {
-      leadChat: groupData(
-        leadChat,
-        title: 'Mobile',
-        agentIds: ['agent-lead'],
-        leadId: 'agent-lead',
-        lastMessageSequence: 5,
-      ),
+      leadChat: {
+        ...groupData(leadChat, title: 'Mobile', lastMessageSequence: 5),
+        'lastPersonSequence': 5,
+      },
       'web-lead': {
         ...groupData('web-lead', title: 'Web', lastMessageSequence: 2),
+        'lastPersonSequence': 2,
         'projectId': other,
       },
     });
@@ -320,7 +316,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0, hasWaitingTag: true),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
 
       r.reader.readMarks!.markRead('g1', 4);
@@ -336,7 +332,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0, hasWaitingTag: true),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
 
       // The person reads the chat as far as the first read had marked it.
@@ -433,7 +429,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0, hasWaitingTag: true),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
     });
 
@@ -453,7 +449,7 @@ void main() {
       expect(chat(r, 'g1'), (bold: false, tags: 0));
       expect(chat(r, 'g2'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0, hasWaitingTag: true),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
       expect(r.asks.mentions, hasLength(2));
     });
@@ -527,7 +523,7 @@ void main() {
 
         expect(chat(r, 'g1'), (bold: true, tags: 1));
         expect(swarmProjectNews(r.reader, r.asks), {
-          project: (bold: true, tags: 0, hasWaitingTag: true),
+          project: (bold: false, tags: 0, hasWaitingTag: true),
         });
       },
     );
@@ -536,13 +532,19 @@ void main() {
     // in Activity and on the chat's own row.
     test('a decision asked in the project chat raises its chat row, not the '
         "project's number, even while the chat is unread", () async {
-      final r = await rig(decisions: [decisionRow('d1', conversationId: leadChat)]);
+      final r = await rig(
+        decisions: [decisionRow('d1', conversationId: leadChat)],
+      );
       await moveOn(r, {
         leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
       });
 
       expect(chat(r, leadChat), (bold: true, tags: 1));
-      expect(swarmProjectNews(r.reader, r.asks)[project]?.tags, 0);
+      expect(swarmProjectNews(r.reader, r.asks)[project], (
+        bold: false,
+        tags: 0,
+        hasWaitingTag: true,
+      ));
       expect(r.asks.decisions, hasLength(1), reason: 'Activity keeps it');
     });
 
@@ -568,9 +570,7 @@ void main() {
       await settle();
 
       expect(chat(r, 'g1'), (bold: true, tags: 0));
-      expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0, hasWaitingTag: false),
-      });
+      expect(swarmProjectNews(r.reader, r.asks), isEmpty);
       expect(
         r.swarm.paths.where((p) => p.endsWith('/parts')),
         hasLength(loads),
