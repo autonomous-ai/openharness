@@ -2139,6 +2139,15 @@ export class SuperTabStore {
           status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
           data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
       }
+      // A reaction is how an agent acknowledges (project instructions: react instead of posting an acknowledgement), so its own
+      // reaction settles its deliveries of that message too: else the PM owed every message it reacted to for a day, and its host
+      // took any long turn for a hang (reviews of #3213; timeChecks.ts owedAsk).
+      if (command.type === 'message.react' && command.on && actor.kind === 'agent') {
+        const { messageId } = command, agentId = actor.agentId
+        await this.endDeliveries(tx, tabId, { where: { messageId, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId, agentId,
+          status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
+          data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
+      }
       if (command.type === 'project.report' && actor.kind === 'agent') {
         // Judged on the progress after this report summarized what it names.
         const progress = projectsOf(effects.state).find(p => p.id === command.projectId)?.progress
@@ -4617,10 +4626,11 @@ export class SuperTabStore {
           select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
         for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
       }
-      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing.
-      for (const project of projects) {
-        const pm = state.conversations.find(c => c.id === project.leadConversationId)!.leadId!
-        const owed = await owedAsk(tx, tabId, pm, now)
+      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing. A
+      // project that lost its PM owes nothing until it has one again (review of #3213, Minor 4).
+      for (const project of projectsOf(state)) {
+        const pm = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+        const owed = pm ? await owedAsk(tx, tabId, pm, now) : null
         if (owed?.messageId === project.owed?.messageId && owed?.since === project.owed?.since) continue
         if (owed) project.owed = owed
         else delete project.owed

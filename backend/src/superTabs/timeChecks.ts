@@ -35,27 +35,46 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
 export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
 /** The most Swarms a pass checks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
 export const TIME_CHECK_SWARMS = 200
-export const QUIET_CHECK_MS = 0
+/** A Swarm whose groups show no activity since its last check is checked again only this often (ENGINEERING.md 4: a timer that
+ *  wakes while nothing changed is a defect). Its stalls (30 minutes) and idle agents (15) are still told within minutes of
+ *  falling due; a lost task's machine reports run the loss checks every 30 s anyway (liveness.ts sweepLiveness). */
+export const QUIET_CHECK_MS = 5 * 60_000
 
 /** The Swarms to check: those with a conversation awake and active in the last [TIME_CHECK_QUIET_MS], newest first. On the
  *  `[dormant, lastActivityAt]` group index; a deleted Swarm is left to `runTimeChecks`, which reads its row anyway. */
 export async function timeCheckSwarms(db: PrismaClient, now: number, limit = TIME_CHECK_SWARMS): Promise<string[]> {
+  return (await timeCheckCandidates(db, now, limit)).map(row => row.tabId)
+}
+
+/** The same Swarms, each with its groups' latest activity, which says whether anything moved there since the last pass. */
+async function timeCheckCandidates(db: PrismaClient, now: number, limit: number): Promise<Array<{ tabId: string; at: string }>> {
   const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
     { $match: { dormant: false, lastActivityAt: { $gte: { $date: new Date(now - TIME_CHECK_QUIET_MS).toISOString() } } } },
     { $group: { _id: '$tabId', at: { $max: '$lastActivityAt' } } },
     { $sort: { at: -1 } },
     { $limit: limit },
-  ] }) as unknown as Array<{ _id: string }>
-  return rows.map(row => row._id)
+  ] }) as unknown as Array<{ _id: string; at: { $date: string } | string }>
+  return rows.map(row => ({ tabId: row._id, at: typeof row.at === 'string' ? row.at : JSON.stringify(row.at) }))
 }
 
-/** One pass: each Swarm's checks in its own write. One Swarm's failure is logged and skips that Swarm alone. */
-export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS, _seen?: Map<string, unknown>) {
-  const tabIds = await timeCheckSwarms(db, now, limit)
-  const pass = { swarms: tabIds.length, written: 0, failed: 0 }
-  for (const tabId of tabIds) {
+/** Per Swarm, its activity and when the pass last checked it: the worker's memory, gone with it (the next pass checks all). */
+export type TimeCheckMemory = Map<string, { at: string; checkedAt: number }>
+
+/** One pass: each Swarm's checks in its own write, for a Swarm whose activity moved since [seen] last checked it, or that it has
+ *  not checked for QUIET_CHECK_MS. One Swarm's failure is logged and skips that Swarm alone, and it is checked again next pass. */
+export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS,
+  seen: TimeCheckMemory = new Map()) {
+  const rows = await timeCheckCandidates(db, now, limit)
+  const pass = { swarms: rows.length, checked: 0, written: 0, failed: 0 }
+  const listed = new Set(rows.map(row => row.tabId))
+  for (const tabId of seen.keys()) if (!listed.has(tabId)) seen.delete(tabId)
+  for (const { tabId, at } of rows) {
+    const last = seen.get(tabId)
+    if (last && last.at === at && now - last.checkedAt < QUIET_CHECK_MS) continue
+    pass.checked++
     try {
       pass.written += await store.runTimeChecks(tabId)
+      seen.set(tabId, { at, checkedAt: now })
     } catch (error) {
       pass.failed++
       logger.warn('[swarm-time-checks] Swarm skipped', { tabId, error: error instanceof Error ? error.message : String(error) })
@@ -68,11 +87,12 @@ export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabSto
  *  sign the checks no longer keep up. */
 export function startTimeChecks(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, everyMs = SWEEP_EVERY_MS): () => void {
   let running = false
+  const seen: TimeCheckMemory = new Map()
   const run = () => {
     if (running) return
     running = true
     const started = Date.now()
-    void runTimeCheckPass(db, store, started)
+    void runTimeCheckPass(db, store, started, TIME_CHECK_SWARMS, seen)
       .then(pass => {
         const ms = Date.now() - started
         if (pass.failed || ms > everyMs) logger.warn('[swarm-time-checks] pass', { ...pass, ms })
