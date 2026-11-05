@@ -23,7 +23,7 @@ const _screen =
 
 /// Wren, at a prompt in its task "Flash the board", as the backend lists it
 /// for the reader (backend superTabs/promptWaits.ts).
-void _wrenAtPrompt(ConversationServer server, {bool screen = true}) {
+void wrenAtPrompt(ConversationServer server, {bool screen = true}) {
   server.state['agents'] = [
     ...(server.state['agents'] as List),
     {
@@ -102,7 +102,7 @@ void main() {
   ) async {
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;
-      _wrenAtPrompt(server);
+      wrenAtPrompt(server);
       final activity = await _loaded(tester, server);
       expect(activity.needsCount, 1);
       final opened = await _show(tester, activity);
@@ -146,7 +146,7 @@ void main() {
       'on', (tester) async {
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;
-      _wrenAtPrompt(server);
+      wrenAtPrompt(server);
       final activity = await _loaded(tester, server);
       await _show(tester, activity);
       expect(_key('super-activity-row-prompt:wren'), findsOneWidget);
@@ -166,7 +166,7 @@ void main() {
       final server = swarm()
         ..followedThreads = null
         ..refuseScreens = true;
-      _wrenAtPrompt(server);
+      wrenAtPrompt(server);
       await _show(tester, await _loaded(tester, server));
       expect(_key('super-activity-row-prompt:wren'), findsOneWidget);
       expect(
@@ -180,7 +180,7 @@ void main() {
     // Its machine did not answer: the row says that instead.
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;
-      _wrenAtPrompt(server, screen: false);
+      wrenAtPrompt(server, screen: false);
       await _show(tester, await _loaded(tester, server));
       expect(find.text('Its last lines could not be read.'), findsOneWidget);
     });
