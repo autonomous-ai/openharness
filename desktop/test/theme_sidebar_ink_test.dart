@@ -7,11 +7,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
+import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
 double _contrast(Color a, Color b) {
   final x = a.computeLuminance() + .05;
@@ -123,12 +127,13 @@ Color _behind(Element element, Color ground) {
 }
 
 /// Every text and icon color drawn under [of], each with the fill behind it.
-Map<String, (Color, Color)> _inks(
+List<(String, Color, Color)> _inks(
   WidgetTester tester,
   Finder of,
   Color ground,
 ) {
-  final inks = <String, (Color, Color)>{};
+  // A list, not a map: the same words (a count of 1) may appear twice.
+  final inks = <(String, Color, Color)>[];
   // An avatar is drawn on its own disc, whatever the theme.
   final avatars = find
       .descendant(
@@ -149,7 +154,7 @@ Map<String, (Color, Color)> _inks(
         final color = span.style?.color ?? paragraph.text.style?.color;
         final text = span.toPlainText().trim();
         if (color != null && text.isNotEmpty) {
-          inks[text] = (Color.alphaBlend(color, behind), behind);
+          inks.add((text, Color.alphaBlend(color, behind), behind));
         }
       }
       return true;
@@ -161,18 +166,19 @@ Map<String, (Color, Color)> _inks(
     final color = icon.color ?? IconTheme.of(element).color;
     if (color != null) {
       final behind = _behind(element, ground);
-      inks['icon ${icon.icon?.codePoint}'] = (
+      inks.add((
+        'icon ${icon.icon?.codePoint}',
         Color.alphaBlend(color, behind),
         behind,
-      );
+      ));
     }
   }
   return inks;
 }
 
-void _expectReadable(Map<String, (Color, Color)> inks, String where) {
+void _expectReadable(List<(String, Color, Color)> inks, String where) {
   expect(inks, isNotEmpty);
-  for (final MapEntry(key: what, value: (ink, behind)) in inks.entries) {
+  for (final (what, ink, behind) in inks) {
     expect(
       _contrast(ink, behind),
       greaterThanOrEqualTo(what.startsWith('icon') ? 3 : 4.5),
@@ -209,14 +215,10 @@ void main() {
     // Under the pointer the row darkens to the hover fill; what sat on the
     // sidebar itself must read there too.
     final hover = HarnessPalette.plum.sidebarHover;
-    _expectReadable({
-      for (final MapEntry(key: what, value: (ink, behind)) in _inks(
-        tester,
-        sidebar,
-        ground,
-      ).entries)
-        what: behind == ground ? (ink, hover) : (ink, behind),
-    }, 'a hovered plum row');
+    _expectReadable([
+      for (final (what, ink, behind) in _inks(tester, sidebar, ground))
+        (what, ink, behind == ground ? hover : behind),
+    ], 'a hovered plum row');
 
     // The same heading outside the sidebar keeps the page's gray.
     final outside = tester.renderObject<RenderParagraph>(
@@ -243,5 +245,54 @@ void main() {
     );
     final ground = HarnessPalette.cloud.sidebar;
     _expectReadable(_inks(tester, sidebar, ground), 'Cloud\'s sidebar');
+  });
+
+  testWidgets('on Plum, Threads, Mentions and Decisions read too, counts '
+      'and arrows included', (tester) async {
+    _wear(HarnessPalette.plum);
+    final server = swarm()..state['swarmBuddy'] = true;
+    server.ask(['Ship it?']);
+    server.tag('message-1');
+    server.followedThreads = {
+      'unread': [unreadThread('message-1')],
+      'read': [],
+      'more': false,
+    };
+    final activity = (await tester.runAsync(() => load(server)))!;
+    final c = activity.controller;
+    final AppNotifier app = createApp();
+    addTearDown(app.dispose);
+    await tester.binding.setSurfaceSize(const Size(280, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: ProjectSidebar(
+            controller: c,
+            app: app,
+            onSelect: c.select,
+            onNewSwarm: () {},
+            onNewProject: () {},
+            onPage: (_) {},
+            activity: activity,
+            attention: activity.attention,
+            places: SuperTabPlaces.of(c),
+            onManage: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    addTearDown(() => tester.pumpWidget(const SizedBox()));
+    final threads = find.byKey(const ValueKey('super-threads'));
+    expect(
+      find.descendant(of: threads, matching: find.text('1')),
+      findsOneWidget,
+    );
+    _expectReadable(
+      _inks(tester, find.byType(ProjectSidebar), HarnessPalette.plum.sidebar),
+      'the plum sidebar with Threads, Mentions and Decisions',
+    );
   });
 }
