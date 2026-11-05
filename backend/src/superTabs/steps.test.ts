@@ -923,4 +923,3 @@ describe('a step on a task from before step lists', () => {
     expect(f.group(f.task)).not.toHaveProperty('stepIds')
   })
 })
-
