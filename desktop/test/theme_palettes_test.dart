@@ -117,11 +117,13 @@ void main() {
         expect(contrast(ink, ground), greaterThanOrEqualTo(4.5));
         expect(contrast(muted, ground), greaterThanOrEqualTo(4.5));
       }
-      expect(
-        contrast(palette.sidebarOnSelected, palette.sidebarSelected),
-        greaterThanOrEqualTo(4.5),
-        reason: '${palette.name} selected sidebar row',
-      );
+      for (final ink in [palette.sidebarOnSelected, muted]) {
+        expect(
+          contrast(ink, palette.sidebarSelected),
+          greaterThanOrEqualTo(4.5),
+          reason: '${palette.name} selected sidebar row',
+        );
+      }
     }
   });
 

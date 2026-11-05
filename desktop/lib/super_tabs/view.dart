@@ -5427,7 +5427,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: grid.AppPalette.swarmWelcome,
+                              color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
                               child: _sidebar(),
                             ),

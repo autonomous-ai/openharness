@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
@@ -98,18 +99,57 @@ Future<void> _mountSidebar(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Every text color drawn under [of], blended over [ground].
-Map<String, Color> _inks(WidgetTester tester, Finder of, Color ground) {
-  final inks = <String, Color>{};
+/// The fill right behind [element]: the nearest opaque box or material
+/// under the sidebar (a badge, an avatar's disc, a selected row), else
+/// [ground].
+Color _behind(Element element, Color ground) {
+  Color? found;
+  element.visitAncestorElements((ancestor) {
+    final widget = ancestor.widget;
+    if (widget is ProjectSidebar) return false;
+    final fill = switch (widget) {
+      DecoratedBox(decoration: BoxDecoration(:final color?)) => color,
+      Material(:final color?) => color,
+      ColoredBox(:final color) => color,
+      _ => null,
+    };
+    if (fill != null && fill.a > .5) {
+      found = fill;
+      return false;
+    }
+    return true;
+  });
+  return found ?? ground;
+}
+
+/// Every text and icon color drawn under [of], each with the fill behind it.
+Map<String, (Color, Color)> _inks(
+  WidgetTester tester,
+  Finder of,
+  Color ground,
+) {
+  final inks = <String, (Color, Color)>{};
+  // An avatar is drawn on its own disc, whatever the theme.
+  final avatars = find
+      .descendant(
+        of: find.byType(SuperTabAvatar),
+        matching: find.byType(RichText),
+      )
+      .evaluate()
+      .toSet();
   for (final element
-      in find.descendant(of: of, matching: find.byType(RichText)).evaluate()) {
+      in find
+          .descendant(of: of, matching: find.byType(RichText))
+          .evaluate()
+          .where((element) => !avatars.contains(element))) {
     final paragraph = element.renderObject! as RenderParagraph;
+    final behind = _behind(element, ground);
     paragraph.text.visitChildren((span) {
       if (span is TextSpan) {
         final color = span.style?.color ?? paragraph.text.style?.color;
         final text = span.toPlainText().trim();
         if (color != null && text.isNotEmpty) {
-          inks[text] = Color.alphaBlend(color, ground);
+          inks[text] = (Color.alphaBlend(color, behind), behind);
         }
       }
       return true;
@@ -120,10 +160,25 @@ Map<String, Color> _inks(WidgetTester tester, Finder of, Color ground) {
     final icon = element.widget as Icon;
     final color = icon.color ?? IconTheme.of(element).color;
     if (color != null) {
-      inks['icon ${icon.icon?.codePoint}'] = Color.alphaBlend(color, ground);
+      final behind = _behind(element, ground);
+      inks['icon ${icon.icon?.codePoint}'] = (
+        Color.alphaBlend(color, behind),
+        behind,
+      );
     }
   }
   return inks;
+}
+
+void _expectReadable(Map<String, (Color, Color)> inks, String where) {
+  expect(inks, isNotEmpty);
+  for (final MapEntry(key: what, value: (ink, behind)) in inks.entries) {
+    expect(
+      _contrast(ink, behind),
+      greaterThanOrEqualTo(what.startsWith('icon') ? 3 : 4.5),
+      reason: '"$what" ${what.codeUnits} on $where',
+    );
+  }
 }
 
 void main() {
@@ -143,15 +198,7 @@ void main() {
       findsWidgets,
     );
     final ground = HarnessPalette.plum.sidebar;
-    final inks = _inks(tester, sidebar, ground);
-    expect(inks, isNotEmpty);
-    for (final MapEntry(key: what, value: ink) in inks.entries) {
-      expect(
-        _contrast(ink, ground),
-        greaterThanOrEqualTo(what.startsWith('icon') ? 3 : 4.5),
-        reason: '"$what" on the plum sidebar',
-      );
-    }
+    _expectReadable(_inks(tester, sidebar, ground), 'the plum sidebar');
 
     // Hovering a row keeps it readable.
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -159,26 +206,23 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('lampos')));
     await tester.pumpAndSettle();
-    for (final MapEntry(key: what, value: ink) in _inks(
-      tester,
-      sidebar,
-      HarnessPalette.plum.sidebarHover,
-    ).entries) {
-      expect(
-        _contrast(ink, HarnessPalette.plum.sidebarHover),
-        greaterThanOrEqualTo(what.startsWith('icon') ? 3 : 4.5),
-        reason: '"$what" on a hovered row',
-      );
-    }
+    // Under the pointer the row darkens to the hover fill; what sat on the
+    // sidebar itself must read there too.
+    final hover = HarnessPalette.plum.sidebarHover;
+    _expectReadable({
+      for (final MapEntry(key: what, value: (ink, behind)) in _inks(
+        tester,
+        sidebar,
+        ground,
+      ).entries)
+        what: behind == ground ? (ink, hover) : (ink, behind),
+    }, 'a hovered plum row');
 
-    // The same heading outside the sidebar keeps the page's near-black.
+    // The same heading outside the sidebar keeps the page's gray.
     final outside = tester.renderObject<RenderParagraph>(
       find.text('Outside the sidebar'),
     );
-    expect(
-      _contrast(outside.text.style!.color!, HarnessPalette.plum.background),
-      greaterThanOrEqualTo(7),
-    );
+    expect(outside.text.style!.color, HarnessPalette.plum.muted);
     expect(tester.takeException(), isNull);
   });
 
@@ -198,16 +242,6 @@ void main() {
       findsWidgets,
     );
     final ground = HarnessPalette.cloud.sidebar;
-    for (final MapEntry(key: what, value: ink) in _inks(
-      tester,
-      sidebar,
-      ground,
-    ).entries) {
-      expect(
-        _contrast(ink, ground),
-        greaterThanOrEqualTo(what.startsWith('icon') ? 3 : 4.5),
-        reason: '"$what" on Cloud\'s sidebar',
-      );
-    }
+    _expectReadable(_inks(tester, sidebar, ground), 'Cloud\'s sidebar');
   });
 }

@@ -619,6 +619,84 @@ abstract final class AppSurface {
   );
 }
 
+/// The Swarm sidebar's ink (task #3006).
+///
+/// A theme may draw its sidebar darker than the page around it — Plum's is
+/// plum with white text in an otherwise white app. The tokens above follow
+/// one global brightness and cannot tell the sidebar from the page, so the
+/// sidebar's widgets read their ink here instead: inside [SidebarInk.scope]
+/// on such a theme they get the sidebar's own, anywhere else (the same row
+/// widgets on another page, or any theme without a sidebar of its own) the
+/// page's ordinary tokens.
+class SidebarInk extends InheritedWidget {
+  const SidebarInk._({required super.child});
+
+  /// Marks [child] as the Swarm sidebar, and gives text and icons that pick
+  /// no color of their own the sidebar's ink.
+  static Widget scope({required Widget child}) {
+    final palette = AppTheme.surfacePalette;
+    if (!palette.hasSidebarInk) return SidebarInk._(child: child);
+    return SidebarInk._(
+      child: IconTheme.merge(
+        data: IconThemeData(color: palette.sidebarInk),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: palette.sidebarInk),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  /// The default text style of a Material drawn as the sidebar: the theme's,
+  /// in the sidebar's ink when it has its own (a Material sets its own
+  /// default style, which would hide [scope]'s).
+  static TextStyle? textStyle(BuildContext context) => switch (_own(context)) {
+    final palette? => Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: palette.sidebarInk),
+    null => null,
+  };
+
+  static HarnessPalette? _own(BuildContext context) {
+    final palette = AppTheme.surfacePalette;
+    return palette.hasSidebarInk &&
+            context.dependOnInheritedWidgetOfExactType<SidebarInk>() != null
+        ? palette
+        : null;
+  }
+
+  /// The sidebar's inks, for code that draws only the sidebar.
+  static HarnessPalette? get _sidebarOwn =>
+      AppTheme.surfacePalette.hasSidebarInk ? AppTheme.surfacePalette : null;
+  static Color get ink => _sidebarOwn?.sidebarInk ?? AppPalette.textPrimary;
+  static Color get inkMuted => switch (_sidebarOwn) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+  static Color get hover => _sidebarOwn?.sidebarHover ?? AppSurface.hoverFill;
+  static Color get selected =>
+      _sidebarOwn?.sidebarSelected ?? AppSurface.selectedFill;
+
+  /// The same, for a widget that is drawn in the sidebar and elsewhere: the
+  /// sidebar's inside [scope], the page's outside it.
+  static Color foreground(BuildContext context) =>
+      _own(context)?.sidebarInk ?? AppPalette.textPrimary;
+
+  static Color muted(BuildContext context) => switch (_own(context)) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+
+  static Color hoverFill(BuildContext context) =>
+      _own(context)?.sidebarHover ?? AppSurface.hoverFill;
+
+  static Color selectedFill(BuildContext context) =>
+      _own(context)?.sidebarSelected ?? AppSurface.selectedFill;
+
+  @override
+  bool updateShouldNotify(SidebarInk oldWidget) => false;
+}
+
 /// Translucent Codex-like chrome surfaces used behind a backdrop blur (the
 /// sidebar, the top bar, floating pills). Fills are semi-transparent so the blur
 /// shows through; kept separate from [AppCard] because these surfaces are chrome,

@@ -139,7 +139,7 @@ enum HarnessPalette {
     sidebarInk: Color(0xffffffff),
     sidebarMuted: Color(0xffcfc3cf),
     sidebarHover: Color(0xff350d36),
-    sidebarSelected: Color(0xff1164a3),
+    sidebarSelected: Color(0xff0b4c8c),
     sidebarOnSelected: Color(0xffffffff),
   ),
   night(

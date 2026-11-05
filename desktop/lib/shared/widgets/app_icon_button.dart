@@ -154,9 +154,12 @@ class _AppIconButtonState extends State<AppIconButton>
     final enabled = widget.onPressed != null && !widget.spinning;
     final highContrast = MediaQuery.highContrastOf(context);
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    // In a sidebar with its own ink (Plum), that ink; elsewhere the page's.
     final resting =
         widget.color ??
-        (highContrast ? AppPalette.textPrimary : AppPalette.textSecondary);
+        (highContrast
+            ? SidebarInk.foreground(context)
+            : SidebarInk.muted(context));
     // Only the glyph changes. The fill stays the same neutral lift every other
     // button gets, so a destructive button reads as *the same affordance* the
     // rest of the app uses — just saying, in its ink, what it would do.
@@ -166,7 +169,8 @@ class _AppIconButtonState extends State<AppIconButton>
     );
     final active = widget.destructive
         ? danger
-        : (widget.hoverColor ?? AppPalette.textPrimary);
+        : (widget.hoverColor ?? SidebarInk.foreground(context));
+    final hoverFill = widget.hoverFill ?? SidebarInk.hoverFill(context);
 
     return Semantics(
       value: widget.spinning ? 'Working' : null,
@@ -213,7 +217,7 @@ class _AppIconButtonState extends State<AppIconButton>
           }),
           backgroundColor: WidgetStatePropertyAll(
             widget.selected == true
-                ? AppSurface.selectedFill
+                ? SidebarInk.selectedFill(context)
                 : Colors.transparent,
           ),
           overlayColor: WidgetStateProperty.resolveWith((states) {
@@ -223,12 +227,12 @@ class _AppIconButtonState extends State<AppIconButton>
             if (states.contains(WidgetState.pressed)) {
               return Color.alphaBlend(
                 AppPalette.textPrimary.withValues(alpha: .08),
-                widget.hoverFill ?? AppSurface.hoverFill,
+                hoverFill,
               );
             }
             if (states.contains(WidgetState.hovered) ||
                 states.contains(WidgetState.focused)) {
-              return widget.hoverFill ?? AppSurface.hoverFill;
+              return hoverFill;
             }
             return Colors.transparent;
           }),
