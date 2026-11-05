@@ -198,18 +198,22 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(wake(changed)).toBeNull()
   })
 
-  // Ken, 11-05 (#3151): the wake only said to read people's new messages, so in a long session, and after compaction, the PM
-  // worked from rules it no longer had in mind.
-  it('tells the coordinator in every wake to reread the whole instructions before its jobs', () => {
+  // Anh Dee, 11-05 (#3387): rereading the whole instructions every wake (#3151) cost 7-9k tokens 20-30 times a day. The CLI
+  // tells the coordinator when they change and names the file to read again (cli swarmInstructionsSkill.ts), so a wake rereads
+  // nothing that did not change.
+  it('a wake rereads nothing that did not change', () => {
     for (const state of [swarm(task(1, null)), (() => { const s = busy(); chat(s).heardAt = T - 1; return s })()]) {
       const text = wake(state)!.draft.text.replace(/\s+/g, ' ')
-      expect(text).toContain('Before these jobs, reread your project\'s instructions whole')
-      expect(text).toContain('after your context was compacted')
-      expect(text.indexOf('reread your project\'s instructions whole')).toBeLessThan(text.indexOf('- '))
-      expect(text).not.toContain('Don\'t reread the whole instructions')
+      expect(text).not.toContain('reread your project\'s instructions whole')
+      expect(text).not.toContain('instructions command')
     }
-    expect(PM_SCHEDULE_TEXT).not.toContain('Don\'t reread the whole instructions')
-    expect(PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')).toContain('Every wake: reread the instructions whole before its jobs')
+    const heard = busy()
+    chat(heard).heardAt = T - 1
+    expect(wake(heard)!.draft.text).toContain('read only what people sent you since the last wake')
+    const built = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(built).not.toContain('Every wake: reread')
+    expect(built).toContain('read only what people sent you since then')
+    expect(built).toContain('Don\'t reread the whole instructions for it')
   })
 
   it('records what a written wake carried, and only the slot of one held back, so its jobs stay due', () => {
