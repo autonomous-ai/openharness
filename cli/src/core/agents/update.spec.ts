@@ -76,6 +76,10 @@ describe('a model and effort', () => {
     const codex = setup({}, row({ engine: 'codex' }))
     await codex.ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:codex:gpt-6@high' })
     expect(codex.deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', null)
+    // A pick the wire cannot read was the controller's to judge; nothing is recorded for it.
+    const unread = setup()
+    await unread.ask({ agentId: 'a1', selectedModel: 'runtime-v1:x' })
+    expect(unread.deps.registry.setLaunchModel).not.toHaveBeenCalled()
     const failed = setup({ onRuntimeProfileUpdate: async () => { throw new RuntimeProfileControlError('BUSY') } })
     await failed.ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:sonnet@high' })
     expect(failed.deps.registry.setLaunchModel).not.toHaveBeenCalled()
