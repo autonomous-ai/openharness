@@ -2,18 +2,25 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/api/api_client.dart' show describeApiError;
 import 'package:harness_mobile/core/models.dart' show Machine;
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../../swarm/swarm_buddy.dart' show swarmBuddyKey;
+import '../../swarm/swarm_buddy_chat.dart' show openSwarmBuddy;
+import '../../swarm/swarm_session.dart';
+import '../browser_handoff.dart';
 import '../machines_tab.dart';
 import '../phone_navigation.dart' show phoneRoute;
 import '../settings_row.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'intern3_swarm.dart';
 import 'saved_wifi.dart';
 import 'setup_hotspot.dart';
 
@@ -295,8 +302,44 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   AppNotifier get _app => widget.notifier;
 
+  /// Start, with Swarm on: Intern 3 into the person's Swarm and their Buddy on it ([Intern3Swarm]).
+  Intern3Swarm? _swarm;
+
+  /// Redraws the install's bar ([_InstallBar]) while Start runs.
+  Timer? _swarmTick;
+
+  /// The code Claude's sign-in page shows, for Intern 3's login ([Intern3Swarm.sendCode]).
+  final _claudeCode = TextEditingController();
+
+  /// Back from Claude's page in the browser: the code its Copy put on the clipboard is filled in.
+  late final _life = AppLifecycleListener(
+    onResume: () => unawaited(_pasteCode()),
+  );
+
+  Future<void> _pasteCode() async {
+    final swarm = _swarm;
+    if (swarm == null || !swarm.needsCode || _claudeCode.text.isNotEmpty) {
+      return;
+    }
+    final text = (await Clipboard.getData('text/plain'))?.text?.trim() ?? '';
+    // Claude's code is one long word (code#state); anything else on the clipboard is not it.
+    if (!mounted || text.length < 20 || text.contains(RegExp(r'\s'))) return;
+    setState(() => _claudeCode.text = text);
+  }
+
+  void _swarmChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    _life.dispose();
+    unawaited(_handoff.dispose());
+    _claudeCode.dispose();
+    _swarmTick?.cancel();
+    _swarm
+      ?..removeListener(_swarmChanged)
+      ..dispose();
     _poll?.cancel();
     _tick?.cancel();
     _again?.cancel();
@@ -815,22 +858,27 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   // -- 5. its name, then Computers with it marked new --
 
-  Future<void> _finish() async {
+  /// The name the person gave it, saved; false when it was refused, which then shows.
+  Future<bool> _saveName() async {
     final machine = _machine;
     final name = _name.text.trim();
     if (machine != null) {
       if (name.isNotEmpty && name != machine.displayName) {
         setState(() => _busy = true);
         final failed = await _app.renameMachine(machine.machineId, name);
-        if (!mounted) return;
+        if (!mounted) return false;
         if (failed != null) {
           _show(_Step.done, error: failed);
-          return;
+          return false;
         }
       }
       if (!_alreadyHere) _app.markMachineNew(machine.machineId);
     }
-    if (!mounted) return;
+    return mounted;
+  }
+
+  Future<void> _finish() async {
+    if (!await _saveName() || !mounted) return;
     if (widget.overComputers) {
       // Its row reads "new", with Start on it, in the list underneath.
       Navigator.of(context).pop();
@@ -842,6 +890,106 @@ class _AddDevicePageState extends State<AddDevicePage> {
         (_) => MachinesTab(notifier: _app, large: false),
       ),
     );
+  }
+
+  // -- 6. with Swarm on: Start puts it in the person's Swarm, with their Buddy on it --
+
+  /// Start is offered: Swarm on, and a computer new to the account, found online. One that was set up before (only its
+  /// Wi-Fi moved) keeps the OK it had.
+  bool _swarmOffered(BuildContext context) =>
+      SwarmScope.of(context) != null &&
+      SwarmScope.computersOf(context) != null &&
+      !_alreadyHere &&
+      _machine != null;
+
+  Future<void> _startSwarm() async {
+    final session = SwarmScope.of(context);
+    final computers = SwarmScope.computersOf(context);
+    final machine = _machine;
+    if (session == null || computers == null || machine == null) {
+      await _finish();
+      return;
+    }
+    if (!await _saveName()) return;
+    setState(() => _busy = false);
+    final user = _app.currentUser;
+    final owner = (user?.name ?? '').trim().isNotEmpty
+        ? user!.name!.trim()
+        : (user?.email ?? '').split('@').first;
+    final name = _name.text.trim();
+    final run = _swarm ??= Intern3Swarm(
+      session: session,
+      computers: computers,
+      machineId: machine.machineId,
+      machineName: name.isEmpty ? machine.displayName : name,
+      ownerName: owner.isEmpty ? 'My' : owner,
+    )..addListener(_swarmChanged);
+    // Built now, so a return from Claude's page is heard.
+    _life;
+    _swarmTick?.cancel();
+    _swarmTick = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => _swarmChanged(),
+    );
+    try {
+      await run.run();
+    } finally {
+      _swarmTick?.cancel();
+    }
+    // Not signed in to Claude on it: the page asks for that first ([_signIn]).
+    if (mounted && run.done) await _openBuddy();
+  }
+
+  /// Sign in to Claude: its page for Intern 3's login opens in the browser here. It returns to this phone's localhost,
+  /// where [_handoff] catches it and hands it to Intern 3's login, as a sign-in in a pane does: no code to copy. An
+  /// Intern 3 whose login gave no such page opens Claude's code page instead, whose code is filled in on return.
+  Future<void> _signIn() async {
+    final swarm = _swarm;
+    final machine = _machine;
+    final page = await swarm?.openSignIn();
+    if (swarm == null || machine == null || page == null || !mounted) return;
+    _claudeCode.clear();
+    if (swarm.needsCode) {
+      await launchUrl(Uri.parse(page), mode: LaunchMode.externalApplication);
+      return;
+    }
+    await _handoff.open(
+      machine.machineId,
+      page,
+      deliver: (caught) async {
+        final signedIn = await swarm.sendCallback(caught);
+        if (mounted && swarm.done) await _openBuddy();
+        return signedIn;
+      },
+    );
+  }
+
+  /// Catches Claude's sign-in on this phone's localhost ([_signIn]).
+  late final _handoff = BrowserHandoff(
+    _app,
+    say: (text) =>
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(text))),
+  );
+
+  /// Continue: the code into Intern 3's login; once Claude takes it, the Buddy starts and its chat opens.
+  Future<void> _sendCode() async {
+    final swarm = _swarm;
+    if (swarm == null) return;
+    await swarm.sendCode(_claudeCode.text);
+    if (mounted && swarm.done) await _openBuddy();
+  }
+
+  Future<void> _openBuddy() async {
+    final reader = _swarm?.reader;
+    if (reader == null) return;
+    final failed = await openSwarmBuddy(
+      context,
+      reader,
+      reader.tabId,
+      swarmBuddyKey,
+    );
+    if (failed != null && mounted) _show(_Step.done, error: failed);
   }
 
   void _wait(String ssid) {
@@ -1174,6 +1322,15 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ),
         ];
       case _Step.done:
+        final swarm = _swarm;
+        if (swarm != null &&
+            (swarm.busy ||
+                swarm.done ||
+                swarm.error != null ||
+                swarm.step == Intern3SwarmStep.signIn)) {
+          return _swarmBody(tty, swarm);
+        }
+        final offered = _swarmOffered(context);
         return [
           say(
             _alreadyHere
@@ -1185,12 +1342,74 @@ class _AddDevicePageState extends State<AddDevicePage> {
             key: const Key('add-device-name'),
             controller: _name,
             hint: 'Name',
-            autofocus: true,
+            autofocus: !offered,
             maxLength: AppNotifier.machineNameMaxLength,
-            onSubmitted: _busy ? null : () => unawaited(_finish()),
+            onSubmitted: _busy || offered ? null : () => unawaited(_finish()),
           ),
+          if (offered) ...[
+            const SizedBox(height: 12),
+            say(switch (Intern3Swarm.targetOf(SwarmScope.of(context)!)) {
+              null =>
+                'Start makes your Swarm, adds it there and starts your Buddy on it. '
+                    'Claude Code is installed on it first.',
+              final swarm =>
+                'Start adds it to "${swarm.name}" and starts your Buddy there. '
+                    'Claude Code is installed on it first.',
+            }),
+          ],
         ];
     }
+  }
+
+  /// Start under way or ended: each of its steps, done ✓ or going on, then what went wrong or what is left.
+  List<Widget> _swarmBody(Tty tty, Intern3Swarm swarm) {
+    final name = swarm.machineName;
+    final reached = swarm.done
+        ? Intern3SwarmStep.values.length
+        : swarm.step?.index ?? 0;
+    final lines = [
+      'Your Swarm',
+      'Claude Code on $name, and $name in your Swarm',
+      'Signed in to Claude',
+      swarm.keptBuddy ? 'Your Buddy, as it runs now' : 'Your Buddy on $name',
+    ];
+    return [
+      for (var i = 0; i < lines.length; i++)
+        if (i < reached || (i == reached && swarm.busy)) ...[
+          _Line(done: i < reached, text: lines[i]),
+          if (i == reached && swarm.step == Intern3SwarmStep.machine)
+            _InstallBar(since: swarm.stepSince),
+        ],
+      if (swarm.error case final error?) ...[
+        const SizedBox(height: 12),
+        Text(
+          error,
+          key: const Key('add-device-swarm-error'),
+          style: tty.style(color: tty.red),
+        ),
+      ],
+      if (swarm.step == Intern3SwarmStep.signIn && !swarm.done) ...[
+        const SizedBox(height: 12),
+        Text(
+          !swarm.signInOpened
+              ? 'Claude Code is on $name. Sign in to Claude so your Buddy can use it: the page opens here.'
+              : swarm.needsCode
+              ? 'Signed in on Claude\'s page? Tap Copy there, come back, and Continue: the code is filled in.'
+              : 'Sign in on Claude\'s page. Once you have, it closes by itself and this goes on.',
+          key: const Key('add-device-swarm-sign-in'),
+          style: tty.style(color: tty.dim),
+        ),
+        if (swarm.signInOpened && swarm.needsCode) ...[
+          const SizedBox(height: 12),
+          TtyField(
+            key: const Key('add-device-claude-code'),
+            controller: _claudeCode,
+            hint: 'Code from Claude',
+            onSubmitted: swarm.busy ? null : () => unawaited(_sendCode()),
+          ),
+        ],
+      ],
+    ];
   }
 
   List<Widget> _actions() {
@@ -1319,6 +1538,61 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ),
         ];
       case _Step.done:
+        final swarm = _swarm;
+        if (swarm != null && swarm.done) {
+          return [
+            TtyPrimaryButton(
+              key: const Key('add-device-open-buddy'),
+              label: 'Open Buddy chat',
+              onPressed: () => unawaited(_openBuddy()),
+            ),
+          ];
+        }
+        if (swarm != null &&
+            swarm.step == Intern3SwarmStep.signIn &&
+            swarm.needsSignIn) {
+          final code = swarm.signInOpened && swarm.needsCode;
+          return [
+            TtyPrimaryButton(
+              key: const Key('add-device-claude-sign-in'),
+              label: code
+                  ? 'Continue'
+                  : swarm.signInOpened
+                  ? 'Open Claude\'s page again'
+                  : 'Sign in to Claude',
+              busy: swarm.busy,
+              busyLabel: swarm.signInOpened ? 'Signing in…' : 'Opening Claude…',
+              onPressed: () => unawaited(code ? _sendCode() : _signIn()),
+            ),
+            if (code && !swarm.busy)
+              TtyTextButton(
+                key: const Key('add-device-claude-page-again'),
+                label: 'Open Claude\'s page again',
+                onPressed: () => unawaited(_signIn()),
+              ),
+          ];
+        }
+        if (swarm != null || _swarmOffered(context)) {
+          return [
+            TtyPrimaryButton(
+              key: const Key('add-device-swarm-start'),
+              label: swarm?.error != null ? 'Try again' : 'Start',
+              busy: _busy || (swarm?.busy ?? false),
+              busyLabel: switch (swarm?.step) {
+                Intern3SwarmStep.machine => 'Installing Claude Code…',
+                Intern3SwarmStep.buddy => 'Starting your Buddy…',
+                _ => 'Starting…',
+              },
+              onPressed: () => unawaited(_startSwarm()),
+            ),
+            if (!(swarm?.busy ?? false))
+              TtyTextButton(
+                key: const Key('add-device-swarm-not-now'),
+                label: 'Not now',
+                onPressed: () => unawaited(_finish()),
+              ),
+          ];
+        }
         return [
           TtyPrimaryButton(
             key: const Key('add-device-done'),
@@ -1340,6 +1614,55 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
 /// A wait that ends: a bar filling up to [until]. No time under it (owner, 2026-11-03): the bar
 /// alone says it is going and that it ends.
+/// Claude Code installing on Intern 3, as New harness draws its install in the pane (cli lib/engineLaunch.ts
+/// `INSTALL_PROGRESS_JS`, owner 2026-11-05): a bar from the time it has taken, fast then slower, never full before it
+/// ends, under how long is left. Expected longer than a pane's 12 s: over a slow Wi-Fi it took minutes.
+class _InstallBar extends StatelessWidget {
+  const _InstallBar({required this.since});
+
+  final DateTime since;
+
+  static const _expected = Duration(seconds: 60);
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final t = DateTime.now().difference(since).inMilliseconds;
+    final e = _expected.inMilliseconds;
+    final done = (1 - 1 / (1 + 2.4 * t / e)).clamp(0.04, 0.97);
+    final left = ((e - t) / 1000).round();
+    final when = t > 3 * e
+        ? 'still working, this can take a while'
+        : left > 3
+        ? 'about $left s'
+        : 'almost there';
+    return Padding(
+      padding: const EdgeInsets.only(left: 30, top: 4, bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Installing Claude Code…  $when',
+            key: const Key('add-device-install-when'),
+            style: tty.style(color: tty.dim),
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            key: const Key('add-device-install-bar'),
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: done,
+              minHeight: 6,
+              color: tty.green,
+              backgroundColor: tty.green.withValues(alpha: 0.18),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _WaitBar extends StatelessWidget {
   const _WaitBar({required this.until, required this.span});
 
