@@ -9,19 +9,15 @@ import { agentDisplayName } from './agentNames.js'
 import { localNow } from './digest.js'
 import { activeWork, nextConversationNumber, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, projectsOf, type SwarmProject } from './projects.js'
+import { SEED_RULES, type ProjectRules } from './policy.js'
 
-/** The release window and pace, in the shape of the project rules record's `releaseWindow` and `releasePace` (task #3393,
- *  policy.ts). Until that record lands, these constants are the one place the numbers live. */
-export interface ReleaseRules {
-  releaseWindow: { start: string; end: string; timeZone: string }
-  releasePace: { backendEveryMinutes: number; appsAfterVisibleBatch: boolean; backendPause: { start: string; end: string } | null }
-}
+/** The release window, pace and backend pause: the project rules record's own (policy.ts, task #3393), which people edit
+ *  without a release. The store reads each project's record when it settles (store.ts settleReleases). */
+export type ReleaseRules = Pick<ProjectRules, 'releaseWindow' | 'releasePace'>
 
-/** Today's numbers (project instructions rev 78; River, 11-05: no backend release 09:00-10:00, off the morning peak). */
-export const RELEASE_RULES: ReleaseRules = Object.freeze({
-  releaseWindow: Object.freeze({ start: '09:00', end: '18:00', timeZone: 'Asia/Ho_Chi_Minh' }),
-  releasePace: Object.freeze({ backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: Object.freeze({ start: '09:00', end: '10:00' }) }),
-}) as ReleaseRules
+/** The record's seed (09:00-18:00 VN, the backend every 120 minutes and never 09:00-10:00, apps after each visible batch):
+ *  what a project without a saved record runs on, and the pure functions' default. */
+export const RELEASE_RULES: ReleaseRules = { releaseWindow: SEED_RULES.releaseWindow, releasePace: SEED_RULES.releasePace }
 
 export type ReleaseComponentId = 'backend' | 'cli' | 'desktop' | 'web'
 /** What ships a part of the repository: its tag's suffix (`v1.4.16_backend`), the workflow a pushed tag runs, the folders

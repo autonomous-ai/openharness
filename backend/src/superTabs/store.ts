@@ -52,7 +52,7 @@ import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } f
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
-import { deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
+import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
 import { SEED_RULES } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
@@ -65,7 +65,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { RELEASE_RULES, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
+import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -4730,7 +4730,7 @@ export class SuperTabStore {
    *  one write: the tasks a verified release carries are marked released, and a due release step opens for the Integrator.
    *  It loads the project's pending tasks and open steps only, and writes nothing when nothing changed. Null when the Swarm or
    *  its project's list is gone. */
-  async settleReleases(tabId: string, projectId: string, facts: ReleaseFacts, rules: ReleaseRules = RELEASE_RULES): Promise<SettledReleases | null> {
+  async settleReleases(tabId: string, projectId: string, facts: ReleaseFacts, given?: ReleaseRules): Promise<SettledReleases | null> {
     const now = this.now()
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -4743,6 +4743,8 @@ export class SuperTabStore {
       const loaded = await loadRow(tx, requireParts(row), { groupIds })
       const state = cloneData(loaded.state)
       const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
+      // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.
+      const rules = given ?? (await currentRules(tx, tabId, projectId)).rules
       const outcome = settleReleases(state, projectId, facts, now, rules)
       if (!outcome.opened && !outcome.shipped.length && !outcome.messages.length
         && JSON.stringify(projectsOf(state).find(p => p.id === projectId)?.releases) === before) return outcome
