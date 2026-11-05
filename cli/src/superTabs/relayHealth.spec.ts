@@ -34,6 +34,27 @@ describe('asking the owner\'s relay whether it answers', () => {
     for (const status of [503, 529, 429, 500]) expect(await probeRelay(await relay(signedIn, status)), String(status)).toEqual({ ok: true })
   })
 
+  // Review 1 of #3098, second read: the relay answers its own 502 for anything that throws in it, such as an owner sign-in
+  // it refreshed and could not save back to the Keychain: every Team request then fails while the reading said ready.
+  it('reads the relay\'s own 502 as not answering, for both engines', async () => {
+    const throwing = { read: async () => { throw new Error('keychain write refused') }, refresh: async () => null }
+    expect(await probeRelay(await relay(throwing))).toEqual({ ok: false, reason: RELAY_REASONS.vendor })
+  })
+
+  it('reads at most a few kilobytes of an error body, however much a port\'s holder sends', async () => {
+    const endless = createServer((_req, res) => {
+      res.writeHead(500)
+      const chunk = 'x'.repeat(64 * 1024)
+      const pump = () => { while (res.write(chunk)) { /* fill */ } }
+      res.on('drain', pump); pump()
+    })
+    await new Promise<void>(resolve => endless.listen(0, '127.0.0.1', resolve))
+    onTestFinished(() => { endless.closeAllConnections(); endless.close() })
+    const started = Date.now()
+    expect(await probeRelay({ url: `http://127.0.0.1:${(endless.address() as AddressInfo).port}`, token: 'any-token-aaaaaaaaaaaaaaaa' })).toEqual({ ok: true })
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
   it('says Anthropic refused the owner\'s Claude sign-in, as Claude\'s alone, apart from the relay refusing this account', async () => {
     expect(await probeRelay(await relay(signedIn, 401))).toEqual({ ok: false, reason: RELAY_REASONS.claudeRefused, claudeOnly: true })
   })
