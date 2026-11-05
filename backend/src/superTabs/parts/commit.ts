@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
-import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
+import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { RELEASED_CAP } from './types.js'
 
@@ -179,26 +179,6 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
   const machines = ([before, after] as Array<GroupData | undefined>).flatMap(g => g
     ? [...g.agentIds.flatMap(id => machineOf.get(id) ?? []), ...(g.assignment ? [g.assignment.execution.machineId] : [])] : [])
   return { host: { hostMachineIds: [...new Set(machines)] } }
-}
-
-/**
- * Which host a part concerns from its data alone: every host of the Swarm for the head and its people (names, pause,
- * observers), the machine of an agent or a start, none for the other kinds, whose writes leave markers instead (hostMarker).
- * The one rule the host read wakes by (read/host.ts) and the push names hosts by (hostsToTell).
- */
-export function plainHost(kind: PartKind, data: unknown): 'all' | string | null {
-  switch (kind) {
-    case 'head': case 'member': return 'all'
-    case 'agent': {
-      const machineId = (data as { machineId?: unknown } | null)?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    case 'start': {
-      const machineId = (data as AgentStart | null)?.request?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    default: return null
-  }
 }
 
 /**

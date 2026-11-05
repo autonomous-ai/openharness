@@ -7,6 +7,7 @@
 import { z } from 'zod'
 import { INSTANCE_ID } from '../lib/instance.js'
 import { logger } from '../utils/logger.js'
+import type { HostStamp } from './cache.js'
 import { SWEEP_EVERY_MS } from './liveness.js'
 
 /** A record is read again only within this long of its Swarm's last full report. */
@@ -18,6 +19,8 @@ export const DEADLINE_CAP_MS = 300_000
 export interface ReportRecord {
   /** The Swarm's `main` stamp read before the full report loaded it. */
   stamp: number
+  /** This machine's host stamps read with it (cache.ts HostStamp); absent from a record of an older server. */
+  hosts?: { host: number; all: number }
   /** This machine's agents Lent counts for the next report (leaderboard/lent.ts lentAgents). */
   lentCount: number
   /** The same agents by the project of their task (lentProjects); absent from a record of an older server. */
@@ -36,6 +39,17 @@ export interface ReportRecord {
   at: number
 }
 
+/**
+ * Whether nothing a full report of this machine decides from changed since [record] (task #3119): the Swarm unchanged, or
+ * changed only where neither this machine's host nor every host is concerned, by servers that all move host stamps. A busy
+ * Swarm's `main` moves every few seconds, which sent every machine's every reading through the whole Swarm's load.
+ */
+export function recordHolds(record: ReportRecord, now: HostStamp): boolean {
+  if (now.main === record.stamp) return true
+  return !!record.hosts && now.hosted === now.main && now.uncovered <= record.stamp
+    && now.host === record.hosts.host && now.all === record.hosts.all
+}
+
 export interface ReportMemory {
   get(tabId: string, machineId: string): Promise<ReportRecord | undefined>
   set(tabId: string, machineId: string, record: ReportRecord): Promise<void>
@@ -51,7 +65,7 @@ export interface ReportRedis {
   set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<string | null>
 }
 
-const record = z.object({ stamp: z.number().finite(), lentCount: z.number().int().nonnegative(), lentProjects: z.record(z.string(), z.number().int().nonnegative()).optional(), removals: z.boolean(), deadline: z.number().finite(),
+const record = z.object({ stamp: z.number().finite(), hosts: z.object({ host: z.number().finite(), all: z.number().finite() }).optional(), lentCount: z.number().int().nonnegative(), lentProjects: z.record(z.string(), z.number().int().nonnegative()).optional(), removals: z.boolean(), deadline: z.number().finite(),
   team: z.boolean(), members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
 
 function parse(value: string | null): ReportRecord | undefined {

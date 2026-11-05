@@ -21,10 +21,22 @@ export interface Stamp { main: number; machine: number }
 /** `main`: any change of a Swarm's parts. `machine`: a change of a machine part's own reading only. */
 export type StampScope = keyof Stamp
 
+/**
+ * What one machine's reports skip the Swarm's load by (store.ts fastReading, task #3119): `host` moves with every change that
+ * concerns that machine's host (parts/write.ts writeHosts), `all` with every change that concerns all of them. A server of
+ * the release before moves `main` alone: `hosted` is the `main` the latest bump that knew host stamps left, and `uncovered`
+ * the `main` of the latest bump that did not, as the next one that knew found it.
+ */
+export interface HostStamp { main: number; hosted: number; uncovered: number; host: number; all: number }
+/** The host field that every host reads (writeHosts' `all`). */
+export const ALL_HOSTS = '*'
+
 /** Where every process reads and bumps the stamps: Redis in production (redisStamps). */
 export interface SwarmStamps {
   read(tabIds: readonly string[]): Promise<Map<string, Stamp>>
-  bump(tabId: string, scopes: readonly StampScope[]): Promise<void>
+  /** Moves [scopes], and the host stamps of [hosts] (machine ids, or ALL_HOSTS). */
+  bump(tabId: string, scopes: readonly StampScope[], hosts?: readonly string[]): Promise<void>
+  readHost(tabId: string, machineId: string): Promise<HostStamp>
   /** Called back when any process bumps a Swarm, so this one frees what it holds of it early. */
   subscribe(listener: (tabId: string, scopes: readonly StampScope[]) => void): () => void
 }
@@ -403,14 +415,20 @@ const stampKey = (tabId: string) => `swarm:stamp:${tabId}`
 const BUMP = `local t = redis.call('time')
 local now = tonumber(t[1]) * 1000000 + tonumber(t[2])
 if redis.call('exists', KEYS[1]) == 0 then
-  redis.call('hset', KEYS[1], 'main', string.format('%.0f', now - 1), 'machine', string.format('%.0f', now - 1))
+  local first = string.format('%.0f', now - 1)
+  redis.call('hset', KEYS[1], 'main', first, 'machine', first, 'hosted', first)
 end
+local main = redis.call('hget', KEYS[1], 'main')
+if main ~= redis.call('hget', KEYS[1], 'hosted') then redis.call('hset', KEYS[1], 'uncovered', main) end
 for i = 2, #ARGV do
   local next = tonumber(redis.call('hget', KEYS[1], ARGV[i]) or 0) + 1
   redis.call('hset', KEYS[1], ARGV[i], string.format('%.0f', math.max(next, now)))
 end
+redis.call('hset', KEYS[1], 'hosted', redis.call('hget', KEYS[1], 'main'))
 redis.call('pexpire', KEYS[1], ARGV[1])
 return 1`
+/** A host's field in its Swarm's stamp hash. */
+const hostField = (machineId: string) => `host:${machineId}`
 
 /** What redisStamps needs of an ioredis connection that is not in subscribe mode (lib/bus.ts `pub`). */
 export interface StampRedis {
@@ -439,9 +457,14 @@ export function redisStamps(redis: StampRedis, bus: StampBus): SwarmStamps {
         return [id, stampOf(fields as Array<string | null>)]
       }))
     },
-    async bump(tabId, scopes) {
-      await redis.eval(BUMP, 1, stampKey(tabId), STAMP_TTL_MS, ...scopes)
+    async bump(tabId, scopes, hosts = []) {
+      await redis.eval(BUMP, 1, stampKey(tabId), STAMP_TTL_MS, ...scopes, ...hosts.map(hostField))
       await bus.publish(tabId, scopes)
+    },
+    async readHost(tabId, machineId) {
+      const [main, hosted, uncovered, host, all] = (await redis.hmget(stampKey(tabId), 'main', 'hosted', 'uncovered', hostField(machineId),
+        hostField(ALL_HOSTS))).map(field => Number(field ?? 0))
+      return { main: main!, hosted: hosted!, uncovered: uncovered!, host: host!, all: all! }
     },
     subscribe: listener => bus.subscribe(listener),
   }
@@ -463,14 +486,14 @@ export function configureSwarmStamps(next: SwarmStamps | null, options: CacheOpt
 }
 export const swarmReadCache = (): SwarmCache | null => readCache
 
-/** These Swarms' stamps now, or null without stamps, when they fail, or past STAMP_TIMEOUT_MS: a reading-only machine
- *  report then runs in full (machineReports.ts). */
-export async function readStamps(tabIds: readonly string[]): Promise<Map<string, Stamp> | null> {
+/** One machine's host stamps of a Swarm now, or null without stamps, when they fail, or past STAMP_TIMEOUT_MS: its
+ *  reading-only report then runs in full (machineReports.ts). */
+export async function readHostStamp(tabId: string, machineId: string): Promise<HostStamp | null> {
   if (!stamps) return null
   let timer: NodeJS.Timeout | undefined
   const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), STAMP_TIMEOUT_MS) })
   try {
-    return await Promise.race([stamps.read(tabIds), late])
+    return await Promise.race([stamps.readHost(tabId, machineId), late])
   } catch {
     return null
   } finally {
@@ -481,17 +504,22 @@ export async function readStamps(tabIds: readonly string[]): Promise<Map<string,
 /** Whether this process committed a change of the Swarm whose bump Redis has not taken yet: its stamps say nothing new. */
 export const stampOwed = (tabId: string): boolean => owed.has(tabId) || settling.has(tabId)
 
-/** The Swarms a transaction changed, by stamp scope: bumped once it commits (`swarmTransaction`). */
-type Changes = Map<string, Set<StampScope>>
+/** The Swarms a transaction changed, by stamp scope and host: bumped once it commits (`swarmTransaction`). */
+type Changes = Map<string, { scopes: Set<StampScope>; hosts: Set<string> }>
 const changesOf = new WeakMap<object, Changes>()
 
-/** A part write in this transaction changed this Swarm (parts/write.ts). */
-export function noteChange(tx: object, tabId: string, scope: StampScope): void {
+/** A part write in this transaction changed this Swarm, and concerned these hosts (parts/write.ts writeHosts). A change of
+ *  the Swarm that names none concerns every host: a rollback, a Swarm's parts inserted. */
+export function noteChange(tx: object, tabId: string, scope: StampScope, hosts: readonly string[] = scope === 'main' ? [ALL_HOSTS] : []): void {
   const changes = changesOf.get(tx)
-  if (!changes) return
-  const scopes = changes.get(tabId) ?? new Set<StampScope>()
-  scopes.add(scope)
-  changes.set(tabId, scopes)
+  if (changes) owe(changes, tabId, [scope], hosts)
+}
+
+function owe(changes: Changes, tabId: string, scopes: Iterable<StampScope>, hosts: Iterable<string>): void {
+  const change = changes.get(tabId) ?? { scopes: new Set<StampScope>(), hosts: new Set<string>() }
+  for (const scope of scopes) change.scopes.add(scope)
+  for (const host of hosts) change.hosts.add(host)
+  changes.set(tabId, change)
 }
 
 /**
@@ -517,13 +545,11 @@ export const OWED_RETRY_MS = 1_000
 async function announce(changes: Changes): Promise<void> {
   if (!stamps || !changes.size) return
   const current = stamps
-  await Promise.all([...changes].map(async ([tabId, scopes]) => {
-    try { await current.bump(tabId, [...scopes]) } catch (error) {
+  await Promise.all([...changes].map(async ([tabId, { scopes, hosts }]) => {
+    try { await current.bump(tabId, [...scopes], [...hosts]) } catch (error) {
       readCache?.drop(tabId)
       if (!owed.size) logger.error('[swarm-cache] stamp bump failed after commit; retrying every second', error, { tabId })
-      const due = owed.get(tabId) ?? new Set<StampScope>()
-      for (const scope of scopes) due.add(scope)
-      owed.set(tabId, due)
+      owe(owed, tabId, scopes, hosts)
       paying ??= setTimeout(payOwed, OWED_RETRY_MS)
       paying.unref?.()
     }
