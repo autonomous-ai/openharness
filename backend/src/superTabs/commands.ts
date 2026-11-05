@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitByRoom, admitMachineStart, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
@@ -2531,6 +2531,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const startGroup = conversation(state, command.request.conversationId)
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
+      // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
+      // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
+      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || context.pushOrigin === 'unknown')
+      if (ownEntry) failOwnAccountTeamEntry(ownEntry)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
       if (moved.machineId !== named.machineId) {
