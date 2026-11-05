@@ -682,9 +682,9 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
 
-  // Any agent of the project tells a person now (project instructions, phase 4): its quiet Buddy chat is loaded for that
-  // agent's line too, not only the coordinator's (final review of the branch).
-  it('takes any agent\'s line in a quiet chat rather than opening a second one', async () => {
+  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need, and the
+  // PM's next line still lands in the quiet chat rather than opening a second one.
+  it('takes the PM\'s line in a quiet chat rather than opening a second one, and gives the PM another agent\'s', async () => {
     const f = await swarm()
     const engineer = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Engineer',
       configuration: config, lead: false })).result.agentId)
@@ -694,8 +694,12 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     const [chat] = await chats()
     await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
     await f.execute(tell('From the Engineer.'), owner, engineer)
+    const needs = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'crew-need')
+    expect(needs).toEqual([expect.objectContaining({ recipientIds: [f.lead], source: expect.objectContaining({ crewNeed: expect.objectContaining({ agentId: engineer, personIds: [peer.sub] }) }) })])
+    await f.execute(tell('Again.'), owner, f.lead)
     expect(await chats()).toEqual([chat])
-    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'From the Engineer.'])
+    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Again.'])
   })
 })
 

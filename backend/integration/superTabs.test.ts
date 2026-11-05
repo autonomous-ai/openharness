@@ -4634,10 +4634,12 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
   })
 
+  // In a project with no PM a worker asks a person itself, as before (crewNeeds.ts, task #3404).
   it('credits a worker\'s question asked again after it moved on once, when its decision is answered', async () => {
     const { tab } = await fixture()
     await invite(tab)
-    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const quiet = (await run(tab, { type: 'project.create', name: 'Quiet', visibility: 'public', brief: '' })).result.projectId as string
+    const group = (await run(tab, { type: 'conversation.create', projectId: quiet, title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string

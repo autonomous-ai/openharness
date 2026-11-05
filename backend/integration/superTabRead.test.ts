@@ -107,6 +107,12 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   if (!report.ok) throw new Error(report.error)
   return { tabId, lead, worker, web, done, secretGroup, privateId, buddyId, secret, leads: state.leadsConversationId!, more }
 }
+/** [scene]'s project with its PM gone from the project chat: with no PM, a worker asks a person itself, as before (crewNeeds.ts,
+ *  task #3404). */
+const withoutPm = (s: ReturnType<typeof swarm>) => s.edit(state => {
+  const chat = state.conversations.find(c => c.id === 'lead')!
+  chat.agentIds = chat.agentIds.filter(id => id !== chat.leadId)
+})
 const get = async (url: string, as: AuthUser = owner) => {
   const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as.sub}` } })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } } }
@@ -816,7 +822,7 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('takes the person\'s one-tap answer once, and the answer reaches the asking worker and the Lead', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
     const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
@@ -914,7 +920,7 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('takes an answer in a conversation that went quiet with its task still waiting, counts it on a fresh first load, and tells both agents', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
     await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
@@ -1249,7 +1255,7 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('at the cap, a worker\'s needs-human update still records its status, tells the Lead and renews its lease, asking nothing new', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignment = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment
     const assignmentId = (await assignment()).id as string
@@ -1292,7 +1298,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(left.map(d => d.id)).toEqual(expect.arrayContaining(['recent', 'waiting']))
   })
 
-  it('keeps a decision of its own for another asker, another task, or other options with the same question text', async () => {
+  it('keeps a decision of its own for other options with the same question text, and a worker\'s goes to the PM', async () => {
     const s = await scene()
     clock = Date.now()
     const [lead] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead))
@@ -1303,11 +1309,12 @@ describe('decisions asked of one person (v2)', () => {
     expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)).status).toBe(200)
     const open = await decisions(s.tabId, peer)
-    expect(open).toHaveLength(3)
-    expect(new Set([lead, other, ...open.map(d => d.id)]).size).toBe(3)
-    // The worker reads its own question, and its answer reaches it.
-    const [mine] = await decisions(s.tabId, owner, 'open', s.worker)
-    expect(mine).toMatchObject({ askerAgentId: s.worker, assignmentId, options: ['Behind a flag', 'To everyone'] })
+    // The worker's same question is the PM's crew need (crewNeeds.ts, task #3404): it opens nothing for peer.
+    expect(open).toHaveLength(2)
+    expect(new Set([lead, other, ...open.map(d => d.id)]).size).toBe(2)
+    expect(await decisions(s.tabId, owner, 'open', s.worker)).toEqual([])
+    const status = await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } })
+    expect(status).toMatchObject({ recipientIds: [s.lead], source: { status: 'needs_human', crewNeed: { agentId: s.worker, personIds: [peer.sub] } } })
   })
 
   it('counts an open decision in a quiet conversation on a change read, which loads only some conversations', async () => {
