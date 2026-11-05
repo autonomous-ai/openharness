@@ -78,6 +78,41 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value)
 }
 
+/**
+ * The review table's security areas (project instructions, Ken 2026-10-29: two independent reviews for sign-in, tokens,
+ * access, encryption, the Buddy guard, the device link and anything that deletes data). Each old term matches as a name or as
+ * a folder, as the merge train's own matcher did before it read this record (task #3475, review of #3250: it erred wide, and
+ * so does this). The seed starts from these rows, and requiredReads never asks fewer than two reads where they match, whatever
+ * a saved record says (River, 2026-11-06): a record can raise an area, never lower it.
+ */
+export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: string[] }> = deepFreeze([
+  { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/middlewares/**', '**/sessionScope*', 'backend/src/**/session*', '**/community/session*', '**/session-lock*', 'store/agents/**/guard.py'] },
+  { area: 'Tokens', reads: 2, paths: ['**/*token*', '**/*token*/**', '**/*credential*', '**/*credential*/**', '**/*secret*', '**/*secret*/**', '**/*keychain*', 'backend/src/github/**', 'cli/src/team/handoff*'] },
+  { area: 'Encryption', reads: 2, paths: ['**/*crypt*', '**/*crypt*/**', '**/*cipher*', '**/*cipher*/**', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*', '**/*tlsguard*', 'backend/src/**/*key', 'backend/src/**/*key.*', 'backend/src/**/*key/**', 'backend/src/**/*key-*', 'backend/src/**/*keys', 'backend/src/**/*keys.*', 'backend/src/**/*keys/**', 'backend/src/**/*keys-*', 'cli/src/**/*key', 'cli/src/**/*key.*', 'cli/src/**/*key/**', 'cli/src/**/*key-*', 'cli/src/**/*keys', 'cli/src/**/*keys.*', 'cli/src/**/*keys/**', 'cli/src/**/*keys-*'] },
+  { area: 'Access', reads: 2, paths: ['**/*access*', '**/*access*/**', '**/*permission*', '**/*permission*/**', '**/*audience*', '**/*audience*/**', '**/*membership*', '**/*membership*/**', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
+  { area: 'Buddy guard', reads: 2, paths: ['**/*buddy*guard*', '**/*ruleguard*', '**/*rule_guard*', '**/*devicesguard*', '**/*devices_guard*', '**/*leadguard*', '**/*lead_guard*', 'backend/src/superTabs/*guard*', 'companions/src/shared/guard.ts'] },
+  { area: 'Device links', reads: 2, paths: ['**/*device*', 'cli/src/device/**', 'cli/src/devices/**', 'cli/src/lib/*device*/**', '**/add_device/**', '**/*wifi_robot*', 'devices/**/*cable*', 'devices/**/*pair*', 'devices/**/*link*', 'devices/**/*key*', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
+  { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*', '**/account_keys*'] },
+])
+/** The fewest reads a change to a security area gets, whatever a saved record says. */
+export const SECURITY_FLOOR_READS = 2
+/** What runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs, samples and build output.
+ *  The built-in security patterns never catch it (River, SecAlder and ReviewLinnea, review of #3250); a path a person writes
+ *  into a security row of their record still does, as written. */
+const NOT_CODE = /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i
+/** Names a security term catches by accident, per area: accessibility is not access control. */
+const NOT_AREA: Readonly<Record<string, RegExp>> = { access: /accessib/i }
+/** The built-in patterns of each security area, by its name in lower case. */
+const BUILT_IN = new Map(SECURITY_ROWS.map(row => [row.area.toLowerCase(), new Set(row.paths)]))
+/** Whether [glob] of a security area's row catches [file]: a built-in pattern catches code only, not a known false name; a
+ *  pattern a person added to the row in their record catches exactly what it says (SecAlder, re-review of #3250). */
+function securityGlob(area: string, glob: string, file: string): boolean {
+  if (!globMatch(glob, file)) return false
+  if (!BUILT_IN.get(area.toLowerCase())?.has(glob)) return true
+  return !NOT_CODE.test(file) && !NOT_AREA[area.toLowerCase()]?.test(file)
+}
+const inSecurityArea = (row: { area: string; paths: readonly string[] }, file: string) => row.paths.some(glob => securityGlob(row.area, glob, file))
+
 /** Today's numbers (task #3393; project instructions, 2026-11-05): what a project reads until its first save. */
 export const SEED_RULES: ProjectRules = deepFreeze({
   releaseWindow: { start: '09:00', end: '18:00', timeZone: 'Asia/Ho_Chi_Minh' },
@@ -86,15 +121,7 @@ export const SEED_RULES: ProjectRules = deepFreeze({
   // (project instructions, Ken 2026-10-29), a test where the change runs (Workflow 2).
   reviews: {
     defaultReads: 1,
-    rows: [
-      { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/middlewares/**'] },
-      { area: 'Tokens', reads: 2, paths: ['**/*token*', '**/*credential*', '**/*secret*', '**/*keychain*', 'backend/src/github/**'] },
-      { area: 'Encryption', reads: 2, paths: ['**/*crypto*', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*'] },
-      { area: 'Access', reads: 2, paths: ['**/*access*', '**/*permission*', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
-      { area: 'Buddy guard', reads: 2, paths: ['**/*buddyguard*', '**/*buddy_guard*'] },
-      { area: 'Device links', reads: 2, paths: ['**/*devicelink*', '**/*device_link*', '**/*deviceauth*', '**/*pairing*'] },
-      { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*purge*', '**/*cleanup*', '**/*tombstone*', '**/*wipe*'] },
-    ],
+    rows: SECURITY_ROWS.map(row => ({ ...row, paths: [...row.paths] })),
     test: [
       { where: 'Desktop on a Mac', paths: ['desktop/**'] },
       { where: 'The CLI on a Mac and on a Linux machine', paths: ['cli/**', 'pty/**', 'term/**', 'tui/**', 'daemons/**'] },
@@ -232,7 +259,15 @@ export function touchedRows(rules: ProjectRules, files: readonly string[] | null
 /** The independent reads a change to [files] needs: the most any touched row asks, at least the default. Files that could
  *  not be read (null) need the most any row asks (the merge train and the review steps fail closed, #3401, #3402). */
 export function requiredReads(rules: ProjectRules, files: readonly string[] | null): number {
-  return Math.max(rules.reviews.defaultReads, ...touchedRows(rules, files).map(row => row.reads))
+  // The floor (River, 2026-11-06): a security area's two reads hold whatever the record's own rows say, and unknown files
+  // touch every area.
+  const security = files === null || files.some(file => SECURITY_ROWS.some(row => inSecurityArea(row, file)))
+  // A security area's own row in the record reads files the same way, so a doc or an image named after a device asks no
+  // second read; any other row reads every file.
+  const areas = new Set(SECURITY_ROWS.map(row => row.area.toLowerCase()))
+  const rows = files === null ? touchedRows(rules, null) : rules.reviews.rows.filter(row => areas.has(row.area.toLowerCase())
+    ? files.some(file => inSecurityArea(row, file)) : files.some(file => row.paths.some(glob => globMatch(glob, file))))
+  return Math.max(rules.reviews.defaultReads, ...rows.map(row => row.reads), security ? SECURITY_FLOOR_READS : 0)
 }
 
 /** Where a change to [files] runs, for its test, in the table's order: none for tests, fixtures and docs alone, and none when

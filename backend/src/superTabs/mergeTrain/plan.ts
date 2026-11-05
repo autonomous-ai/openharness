@@ -4,7 +4,7 @@
  * be taken back, and one that waits a pass costs ten minutes.
  */
 import type { Check, CheckVerdict, Conversation } from '../model.js'
-import { FAST_LANE, REVIEW_AREAS, SECURITY_READS, TRAIN_HOLD_LABELS } from './config.js'
+import { FAST_LANE, TRAIN_HOLD_LABELS } from './config.js'
 
 /** A pull request as the train reads it from GitHub this pass. */
 export interface TrainCandidate {
@@ -81,21 +81,6 @@ export function headReads(task: TrainTask, url: string, head: string): number | 
     }
   }
   return reviewed ? readers.size : null
-}
-
-/** The review table's part the train reads (task #3393 rules.reviews). */
-export interface ReviewTable { defaultReads: number; rows: Array<{ area: string; reads: number }> }
-
-/** The reads [files] need: the most any area they touch asks, never fewer than the default. Without a table, each security
- *  area needs [SECURITY_READS]. */
-export function requiredReads(files: readonly string[], reviews?: ReviewTable): number {
-  let reads = reviews?.defaultReads ?? 1
-  for (const { area, paths } of REVIEW_AREAS) {
-    if (!files.some(file => paths.test(file))) continue
-    const row = reviews?.rows.find(r => r.area.toLowerCase() === area.toLowerCase())
-    reads = Math.max(reads, reviews ? row?.reads ?? reviews.defaultReads : SECURITY_READS)
-  }
-  return reads
 }
 
 export type Ineligible = 'closed' | 'draft' | 'base' | 'hold' | 'ci' | 'mergeable' | 'conflict' | 'verdict' | 'reads'
