@@ -222,7 +222,9 @@ jobs:
           version: ${{ steps.toolchain.outputs.version }}
       - name: Every Desktop shard keeps a quarter of its time limit (task #3458)
         if: matrix.shard == 1
-        run: python3 -m unittest discover -s scripts/tests -p test_desktop_tests.py -k test_ci_split_leaves_every_shard -v
+        # Named in full: a renamed test then fails here instead of matching nothing and passing (review of #3241).
+        working-directory: scripts/tests
+        run: python3 -m unittest -v test_desktop_tests.DurationSplitTests.test_ci_split_leaves_every_shard_a_quarter_of_its_time_limit
       - name: Run bounded Desktop VM shard
         env:
           DESKTOP_SHARD: ${{ matrix.shard }}
