@@ -238,6 +238,20 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
     claude.lead('owner-mac')
     expect(requestOf(claude)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
   })
+  // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever starts it.
+  it('refuses an effort below high, and changes nothing', () => {
+    for (const effort of ['medium', 'low', 'minimal', 'Medium']) {
+      const f = swarm()
+      expect(refusal(() => f.lead('owner-mac', { effort }))?.code).toBe('EFFORT_TOO_LOW')
+      expect(f.state.starts ?? []).toEqual([])
+      expect(f.project().lead).toBeUndefined()
+    }
+    for (const effort of ['high', 'xhigh', 'max']) {
+      const f = swarm()
+      f.lead('owner-mac', { effort })
+      expect(requestOf(f)).toMatchObject({ effort })
+    }
+  })
   it('never takes another project\'s role default', () => {
     const f = swarm()
     const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: 'Other work.' }).result.projectId as string
