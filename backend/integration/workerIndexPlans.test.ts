@@ -310,7 +310,9 @@ describe('the merge train\'s candidates', () => {
     const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+    // One index range per mark, merged newest first: each reads up to the limit, and the step is filtered after. Never the
+    // archived or month-old rows, whatever other tests in this database left.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2 * 2 + 1)
   })
 })
 
