@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
@@ -17,6 +19,7 @@ const user = (sub: string, email: string): AuthUser => ({ sub, email, autonomous
 const owner = user('500000000000000000000009', 'owner@example.com'), kelvinUser = user(kelvin, 'kelvin@example.com'), ttUser = user(tt, 'ttkhoahcmus@example.com')
 let replica: MongoMemoryReplSet
 let db: PrismaClient
+let uri: string
 let store: SuperTabStore
 /** Each machine's key in its account's device key log (lib/deviceKeyLog.ts): one key per computer, whatever account it signs
  *  in to, so a computer's machines of two accounts hold the same one (e2ee/store.ts identity.json). */
@@ -26,7 +29,7 @@ const keys: Array<{ userId: string; machineId: string; pub: string }> = [
 ]
 
 beforeAll(async () => {
-  ({ replica, db } = await planDatabase('computer_moves'))
+  ({ replica, db, uri } = await planDatabase('computer_moves'))
   const machine = (machineId: string, userId: string, computerId: string, extra: Record<string, unknown> = {}) => db.machine.create({ data: {
     machineId, userId, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '', autonomousEnv: 'prod', authMode: 'remote', ...extra } })
   await machine('kelvin-mac', kelvin, COMPUTER)
@@ -227,6 +230,22 @@ describe('the cleanup\'s dry run and its write', () => {
     expect(mine((await cleanUpComputers(db, store, 'prod', { write: true })).moves, tab)).toEqual([moved])
     expect(await machinesIn(tab)).toEqual([`${to}:${tt}`])
   })
+})
+
+// Task #3227: on prod the script printed its JSON and never exited, and its env check refused to start without billing's
+// credential key. Run as Ken runs it, with only the database's URL, and Redis nowhere to be reached.
+describe('the cleanup script', () => {
+  it('runs without billing\'s environment and exits once it has printed', async () => {
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL: uri, REDIS_URL: 'redis://127.0.0.1:1' }
+    const started = Date.now()
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile(join(process.cwd(), 'node_modules/.bin/tsx'), ['scripts/swarm-computer-moves/run.ts'], { env, timeout: 60_000 },
+        (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout }))
+    })
+    const printed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { write: boolean; env: string; moves: unknown[]; left: unknown[] }
+    expect(printed).toMatchObject({ write: false, env: 'prod', moves: expect.any(Array), left: expect.any(Array) })
+    expect(Date.now() - started).toBeLessThan(60_000)
+  }, 90_000)
 })
 
 describe("a Mac whose owner's Team account is about to join", () => {
