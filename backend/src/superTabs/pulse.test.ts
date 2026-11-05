@@ -12,6 +12,8 @@ import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
+/** What a task an agent opens must say (commands.ts): at least one check, with a priority and who asked. */
+const DONE_WHEN = [{ description: 'It works', independent: false }]
 
 function setup() {
   const f = stepsFixture()
@@ -29,7 +31,7 @@ function setup() {
   const react = (by: string, on: string, messageId: string, emoji: string) => f.run({ type: 'message.react', conversationId: on, messageId, emoji, on: true } as Command,
     f.as(by), { reaction: { messageId, reacted: false } })
   const request = (id: string) => ({ id, conversationId: 'lead', replyTo: null, source: null, author: person })
-  const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: [], requestMessageId: ask } as Command,
+  const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: DONE_WHEN, priority: 'P2', requestMessageId: ask } as Command,
     f.as(f.lead), { request: request(ask) } as Partial<CommandContext>)
   return { f, post, owed, react, taskFrom, person, request }
 }
@@ -153,7 +155,7 @@ describe('the pulse', () => {
   const stored = (f: ReturnType<typeof stepsFixture>) => storedPulse(f.state, projectsOf(f.state)[0]!)!
   /** A task the PM opens, unassigned (Next up). */
   const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
-    const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: [] } as Command, f.as(f.lead)).result.conversationId as string
+    const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: DONE_WHEN, priority: 'P2', requesterId: 'owner' } as Command, f.as(f.lead)).result.conversationId as string
     if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore } as Command, f.as(f.lead))
     return id
   }

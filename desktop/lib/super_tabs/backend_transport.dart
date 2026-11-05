@@ -21,12 +21,14 @@ final _swarmRoute = RegExp(
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   '|activity|activity/read|threads|inbox|proposals'
   '|reminders'
+  // New Project's New Repository asks whether an organization can (#3374).
+  '|github/owners/$_id'
   // A voice message's clip, read once before it is sent (#2887; the mic, #2665).
   '|attachments/$_id/voice'
   '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id|messages/$_id/reminder)'
-  '|projects/$_id/(?:github|github/approve'
+  '|projects/$_id/(?:github|github/approve|github/repository'
   '|instructions(?:/revisions(?:/[0-9]+)?)?)'
   '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
