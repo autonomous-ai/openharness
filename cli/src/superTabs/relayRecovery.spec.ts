@@ -70,7 +70,7 @@ describe('a Team agent whose model keeps failing on its owner\'s relay', () => {
     expect(t.deps.restart).not.toHaveBeenCalled()
     // Asked again on a later read, once the relay may answer.
     t.wait(15_000)
-    t.deps.answers.mockResolvedValue(true)
+    vi.mocked(t.deps.answers).mockResolvedValue(true)
     await t.recovery.seen('h1', 'claude', t.failingFor(RECOVER_AFTER_MS + 15_000))
     expect(t.deps.restart).toHaveBeenCalledOnce()
   })
@@ -104,7 +104,7 @@ describe('a Team agent whose model keeps failing on its owner\'s relay', () => {
     await t.recovery.seen('h1', 'claude', t.failingFor(RECOVER_AFTER_MS + 15_000))
     expect(t.deps.restart).toHaveBeenCalledOnce()
     expect(t.deps.input).not.toHaveBeenCalled()
-    const logged = t.deps.log.mock.calls.map(c => String(c[0])).join('\n')
+    const logged = vi.mocked(t.deps.log).mock.calls.map(c => String(c[0])).join('\n')
     expect(logged).toContain('RESTART_FAILED')
     expect(logged).not.toContain(NEW.token)
   })
