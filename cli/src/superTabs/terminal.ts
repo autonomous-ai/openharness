@@ -206,6 +206,8 @@ export class TerminalHost {
   private readonly alertRetries = new CommandRetries(() => this.now())
   /** Per running harness here, its last screen's digest and when that last changed. */
   private readonly progress = new Map<string, { digest: string; at: number }>()
+  /** When each harness's whole screen, status lines too, last changed: one still while its engine works is frozen (crew.ts). */
+  private readonly still = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
   private readonly log: (message: string) => void
   /** Whether the server is known to push now (the host's delivery push lease). */
@@ -225,7 +227,7 @@ export class TerminalHost {
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
     const here = this.here = this.agentsHere(rows)
-    if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
+    if (!here.length) { this.watched.clear(); this.progress.clear(); this.still.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
     if (!this.serving && !this.pushes() && now - this.servedAt >= SERVE_EVERY_MS) this.startServing()
@@ -255,6 +257,12 @@ export class TerminalHost {
 
   /** When each of these harnesses' screens last changed, epoch ms, for those running here that the watch has read. An
    *  agent's first read counts as a change: the host cannot know what its screen showed before. */
+  /** When [harnessId]'s whole screen last changed, status lines included, from the reads the watch already makes; undefined
+   *  for one it has not read. A working engine redraws its timer, so a screen that stays the same while it works is frozen. */
+  stillSince(harnessId: string): number | undefined {
+    return this.still.get(harnessId)?.at
+  }
+
   progressOf(harnessIds: readonly string[]): Record<string, number> {
     return Object.fromEntries(harnessIds.flatMap(id => {
       const seen = this.progress.get(id)
@@ -322,6 +330,7 @@ export class TerminalHost {
     this.alertRetries.keepIf(key => agents.has(key.split('-')[2] ?? ''))
     const harnesses = new Set(own.map(a => a.harnessId))
     for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
+    for (const id of this.still.keys()) if (!harnesses.has(id)) this.still.delete(id)
     this.relay?.keep(harnesses)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
@@ -336,6 +345,8 @@ export class TerminalHost {
       const failing = unanswered(read.text)
       // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
       if (!seen || (seen.digest !== digest && !failing)) this.progress.set(agent.harnessId, { digest, at: now })
+      const whole = createHash('sha256').update(read.text).digest('base64url')
+      if (this.still.get(agent.harnessId)?.digest !== whole) this.still.set(agent.harnessId, { digest: whole, at: now })
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
