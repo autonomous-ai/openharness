@@ -3495,7 +3495,7 @@ describe('adding this Mac\'s Harness Team account where this Mac was added', () 
       await host.tick()
       if (prepareTeam.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
     }
-    return { core, rows, commands, refusals, prepareTeam, prepare, log, pass }
+    return { core, host, rows, commands, refusals, prepareTeam, prepare, log, pass }
   }
 
   it('adds it once, prepared by its own daemon, with this Mac\'s name and slots', async () => {
@@ -3510,17 +3510,31 @@ describe('adding this Mac\'s Harness Team account where this Mac was added', () 
     expect(t.prepareTeam).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['MACHINES_FULL', 'MACHINE_LIMIT_PER_PERSON', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
+  // Amon, 11-05 (#3215): after Repair his Mac read "joining" for good. A refusal stopped the join until the daemon restarted,
+  // and nothing on the row said why. Each is retried with the usual backoff: the roster stops asking when it no longer
+  // applies (backend hostRows.ts joinTeam, within the machine's room).
+  it.each(['MACHINES_FULL', 'MACHINE_LIMIT_PER_PERSON', 'OWNER_REQUIRED'])('retries after %s with the usual backoff, and says why', async code => {
     const t = joining()
     t.refusals.push(code)
     await t.pass(0)
-    await t.pass(24 * 60 * 60_000)
+    expect(t.host.teamJoinFailure()).toBe(`Refused: ${code}`)
+    await t.pass(59_000)
     expect(t.prepareTeam).toHaveBeenCalledTimes(1)
-    const row = t.rows.splice(0, 1)
-    await t.pass(24 * 60 * 60_000 + 1)
-    t.rows.unshift(...row)
-    await t.pass(24 * 60 * 60_000 + 2)
+    await t.pass(60_000)
     expect(t.prepareTeam).toHaveBeenCalledTimes(2)
+    expect(t.host.teamJoinFailure()).toBeNull()
+  })
+
+  it('tries again at once when its person asks (Retry on the row), not after the backoff', async () => {
+    const t = joining()
+    t.prepareTeam.mockRejectedValueOnce(new Error('That machine is not reachable now.'))
+    await t.pass(0)
+    expect(t.host.teamJoinFailure()).toBe('That machine is not reachable now.')
+    t.host.retryTeamJoins()
+    await t.pass(1_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
+    expect(t.commands).toHaveLength(1)
+    expect(t.host.teamJoinFailure()).toBeNull()
   })
 
   it('backs off while the team account cannot prepare (offline, signed out), and says why', async () => {

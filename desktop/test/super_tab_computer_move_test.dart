@@ -13,6 +13,9 @@ import 'swarm_state_test.dart' show createApp;
 class _TeamDaemon extends RenameConnection {
   Map<String, dynamic> status = {'ok': true, 'state': 'exists'};
   final setups = <Map<String, dynamic>>[];
+  String? joinFailure;
+  bool hostRunning = true;
+  int joinRetries = 0;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -22,6 +25,15 @@ class _TeamDaemon extends RenameConnection {
   }) {
     if (type == 'super_tabs' && payload['action'] == 'teamSetupStatus') {
       return Future.value(status);
+    }
+    if (type == 'super_tabs' && payload['action'] == 'teamJoinStatus') {
+      return Future.value({'ok': true, 'failure': joinFailure, 'hostRunning': hostRunning});
+    }
+    if (type == 'super_tabs' && payload['action'] == 'teamJoinRetry') {
+      joinRetries++;
+      joinFailure = null;
+      hostRunning = true;
+      return Future.value({'ok': true});
     }
     if (type == 'super_tabs' && payload['action'] == 'teamSetup') {
       setups.add(Map.of(payload));
@@ -199,6 +211,107 @@ void main() {
       findsNothing,
     );
     await _unmount(tester, c);
+    app.dispose();
+  });
+
+  // Amon, 11-05: the row's Repair looked out of place. Set up and Repair are the design system's own secondary action, a
+  // themed outlined button as drawn everywhere else, never a text button squeezed to the line's height.
+  testWidgets('Set up and Repair on the row are the standard secondary button', (tester) async {
+    final daemon = _TeamDaemon();
+    final app = createApp(connectionForTest: (_) => daemon, connected: true)
+      ..teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = true;
+    final c = await _mount(
+      tester,
+      _swarm(
+        _pool(
+          teamWork: {
+            'allowed': false,
+            'code': 'TEAM_ACCOUNT_REQUIRED',
+            'reason': 'Refused.',
+          },
+        ),
+      ),
+      app: app,
+    );
+    final button = tester.widget<ButtonStyleButton>(
+      find.byKey(const ValueKey('super-machine-team-setup-m')),
+    );
+    expect(button, isA<OutlinedButton>());
+    expect(button.style, isNull);
+    await _unmount(tester, c);
+    app.dispose();
+  });
+
+  // Amon, 11-05 (#3215): after Repair the row read "joining" for good while this Mac kept failing to add the Team account,
+  // and only the log said why. The row says why, and Retry tries again at once.
+  testWidgets('a Team account that cannot join says why on this Mac\'s row, with Retry', (
+    tester,
+  ) async {
+    final daemon = _TeamDaemon()
+      ..joinFailure = 'The Harness Team account is not reachable now.';
+    final app = createApp(connectionForTest: (_) => daemon, connected: true)
+      ..teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = true;
+    final c = await _mount(
+      tester,
+      _swarm(
+        _pool(
+          teamWork: {
+            'allowed': false,
+            'code': 'TEAM_ACCOUNT_JOINING',
+            'reason': 'Joining.',
+          },
+        ),
+      ),
+      app: app,
+    );
+    expect(
+      _text(tester, 'super-machine-problem-m'),
+      "Teammates' agents paused: Harness Team could not join: The Harness Team account is not reachable now",
+    );
+    final retry = find.byKey(const ValueKey('super-machine-team-setup-m'));
+    expect(find.descendant(of: retry, matching: find.text('Retry')), findsOneWidget);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(daemon.joinRetries, 1);
+    // Retried and no longer failing: back to joining, with no button.
+    expect(
+      _text(tester, 'super-machine-problem-m'),
+      "Teammates' agents paused: Harness Team is joining",
+    );
+    expect(retry, findsNothing);
+    await _unmount(tester, c);
+
+    // A Mac whose Swarm work never started (it was moved into the Swarm, #3215) says so, and Retry starts it.
+    daemon
+      ..hostRunning = false
+      ..joinRetries = 0;
+    final idle = await _mount(
+      tester,
+      _swarm(
+        _pool(
+          teamWork: {
+            'allowed': false,
+            'code': 'TEAM_ACCOUNT_JOINING',
+            'reason': 'Joining.',
+          },
+        ),
+      ),
+      app: app,
+    );
+    expect(
+      _text(tester, 'super-machine-problem-m'),
+      "Teammates' agents paused: Harness Team could not join: this computer is not adding it",
+    );
+    await tester.tap(find.byKey(const ValueKey('super-machine-team-setup-m')));
+    await tester.pumpAndSettle();
+    expect(daemon.joinRetries, 1);
+    expect(
+      _text(tester, 'super-machine-problem-m'),
+      "Teammates' agents paused: Harness Team is joining",
+    );
+    await _unmount(tester, idle);
     app.dispose();
   });
 
