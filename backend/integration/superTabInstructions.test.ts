@@ -132,6 +132,45 @@ describe('project instructions storage', () => {
   })
 })
 
+// Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store,
+// which tells them in their Buddy chats.
+describe('a person\'s rules in a save', () => {
+  it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
+    const { tab, lead } = await withLead()
+    await invite(tab)
+    const rule = 'A bug that reaches stable is promoted back within the hour (peer, 2026-11-04).'
+    expect((await run(tab, save(1, `# Rules\n\n- ${rule}\n- Tests run first (owner, 4 Nov).`), peer)).result.revision).toBe(2)
+    const asLead = (approvals?: string[]) => store.execute(host, tab, { operationId: randomUUID(), command: { ...save(2, '# Rules\n\n- Tests run first (owner, 4 Nov).',
+      'Dropped the promote-back'), askedBy: owner.sub, ...(approvals ? { approvals } : {}) } }, lead)
+    await expect(asLead()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule, people: ['peer'], why: 'removed' }] } })
+    // The owner's message is not the peer's approval.
+    const ownerSaid = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Drop it.', replyTo: null, recipientIds: [] })).result.messageId as string
+    await expect(asLead([ownerSaid])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const peerSaid = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Yes, drop my promote-back rule.', replyTo: null, recipientIds: [] }, peer))
+      .result.messageId as string
+    expect((await asLead([peerSaid])).result.revision).toBe(3)
+    // The History keeps what the save dropped, with its kind and who gave it (River, 11-05).
+    expect((await store.instructionRevision(owner, tab, 'lead', 3)).dropped).toEqual([{ text: rule, kind: 'rule', people: ['peer'] }])
+    // Revision 2 replaced the template: every template line it dropped is listed. One stored before the list was kept reads none.
+    expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped.length).toBeGreaterThan(10)
+    await db.superTabInstructionsRevision.updateMany({ where: { tabId: tab, projectId: 'lead', revision: 2 }, data: { dropped: null } })
+    expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped).toEqual([])
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'as you approved' } } })
+    expect(notices.length).toBe(2)
+    for (const notice of notices) {
+      expect(notice.conversationId).not.toBe('lead')
+      expect(notice.text).toContain('A bug that reaches stable')
+      expect(notice.recipientIds).toEqual([])
+    }
+    // Only the peer reads them.
+    const chats = new Set(notices.map(n => n.conversationId))
+    for (const chat of chats) {
+      expect((await store.messages(peer, tab, chat, {})).messages.some(m => m.text.includes('as you approved'))).toBe(true)
+      await expect(store.messages(owner, tab, chat, {})).rejects.toBeTruthy()
+    }
+  })
+})
+
 describe('PM notes storage', () => {
   it('keeps the coordinator\'s notes beside the project, deletes an expired one on the next write, and tells it of a removal', async () => {
     const { tab, lead } = await withLead()

@@ -1692,7 +1692,9 @@ model SuperTabInstructions {
 
 // Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
 // that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
-// member whose words it carries. id = stableId(tabId, projectId, revision).
+// member whose words it carries. `dropped`: the lines that save dropped, each with its kind and who gave it, for the History
+// (superTabs/ruleGuard.ts droppedLines): at most 500 of 400 characters, removed with its revision. id = stableId(tabId,
+// projectId, revision).
 model SuperTabInstructionsRevision {
   id            String   @id @map("_id")
   tabId         String
@@ -1705,6 +1707,7 @@ model SuperTabInstructionsRevision {
   writtenBy     String
   askedBy       String?
   at            DateTime
+  dropped       Json?
 
   @@index([tabId, projectId, revision])
 }

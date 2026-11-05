@@ -57,9 +57,10 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
-import { BUILT_IN_HEADING } from './pmSchedule.js'
+import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
@@ -219,7 +220,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The project's instructions, saved on the revision the writer read (instructions.ts). `askedBy`: the member whose words it
   // carries, required of the coordinator; a person writes in their own.
   z.object({ type: z.literal('instructions.save'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), text: instructionsTextSchema,
-    summary: summarySchema, askedBy: id.optional() }).strict(),
+    summary: summarySchema, askedBy: id.optional(),
+    // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
+    approvals: z.array(id).max(MAX_APPROVALS).optional(),
+    // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
+    dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
+      .max(MAX_DROPPED_LINES).optional(),
+    // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
+    tidy: z.literal(true).optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -431,7 +439,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'project.create': ['name', 'brief'],
   'project.rename': ['name'],
   'project.report': ['text'],
-  'instructions.save': ['text', 'summary'],
+  'instructions.save': ['text', 'summary', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
@@ -534,7 +542,9 @@ export interface CommandContext {
     text?: string
     shown?: string[] }
   /** For `instructions.save`: the project's stored document, read by the store, which a stale save hands back to merge. */
-  instructions?: { revision: number; text: string } | null
+  instructions?: { revision: number; text: string; at?: number } | null
+  /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
+  approvals?: ApprovalRow[]
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
@@ -1138,14 +1148,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Accepted, kept nowhere: an older client's save of what each project's instructions say now (IGNORED_NOTE). */
   const ignored = () => Object.assign(result, { ignored: true, note: IGNORED_NOTE })
   /** A new revision of [project]'s instructions from revision [current]: what instructions.save and an older client's rule.set
-   *  write. It is kept in the revision history, who wrote it and for whom, and posts nothing in any chat (Dee and Ken,
-   *  2026-11-05, #3132): a change is read and undone in the Instructions history. */
-  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string) => {
+   *  write. It is kept in the revision history, who wrote it and for whom, and the lines it dropped (#3151), and posts nothing in
+   *  any chat (Dee and Ken, 2026-11-05, #3132): a change is read and undone in the Instructions history. */
+  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string, dropped: DroppedLine[] = []) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
     effects.instructions = { projectId: project.id, revision: current + 1, hash, text, summary,
-      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now }
+      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now, ...dropped.length ? { dropped } : {} }
     Object.assign(result, { projectId: project.id, revision: current + 1, hash })
   }
   /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
@@ -1821,7 +1831,28 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      saveInstructions(project, current, command.text, command.summary, askedBy)
+      // The text this save replaces, which the store read for the stale check above: what the rule check compares with. A
+      // project still on the template needs no read. Unread, nothing can be checked, so nothing is saved (review of #3112).
+      const onTemplate = !current || project.instructionsHash === instructionsHash(INSTRUCTIONS_TEMPLATE)
+      const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
+        : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
+      // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
+      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
+        context.instructions?.at ?? 0)
+      // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
+      saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
+      // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
+      // meanwhile is not (review of #3112).
+      if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
+      // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
+      for (const [personId, rules] of told) {
+        const to = person(state, personId)
+        const text = approvedDropNotice(who, project, rules)
+        const id = stableId(operationId, 'rule-approved', personId)
+        message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
+        Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
+        effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
+      }
       break
     }
     case 'note.add': {
