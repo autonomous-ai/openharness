@@ -280,12 +280,42 @@ describe('the pull request watch', () => {
     ] })
     const asked: string[] = []
     const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
-    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2))
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2, 0))
     expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
     const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+  })
+})
+
+// #3394: done tasks are read too, for their pull requests' heads, by the same index with workFinished true.
+describe('the pull request watch of done tasks', () => {
+  it('reads the done tasks active this week by the finished mark index, capped', async () => {
+    const { watchPullRequests } = await import('../src/superTabs/pullRequestEvents.js')
+    let n = 0
+    const group = (activeAt: number, status: string, workFinished = true) => {
+      const key = `d${++n}`
+      return { id: `tab-d:${key}`, tabId: 'tab-d', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
+        workFinished, data: { pullRequestUrls: [`https://github.com/acme/done/pull/${n}`], assignment: { status } } }
+    }
+    // Done work quiet for a month, which the index's range leaves out; open work, which the other read takes.
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, () => group(NOW - 30 * DAY, 'done')), ...Array.from({ length: 5 }, () => group(NOW - DAY, 'working', false)),
+      group(NOW - 3 * 3_600_000, 'done'), group(NOW - 2 * 3_600_000, 'cancelled'), group(NOW - 60_000, 'done'),
+    ] })
+    const asked: string[] = []
+    const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 0, 5))
+    expect(asked.filter(url => url.includes('/done/'))).toEqual(['https://github.com/acme/done/pull/28', 'https://github.com/acme/done/pull/26'])
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
+    // Only this week's finished, unarchived tasks are examined (other tests' too, as the read spans Swarms); the month-old ones
+    // never are, and the cancelled one among them is filtered.
+    const inWindow = await db.swarmGroup.count({ where: { workFinished: true, archived: false, lastActivityAt: { gte: new Date(NOW - 7 * DAY) } } })
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(inWindow)
+    expect(inWindow).toBeLessThan(30)
   })
 })
 

@@ -60,7 +60,6 @@ describe('a verdict at a head', () => {
   it('naming no head, stops counting once a head is watched', () => {
     expect(verdictCounts(verdict('r', true, undefined), at(B, 'p2'))).toBe(false)
     expect(verdictCounts({ by: 'r', passed: true, evidence: '', at: 1, pullRequest: PR }, at(B, 'p2'))).toBe(false)
-    expect(verdictCounts({ by: 'r', passed: true, evidence: '', at: 1, pullRequest: PR }, { 'https://github.com/acme/app/pull/8': { head: B, patch: 'p2', at: 1 } })).toBe(true)
   })
 })
 
@@ -130,7 +129,7 @@ describe('the heads a task keeps', () => {
   const url = (n: number) => `https://github.com/acme/app/pull/${n}`
 
   it('keeps only pull requests it still links', () => {
-    expect(Object.keys(keepHead({ [url(1)]: head(1), [url(2)]: head(2) }, url(3), head(3), [url(2), url(3)]))).toEqual([url(2), url(3)])
+    expect(Object.keys(keepHead({ [url(1)]: head(1), [url(2)]: head(2) }, url(3), head(3), [url(2), url(3)])).sort()).toEqual([url(2), url(3)])
   })
 
   it('keeps at most HEADS_KEPT, the most recently read', () => {

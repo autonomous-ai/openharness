@@ -123,6 +123,11 @@ const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
 /** The most tasks a pass reads, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
 export const WATCH_GROUPS = 200
+/** The most done tasks a pass also reads for their heads (#3394): done before the PM merges, their verdicts must still go
+ *  stale on a push. Production had 15, with 18 links (2026-11-05). */
+export const WATCH_DONE_GROUPS = 50
+/** A head whose patch GitHub could not give is asked again after this long, not every pass. */
+export const PATCH_RETRY_MS = 15 * 60_000
 
 /** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
  *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
@@ -166,45 +171,52 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
  * request, says so in one line: the measure of this feature (ENGINEERING.md 6 and 8). The messages posted.
  */
 export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, now: number,
-  limit = WATCH_GROUPS): Promise<number> {
+  limit = WATCH_GROUPS, doneLimit = WATCH_DONE_GROUPS): Promise<number> {
   try {
     // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
     // gives the sort; the rest filters what it fetches. A step's reviewOf is a string and a task has none (null matches it).
-    const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
-      { $match: { workFinished: false, archived: false, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
-        deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true } } },
+    // Open tasks, then done ones, each read by that index (#3394: a done task's pull request is not merged yet).
+    const read = (workFinished: boolean, cap: number, more: Record<string, unknown> = {}) => cap <= 0 ? Promise.resolve([]) : db.swarmGroup.aggregateRaw({ pipeline: [
+      { $match: { workFinished, archived: false, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
+        deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true }, ...more } },
       { $sort: { lastActivityAt: -1 } },
-      { $limit: limit },
-      { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls', heads: '$data.pullRequestHeads' } },
-    ] }) as unknown as Array<{ tabId: string; key: string; urls: string[]; heads?: Record<string, PullRequestHead> | null }>
+      { $limit: cap },
+      { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls', heads: '$data.pullRequestHeads', steps: '$data.stepIds' } },
+    ] }) as unknown as Promise<Array<{ tabId: string; key: string; urls: string[]; heads?: Record<string, PullRequestHead> | null; steps?: string[] | null }>>
+    const rows = [...await read(false, limit), ...await read(true, doneLimit, { 'data.assignment.status': 'done' })]
     if (!rows.length) return 0
     const bot = await reader.botLogin()
     // One read per pull request a pass, however many tasks link it.
     const reads = new Map<string, Promise<PullRequestWatch | null>>()
     const watchOf = (url: string) => { if (!reads.has(url)) reads.set(url, reader.watch(url).catch(() => null)); return reads.get(url)! }
-    // A patch id is read only for a head the task has not recorded yet (#3394), once a pass whatever links it.
+    // A patch id is read only for a head the task has not recorded yet, or whose patch GitHub could not give PATCH_RETRY_MS ago
+    // (#3394), once a pass whatever links it.
     const patches = new Map<string, Promise<string | null>>()
     const patchOf = (url: string, head: string) => {
       const key = `${url}@${head}`
       if (!patches.has(key)) patches.set(key, reader.patch(url, head).catch(() => null))
       return patches.get(key)!
     }
+    const patchNeeded = (known: PullRequestHead | undefined, head: string) =>
+      known?.head !== head || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
     let posted = 0
     for (const row of rows) {
       for (const url of row.urls) {
         try {
           const watch = await watchOf(url)
           if (watch?.state !== 'open') continue
-          const patch = row.heads?.[url]?.head === watch.head ? undefined : await patchOf(url, watch.head)
-          posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch)
+          const patch = patchNeeded(row.heads?.[url] ?? undefined, watch.head) ? await patchOf(url, watch.head) : undefined
+          posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch, row.steps ?? [])
         } catch (error) {
           logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
         }
       }
     }
     const unreadable = (await Promise.all(reads.values())).filter(watch => watch === null).length
-    const line = { groups: rows.length, pulls: reads.size, unreadable, posted }
-    if (unreadable) logger.warn('[swarm-pr-events] pass', line)
+    // Heads whose patch GitHub could not give: their verdicts count only at that exact head until a later read gives it.
+    const unpatched = (await Promise.all(patches.values())).filter(patch => patch === null).length
+    const line = { groups: rows.length, pulls: reads.size, unreadable, patched: patches.size, unpatched, posted }
+    if (unreadable || unpatched) logger.warn('[swarm-pr-events] pass', line)
     else if (posted) logger.info('[swarm-pr-events] pass', line)
     return posted
   } finally { await reader.done() }

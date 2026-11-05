@@ -142,16 +142,24 @@ describe('pull request events', () => {
     expect((row.data as { pullRequestEvents?: Record<string, string[]> }).pullRequestEvents?.[f.PR]).toContain(`conflict:${HEAD}`)
   })
 
-  it('a step and a finished task are not read', async () => {
+  // A done task is read for its heads (#3394: done before the PM merges it), and posts nothing; a step and a cancelled task
+  // are not read.
+  it('a step and a cancelled task are not read; a done task is, and posts nothing', async () => {
     const f = await swarm()
     const other = 'https://github.com/acme/app/pull/13'
     await f.execute({ type: 'conversation.create', title: 'Review', reviewOf: f.task, step: 'Review', brief: `Review ${other}`,
       checks: [{ description: 'Verdict', independent: false }] } as Command)
     await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
+    f.pulls.set(f.PR, f.pull({ mergeable: false }))
+    const before = (await f.told()).length
     await f.pass()
-    // Other tests' Swarms are in this database too: this one's pull requests are the ones not asked about.
-    expect(f.asked).not.toContain(f.PR)
+    expect(f.asked).toContain(f.PR)
     expect(f.asked).not.toContain(other)
+    expect(await f.told()).toHaveLength(before)
+    const cancelled = await swarm()
+    await cancelled.execute({ type: 'work.cancel', conversationId: cancelled.task, assignmentId: cancelled.assignment, reason: 'Not needed' } as Command)
+    await cancelled.pass()
+    expect(cancelled.asked).not.toContain(cancelled.PR)
   })
 
   // ENGINEERING.md 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
@@ -161,7 +169,7 @@ describe('pull request events', () => {
     // Other tests' tasks are in this database too: this one is made the most recently active.
     f.clock.advance(60 * MINUTE)
     await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `Still on ${f.PR}` }, host, f.worker)
-    await watchPullRequests(db, f.store, f.reader, f.clock.now + MINUTE, 1)
+    await watchPullRequests(db, f.store, f.reader, f.clock.now + MINUTE, 1, 0)
     expect(f.asked).toEqual([f.PR])
   })
 
@@ -238,14 +246,15 @@ describe('pull request events', () => {
       const { f, HEAD3, step, read } = await reviewed()
       await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Ready to merge ${f.PR}` }, host, f.worker)
       await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: step }, data: { dormant: true } })
-      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      const before = (await f.told()).length
+      f.pulls.set(f.PR, f.pull({ head: HEAD3, mergeable: false }))
       await f.pass()
       for (const check of await read()) {
         expect(check.passedBy).toBeNull()
         expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
       }
-      // Nothing is posted to an Engineer whose task is done.
-      expect(await f.told()).toEqual([])
+      // Nothing is posted to an Engineer whose task is done, not even a merge conflict.
+      expect(await f.told()).toHaveLength(before)
     })
 
     // Review of #3218 (Ledger), Important 5: a patch GitHub could not give is told in the pass's line, and read again later.

@@ -250,7 +250,8 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
   head?: string
   /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
   patch?: string
-  /** The pull request's head it stopped counting at, while it does not count. */
+  /** The pull request's head it stopped counting at, while it does not count: empty while its own pull request's head is not
+   *  read yet. */
   stale?: string }
 /** A linked pull request's head commit as the PR watch last read it, with its patch id (pullRequestPatch.ts): null when the
  *  patch could not be read, so only that exact head counts (#3394). */
@@ -380,6 +381,9 @@ export interface Conversation {
   /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
    *  Absent until the watch reads one. */
   pullRequestHeads?: Record<string, PullRequestHead>
+  /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 50: what a new pull request head re-derives
+   *  the checks of, dormant ones included (#3394). Absent before its first step since this was added. */
+  stepIds?: string[]
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */

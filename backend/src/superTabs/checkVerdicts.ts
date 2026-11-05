@@ -16,20 +16,39 @@ export type PullRequestHeads = Readonly<Record<string, PullRequestHead>>
  *  #3218). */
 const sameHead = (full: string, head: string) => full.toLowerCase() === head.toLowerCase()
 
-/** The head a verdict's pull request is at now: its own pull request's, or for one recorded with none (from before heads,
- *  or before the task linked one), whichever its task's watch has read. */
-const currentHead = (verdict: CheckVerdict, heads: PullRequestHeads | undefined): PullRequestHead | undefined =>
-  verdict.pullRequest ? heads?.[verdict.pullRequest] : Object.values(heads ?? {})[0]
+/** The most pull request heads a task keeps (keepHead): the most recently read. */
+export const HEADS_KEPT = 50
 
-/** Whether [verdict] counts against [heads]. While no head of its pull request is watched, it counts as verdicts always did.
- *  Then only at the head it names, or at a head whose patch id is its own; a patch nobody could read (null) matches nothing,
- *  so only that exact head counts there. A verdict naming no head counts at none (security review of #3218: the head watched
- *  last may be a push nobody read), so one from before heads needs a new check once its pull request is watched. */
+/** The head a verdict's pull request is at now: its own pull request's, or for one recorded with none (from before heads,
+ *  or before the task linked one), the one its task's watch read last. Undefined while the task has none watched; null while
+ *  it has, but none of the verdict's own pull request (not read yet, or no longer kept). */
+function currentHead(verdict: CheckVerdict, heads: PullRequestHeads | undefined): PullRequestHead | null | undefined {
+  const watched = Object.values(heads ?? {})
+  if (!watched.length) return undefined
+  if (verdict.pullRequest) return heads![verdict.pullRequest] ?? null
+  return watched.reduce((a, b) => b.at > a.at ? b : a)
+}
+
+/** Whether [verdict] counts against [heads]. While its task has no watched head, it counts as verdicts always did. Then only
+ *  at the head it names of its own pull request, or at a head whose patch id is its own; a patch nobody could read (null)
+ *  matches nothing, so only that exact head counts there. A verdict naming no head counts at none (security review of #3218:
+ *  the head watched last may be a push nobody read), and one whose pull request has no watched head is unverified (review of
+ *  #3218), so one from before heads needs a new check once its task is watched. */
 export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | undefined): boolean {
   const current = currentHead(verdict, heads)
-  if (!current) return true
-  if (!verdict.head) return false
+  if (current === undefined) return true
+  if (!current || !verdict.head) return false
   return sameHead(current.head, verdict.head) || (!!verdict.patch && current.patch === verdict.patch)
+}
+
+/** [heads] with [url] at [entry]: only the pull requests the task still [links], at most HEADS_KEPT, the most recently read
+ *  kept (review of #3218: one task links 369 pull requests in production). A verdict on one dropped is unverified
+ *  (verdictCounts), never valid for every head. */
+export function keepHead(heads: PullRequestHeads | undefined, url: string, entry: PullRequestHead, links: readonly string[]): Record<string, PullRequestHead> {
+  const linked = new Set(links)
+  const kept = Object.entries({ ...heads, [url]: entry }).filter(([key]) => key === url || linked.has(key))
+    .sort(([, a], [, b]) => b.at - a.at).slice(0, HEADS_KEPT)
+  return Object.fromEntries(kept)
 }
 
 /** [verdict] at a head whose patch id is known learns it: from [known] when that is the head it read. */
@@ -45,7 +64,7 @@ export function deriveCheck(check: Check, heads: PullRequestHeads | undefined): 
   const verdicts = check.verdicts ?? []
   for (const verdict of verdicts) {
     if (verdictCounts(verdict, heads)) delete verdict.stale
-    else verdict.stale = currentHead(verdict, heads)!.head
+    else verdict.stale = currentHead(verdict, heads)?.head ?? ''
   }
   const live = verdicts.filter(v => v.stale === undefined)
   const failed = live.findLast(v => !v.passed), passed = live.findLast(v => v.passed)

@@ -2307,6 +2307,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         checks: storedChecks(command.checks, operationId),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
+      // Its task lists it, so a new head of the task's pull request re-derives its checks even once it is dormant (#3394).
+      if (command.reviewOf) {
+        const reviewedTask = conversation(state, command.reviewOf)
+        reviewedTask.stepIds = [...reviewedTask.stepIds ?? [], operationId].slice(-50)
+      }
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
       if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId } }
@@ -3918,11 +3923,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
       const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
         ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {} }, accountable ? departed : undefined, heads)
-      const recorded = check.verdicts!.at(-1)!
-      result.counts = recorded.stale === undefined
-      if (!result.counts) {
-        result.next = head ? `This verdict is for ${head.slice(0, 7)}; the pull request is at ${recorded.stale!.slice(0, 7)}. Check that head and send it as head.`
-          : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. It is at ${recorded.stale!.slice(0, 7)}.`
+      const recorded = check.verdicts!.at(-1)!, counts = recorded.stale === undefined
+      result.counts = counts
+      if (!counts) {
+        const now = recorded.stale ? `It is at ${recorded.stale.slice(0, 7)}.` : 'Its head is not read yet.'
+        result.next = head ? `This verdict is for ${head.slice(0, 7)}, not the pull request's head. ${now} Check its head and send it as head.`
+          : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. ${now}`
       }
       const first = !earlier
       // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
@@ -3940,16 +3946,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (reviewed !== false && run?.firstReview === false && run.grid) reviewFailed(group, run.model ?? 'its grid model', command.evidence)
       // An older skill's working hand-off stops waiting once someone else's verdict finds problems in it: its quiet time counts
       // from now (liveness.ts waitingForReview). Its status stays as its agent set it.
-      if (!command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
+      // A failure counts only at the head it read (#3394, review of #3218): one for a head the pull request has moved past asks
+      // for no changes, and holds nobody waiting.
+      if (counts && !command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
-      if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      if (counts && !command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
       // form for a post to carry, and its step waits for the new revision instead of moving after 30 quiet minutes (Ken,
       // 2026-11-04: ~18 of 51 steps moved in two days were waiting on the Engineer's fix).
-      if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
+      if (counts && !command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
       }
