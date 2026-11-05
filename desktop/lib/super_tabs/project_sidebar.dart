@@ -226,7 +226,7 @@ class ProjectSidebar extends StatelessWidget {
               '$count',
               style: SwarmType.sidebar(
                 compact: compact,
-                color: DesktopChrome.foreground,
+                color: grid.SidebarInk.ink,
               ).copyWith(fontWeight: grid.AppFont.semibold),
             )
           : null,

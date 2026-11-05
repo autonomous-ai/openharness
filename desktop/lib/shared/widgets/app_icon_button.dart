@@ -207,7 +207,7 @@ class _AppIconButtonState extends State<AppIconButton>
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             if (widget.spinning && widget.onPressed != null) return resting;
             if (states.contains(WidgetState.disabled)) {
-              return AppPalette.textFaint;
+              return SidebarInk.faint(context);
             }
             return states.contains(WidgetState.hovered) ||
                     states.contains(WidgetState.pressed) ||

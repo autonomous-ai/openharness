@@ -687,6 +687,11 @@ class SidebarInk extends InheritedWidget {
     null => AppPalette.textSecondary,
   };
 
+  /// A disabled control's ink: the sidebar's own at half strength on a
+  /// sidebar with its own ink, else the page's faint.
+  static Color faint(BuildContext context) =>
+      _own(context)?.sidebarInk?.withValues(alpha: .5) ?? AppPalette.textFaint;
+
   static Color hoverFill(BuildContext context) =>
       _own(context)?.sidebarHover ?? AppSurface.hoverFill;
 
