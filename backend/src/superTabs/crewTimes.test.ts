@@ -3,6 +3,9 @@
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type SuperTabState } from './model.js'
 import { crewTimingOf, finishedWakes, moveTimingRow, startWake } from './crewTimes.js'
+import { applyCommand, type Command } from './commands.js'
+import { applyCrewKeep } from './crewKeep.js'
+import { config as crewConfig, fixture, machine, NOW, person } from './crewKeep.test-support.js'
 
 const SECOND = 1000
 const T = Date.UTC(2026, 10, 6, 3)
@@ -83,5 +86,44 @@ describe('a crew move is timed from the keeper picking a machine to the new sess
     expect(crewTimingOf({ kind: 'crew-timing', what: 'nap', agentId: 'a', startedAt: 1, runningAt: 2, reason: 'x' })).toBeNull()
     expect(crewTimingOf({ kind: 'crew-timing', what: 'wake', agentId: 'a', startedAt: 5, runningAt: 2, reason: 'x' })).toBeNull()
     expect(crewTimingOf(null)).toBeNull()
+  })
+})
+
+// The crew keeper's hooks (#3229 on main): work.assign starts a wake, agent.started's takeover finishes a move.
+describe('the crew keeper times its own wakes and moves (#3462)', () => {
+  const host = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+  const run = (state: SuperTabState, command: Command, operationId: string, now: number, extra: Record<string, unknown> = {}) =>
+    applyCommand(state, person, command, { now, operationId, ...extra })
+  const task = (f: ReturnType<typeof fixture>) => {
+    f.state = run(f.state, { type: 'conversation.create', title: 'Fix it', brief: 'Fix the thing', checks: [] } as Command, 'task-1', NOW - 3_600_000).state
+    return f.state.conversations.find(c => c.title === 'Fix it')!
+  }
+
+  it('new work on an asleep member starts its wake; work for an awake one starts none', () => {
+    const asleep = fixture()
+    asleep.ada.asleep = { since: NOW - 7_200_000 }
+    const work = task(asleep)
+    asleep.state = run(asleep.state, { type: 'work.assign', conversationId: work.id, agentId: asleep.ada.id } as Command, 'assign-1', NOW).state
+    expect(asleep.state.agents.find(a => a.id === asleep.ada.id)!.crewWaking).toEqual({ at: NOW, conversationId: work.id })
+    const awake = fixture()
+    const other = task(awake)
+    awake.state = run(awake.state, { type: 'work.assign', conversationId: other.id, agentId: awake.ada.id } as Command, 'assign-1', NOW).state
+    expect(awake.state.agents.find(a => a.id === awake.ada.id)!.crewWaking).toBeUndefined()
+  })
+
+  it('a move\'s new session taking over writes one timing row, from the keeper\'s pick to the takeover', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
+    applyCrewKeep(f.state, NOW, { admits: () => true })
+    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
+    const effects = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: crewConfig } as Command, 'started-1', NOW + 95_000, host)
+    const moved = effects.state.agents.find(a => a.harnessId === 'ada-2')!
+    const timings = effects.messages.flatMap(m => crewTimingOf(m.source) ? [{ row: m, timing: crewTimingOf(m.source)! }] : [])
+    expect(timings).toHaveLength(1)
+    expect(timings[0]!.timing).toEqual({ what: 'move', agentId: moved.id, startedAt: NOW, runningAt: NOW + 95_000, reason: 'signed-out' })
+    expect(timings[0]!.row.conversationId).toBe('lead')
+  })
+
+  it('the crew keeper reads crew membership through crew.ts isCrew, with no copy of its own', async () => {
+    expect(Object.keys(await import('./crewKeep.js'))).not.toContain('isCrewMember')
   })
 })
