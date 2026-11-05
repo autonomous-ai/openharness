@@ -271,6 +271,7 @@ void main() {
         'scope': 'swarm',
         'engines': ['claude', 'codex'],
         'maxAgents': 8,
+        'agents': 'memory',
         'teamAccountOnly': true,
       });
       expect(commands.last['name'], 'Studio');
