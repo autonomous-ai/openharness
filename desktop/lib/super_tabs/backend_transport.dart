@@ -17,7 +17,7 @@ const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
   '|/list|/invitations|/deleted'
-  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
+  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|scorecard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   '|activity|activity/read|threads|inbox|proposals'
   '|reminders'

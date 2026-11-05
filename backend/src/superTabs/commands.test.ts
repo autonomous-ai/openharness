@@ -2673,6 +2673,16 @@ describe('cancelling work', () => {
     f.run(cancel, workerActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
   })
+  it('marks its cancel row with the status, so the scorecard sees the task close (#3386)', () => {
+    const { f, group, leadActor, cancel } = active()
+    const row = f.run(cancel, leadActor).messages.find(m => m.conversationId === group)!
+    expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
+  })
+  it('marks an unassigned task\'s cancel row with the status too', () => {
+    const f = fixture(), group = f.group()
+    const row = f.run({ type: 'work.cancel', conversationId: group, assignmentId: 'current', reason: 'Not needed' }).messages.find(m => m.conversationId === group)!
+    expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
+  })
   it('names the owner when the owner cancels and drops a trailing full stop from the reason', () => {
     const { f, cancel } = active()
     const text = f.run({ ...cancel, reason: 'Obsolete.' } as Command).messages[0]!.text
