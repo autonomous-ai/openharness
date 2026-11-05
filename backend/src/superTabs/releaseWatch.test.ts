@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
-import { readReleases, watchReleases, type GitHubGet, type ReleaseReader } from './releaseWatch.js'
+import { batchLookupDue, readReleases, watchReleases, type GitHubGet, type ReleaseReader } from './releaseWatch.js'
 import type { ReleaseFacts, ReleaseLedger } from './releases.js'
 import { componentNamed, pendingKey } from './releases.js'
 
@@ -83,6 +83,31 @@ describe('readReleases.mergeCommit and contains', () => {
     expect(await readReleases(g.get).mergeCommit(REPO, 7, T)).toBe('batch')
     expect(g.asked.at(-1)).toBe(`/repos/acme/app/commits?sha=main&since=${new Date(T - 6 * 3_600_000).toISOString()}&until=${new Date(T + 3_600_000).toISOString()}&per_page=100`)
     expect(await readReleases(github({ '/repos/acme/app/pulls/7': { status: 502, body: {} } }).get).mergeCommit(REPO, 7, T)).toBeNull()
+  })
+
+  // Review 2 of #3228: on main, squash titles carry task numbers ("… (#3159)") and batch bodies name other pull requests.
+  it('takes only a batch title naming the original, never a task number in another title or a mention in a batch\'s body', async () => {
+    const g = github({
+      '/repos/acme/app/pulls/7': { status: 200, body: { merged_at: null, state: 'closed' } },
+      '/repos/acme/app/commits': { status: 200, body: [
+        { sha: 'real', commit: { message: 'Merge batch i2: #6 #7 (#80)' } },
+        { sha: 'mention', commit: { message: 'Merge batch i1: #5 (#79)\n\nIncludes the fix #7 needed.' } },
+        { sha: 'task', commit: { message: 'The board says so (#7)' } }] },
+      '/repos/acme/app': repo,
+    })
+    expect(await readReleases(g.get).mergeCommit(REPO, 7, T)).toBe('real')
+    const none = github({ '/repos/acme/app/pulls/7': { status: 200, body: { merged_at: null } }, '/repos/acme/app': repo,
+      '/repos/acme/app/commits': { status: 200, body: [{ sha: 'task', commit: { message: 'The board says so (#7)' } }, { sha: 'b', commit: { message: 'Merge batch i3: #70 (#81)' } }] } })
+    expect(await readReleases(none.get).mergeCommit(REPO, 7, T)).toBeNull()
+  })
+
+  it('looks for a batch every pass in the merge\'s first hour, then every 30 minutes, then every 2 hours after a day', () => {
+    const HOUR = 3_600_000, half = 30 * 60_000, at = 100 * 24 * HOUR
+    expect(batchLookupDue(at, at + 10 * 60_000 + 7)).toBe(true)
+    expect(batchLookupDue(at, at + 3 * HOUR)).toBe(true)
+    expect(batchLookupDue(at, at + 3 * HOUR + 5 * 60_000)).toBe(false)
+    expect(batchLookupDue(at, at + 2 * 24 * HOUR)).toBe(true)
+    expect(batchLookupDue(at, at + 2 * 24 * HOUR + half)).toBe(false)
   })
 
   it('says a tag contains a merge when main\'s history from the merge reaches the tag', async () => {
@@ -176,5 +201,15 @@ describe('watchReleases', () => {
     await watchReleases(s.db, s.store, s.fake, T + 6 * 60_000, { warn: () => {}, info: () => {} })
     expect(s.settled[0]!.facts.releases.cli).toEqual({ tag: 'v0.5.55_cli', sha: 'm7', at: T + 5 * 60_000,
       carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
+  })
+
+  // Review 2 of #3228: a merge commit found in a pass whose comparison GitHub could not answer is found again, so the tag
+  // already settled is still compared with it.
+  it('keeps no merge commit found in a pass whose comparison was unsure', async () => {
+    const s = scene({ pending: [{ groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend'] }],
+      last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } }, { contains: async () => null })
+    await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
+    expect(s.read).toContain('contains m8 b')
+    expect(s.settled[0]!.facts).toEqual({ resolved: [], releases: {} })
   })
 })
