@@ -123,6 +123,8 @@ export interface Agent {
   movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
   /** The agent this crew member took over from on a move, so its history reads as one member. */
   movedFrom?: { agentId: string; machineId: string; reason: CrewTrouble; at: number }
+  /** The machine whose start of this member's move failed, and when: not picked again for MOVE_REFUSED_WAIT_MS (crewKeep.ts). */
+  crewMoveRefused?: { machineId: string; at: number }
   /** A move needed but no machine could take it: said once in the project chat until the trouble changes. */
   crewStuck?: CrewTrouble
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */

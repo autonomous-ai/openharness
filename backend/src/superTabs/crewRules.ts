@@ -16,3 +16,5 @@ export const MOVE_LOW_DISK_BYTES = 5 * GB
 export const FOLDER_ASLEEP_MS = 7 * DAY
 /** A machine with less free disk than this drops asleep members' folders first, the longest asleep first, one a pass. */
 export const DISK_FLOOR_BYTES = 10 * GB
+/** A machine that refused a member's move start (no token, no room) is not picked for that member again this long. */
+export const MOVE_REFUSED_WAIT_MS = HOUR

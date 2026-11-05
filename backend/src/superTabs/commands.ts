@@ -2886,7 +2886,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const counted = !start.error
         start.error = command.error
         // A crew member's move that did not start leaves it where it was, for the keeper's next pass (crewKeep.ts).
-        if (start.request.crewMoveOf) crewMoveFailed(state, start)
+        if (start.request.crewMoveOf) crewMoveFailed(state, start, context.now)
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A thread session's says so in its thread (buddySessions.ts), and frees its place.
         if (start.request.buddySession) {

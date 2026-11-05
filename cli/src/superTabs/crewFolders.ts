@@ -6,8 +6,8 @@
  *   conversation is filed (claude --resume and codex resume find it by folder);
  * - finished branch copies go: a local branch whose work merged into the default branch, or whose remote branch was
  *   deleted (a merged or closed pull request). Never the current branch or one never pushed; a deleted branch's tip is
- *   kept under refs/harness/dropped/ so no commit becomes unreachable. Branches are the clone's, shared by its worktrees, so
- *   another agent's finished branch that no worktree has checked out goes too, recoverably (security review of #3229).
+ *   kept under refs/harness/dropped/ so no commit becomes unreachable. Only branches this member's own folder was on: the
+ *   clone's other branches (a person's, other agents') are never touched (security reviews of #3229).
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -103,8 +103,13 @@ export async function pruneBranches(folder: string): Promise<string[]> {
   const base = await git(folder, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => '')
   const rows = (await git(folder, 'for-each-ref', 'refs/heads', '--format=%(refname:short)%09%(upstream)%09%(upstream:track)%09%(objectname)'))
     .split('\n').filter(Boolean).map(line => { const [name, upstream, track, sha] = line.split('\t'); return { name: name!, upstream: upstream ?? '', track: track ?? '', sha: sha ?? '' } })
+  // Only branches this member's own folder was on (its HEAD's history): a worktree shares its clone's branches, which on an
+  // own account is a person's checkout with their branches and other agents' (security review 2 of #3229).
+  const own = new Set((await git(folder, 'reflog', 'show', '--format=%gs', 'HEAD').catch(() => '')).split('\n')
+    .flatMap(line => /^checkout: moving from (\S+) to (\S+)$/.exec(line)?.slice(1, 3) ?? []))
   const dropped: string[] = []
   for (const branch of rows) {
+    if (!own.has(branch.name)) continue
     // A branch tracking the default branch itself (a start's own branch) is no pull request's copy.
     if (checkedOut.has(branch.name) || !branch.upstream || (base && branch.upstream === `refs/remotes/${base}`)) continue
     const gone = branch.track === '[gone]'

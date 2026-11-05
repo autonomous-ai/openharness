@@ -8,11 +8,11 @@ import { activeWork, actorKey, stableId, type Agent, type AgentStart, type Agent
 import { isBuddy } from './buddies.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
-import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
+import { barredFromTeamWritten, markTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
-import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, SLEEP_IDLE_MS } from './crewRules.js'
+import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, SLEEP_IDLE_MS } from './crewRules.js'
 
 export type CrewAction =
   | { kind: 'sleep'; agentId: string }
@@ -70,7 +70,7 @@ export function teamOnly(state: SuperTabState, agent: Agent): boolean {
 
 export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps: CrewDeps): ContributedMachine[] {
   const from = standingPool(state, agent.machineId)
-  const team = teamOnly(state, agent)
+  const team = teamOnly(state, agent), kind = onTeamAccount(state, agent)
   const engine = agent.configuration.engine
   const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
   const working = (pool: ContributedMachine) => state.agents.filter(a => a.machineId === pool.machineId && hasWork(state, a)).length
@@ -80,7 +80,10 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
       w ? w.usedPercent : 100, working(pool), pool.name]
   }
   return (state.machines ?? [])
-    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool)) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
+    // The same account kind only (security review 2 of #3229): a Team member's work stays in Team accounts, and a main-account
+    // member never brings its own-account work into one. A machine that just refused its start waits.
+    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool))
+      && teamAccountPool(pool) === kind && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
     .map(entry => entry.pool)
@@ -102,7 +105,9 @@ export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): Cre
       if (!agent.asleep.folderDropped && now - agent.asleep.since >= FOLDER_ASLEEP_MS) actions.push({ kind: 'dropFolder', agentId: agent.id, why: 'asleep-7d' })
       continue
     }
-    if (hasWork(state, agent)) continue
+    // On a Team account the only close deletes the session's own data (inCore/agents.ts ended), so a wake could not resume it
+    // in place: such a member is kept awake until a close that keeps it exists (security review 2 of #3229).
+    if (hasWork(state, agent) || onTeamAccount(state, agent)) continue
     const since = idleSince(agent, groupsOf(state, agent))
     if (since !== undefined && now - since >= SLEEP_IDLE_MS) actions.push({ kind: 'sleep', agentId: agent.id })
   }
@@ -213,9 +218,11 @@ export function wakeCrewMember(agent: Agent, now: number): boolean {
 }
 
 /** A move's start failed: the member stays where it was, and the keeper may try another machine on its next pass. */
-export function crewMoveFailed(state: SuperTabState, start: AgentStart): void {
+export function crewMoveFailed(state: SuperTabState, start: AgentStart, now: number): void {
   const from = start.request.crewMoveOf ? state.agents.find(a => a.id === start.request.crewMoveOf) : undefined
-  if (from?.movedTo?.startId === start.id) delete from.movedTo
+  if (from?.movedTo?.startId !== start.id) return
+  delete from.movedTo
+  from.crewMoveRefused = { machineId: start.request.machineId, at: now }
 }
 
 /**
@@ -235,7 +242,10 @@ export function takeOverCrewMember(state: SuperTabState, start: AgentStart, agen
   for (const group of state.conversations) {
     // Never into Team-written work from the main account (audit H2): the placement keeps such a member in Team accounts,
     // and this holds even for a start placed otherwise.
-    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id) && !barredFromTeamWritten(state, group, moved)) group.agentIds.push(moved.id)
+    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id) && !barredFromTeamWritten(state, group, moved)) {
+      group.agentIds.push(moved.id)
+      markTeamWritten(state, group, moved)
+    }
     if (group.assignment?.agentId === from.id && activeWork(group)) {
       group.assignment.status = 'lost'
       group.assignment.lost = { reason: 'crew-moved', at: now }
