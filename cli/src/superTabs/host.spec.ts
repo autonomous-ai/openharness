@@ -5882,3 +5882,101 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(lead.lists).toBe(2)
   }, 60_000)
 })
+
+// Task #3385 (anh Dee, 11-05): a PM that hung in one turn left five people's asks unanswered for 3 to 10 hours, as the keep-alive
+// reopened only a PM whose session was gone. Its host now restarts it in place once it owes a person an answer past the time the
+// server gives and it has been in one turn that long, or its screen has not changed that long. Never a second PM.
+describe('a PM that stops answering', () => {
+  const MIN = 60_000
+  /** A PM row here that owes the message `m1`, sent at [since]. */
+  const owing = (since: number, restartAfterMs = 20 * MIN) => leadRow({ owed: { messageId: 'm1', since, restartAfterMs } })
+  function stuckFixture(rows: Record<string, unknown>[], activity: 'working' | 'idle' | 'unknown' = 'working') {
+    let release: (() => void) | null = null
+    const restartLead = vi.fn(async (_harnessId: string) => {
+      // The restart relaunches it in its own pane: its session reads as gone until the relaunch is up.
+      t.live(false)
+      await new Promise<void>(resolve => { release = resolve })
+      t.live(true)
+      return { ok: true as const }
+    })
+    const t = lifeFixture(rows, { restartLead })
+    t.live(true)
+    const turns = { activity }
+    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, turns.activity])))
+    return { ...t, restartLead, turns, finish: () => release?.() }
+  }
+
+  it('restarts a PM stuck in one turn while it owes an ask, once, in place, and never opens a second PM meanwhile', async () => {
+    // The host's clock starts at 0: the ask was sent then, and the PM's turn began.
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.restartLead).toHaveBeenCalledWith('harness')
+    // Its session reads as gone while it relaunches: the keep-alive must not reopen another one beside it.
+    for (let i = 0; i < 6; i++) await t.poll(10_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.finish()
+    await t.poll(1_000)
+    // Still in one turn, still owing: once is enough. People see it from here, not a restart loop.
+    for (let i = 0; i < 6; i++) await t.poll(10 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+  })
+
+  it('restarts again only after the PM ended a turn and then hung again', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(21 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    t.finish()
+    await t.poll(2 * MIN)
+    t.turns.activity = 'idle'
+    await t.poll(MIN)
+    t.turns.activity = 'working'
+    await t.poll(MIN)
+    await t.poll(19 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    await t.poll(2 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(2)
+  })
+
+  it('restarts a PM whose screen has not changed while it owes an ask, whatever its turn reads', async () => {
+    const t = stuckFixture([owing(0)], 'unknown')
+    // Its terminal shows the same screen on every read.
+    ;(t.core as { superTabs?: unknown }).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true, text: 'Thinking about the batch', hold: null })) }
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(2 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves alone an idle PM, a PM that owes nothing or not for long, and one that keeps ending its turns', async () => {
+    const idle = stuckFixture([owing(0)], 'idle')
+    await idle.poll()
+    await idle.poll(60 * MIN)
+    const none = stuckFixture([leadRow({ owed: null })])
+    await none.poll()
+    await none.poll(60 * MIN)
+    // Asked a minute ago: a PM deep in a long turn has not let anyone wait yet.
+    const fresh = stuckFixture([])
+    await fresh.poll()
+    await fresh.poll(30 * MIN)
+    fresh.rows.push(owing(29 * MIN))
+    await fresh.poll(MIN)
+    const busy = stuckFixture([owing(0)])
+    await busy.poll()
+    for (let i = 0; i < 6; i++) {
+      await busy.poll(10 * MIN)
+      busy.turns.activity = 'idle'
+      await busy.poll(MIN)
+      busy.turns.activity = 'working'
+    }
+    for (const t of [idle, none, fresh, busy]) expect(t.restartLead).not.toHaveBeenCalled()
+  })
+})
