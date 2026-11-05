@@ -22,7 +22,7 @@
 
 ## Design
 
-1. **Growth:** At most one counter, capped backoff level and active suspension per supported engine, plus one set for the machine. Success removes its state; owner resume clears its engine state; expiry removes active suspensions but retains bounded backoff levels until success/removal. Machine removal/account replacement deletes all health state. Saving settings preserves it.
+1. **Growth:** At most one counter, capped backoff level and active suspension per supported engine, plus one set for the machine. Success removes its state; owner resume clears its selected engine and machine state, preserving other engine suspensions; expiry removes active suspensions but retains bounded backoff levels until success/removal. Machine removal/account replacement deletes all health state. Saving settings preserves it.
 2. **Concurrency:** Existing guarded machine-part writes serialize failure receipts, successes, sweeps and readings. Commands count the first failure only; a late host report cannot count a server timeout twice. Fast readings fall back to the full transaction whenever a suspension changes.
 3. **Read cost:** No new query, scan, history load or polling. Existing machine reads carry bounded counters; derived reads return fixed suspension sentences. CLI uses the starts it already reads.
 4. **Scale:** Cost remains linear in listed machines and constant per engine, even after arbitrarily many failures. Measure a fixed machine-health workload before/after; track existing start failure notices and machine-part byte size. No growing failure history is added.
@@ -39,7 +39,7 @@
 - Repeated expired cooldowns retain escalation through machine readings and settings saves, and success resets only the appropriate engine plus machine (tasks 2–3).
 - Timeouts of different engines combine at machine level; grid starts cannot bypass a machine cooldown (task 3).
 - A healthy reading clears sign-in failures only, not a different launch/question failure; legacy records remain readable (task 2).
-- A timeout followed by its host's failure is counted once; owner resume permissions and public reason redaction remain intact (task 3).
+- A timeout followed by its host's failure is counted once; owner resume permissions and public reason redaction remain intact (task 3). Owner resume lifts the machine cooldown so admission can recover, without clearing unrelated engine suspensions.
 
 ### Task 1: Attribute failures to engines precisely
 

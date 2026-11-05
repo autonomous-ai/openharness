@@ -55,7 +55,7 @@ function suspensionReason(engine: string, suspension: EngineSuspension): string 
 export function machineSuspensionReason(machine: ContributedMachine, now: number): string | null {
   const s = machine.machineSuspension
   return s && now - s.at < s.durationMs
-    ? `This machine is suspended for new work: its last ${SUSPEND_AFTER} starts timed out. It is offered again after ${durationText(s.durationMs)}.` : null
+    ? `This machine is suspended for new work: its last ${SUSPEND_AFTER} starts timed out. It is offered again after ${durationText(s.durationMs)}, or once its owner resumes it.` : null
 }
 
 /** Count the first failure receipt only (the caller owns deduplication). Return a notice once per cooldown. */
@@ -113,9 +113,12 @@ export function readingClearsSuspensions(machine: ContributedMachine, now: numbe
   machine.engineSuspensions = Object.fromEntries(kept)
 }
 
-/** The machine owner's resume: true when there was a suspension to end. */
+/** The owner's resume must lift the machine cooldown too, so the selected engine can take a start again. */
 export function resumeEngine(machine: ContributedMachine, engine: string): boolean {
-  const had = !!machine.engineSuspensions?.[engine]
+  const had = !!machine.engineSuspensions?.[engine] || !!machine.machineSuspension
+  delete machine.machineFailures
+  delete machine.machineBackoff
+  delete machine.machineSuspension
   if (machine.engineSuspensions) { const { [engine]: _ended, ...others } = machine.engineSuspensions; machine.engineSuspensions = others }
   if (machine.engineFailures) { const { [engine]: _reset, ...others } = machine.engineFailures; machine.engineFailures = others }
   if (machine.engineBackoff) { const { [engine]: _reset, ...others } = machine.engineBackoff; machine.engineBackoff = others }
