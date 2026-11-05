@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { machineTeamWork, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
-import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // Task #2806 (Scholes, 11-04): a Mac added as its person joined runs teammates' work only in its Harness Team account
 // (teamAccountOnly). The lampOS mobile team needs it in the owner's own account on Gray's Mac (Flutter and the phone signing
@@ -292,5 +292,24 @@ describe('a start that names a Mac\'s Team account entry while its owner runs te
     f.machine('gray-mac').ownAccountChoice = { allowed: true, by: 'mate', at: new Date(NOW).toISOString() }
     startOnTeam(f, f.group())
     expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+  })
+})
+
+// Task #3060: both of Gray's entries were named 'Gray.local', so whoever picked one could not tell the Team account from the Mac.
+describe('a Mac\'s Team account entry, as every read shows it', () => {
+  it('goes by its Mac\'s name and "· Team account", while the Mac keeps its own name', () => {
+    const f = swarm()
+    const shown = (actor: Actor) => Object.fromEntries((visibleState(f.state, actor, NOW).machines ?? []).map(m => [m.machineId, m.name]))
+    for (const reader of [owner, gray, mate, f.leadActor]) {
+      expect(shown(reader)['gray-team']).toBe('Gray\'s Mac · Team account')
+      expect(shown(reader)['gray-mac']).toBe('Gray\'s Mac')
+      expect(shown(reader)['owner-mac']).toBe('Owner Mac')
+    }
+  })
+
+  it('keeps the stored name its Mac\'s, which renames and the server\'s own sentences read', () => {
+    const f = swarm()
+    visibleState(f.state, owner, NOW)
+    expect(f.machine('gray-team').name).toBe('Gray\'s Mac')
   })
 })
