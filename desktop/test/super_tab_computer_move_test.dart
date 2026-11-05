@@ -92,28 +92,32 @@ String? _text(WidgetTester tester, String key) {
 }
 
 void main() {
-  testWidgets('a computer moved from another account says who had it, and until when', (
-    tester,
-  ) async {
-    final until = DateTime(DateTime.now().year, 11, 5, 12);
-    final c = await _mount(
-      tester,
-      _swarm(
-        _pool(
-          previousOwner: {
-            'personId': 'kelvin',
-            'until': until.toUtc().toIso8601String(),
-          },
+  testWidgets(
+    'a computer moved from another account says who had it, and until when',
+    (tester) async {
+      final until = DateTime(DateTime.now().year, 11, 5, 12);
+      final c = await _mount(
+        tester,
+        _swarm(
+          _pool(
+            previousOwner: {
+              'personId': 'kelvin',
+              'until': until.toUtc().toIso8601String(),
+            },
+          ),
         ),
-      ),
-    );
-    expect(_text(tester, 'super-machine-history-m'), 'Was kelvin until 5 Nov');
-    await _unmount(tester, c);
-    // Never moved: nothing said.
-    final plain = await _mount(tester, _swarm(_pool()));
-    expect(_text(tester, 'super-machine-history-m'), isNull);
-    await _unmount(tester, plain);
-  });
+      );
+      expect(
+        _text(tester, 'super-machine-history-m'),
+        'Was kelvin until 5 Nov',
+      );
+      await _unmount(tester, c);
+      // Never moved: nothing said.
+      final plain = await _mount(tester, _swarm(_pool()));
+      expect(_text(tester, 'super-machine-history-m'), isNull);
+      await _unmount(tester, plain);
+    },
+  );
 
   testWidgets(
     'a Harness Team account serving another account reads so on this Mac\'s row, and Repair signs it in again for this account',
@@ -164,7 +168,7 @@ void main() {
     },
   );
 
-  test('a Harness Team account in place with every part says nothing of its own otherwise', () {
+  test("the row's button reads Repair for an account already here, Set up otherwise", () {
     expect(superTabTeamSetupAction((state: 'exists', detail: null)), 'Repair');
     expect(superTabTeamSetupAction((state: 'none', detail: null)), 'Set up');
   });
