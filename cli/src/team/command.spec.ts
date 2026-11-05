@@ -97,6 +97,17 @@ describe('harness team', () => {
 })
 
 describe('harness team setup', () => {
+  it('copies the engines this Mac already has into the team account, instead of downloading them (#3169)', async () => {
+    const codex = { packageName: '@openai/codex', dir: `${OWNER_HOME}/.local/lib/node_modules/@openai/codex`, bin: 'codex', binPath: 'bin/codex.js' }
+    const f = fake({ statusAfter: reported })
+    const installed = f.deps.installed()
+    f.deps.installed = () => ({ ...installed, engineCopies: [codex] })
+    expect(await teamCommand(['setup'], f.deps)).toBe(0)
+    const { script } = f.built[0]!
+    expect(script).toContain(`copy_engine '@openai/codex' '${OWNER_HOME}/.local/lib/node_modules/@openai/codex' 'codex' 'bin/codex.js'`)
+    expect(script).toContain("[ -n \"$copied_claude\" ] || set -- \"$@\" '@anthropic-ai/claude-code'")
+  })
+
   it('says what it will make, runs one privileged script, and waits for the team daemon to sign in and pass its check', async () => {
     const f = fake({ statusAfter: reported, env: { BACKEND_WS_URL: 'wss://backend.example.test', HARNESS_AUTH_DIR: '/tmp/auth' } })
     expect(await teamCommand(['setup'], f.deps)).toBe(0)
