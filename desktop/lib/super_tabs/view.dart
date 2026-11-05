@@ -3829,6 +3829,14 @@ class _SuperTabViewState extends State<SuperTabView>
             username: name,
       },
       references: _references,
+      onOpenInstructions: (saved) => unawaited(
+        showSuperTabInstructions(
+          context,
+          c,
+          saved.projectId,
+          revision: saved.revision,
+        ),
+      ),
       onOpenGroup: (id) {
         setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
