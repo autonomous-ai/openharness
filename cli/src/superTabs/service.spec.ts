@@ -1235,6 +1235,25 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
   })
 
+  // Amon, 11-05 (#3215): his row read "joining" while this host's join of the Team account kept failing, and only the log said
+  // why. This Mac's own Desktop reads the reason, and its Retry tries again at once.
+  it("tells this Mac's Desktop why its Team account has not joined, and retries at once when asked", async () => {
+    const retryTeamJoins = vi.fn()
+    const host = { machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), teamJoinFailure: vi.fn(() => 'Refused: OWNER_REQUIRED'), retryTeamJoins }
+    const service = superTabService(fakeCore(), { host: () => host as unknown as SuperTabHost })
+    // A host that never ran has nothing to say, and is not started by asking.
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null })
+    await service.requests.super_tabs({ action: 'wake' }, owner)
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: 'Refused: OWNER_REQUIRED' })
+    expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, owner)).toEqual({ ok: true })
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
+  })
+
   it('tells only Desktop on this Mac why there is no account, asking nothing and starting nothing', async () => {
     const offer = vi.fn(async () => ({ state: 'started' as const }))
     const status = vi.fn(async () => ({ state: 'failed' as const, detail: 'launchd would not start it' }))
