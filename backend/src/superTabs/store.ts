@@ -154,9 +154,14 @@ const FREEING_STATUSES: ReadonlySet<string> = new Set(['done', 'review', 'stoppe
 const freesOrOpens = (command: Command): boolean =>
   command.type === 'work.status' ? FREEING_STATUSES.has(command.status) : DISPATCH_TRIGGERS.has(command.type)
 /** How long a refused pick is not sent again in the same round. */
+/** How long a pick refused for a reason its round cannot change (LASTING_REFUSALS) is not sent again. */
 const DISPATCH_REFUSAL_MS = 60 * 60_000
-/** How long a project waits after its PM itself was refused (its grant, its Team boundary) before the dispatch tries again. */
-export const DISPATCH_PM_RETRY_MS = 2 * 60_000
+/** How long any other refusal waits before the dispatch tries again: a PM refused itself (its project waits), or a pick
+ *  refused for what may recover without a new round (repository access, a session reopening...; review 2 of #3230). */
+export const DISPATCH_RETRY_MS = 2 * 60_000
+/** The refusals a task's round cannot change: Team-written code for a member outside a Team account, a Buddy. Named, so
+ *  everything else is retried soon. */
+const LASTING_REFUSALS: ReadonlySet<string> = new Set(['TEAM_WRITTEN_WORK', 'BUDDY_NOT_ASSIGNABLE'])
 /** At most this many refused picks, and as many waiting PMs, are remembered per process; the oldest go first. */
 const DISPATCH_REFUSALS_HELD = 5_000
 /** How long the dispatch waits after a trigger, so a burst of writes runs one pass. */
@@ -2241,9 +2246,10 @@ export class SuperTabStore {
     return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
   }
 
-  /** Picks whose work.assign was refused for a reason of the pick itself, by Swarm, task, round and member, for
-   *  DISPATCH_REFUSAL_MS (dispatchRefusals.ts: pruned every pass, bounded); and PMs refused themselves, by Swarm and PM, for
-   *  DISPATCH_PM_RETRY_MS, so a PM whose access comes back assigns within minutes (review 2 of #3230). Per process. */
+  /** Picks whose work.assign was refused, by Swarm, task, round and member: for DISPATCH_REFUSAL_MS when their round cannot
+   *  change the reason (LASTING_REFUSALS), else for DISPATCH_RETRY_MS; and PMs refused themselves, by Swarm and PM, for
+   *  DISPATCH_RETRY_MS, so access that comes back is used within minutes (review 2 of #3230). Pruned every pass and bounded
+   *  (dispatchRefusals.ts). Per process. */
   private readonly refusedPicks = new RefusalMemory(DISPATCH_REFUSALS_HELD)
   private readonly waitingPms = new RefusalMemory(DISPATCH_REFUSALS_HELD)
   private refusedKey(tabId: string, group: Conversation, agentId: string): string { return `${tabId}:${group.id}:${roundOf(group)}:${agentId}` }
@@ -2326,14 +2332,16 @@ export class SuperTabStore {
             if (code === 'unknown') throw error
             // The PM itself was refused: nothing more for its project now; the sweep tries it again after a short wait.
             if (error instanceof SuperTabError && error.details?.pmRefused) {
-              this.waitingPms.remember(`${tabId}:${lead.id}`, now + DISPATCH_PM_RETRY_MS)
+              this.waitingPms.remember(`${tabId}:${lead.id}`, now + DISPATCH_RETRY_MS)
               continue projects
             }
+            // Paused meanwhile: nothing more this pass, and nothing remembered; a resume's next pass hands out work at once.
+            if (code === 'PAUSED') break projects
             // What another write changed meanwhile (the member took work, its start is settling, the task moved): next pass.
             if (code === 'AGENT_BUSY' || code === 'START_PENDING') break
             if (code === 'DISPATCH_STALE') continue
-            // Refused for a reason this round will not change: not sent again until the next round or the memory expires.
-            this.refusedPicks.remember(this.refusedKey(tabId, group, member.id), now + DISPATCH_REFUSAL_MS)
+            // Not sent again for an hour if its round cannot change it, else for a short retry (DISPATCH_RETRY_MS).
+            this.refusedPicks.remember(this.refusedKey(tabId, group, member.id), now + (LASTING_REFUSALS.has(code) ? DISPATCH_REFUSAL_MS : DISPATCH_RETRY_MS))
             if (code === 'AGENT_CLOSED' || code === 'STOP_REQUESTED') break
           }
         }
