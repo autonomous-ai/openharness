@@ -1,3 +1,4 @@
+import { projectPm } from './crewNeeds.js'
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { shippedNotice } from './buddyNews.js'
@@ -79,6 +80,10 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   if (was?.id !== assignment.id) return null
   switch (assignment.status) {
     case 'needs_human': {
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's question is the PM's crew need, so its line
+      // tells nobody it is their call.
+      const projectLead = projectPm(state, group)
+      if (projectLead && projectLead !== assignment.agentId) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
       const decision = effects.decisions?.find(d => d.conversationId === group.id && d.assignmentId === assignment.id)
       const fallback = decision && decision.options[decision.recommended]

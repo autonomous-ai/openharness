@@ -66,13 +66,14 @@ describe('asking a person for decisions', () => {
       questions: Array.from({ length: 11 }, (_, i) => question(`Question ${i}`)) }).success).toBe(false)
   })
 
-  it('opens a decision for the named person when a worker needs one on its own task, and still tells the Lead', () => {
+  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): a worker's question is the PM's crew need, and
+  // opens no decision for the person it names.
+  it('tells the Lead a worker needs a person on its own task, for the Lead to ask them', () => {
     const s = swarm()
     const needs = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Ship to everyone, or behind a flag?',
       ask: { personId: 'peer', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning the feature on' } }, asAgent(s.worker))
-    expect(needs.decisions).toEqual([expect.objectContaining({ personId: 'peer', askerAgentId: s.worker, assignmentId: s.assignmentId,
-      question: 'Ship to everyone, or behind a flag?', recommended: 0, unblocks: 'Turning the feature on' })])
-    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer.', recipients: [s.lead] })
+    expect(needs.decisions ?? []).toEqual([])
+    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nFor the PM to ask peer.', recipients: [s.lead] })
     // Without a person and options it reaches the Lead as before, who asks.
     const plain = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(s.worker))
     expect(plain.decisions ?? []).toEqual([])
@@ -80,13 +81,15 @@ describe('asking a person for decisions', () => {
       ask: { personId: 'peer', options: ['A', 'B'], recommended: 0, unblocks: 'X' } }, asAgent(s.worker))).toThrow('needs a human')
   })
 
-  // Who asks a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
-  it('lets any agent of the project ask a person', () => {
+  // Who asks a person is workflow (project instructions, phase 4): any agent of the project, in its own project only, and
+  // another agent than the PM asks through the PM (crewNeeds.ts, task #3404).
+  it('lets any agent of the project ask, a worker through the PM', () => {
     const s = swarm()
     const task = s.state.conversations.find(c => c.id === s.group)!
     expect(checkAsker(s.state, asAgent(s.worker), task)).toBe(s.worker)
     const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [question('Ship how?')] }, asAgent(s.worker))
-    expect(asked.decisions).toEqual([expect.objectContaining({ askerAgentId: s.worker, conversationId: s.group })])
+    expect(asked.decisions ?? []).toEqual([])
+    expect(asked.messages.map(m => [m.source?.kind, m.recipients])).toEqual([['crew-need', [s.lead]]])
     const other = s.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result as { projectId: string }
     const elsewhere = s.run({ type: 'conversation.create', projectId: other.projectId, title: 'Elsewhere', brief: '', checks: [] }).result.conversationId as string
     const state = structuredClone(s.state), leadsId = storeOldLeads(state), leads = state.conversations.find(c => c.id === leadsId)!

@@ -153,9 +153,13 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     ]
     const asked = post(f.lead, f.task, 'Is the migration reversible?', [f.dev])[0]!
     rows.push(...post(f.dev, f.task, 'Yes.', [], { id: asked.id, author: asked.author as never }))
-    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system')
+    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system' && m.source?.kind !== 'crew-need')
     expect(agentPosts).toHaveLength(18)
     expect(agentPosts.filter(m => m.recipients.includes(f.lead))).toHaveLength(3)
+    // The Engineer's tag of the owner is the PM's crew need instead (crewNeeds.ts, task #3404): one more for the PM, and the
+    // owner is not tagged.
+    expect(rows.filter(m => m.source?.kind === 'crew-need').map(m => m.recipients)).toEqual([[f.lead]])
+    expect(rows.flatMap(m => m.mentions ?? [])).toEqual([])
   })
 })
 

@@ -2395,10 +2395,12 @@ describe('any agent of the project', () => {
     expect(JSON.stringify(f.state)).toBe(before)
   })
 
-  it('lets any agent tell a person of its project', () => {
-    const { f, E } = project()
+  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need.
+  it('lets the PM tell a person of its project, and turns another agent\'s line into a crew need', () => {
+    const { f, E } = project(), pm = f.leadActor
     f.invite()
-    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E)
+    expect(f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E).messages.map(m => m.source?.kind)).toEqual(['crew-need'])
+    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)
     // In their one Buddy chat, marked with its project, and in their older chat there for older apps (Dee, 10-31).
     const swarm = f.state.conversations.find(c => c.kind === 'swarm-buddy')!, chat = f.state.conversations.find(c => c.kind === 'buddy')!
     expect(told.messages).toEqual([
@@ -4297,10 +4299,13 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('lets any agent of the project tag, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
+  it('lets the PM tag, routes another agent’s tag to the PM, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
     expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
-    expect(f.run(send(group, ['peer']), as(worker)).messages[0]!.mentions).toEqual(['peer'])
+    // People talk only to the PM (crewNeeds.ts, task #3404): the worker's tag is the PM's crew need.
+    const byWorker = f.run(send(group, ['peer']), as(worker)).messages
+    expect(byWorker.flatMap(m => m.mentions ?? [])).toEqual([])
+    expect(byWorker.filter(m => m.source?.kind === 'crew-need').map(m => m.recipients)).toEqual([[lead]])
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This conversation is unavailable.')
     expect(() => f.run(send(storeOldLeads(f.state), ['owner']), as(lead))).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })

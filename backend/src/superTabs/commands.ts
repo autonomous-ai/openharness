@@ -23,6 +23,7 @@ import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './ru
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
+import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -1006,6 +1007,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     effects.messages.push({ id, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
       ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}), ...(holdMentions ? { holdMentions } : {}) })
     result.messageId = operationId
+  }
+  /** A crew need for the PM (crewNeeds.ts): its own row, to the PM alone, and the agent's result says where it went. Its
+   *  messageId is where the agent asked; an ask or a line with no message of its own points at this row. */
+  const crewNeed = (group: Conversation, pm: string, need: Omit<CrewNeed, 'agentId' | 'messageId'> & { messageId?: string }, words: string,
+    id = stableId(operationId, 'crew-need')) => {
+    const full: CrewNeed = { agentId: actor.kind === 'agent' ? actor.agentId : '', ...need, messageId: need.messageId ?? id }
+    effects.messages.push({ id, conversationId: crewNeedPlace(state, group, pm), author: sender, replyTo: null, recipients: [pm],
+      text: crewNeedText(state, need.personIds, words, need.options, need.recommended), source: { kind: CREW_NEED_KIND, crewNeed: full } })
+    effects.result.routedToPm = routedLine(state, need.personIds)
   }
   /** A route, start or assignment on a task by any agent of its project, or a post there by its coordinator, with its time:
    *  it ends a person's held tags there (mentions.ts dropHeldTags) and restarts an unstarted start's clock (liveness.ts). Any
@@ -2327,8 +2337,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'decision.ask': {
       const group = open(state, command.conversationId)
-      effects.decisions = askDecisions(state, group, command.personId, command.questions,
+      const drafts = askDecisions(state, group, command.personId, command.questions,
         { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one
+      // each, checked as a decision would be and opened for nobody.
+      const pmInstead = routesToPm(state, actor, group)
+      if (pmInstead) {
+        command.questions.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
+          question: q.question, options: q.options, recommended: q.recommended }, q.question, stableId(operationId, 'crew-need', String(i))))
+        result.decisionIds = []
+        break
+      }
+      effects.decisions = drafts
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
@@ -2736,6 +2756,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = projectOf(state, projectId)
       const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
       if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${usernameOf(state, to.id)} cannot read this project.`, 400)
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's line is the PM's crew need, in the project chat.
+      const projectChat = state.conversations.find(c => c.id === project.leadConversationId)
+      const pmInstead = projectChat ? routesToPm(state, actor, projectChat) : null
+      if (projectChat && pmInstead) {
+        crewNeed(projectChat, pmInstead, { personIds: [to.id], conversationId: projectChat.id }, command.text)
+        break
+      }
       // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
       // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
       // which older apps and the phone still show (spec: Older apps).
@@ -3394,11 +3421,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Every username is worked out at once, and only for a post that names or picks someone.
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
-      const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
-      const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): an agent other than the PM tags only the person it answers,
+      // and its other tags go to the PM as a crew need, written after the post below.
+      const pmInstead = command.agentOnly ? null : routesToPm(state, actor, group)
+      const answering = pmInstead && (command.replyTo || command.answers) && context.reply?.author.kind === 'person' ? context.reply.author.id : null
+      const tagged = pmInstead ? mentions.filter(id => id === answering) : mentions
+      const routedTags = mentions.filter(id => !tagged.includes(id))
+      const unsaid = picked.filter(id => tagged.includes(id) && !named.includes(id) && !saysName(command.text, names.get(id)!))
+      const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -3476,7 +3509,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
+        tagged.length ? command.mentionsIfNoWorker : undefined)
+      if (pmInstead && routedTags.length) {
+        crewNeed(group, pmInstead, { personIds: routedTags, messageId: operationId, conversationId: group.id }, text)
+      }
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
@@ -3734,10 +3771,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
       let asked: string | undefined
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): its own agent's needs_human, when that agent is not the PM,
+      // is the PM's crew need, and its question opens no decision for the person it names.
+      const pmInstead = command.status === 'needs_human' && actor.kind === 'agent' && actor.agentId === assignment.agentId
+        ? routesToPm(state, actor, group) : null
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
         }
+        // For the PM to ask: the person must be in the Swarm, as a decision's would.
+        if (pmInstead) person(state, command.ask.personId)
+      }
+      if (command.ask && !pmInstead && command.result && actor.kind === 'agent') {
         const { personId, ...choices } = command.ask
         const drafts = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
           { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
@@ -3756,6 +3801,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       assignment.result = command.result
       // A new status is a new hand-off, or the end of one: a review's earlier findings are answered (liveness.ts waitingForReview).
       delete assignment.reviewFoundAt
+      // Whom the work waits on, for the board and liveness, even when the PM asks them: a record, which notifies nobody.
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
@@ -3786,9 +3832,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
-        const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${agentWrittenNameOf(state, person(state, command.ask.personId).id)}.`
+        const askedName = command.ask ? agentWrittenNameOf(state, person(state, command.ask.personId).id) : ''
+        const asked = !command.ask ? '' : pmInstead ? `\n\nFor the PM to ask ${askedName}.`
+          : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${askedName}.`
+        // A needs_human for the PM is its crew need: on this row when the row reaches the PM, else on a row of its own there.
+        const need = pmInstead ? { personIds: command.ask ? [command.ask.personId] : [], conversationId: group.id,
+          ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended } : {} } : null
+        const onRow = need && pmInstead && recipients.includes(pmInstead) ? { crewNeed: { agentId: assignment.agentId, ...need, messageId: operationId } } : {}
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
-        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status })
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status, ...onRow })
+        if (need && pmInstead) {
+          if (onRow.crewNeed) effects.result.routedToPm = routedLine(state, need.personIds)
+          else crewNeed(group, pmInstead, { ...need, messageId: operationId }, command.result ?? label)
+        }
         // The server opens no review by itself: the agent whose work is ready opens and assigns it, as the project's instructions
         // say (project instructions, phase 4). When no machine the project may use can start either engine, or soon none
         // will, the project's coordinator hears it once, in its chat (reviewCapacity.ts).
