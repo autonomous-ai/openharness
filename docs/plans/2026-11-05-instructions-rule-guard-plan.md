@@ -29,7 +29,8 @@ one Buddy chat and their older project Buddy chat). `pmSchedule.ts` text changes
 
 ## Design
 
-- growth: N/A because nothing is stored; the check runs on the two texts of one save.
+- growth: no new collection. One boolean on the project's schedule (`tidyPending`), cleared by the next coordinator save;
+  the rule check runs on the two texts of one save.
 - concurrency: N/A because it runs inside the save's existing transaction and revision check.
 - read cost: one indexed read of the named approval messages (by id, at most 20), only when a save names them.
 - scale: 64 KB documents (~1,000 items): segments × items word-set compare, well under a millisecond per save at today's
@@ -84,10 +85,26 @@ export function droppedRules(before: string, after: string): DroppedRule[]
   approve.
 - [ ] Implement in `commands.ts`; the store loads the approval messages and the approvers' Buddy chats.
 
-## Task 3: The PM's built-in text
+## Task 3: The PM's built-in text and the daily tidy
 
-**Files:** `backend/src/superTabs/pmSchedule.ts`, its test.
+Ken's additions through River (11-05), part of this task: (4) every wake tells the PM to reread the whole instructions
+before its jobs (about 7-9k tokens a wake, 20-30 wakes a day, accepted); (5) after the tidy's save the PM compares it with
+the previous revision; (6) the tidy leaves the 30-minute wake for its own daily message at 23:00 local, beside the nightly
+reflection; (7) it counts only when a save follows, and the next day's message says when it was skipped; (8) the PM sorts
+every dropped line as merged, expired or a person's rule that is gone, restores or asks about the last, and lists them in
+the save's summary.
 
-- [ ] Failing test: the tidy and teaching text say never to drop or weaken a person's rule on the PM's own judgment, even
-  one it thinks can't be done; ask that person and keep the rule until they answer; name their approval message.
-- [ ] Change the text.
+**Files:** `backend/src/superTabs/pmSchedule.ts`, `projects.ts` (`schedule.tidyPending`), `commands.ts` (a coordinator
+save completes a pending tidy), `store.ts` (the poll sends the tidy), their tests.
+
+**Interfaces:** `tidyRequest(state, target, now): ScheduledTidy | null`, `recordTidy(project, tidy)`,
+`tidySaved(project, revision)`, `tidyMessageId(tabId, projectId, day)`. `ScheduleJob` loses `'tidy'`.
+
+- [ ] Failing tests: the teaching and schedule text say never to drop or weaken a person's rule on the PM's own judgment;
+  every wake opens with the reread line; the wake never carries the tidy; the tidy comes alone in the 23:00 hour, once a
+  day, when the instructions changed; it stays pending until the coordinator saves, and the next one says it was skipped;
+  its text sorts dropped lines into the three kinds and checks the save against the previous revision.
+- [ ] Implement.
+
+Known limit: a save's summary is one line of at most 200 characters (instructions.ts), so a long tidy lists its dropped
+lines there in a few words each; the chat line still shows every removed item (#3021).

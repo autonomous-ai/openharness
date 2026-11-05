@@ -274,3 +274,45 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
   })
 })
+
+// Task #3151 (Ken, 11-05): the tidy left the 30-minute wake for its own message at 23:00 local, and counts only when a save
+// follows it.
+describe('the daily tidy on the coordinator\'s poll', () => {
+  const tidies = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
+    .filter(m => kindOf(m) === 'tidy-request')
+  /** 23:05 in Vietnam on the given November day. */
+  const night = (day: number) => Date.UTC(2026, 10, day, 16, 5)
+
+  it('asks once a night in its own message, says the next night when no save followed, and stops once one did', async () => {
+    const f = await swarm()
+    wantSchedule()
+    await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Rules\n\n- Tests run first (owner, 2026-11-02).', summary: 'Tests first' })
+    await f.poll()
+    expect(await tidies(f.tab)).toEqual([])
+    f.clock.now = night(2)
+    const inbox = await f.poll()
+    const [first] = await tidies(f.tab)
+    expect(first).toBeDefined()
+    expect(first!.recipientIds).toEqual([f.lead])
+    expect(first!.text).toMatch(/^Daily tidy, 23:05 \(Asia\/Ho_Chi_Minh\)\./)
+    expect(first!.text).not.toContain('Yesterday\'s tidy was skipped')
+    expect(inbox.map(d => d.messageId)).toContain(first!.id)
+    // Never inside a wake.
+    expect((await schedules(f.tab)).some(m => m.text.includes('Daily tidy'))).toBe(false)
+    f.clock.now += 10 * MINUTE
+    await f.poll()
+    expect(await tidies(f.tab)).toHaveLength(1)
+    // No save followed: the next night asks again and says so.
+    f.clock.now = night(3)
+    await f.poll()
+    const second = (await tidies(f.tab))[1]
+    expect(second?.text).toContain('Yesterday\'s tidy was skipped: no save followed it.')
+    // The coordinator's save is the tidy done: nothing to tidy the night after.
+    expect((await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: 2,
+      text: '# Rules\n\n- Tests run first (owner, 2026-11-02).\n- Reviews run on Opus.', summary: 'Tidied: nothing dropped', askedBy: owner.sub },
+    host, f.lead)).result.revision).toBe(3)
+    f.clock.now = night(4)
+    await f.poll()
+    expect(await tidies(f.tab)).toHaveLength(2)
+  })
+})

@@ -59,7 +59,7 @@ import { allowedDrops, approvedDropNotice, MAX_APPROVALS, type ApprovalRow } fro
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { instructionsChange } from './instructionsDiff.js'
-import { BUILT_IN_HEADING } from './pmSchedule.js'
+import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -1805,6 +1805,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const told = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
       saveInstructions(project, current, before, command.text, command.summary, askedBy)
+      // The coordinator's save after the daily tidy asked for one is that tidy done (pmSchedule.ts tidyRequest).
+      if (actor.kind === 'agent') tidySaved(projectOf(state, project.id), current + 1)
       // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
       for (const [personId, rules] of told) {
         const to = person(state, personId)

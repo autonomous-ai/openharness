@@ -260,7 +260,7 @@ describe('the daily tidy', () => {
     expect(tidy(state, NIGHT + 2 * DAY)).toBeNull()
     project(state).instructionsRevision = 5
     expect(tidy(state, NIGHT + 2 * DAY)!.skipped).toBe(false)
-    expect(tidy(state, NIGHT + 2 * DAY)!.draft.text).not.toContain('skipped')
+    expect(tidy(state, NIGHT + 2 * DAY)!.draft.text).not.toContain('Yesterday\'s tidy was skipped')
   })
 
   it('sorts every dropped line, keeps a person\'s rule or asks them, and checks the save against the revision before', () => {

@@ -86,7 +86,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3935,6 +3935,14 @@ export class SuperTabStore {
         // Held back, only its slot: the people and tidy jobs stay due for the next one (pmSchedule.ts recordWake).
         recordWake(project, scheduled, this.now(), open ? null : wakeId!)
         afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
+      }
+      // The daily tidy, in its own message (pmSchedule.ts tidyRequest): once a local date, recorded in this same write, so two
+      // racing polls ask once.
+      const tidy = led ? tidyRequest(state, target, this.now()) : null
+      if (tidy) {
+        written.push(tidy.draft)
+        recordTidy(projectOf(state, led!.id), tidy)
+        afterCommit(tx, () => logger.info('[swarm-deliveries] tidy request', { tabId, day: tidy.day, skipped: tidy.skipped }))
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
