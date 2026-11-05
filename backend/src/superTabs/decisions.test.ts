@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -127,6 +127,16 @@ describe('answering a decision', () => {
     expect(answer(peer, open(s, { conversationId: 'gone' }))).toThrow('unavailable')
   })
 
+  it('takes a typed answer as its note with no option, and tells the asker as it does for an option', () => {
+    const s = swarm()
+    expect(commandSchema.safeParse({ type: 'decision.answer', decisionId: 'decision-1', note: 'Use the Mac Studio' }).success).toBe(true)
+    const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', note: 'Use the Mac Studio' }, peer, { decision: open(s) })
+    expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: null, note: 'Use the Mac Studio' })
+    expect(answered.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.worker, s.lead], text: ANSWERED_NOTICE,
+      source: { kind: 'agent-only', decisionId: 'decision-1' } })])
+    expect(answered.messages[0]!.text).not.toContain('Mac Studio')
+  })
+
   it('still records the answer when the asker has left the conversation, telling whoever of them is left', () => {
     const s = swarm()
     const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, peer, { decision: open(s, { askerAgentId: 'gone' }) })
@@ -195,10 +205,11 @@ describe('leaving a decision to the PM', () => {
     expect(() => delegate(s, peer, open(s, { recommended: 2 }))).toThrow('no recommended option')
   })
 
-  it('takes either a choice or a delegation, not both or neither', () => {
+  it('takes a choice, a typed answer or a delegation, not a choice and a delegation or none of them', () => {
     const s = swarm()
     expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0, delegate: true }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
-    expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1' }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
+    expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1' }, peer, { decision: open(s) }))
+      .toThrow('Choose one of its options, type an answer, or leave it to the PM.')
     expect(commandSchema.safeParse({ type: 'decision.answer', decisionId: 'decision-1', delegate: false }).success).toBe(false)
   })
 
@@ -243,6 +254,19 @@ describe('listing a person\'s decisions', () => {
     const all = await listDecisions(reading(s, 3).tx, 'tab', s.state, peer, 'open')
     expect(all.decisions.map(d => d.id)).toEqual(['decision-0', 'decision-1', 'decision-2'])
     expect(all.more).toBe(false)
+  })
+})
+
+describe('reading a typed answer', () => {
+  it('shows the asker the note as the answer, with no option', async () => {
+    const s = swarm()
+    const row = { id: 'decision-1', batchId: 'batch-1', projectId: 'lead', conversationId: s.group, assignmentId: null, personId: 'peer',
+      askerAgentId: s.worker, question: 'Which machine runs the phone tests?', options: ['Tony\'s Mac', 'Mac Studio'], recommended: 0,
+      unblocks: 'The phone tests', createdAt: new Date(1000), answeredAt: new Date(2000), choice: null, note: 'Use the Mac Studio', delegated: null,
+      overdue: null, kind: null, withdrawn: null }
+    const tx = { superTabDecision: { findMany: async () => [row] } } as unknown as Prisma.TransactionClient
+    const read = await listDecisions(tx, 'tab', s.state, asAgent(s.worker), 'answered')
+    expect(read.decisions).toEqual([expect.objectContaining({ id: 'decision-1', choice: null, note: 'Use the Mac Studio', answer: 'Use the Mac Studio' })])
   })
 })
 

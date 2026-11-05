@@ -50,7 +50,6 @@ void main() {
           ),
         ),
       );
-      if (!c.projectsGroupOpen) c.toggleProjectsGroup();
       await tester.pumpAndSettle();
 
       Future<void> shot(String name) => tester.runAsync(() async {
