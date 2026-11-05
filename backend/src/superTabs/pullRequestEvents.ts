@@ -114,7 +114,8 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
  *  cannot say, pullRequestPatch.ts), the app's own login, and `done` once it is over. */
 export interface PullRequestReader {
   watch(url: string): Promise<PullRequestWatch | null>
-  patch(url: string, head: string): Promise<string | null>
+  /** [base]: the branch the watch read it merging into; no id when GitHub's answer for the comparison names another. */
+  patch(url: string, head: string, base: string): Promise<string | null>
   botLogin(): Promise<string | null>
   done(): Promise<void>
 }
@@ -153,9 +154,11 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
   return {
     watch: url => read(url, PULL_WATCH_PERMISSIONS, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
     // The files at [head], from the comparison of the commits the pull request names: none once it names another head.
-    patch: (url, head) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
+    // Against the base the watch saw (review of #3218, round 5): a retarget between the two reads gives no id, so a patch hashed
+    // against one branch is never recorded under another; it is read again later.
+    patch: (url, head, base) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
       const read = await app.pullRequestPatchFiles(repository, number, granted, head)
-      return read && patchId(read.files, read.base)
+      return read && read.base === base ? patchId(read.files, read.base) : null
     }),
     botLogin: () => app.botLogin(),
     async done() {
@@ -199,7 +202,7 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     const patches = new Map<string, Promise<string | null>>()
     const patchOf = (url: string, head: string, base: string) => {
       const key = `${url}@${head}@${base}`
-      if (!patches.has(key)) patches.set(key, reader.patch(url, head).catch(() => null))
+      if (!patches.has(key)) patches.set(key, reader.patch(url, head, base).catch(() => null))
       return patches.get(key)!
     }
     // A new base branch is read again like a new head (security review of #3218, round 3): the id names the branch.

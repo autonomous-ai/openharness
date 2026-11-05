@@ -51,7 +51,7 @@ function fakeReader() {
   const reader: PullRequestReader = {
     watch: async url => { asked.push(url); return pulls.get(url) ?? null },
     // A patch id names the base branch too (pullRequestPatch.ts): `HEAD@BASE` when a test sets one, else by head alone.
-    patch: async (url, head) => { patchReads.push(`${url}@${head}`); return patches.get(`${head}@${pulls.get(url)?.base}`) ?? patches.get(head) ?? null },
+    patch: async (url, head, base) => { patchReads.push(`${url}@${head}`); return patches.get(`${head}@${base}`) ?? patches.get(head) ?? null },
     botLogin: async () => 'harness[bot]',
     done: async () => {},
   }
