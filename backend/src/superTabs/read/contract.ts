@@ -128,6 +128,10 @@ export interface Derived {
   /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
    *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
   swarmBuddy?: true
+  /** Each project with a crew the reader reads, by id: its lanes' waiting and busy tasks, the oldest wait (ms) and the waiting
+   *  tasks in the order the Swarm hands them out (dispatch.ts laneCapacity, task #3400). Absent when none has a crew, and from
+   *  an older backend. */
+  lanes?: Record<string, import('../dispatch.js').LaneCapacity[]>
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

@@ -4,6 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
+import { derivedLanes, type LaneCapacity } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
@@ -126,6 +127,12 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
 export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
+/** The crew's lanes (dispatch.ts derivedLanes), only when some project the reader reads has a crew. */
+function lanesOf(state: SuperTabState, visible: SuperTabState, now: number): { lanes?: Record<string, LaneCapacity[]> } {
+  const lanes = derivedLanes(state, visible, now)
+  return lanes ? { lanes } : {}
+}
+
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
   const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
@@ -164,5 +171,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     sessionsFromChat: true as const,
     // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.
     swarmBuddy: true as const,
+    ...lanesOf(state, visible, now),
   }
 }

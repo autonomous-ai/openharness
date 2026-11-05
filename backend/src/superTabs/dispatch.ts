@@ -7,7 +7,7 @@
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, projectOf } from './projects.js'
+import { agentProjectId, projectOf, projectsOf } from './projects.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 
 const HOUR_MS = 3_600_000
@@ -161,4 +161,42 @@ export function dispatchPlan(state: SuperTabState, projectId: string, rules: Dis
     picks.push({ conversationId: next.group.id, agentId: member.id, why: next.why, lane: laneOf(next.group, rules.lanes) })
   }
   return picks
+}
+
+/** One lane's line of the capacity read: its waiting tasks (open, nobody's, in hand-out order), how many of its tasks are in
+ *  someone's hands, and since when the longest-waiting one has waited (null when no wait was recorded). */
+export interface LaneCapacity { lane: string; waiting: number; busy: number; oldestAt: number | null; taskIds: string[] }
+
+/** When [group] began waiting with nobody holding it: as its liveness recorded, else when its last attempt was lost. */
+const waitingSince = (group: Conversation): number | undefined =>
+  group.liveness?.state === 'orphaned' ? group.liveness.since : group.assignment?.lost?.at
+
+/** [projectId]'s lanes as the dispatch sees them, in the table's order, each with work waiting or in hand. A time, not an age,
+ *  so the read's summary does not move as the clock does (read/derivedEtag.ts). */
+export function laneCapacity(state: SuperTabState, projectId: string, rules: DispatchRules, now = Date.now()): LaneCapacity[] {
+  const open = openTasks(state, projectId, now)
+  const project = projectOf(state, projectId)
+  const busy = queueSiblings(state, project).filter(occupiesAgent)
+  return rules.lanes.flatMap(({ name }) => {
+    const waiting = open.filter(g => laneOf(g, rules.lanes) === name)
+    const inHand = busy.filter(g => laneOf(g, rules.lanes) === name).length
+    if (!waiting.length && !inHand) return []
+    const since = waiting.map(waitingSince).filter((t): t is number => t !== undefined)
+    return [{ lane: name, waiting: waiting.length, busy: inHand, oldestAt: since.length ? Math.min(...since) : null, taskIds: waiting.map(g => g.id) }]
+  })
+}
+
+/** "Desktop: 6 waiting, 2 busy, oldest 2 h" (under an hour in minutes; no oldest when none was recorded). */
+export function capacityLine(c: LaneCapacity, now: number): string {
+  const age = c.oldestAt === null ? null : Math.max(0, now - c.oldestAt)
+  const oldest = age === null ? '' : age >= HOUR_MS ? `, oldest ${Math.floor(age / HOUR_MS)} h` : `, oldest ${Math.floor(age / 60_000)} min`
+  return `${c.lane}: ${c.waiting} waiting, ${c.busy} busy${oldest}`
+}
+
+/** The read's `derived.lanes`: each project [visible] (the reader's view) shows that has a crew, by project id; undefined when
+ *  none has. */
+export function derivedLanes(state: SuperTabState, visible: SuperTabState, now = Date.now()): Record<string, LaneCapacity[]> | undefined {
+  const crewed = new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)))
+  const lanes = projectsOf(visible).filter(p => crewed.has(p.id)).map(p => [p.id, laneCapacity(state, p.id, DISPATCH_RULES, now)] as const)
+  return lanes.length ? Object.fromEntries(lanes) : undefined
 }
