@@ -182,7 +182,7 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
       for (const project of projectsOf(head.data as unknown as SuperTabState).filter(p => projectIds.includes(p.id))) {
         const ledger = project.releases
         const repository = githubRepository(project.repository?.repositoryUrl)
-        if (!ledger || !repository || (!ledger.pending.length && !Object.keys(ledger.steps ?? {}).length)) continue
+        if (!ledger || !repository || (!ledger.pending.length && !Object.keys(ledger.steps ?? {}).length && !ledger.leaving?.length)) continue
         try {
           const facts: ReleaseFacts = { resolved: [], releases: {} }
           let unread = 0

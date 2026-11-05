@@ -70,12 +70,14 @@ describe('releases scheduled by the Swarm', () => {
     const url = 'https://github.com/example/app/pull/41'
     await s.run({ type: 'conversation.merged', conversationId: shipIt, pullRequestUrl: url, mergedAt: new Date(T - 30 * MINUTE).toISOString() }, host, s.lead)
     expect((await s.ledger())!.pending).toEqual([{ groupId: shipIt, url, mergedAt: T - 30 * MINUTE }])
+    expect((await s.group(shipIt)).releasing).toEqual([])
     // After 18:00: the release shipped it, and no step opens.
     s.clock.set(T + 8 * 60 * MINUTE)
     const outcome = await s.store.settleReleases(s.tab, 'lead', { resolved: [{ groupId: shipIt, url, components: ['desktop'], sha: 'm41' }],
       releases: { desktop: { tag: 'v1.3.78_desktop', sha: 'd1', at: T - 5 * MINUTE, carries: [pendingKey({ groupId: shipIt, url })] } } })
     expect(outcome).toMatchObject({ shipped: [shipIt], opened: null })
     expect((await s.group(shipIt)).released).toEqual({ at: T - 5 * MINUTE, tags: ['v1.3.78_desktop'] })
+    expect(await s.group(shipIt)).not.toHaveProperty('releasing')
     expect((await s.ledger())!.pending).toEqual([])
   })
 

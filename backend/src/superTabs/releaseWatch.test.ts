@@ -162,6 +162,10 @@ describe('watchReleases', () => {
     const s = scene({ pending: [], steps: { cli: { groupId: 's', at: T } } })
     await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
     expect(s.read).toEqual(['latest cli', 'done'])
+    // A list whose only work is clearing tasks the cap pushed off still settles, with nothing to read from GitHub.
+    const leaving = scene({ pending: [], leaving: ['g9'] })
+    await watchReleases(leaving.db, leaving.store, leaving.fake, T, { warn: () => {}, info: () => {} })
+    expect(leaving.settled.map(x => x.projectId)).toEqual(['p1'])
     const quiet = scene({ pending: [] })
     await watchReleases(quiet.db, quiet.store, quiet.fake, T, { warn: () => {}, info: () => {} })
     expect(quiet.settled).toEqual([])

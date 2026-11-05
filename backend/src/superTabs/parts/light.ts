@@ -95,6 +95,7 @@ export const GROUP_FIELDS = {
     'queueRank',
     'reactionSeq',
     'released',
+    'releasing',
     'reportSeq',
     'requesterId',
     'reviewStamp',

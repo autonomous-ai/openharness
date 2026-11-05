@@ -467,6 +467,9 @@ export interface Conversation {
   /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
    *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
   released?: { at: number; tags: string[] }
+  /** While it is on its project's release list (releases.ts): the parts it still waits for, as `desktop` or `cli`; empty until
+   *  its pull request's files are read. Absent otherwise, and cleared once it is released or leaves the list (River, 11-05). */
+  releasing?: import('./releases.js').ReleaseComponentId[]
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
