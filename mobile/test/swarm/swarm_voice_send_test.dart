@@ -150,6 +150,26 @@ void main() {
       expect(files.files, [image]);
     });
 
+    test('$where restores attached files after a refused combined post', () async {
+      final r = rig();
+      final c = await open(r.reader);
+      final thread = SwarmThread(c, 'root-1');
+      addTearDown(thread.dispose);
+      final files = inThread ? thread.files : c.files;
+      final image = SwarmOutgoingFile('picture.png', Uint8List.fromList([1]));
+      final later = SwarmOutgoingFile('later.txt', Uint8List.fromList([2]));
+      files.add([image]);
+      r.swarm.routes[commands] = (_) {
+        files.add([later]);
+        throw const SuperTabFailure('INVALID', 'Try again', statusCode: 400);
+      };
+      final sent = inThread
+          ? await thread.sendVoice(take, 'en')
+          : await c.sendVoice(take, 'en');
+      expect(sent.sent, isFalse);
+      expect(files.files, [image, later]);
+    });
+
     test('$where keeps attachments when voice reading fails', () async {
       final r = rig();
       final c = await open(r.reader);
