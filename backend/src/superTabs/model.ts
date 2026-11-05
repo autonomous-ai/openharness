@@ -197,6 +197,8 @@ export interface AgentStartRequest {
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** The offered account selected for a destination PM switch. */
   profileId?: string
+  /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
+  crewMoveOf?: string
   /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
   handoffNote?: string
   handoffSourceAgentId?: string
@@ -548,9 +550,6 @@ export interface SuperTabState {
   /** What a report's removal of a closed agent must restore if its session reopens (closedAgents.ts): only its machine's host hears
    *  of it (read/hostRows.ts), and no reader gets it, as it names private chats. */
   removedSessions?: RemovedSession[]
-  /** Crew sessions left on a machine by a move or a retire (crewKeep.ts): its host closes the session and drops the folder,
-   *  then says so (agent.crewRetired). At most CREW_RETIRED_MAX, each kept CREW_RETIRED_KEEP_MS. */
-  crewRetired?: Array<{ machineId: string; harnessId: string; agentId: string; why: 'moved' | 'retired'; at: number }>
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
     buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */

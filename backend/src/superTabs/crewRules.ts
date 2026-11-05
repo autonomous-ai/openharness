@@ -16,6 +16,3 @@ export const MOVE_LOW_DISK_BYTES = 5 * GB
 export const FOLDER_ASLEEP_MS = 7 * DAY
 /** A machine with less free disk than this drops asleep members' folders first, the longest asleep first, one a pass. */
 export const DISK_FLOOR_BYTES = 10 * GB
-/** How long, and how many, retired crew sessions wait for their host to close and drop them. */
-export const CREW_RETIRED_KEEP_MS = 7 * DAY
-export const CREW_RETIRED_MAX = 200

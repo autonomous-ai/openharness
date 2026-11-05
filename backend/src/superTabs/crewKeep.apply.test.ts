@@ -32,7 +32,7 @@ describe('applying the crew keeper in the Swarm\'s sweep', () => {
     const start = f.state.starts!.find(s => s.request.crewMoveOf === ada.id)!
     expect(ada.movedTo).toEqual({ machineId: 'mini', startId: start.id, reason: 'signed-out', at: NOW })
     expect(start.request).toMatchObject({ machineId: 'mini', name: ada.name, roleName: 'Engineer', engine: 'claude', model: 'opus', effort: 'high',
-      cwd: '/swarms/mini', worktree: true })
+      cwd: '/swarms/mini/lead', worktree: true })
     expect(start.request.handoffNote).toContain('signed out')
     expect(drafts).toEqual([expect.objectContaining({ conversationId: 'lead', text: expect.stringContaining('moving to mini') })])
     // Moved once: the next pass leaves it to its start.

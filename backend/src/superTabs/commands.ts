@@ -1,4 +1,5 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
@@ -2884,6 +2885,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // Only its first failure counts against its engine: the server may have timed it out before its host said so (liveness.ts).
         const counted = !start.error
         start.error = command.error
+        // A crew member's move that did not start leaves it where it was, for the keeper's next pass (crewKeep.ts).
+        if (start.request.crewMoveOf) crewMoveFailed(state, start)
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A thread session's says so in its thread (buddySessions.ts), and frees its place.
         if (start.request.buddySession) {
@@ -2983,6 +2986,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       start.harnessId = command.harnessId
       noteStartSucceeded(state, start)
       result.agentId = agentId
+      // A crew member's move: its new session becomes the same member, and the old one is retired (crewKeep.ts).
+      if (start.request.crewMoveOf) takeOverCrewMember(state, start, agentId, context.now, target => removeAgent(target))
       // A thread session joins its chat's record, and hears the person's messages sent while it started, by delivery as any
       // other: its host's person check, run: judging and read grant apply to them too (spec: Security).
       if (start.request.buddySession) {
@@ -3655,7 +3660,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const worker = agent(state, command.agentId)
       // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
       // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
-      if (sessionClosed(state, worker, context.now)) {
+      // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts).
+      if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+      const woke = wakeCrewMember(worker, context.now)
+      if (!woke && sessionClosed(state, worker, context.now)) {
         fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
       }
       projectChatJoin(group, worker.id, worker.displayName ?? worker.name)

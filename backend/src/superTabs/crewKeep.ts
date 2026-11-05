@@ -4,10 +4,11 @@
  * route's order (project instructions, Order and quota); folders of long-asleep members, and of asleep members on a machine
  * short of disk, are dropped. The numbers are in crewRules.ts. Applying the actions is liveness.ts's (sweepLiveness).
  */
-import { activeWork, type Agent, type CrewTrouble, type SuperTabState } from './model.js'
+import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
-import type { ContributedMachine } from './machines.js'
-import { teamAccountPool } from './projects.js'
+import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
+import { agentProjectId, groupProject, projectsOf, teamAccountPool } from './projects.js'
+import { placeAfter, queueSiblings } from './taskQueue.js'
 import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, SLEEP_IDLE_MS } from './crewRules.js'
@@ -106,4 +107,134 @@ export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): Cre
     if (asleep) actions.push({ kind: 'dropFolder', agentId: asleep.id, why: 'low-disk' })
   }
   return actions
+}
+
+const ENGINE = (engine: string) => engine === 'claude' ? 'Claude' : engine === 'codex' ? 'Codex' : engine
+const machineName = (state: SuperTabState, machineId: string) => state.machines?.find(m => m.machineId === machineId)?.name ?? 'its machine'
+/** Why a member leaves [from], in words the project chat and its hand-off note use. */
+export function troubleText(state: SuperTabState, agent: Agent, reason: CrewTrouble): string {
+  const from = machineName(state, agent.machineId), engine = ENGINE(agent.configuration.engine)
+  return reason === 'offline' ? `${from} has been offline over 5 minutes`
+    : reason === 'signed-out' ? `${engine} is signed out on ${from}`
+    : reason === 'quota' ? `${from} is out of ${engine} quota for over an hour`
+    : `${from} is low on disk`
+}
+const nameOf = (agent: Agent) => agent.displayName ?? agent.name
+
+/** The start that moves [agent] to [pool], as an agent.start of the same member there: its project's folder, its name, role,
+ *  engine, model and effort, in its project's chat. Null when its project is gone. Checked by admitMachineStart before use. */
+export function crewMoveRequest(state: SuperTabState, agent: Agent, pool: ContributedMachine): AgentStartRequest | null {
+  const project = projectsOf(state).find(p => p.id === agentProjectId(state, agent))
+  if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return null
+  const { engine, model, effort } = agent.configuration
+  return { conversationId: project.leadConversationId, machineId: pool.machineId, engine, ...(model ? { model } : {}), ...(effort ? { effort } : {}),
+    name: agent.name, ...(agent.roleName ? { roleName: agent.roleName } : {}), cwd: projectFolder(pool, project), worktree: true,
+    requirements: { memoryBytes: AGENT_MEMORY_BYTES, diskBytes: 10 * 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
+    crewMoveOf: agent.id }
+}
+
+/** The note the moved member reads first (the host shows it in its start row): why it moved, and that its task was handed back. */
+function handoffNote(state: SuperTabState, agent: Agent, reason: CrewTrouble, to: ContributedMachine): string {
+  const task = state.conversations.find(c => c.assignment?.agentId === agent.id && activeWork(c))
+  const pr = task?.pullRequestUrls?.at(-1)
+  return [`You are ${nameOf(agent)}, moved from ${machineName(state, agent.machineId)} to ${to.name} because ${troubleText(state, agent, reason)}.`,
+    'This folder is new: fetch your branch before you go on.',
+    task ? `Your task "${task.title}" went back to the head of the list${pr ? ` (its pull request: ${pr})` : ''}; it comes back to you or to whoever is free first.` : '']
+    .filter(Boolean).join(' ').slice(0, 1000)
+}
+
+/** Its project's chat, written as a system row by the Swarm's owner, as liveness.ts's notices are. */
+function notice(state: SuperTabState, agent: Agent, id: string, text: string): MessageDraft[] {
+  const owner = state.people.find(p => p.id === state.ownerId)
+  const project = projectsOf(state).find(p => p.id === agentProjectId(state, agent))
+  if (!owner || !project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
+  return [{ id, conversationId: project.leadConversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }, text, source: { kind: 'system' } }]
+}
+
+/**
+ * Applies the keeper to [state] (store.ts, with the Swarm's time checks): sleeps, moves, says a stuck move once, and marks
+ * folders to drop. A move whose start ended without running is forgotten first, so the member can move again. Returns the
+ * project chat rows to post: one per move and per stuck member, none for a sleep.
+ */
+export function applyCrewKeep(state: SuperTabState, now: number, deps: CrewDeps): MessageDraft[] {
+  for (const agent of state.agents) {
+    if (!agent.movedTo) continue
+    const start = state.starts?.find(s => s.id === agent.movedTo!.startId)
+    if (!start || start.error) delete agent.movedTo
+  }
+  const drafts: MessageDraft[] = []
+  for (const action of crewKeep(state, now, deps)) {
+    const agent = state.agents.find(a => a.id === action.agentId)!
+    if (action.kind === 'sleep') agent.asleep = { since: now }
+    else if (action.kind === 'dropFolder') agent.asleep = { ...agent.asleep!, folderDropped: true }
+    else if (action.kind === 'stuck') {
+      agent.crewStuck = action.reason
+      drafts.push(...notice(state, agent, stableId('crew-stuck', agent.id, action.reason, String(now)),
+        `${nameOf(agent)} can't keep working there: ${troubleText(state, agent, action.reason)}, and no other machine can take it now.`))
+    } else {
+      const pool = state.machines!.find(m => m.machineId === action.toMachineId)!
+      const request = crewMoveRequest(state, agent, pool)
+      state.starts ??= []
+      if (!request || state.starts.filter(s => !s.harnessId && !s.error).length >= 32) continue
+      const contributor = state.people.find(p => p.id === pool.contributorId)
+      if (!contributor) continue
+      const id = stableId('crew-move', agent.id, String(now))
+      const start: AgentStart = { poolGeneration: pool.generation, id, creationId: `super-${id}`,
+        actorKey: actorKey({ kind: 'person', userId: contributor.id, email: contributor.email }), contributorId: contributor.id,
+        membershipGeneration: contributor.generation, machineOwnerId: pool.contributorId, hostGrant: null,
+        request: { ...request, handoffNote: handoffNote(state, agent, action.reason, pool) }, harnessId: null, dispatched: false, error: null, requestedAt: now }
+      state.starts.push(start)
+      agent.movedTo = { machineId: pool.machineId, startId: id, reason: action.reason, at: now }
+      delete agent.crewStuck
+      drafts.push(...notice(state, agent, stableId('crew-move', agent.id, id),
+        `${nameOf(agent)} is moving to ${pool.name}: ${troubleText(state, agent, action.reason)}. Its task goes back to the head of the list.`))
+    }
+  }
+  return drafts
+}
+
+/** New work for an asleep crew member wakes it (work.assign): its host reopens the session in place. The reopen grace counts
+ *  from now (#3397's CREW_REOPEN_GRACE_MS from downSince), so the task is not lost while it reopens. Whether it was asleep. */
+export function wakeCrewMember(agent: Agent, now: number): boolean {
+  if (!agent.asleep) return false
+  delete agent.asleep
+  agent.downSince = new Date(now).toISOString()
+  return true
+}
+
+/** A move's start failed: the member stays where it was, and the keeper may try another machine on its next pass. */
+export function crewMoveFailed(state: SuperTabState, start: AgentStart): void {
+  const from = start.request.crewMoveOf ? state.agents.find(a => a.id === start.request.crewMoveOf) : undefined
+  if (from?.movedTo?.startId === start.id) delete from.movedTo
+}
+
+/**
+ * A move's new session started as [agentId] (agent.started): it becomes the same member. It takes the old one's crew record,
+ * name and groups, and records where it came from. The old one's active task is lost with reason crew-moved and goes to the
+ * head of its project's Next up, so whoever is free next (or this member) takes it with its pushed branch. Then the old
+ * agent is removed, which closes its session on its host and drops its folder when clean ([remove]: commands.ts removeAgent).
+ */
+export function takeOverCrewMember(state: SuperTabState, start: AgentStart, agentId: string, now: number, remove: (agent: Agent) => void): void {
+  const from = start.request.crewMoveOf ? state.agents.find(a => a.id === start.request.crewMoveOf) : undefined
+  const moved = state.agents.find(a => a.id === agentId)
+  if (!from || !moved || from.movedTo?.startId !== start.id) return
+  const crew = (from as Agent & { crew?: unknown }).crew
+  if (crew) (moved as Agent & { crew?: unknown }).crew = crew
+  moved.displayName = nameOf(from)
+  moved.movedFrom = { agentId: from.id, machineId: from.machineId, reason: from.movedTo.reason, at: now }
+  for (const group of state.conversations) {
+    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id)) group.agentIds.push(moved.id)
+    if (group.assignment?.agentId === from.id && activeWork(group)) {
+      group.assignment.status = 'lost'
+      group.assignment.lost = { reason: 'crew-moved', at: now }
+      group.lostAttempt = { id: group.assignment.id, agentId: from.id, machineId: from.machineId, engine: from.configuration.engine }
+      const siblings = queueSiblings(state, groupProject(state, group))
+      if (siblings.some(s => s.id === group.id)) for (const [id, rank] of placeAfter(siblings, group.id, null)) {
+        const sibling = state.conversations.find(c => c.id === id)
+        if (sibling) sibling.queueRank = rank
+      }
+    }
+  }
+  remove(from)
 }

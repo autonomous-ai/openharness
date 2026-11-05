@@ -1,8 +1,9 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
+import { applyCrewKeep, crewMoveRequest, isCrewMember, type CrewDeps } from './crewKeep.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
+import { admitMachineStart, joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
@@ -3563,6 +3564,18 @@ export class SuperTabStore {
     })
   }
 
+  /** What the crew keeper asks of the store (crewKeep.ts CrewDeps): whether a machine admits a crew member's move start now,
+   *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
+  private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
+    const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
+    return { admits: (machineId, agent) => {
+      const pool = state.machines?.find(m => m.machineId === machineId)
+      const request = pool && crewMoveRequest(state, agent, pool)
+      if (!request) return false
+      try { return !!admitMachineStart(state, request, now, undefined, teamMachines, otherWorkspaceMachines) } catch { return false }
+    } }
+  }
+
   /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
    *  writes nothing. */
   private async moveGitHub(tabId: string, moves: (project: SwarmProject) => boolean, also?: (project: SwarmProject) => void): Promise<boolean> {
@@ -3811,8 +3824,11 @@ export class SuperTabStore {
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
       // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441).
+      // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
+      // placed only where a start would be admitted now, Team rules included.
+      const crew = sweep && state.agents.some(isCrewMember) ? await this.crewDeps(tx, state, now) : null
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
-        ...sweep ? sweepLiveness(state, now) : []]
+        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
       removedIds.push(...closedOut)
