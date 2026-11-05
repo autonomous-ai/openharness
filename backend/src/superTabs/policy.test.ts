@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { RULE_MESSAGE_MS } from './rules.js'
-import { globMatch, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
+import { globMatch, MAX_GLOB_STARS, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
 
 const copy = (): ProjectRules => structuredClone(SEED_RULES)
 const refused = (value: unknown) => projectRulesSchema.safeParse(value).success === false
@@ -119,6 +119,26 @@ describe('reads and tests a change needs', () => {
     expect(globMatch('a?c.ts', 'a/c.ts')).toBe(false)
     expect(globMatch('**/e2ee/**', 'mobile/lib/e2ee/box.dart')).toBe(true)
     expect(globMatch('docs/a.md', 'docs/aXmd')).toBe(false)
+  })
+
+  // Task #3401, River: a saved pattern runs on every Ready, in the command's own write, so none may stall it.
+  it('matches without backtracking: a pattern of many stars fails a long path at once', () => {
+    const started = performance.now()
+    expect(globMatch('*a*a*a*a*a*a*a*a*b', 'a'.repeat(200))).toBe(false)
+    expect(globMatch('**a**a**a**a**a**a**a**a**b', `${'a/'.repeat(100)}c`)).toBe(false)
+    expect(performance.now() - started).toBeLessThan(200)
+    expect(globMatch('**/a*b*c', 'x/y/aXbYc')).toBe(true)
+    expect(globMatch('**/', 'x/')).toBe(true)
+    expect(globMatch('a/**/b', 'a/b')).toBe(true)
+    expect(globMatch('a/**/b', 'a/x/y/b')).toBe(true)
+    expect(globMatch('a/**/b', 'a/xb')).toBe(false)
+  })
+
+  it('refuses a pattern of more than MAX_GLOB_STARS stars when rules are saved', () => {
+    const many = { ...copy(), reviews: { ...copy().reviews, rows: [{ area: 'Billing', reads: 2, paths: [`${'*a'.repeat(MAX_GLOB_STARS + 1)}`] }] } }
+    expect(projectRulesSchema.safeParse(many).success).toBe(false)
+    const enough = { ...copy(), reviews: { ...copy().reviews, rows: [{ area: 'Billing', reads: 2, paths: [`${'*a'.repeat(MAX_GLOB_STARS)}`] }] } }
+    expect(projectRulesSchema.safeParse(enough).success).toBe(true)
   })
 
   it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
