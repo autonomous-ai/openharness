@@ -1,4 +1,4 @@
-import { markIdle, owe, settleReaction, settleReply, settleRequest } from './pulse.js'
+import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
@@ -900,8 +900,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
-  // Every open group is loaded for a command (parts/load.ts): the board's idle mark is decided on it (pulse.ts).
-  markIdle(effects.state, context.now)
+  // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
+  // of the conversation the command names when it names one (it moves no other), else for every project.
+  recordPulse(effects.state, context.now, pulseProjectOf(effects.state, input))
   return effects
 }
 
@@ -2303,7 +2304,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
       }
       const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
-      if (request) settleRequest(state, project, request.messageId)
+      if (request) settleRequest(state, project, actor.kind === 'agent' ? actor.agentId : null, request.messageId)
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
         : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A step and a
@@ -3367,6 +3368,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'message.delete':
       Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
+      settleDeleted(open(state, command.conversationId), command.messageId)
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)

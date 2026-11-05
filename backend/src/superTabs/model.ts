@@ -424,6 +424,8 @@ export interface Conversation {
   /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
    *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
   answered?: import('./answers.js').AnsweredAsk[]
+  /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
+  pulse?: import('./pulse.js').Pulse
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */

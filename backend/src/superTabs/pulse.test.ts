@@ -8,10 +8,12 @@ import type { Command, CommandContext } from './commands.js'
 import type { Author } from './model.js'
 import { sweepForLead } from './liveness.js'
 import { projectsOf } from './projects.js'
-import { projectPulse } from './pulse.js'
+import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
+/** What a task an agent opens must say (commands.ts): at least one check, with a priority and who asked. */
+const DONE_WHEN = [{ description: 'It works', independent: false }]
 
 function setup() {
   const f = stepsFixture()
@@ -29,9 +31,9 @@ function setup() {
   const react = (by: string, on: string, messageId: string, emoji: string) => f.run({ type: 'message.react', conversationId: on, messageId, emoji, on: true } as Command,
     f.as(by), { reaction: { messageId, reacted: false } })
   const request = (id: string) => ({ id, conversationId: 'lead', replyTo: null, source: null, author: person })
-  const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: [], requestMessageId: ask } as Command,
+  const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: DONE_WHEN, priority: 'P2', requestMessageId: ask } as Command,
     f.as(f.lead), { request: request(ask) } as Partial<CommandContext>)
-  return { f, post, owed, react, taskFrom, person }
+  return { f, post, owed, react, taskFrom, person, request }
 }
 
 describe('what the PM owes', () => {
@@ -98,6 +100,39 @@ describe('what the PM owes', () => {
     expect(owed()).toEqual([])
   })
 
+  // River's ruling on Hugo's review of #3209: only a task the PM opens from the ask settles it; one anyone else opens leaves the
+  // PM's answer owed.
+  it('is not settled by a task someone else opens from it', () => {
+    const { f, post, owed, request } = setup()
+    const ask = post(null, 'lead', 'Can we get dark mode?')
+    f.run({ type: 'conversation.create', title: 'Dark mode', brief: 'Dark mode.', checks: [], requestMessageId: ask } as Command, owner,
+      { request: request(ask) } as Partial<CommandContext>)
+    expect(owed()).toEqual([ask])
+  })
+
+  // ReviewPulse2's review of #3209: a deleted ask has nothing left to answer, and its link would open a message that is gone.
+  it('is settled when its message is deleted, kept as deleted or not', () => {
+    const { f, post, owed } = setup()
+    const [gone, kept] = [post(null, 'lead', 'Never mind.'), post(null, 'lead', 'Drop this too.')]
+    const remove = (messageId: string, hasReplies: boolean) => f.run({ type: 'message.delete', conversationId: 'lead', messageId } as Command, owner,
+      { messageChange: { messageId, author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies, text: 'x', sequence: 1 } })
+    remove(gone, false)
+    remove(kept, true)
+    expect(owed()).toEqual([])
+  })
+
+  // River, on ReviewPulse2's review of #3209: the asks of a person who left the Swarm are owed to nobody.
+  it('is settled when the person who asked leaves the Swarm', () => {
+    const { f, owed } = setup()
+    const peer = { kind: 'person' as const, userId: 'peer', email: 'peer@example.com' }
+    const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } as Command)
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string } as Command, peer)
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'One ask before I go.', replyTo: null, recipientIds: [] } as Command, peer)
+    expect(owed()).toHaveLength(1)
+    f.run({ type: 'member.remove', userId: 'peer' } as Command)
+    expect(owed()).toEqual([])
+  })
+
   it('is not settled by another agent\'s reply or reaction', () => {
     const { f, post, owed, react } = setup()
     const ask = post(null, 'lead', 'Who reviews #12?')
@@ -114,10 +149,13 @@ describe('what the PM owes', () => {
 })
 
 describe('the pulse', () => {
-  const pulseOf = (f: ReturnType<typeof stepsFixture>) => projectPulse(f.state, projectsOf(f.state)[0]!, f.now)
+  /** The pulse as the next command or sweep records it on the project's chat (state edited by hand is counted too). */
+  const pulseOf = (f: ReturnType<typeof stepsFixture>) => { recordPulse(f.state, f.now); return storedPulse(f.state, projectsOf(f.state)[0]!)! }
+  /** The pulse as recorded, without working it out again. */
+  const stored = (f: ReturnType<typeof stepsFixture>) => storedPulse(f.state, projectsOf(f.state)[0]!)!
   /** A task the PM opens, unassigned (Next up). */
   const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
-    const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: [] } as Command, f.as(f.lead)).result.conversationId as string
+    const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: DONE_WHEN, priority: 'P2', requesterId: 'owner' } as Command, f.as(f.lead)).result.conversationId as string
     if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore } as Command, f.as(f.lead))
     return id
   }
@@ -218,7 +256,8 @@ describe('the pulse', () => {
     const idleAt = f.now
     f.tick(MINUTE)
     f.run({ type: 'message.send', conversationId: 'lead', text: 'Anyone?', replyTo: null, recipientIds: [] } as Command)
-    expect(pulseOf(f).idleSince).toBe(idleAt)
+    expect(stored(f).idleSince).toBe(idleAt)
+    expect(stored(f).asks.count).toBe(1)
     expect(pulseOf(f).redAt.idle).toBe(idleAt + 10 * MINUTE)
     const task = pulseOf(f).nextUp.conversationIds[0]!
     f.run({ type: 'work.assign', conversationId: task, agentId: f.dev }, f.as(f.lead))
@@ -231,6 +270,7 @@ describe('the pulse', () => {
     f.group(f.task).assignment!.status = 'lost'
     f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
     sweepForLead(f.state, f.now)
-    expect(pulseOf(f).idleSince).toBe(f.now)
+    expect(stored(f).idleSince).toBe(f.now)
+    expect(stored(f).lost.count).toBe(1)
   })
 })

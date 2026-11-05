@@ -6,6 +6,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/pulse_model.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_pulse.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
@@ -234,7 +235,9 @@ void main() {
     }
 
     test('is read into each project of the snapshot', () async {
-      final now = DateTime.utc(2026, 11, 5, 12);
+      // Local, as Desktop's model (pulse_model.dart) reads the server's
+      // times.
+      final now = DateTime(2026, 11, 5, 12);
       final reader = await read(
         {
           'pulse': {
@@ -536,5 +539,46 @@ void main() {
           .conversationId,
       'g-next',
     );
+  });
+
+  // Hugo's review of #3209 (ENGINEERING 4: a timer that wakes while nothing
+  // changed is a defect): the strip wakes only when something it shows will
+  // read differently, the oldest ask's age or a rule turning red, never on a
+  // fixed tick.
+  group('when the strip wakes', () {
+    final now = DateTime(2026, 11, 5, 12);
+    SuperTabPulse pulse(Map<String, dynamic> data) => SuperTabPulse.read(data)!;
+
+    test('never, with no ask and no rule still to turn red', () {
+      expect(swarmPulseNextWake(pulse(pulseData(now, asks: 0)), now), isNull);
+    });
+
+    test('when the oldest ask\'s age next reads differently', () {
+      // 14 minutes old: 15m in a minute.
+      expect(swarmPulseNextWake(pulse(pulseData(now)), now), now.add(minute));
+      final older = pulseData(now)
+        ..['asks']['oldestAt'] = now
+            .subtract(const Duration(hours: 2, minutes: 10))
+            .millisecondsSinceEpoch;
+      // 2h 10m old: 3h in 50 minutes.
+      expect(swarmPulseNextWake(pulse(older), now), now.add(minute * 50));
+    });
+
+    test('when a rule turns red first', () {
+      final soon = now.add(const Duration(seconds: 30));
+      expect(
+        swarmPulseNextWake(
+          pulse(
+            pulseData(
+              now,
+              asks: 0,
+              redAt: {'idle': soon.millisecondsSinceEpoch},
+            ),
+          ),
+          now,
+        ),
+        soon,
+      );
+    });
   });
 }
