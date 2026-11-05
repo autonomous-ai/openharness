@@ -16,11 +16,15 @@ const named = (engine: string) => NAME[engine] ?? engine
  *  call time: machines.ts imports this file, and startFailure.ts reaches machines.ts, so its constants may not exist yet
  *  while this file loads. */
 const notTheEngine = (error: string) => error === MACHINE_REMOVED || error === ABANDONED || error === 'Removed by its owner before it started.'
-  || MEMORY_SHORT.test(error) || CLONE_FAILED.test(error)
+  || MEMORY_SHORT.test(error) || CLONE_FAILED.test(error) || REPOSITORY_ACCESS.test(error)
 const MEMORY_SHORT = /^Not enough free memory: /
 /** A first start whose machine could not clone the project (cli superTabs/projectFolder.ts): the network or GitHub, not the engine.
  *  Six starts on four machines failed this way on 2026-11-05, and each pair suspended an engine there for hours. */
 const CLONE_FAILED = /could not (?:clone|access) the (?:project )?repository/i
+/** A start its machine could not prepare for want of access to the project's repository (cli superTabs/projectFolder.ts): the
+ *  server refused the GitHub App's token, it has no app for a Team account, or the project shares no repository. Its owner's
+ *  to approve, never the engine: two such starts suspended Claude on Huy's Mac on 2026-11-05 (task #3266). */
+const REPOSITORY_ACCESS = /could not get a Harness GitHub App token for this project|has no GitHub App, and a Harness Team account has no git login|^Share a GitHub repository for this project/
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
 /** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
