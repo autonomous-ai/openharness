@@ -1031,7 +1031,8 @@ class SwarmNewProjectSteps with ChangeNotifier {
           }
           unreachable = outcome['reachable'] == false;
           return made;
-        case 'waiting':
+        // Making it now, in the callback (Heron, #3201): as waiting.
+        case 'waiting' || 'creating':
           throw const SwarmRepositoryWaiting();
         case 'taken':
           _creation = null;
@@ -1070,6 +1071,9 @@ class SwarmNewProjectSteps with ChangeNotifier {
         ),
       );
     } on SuperTabFailure catch (failure) {
+      if (swarmRateLimited(failure)) {
+        throw const SwarmRepositoryFailure(swarmRepositoryRateLimited);
+      }
       throw switch (failure.code) {
         'GITHUB_APP_NOT_INSTALLED' => SwarmRepositoryFailure(
           swarmRepositoryNotInstalled(asked.owner),
@@ -1280,6 +1284,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
   /// there as null, asked once.
   final _ownerChecks = <String, SwarmOwnerCheck?>{};
   final _ownerAsked = <String>{};
+
+  /// When each rate-limited check answered: asked again a minute after.
+  final _ownerLimitedAt = <String, DateTime>{};
 
   /// The outcome New repository last went on from, so one outcome runs once.
   String? _outcomeRun;
@@ -2082,10 +2089,22 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     String owner,
   ) {
     final key = '$swarmId/${owner.toLowerCase()}';
+    // Too many checks: kept a minute, then asked again on the next look.
+    if (_ownerLimitedAt[key] case final at?
+        when widget.now().difference(at) >= const Duration(minutes: 1)) {
+      _ownerLimitedAt.remove(key);
+      _ownerAsked.remove(key);
+    }
     if (_ownerAsked.add(key)) {
       unawaited(
         swarmCheckGitHubOwner(reader, owner).then((check) {
-          if (mounted) setState(() => _ownerChecks[key] = check);
+          if (!mounted) return;
+          setState(() {
+            _ownerChecks[key] = check;
+            if (check?.state == 'rate-limited') {
+              _ownerLimitedAt[key] = widget.now();
+            }
+          });
         }),
       );
     }
@@ -2375,7 +2394,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     if (_busy || _error != null || steps!.running != null) return;
     final outcome = snapshot.projectById(projectId)?.repositoryCreation;
     final state = outcome?['state'];
-    if (outcome?['at'] != at || state is! String || state == 'waiting') return;
+    if (outcome?['at'] != at ||
+        state is! String ||
+        state == 'waiting' ||
+        state == 'creating') {
+      return;
+    }
     final key = '$at/$state';
     if (_outcomeRun == key) return;
     _outcomeRun = key;

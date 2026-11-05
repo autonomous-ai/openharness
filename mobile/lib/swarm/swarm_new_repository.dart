@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'model.dart' show superTabMap;
 import 'swarm_reader.dart';
+import 'swarm_request.dart';
 
 /// What New repository makes: [name] in the organization [owner], private
 /// unless switched off.
@@ -56,6 +57,14 @@ const swarmRepositoryNotCreated = 'Nothing was created.';
 /// F9: GitHub, or the way to it, did not answer.
 const swarmRepositoryNoAnswer = 'GitHub didn’t answer. Nothing was created.';
 
+/// Too many organization checks or requests: the server allows 30 a minute
+/// per person (`RATE_LIMITED`, 429; Heron, from #3201's security reviews).
+const swarmRepositoryRateLimited = 'Too many checks. Try again in a minute.';
+
+/// Whether [failure] is the server's rate limit.
+bool swarmRateLimited(SuperTabFailure failure) =>
+    failure.code == 'RATE_LIMITED' || failure.statusCode == 429;
+
 /// F11: the project was deleted while the person was in GitHub.
 String swarmRepositoryProjectGone(String owner, String name) =>
     'The project was deleted meanwhile. $owner/$name was still made on '
@@ -93,7 +102,7 @@ List<String> swarmGitHubOwners(Iterable<String> repositories) {
 
 /// What the server says of an organization before sign-in (Task 6's
 /// `github/owners/:owner`): `ready`, `not-installed` (with where to install
-/// it), `not-accepted` or `not-configured` (no GitHub sign-in on this
+/// it), `not-accepted`, `not-configured` (no GitHub sign-in on this
 /// server). Null when it could not say: a server from before New repository
 /// answers 404, and the choice is not offered.
 typedef SwarmOwnerCheck = ({String state, String? installUrl});
@@ -113,8 +122,14 @@ Future<SwarmOwnerCheck?> swarmCheckGitHubOwner(
     final state = answer['state'];
     if (state is! String) return null;
     return (state: state, installUrl: answer['installUrl'] as String?);
+  } on SuperTabFailure catch (failure) {
+    // Asked too often: the choice stays, and says to wait a minute.
+    if (swarmRateLimited(failure)) {
+      return (state: 'rate-limited', installUrl: null);
+    }
+    // Refused (404 from a server before New repository).
+    return null;
   } catch (_) {
-    // Refused (404 from a server before New repository), or no answer.
     return null;
   }
 }
@@ -126,6 +141,7 @@ String? swarmOwnerProblem(String owner, SwarmOwnerCheck check) =>
       'ready' => null,
       'not-installed' => swarmRepositoryNotInstalled(owner),
       'not-accepted' => swarmRepositoryNotAccepted(owner),
+      'rate-limited' => swarmRepositoryRateLimited,
       _ => swarmRepositoryNoAnswer,
     };
 
