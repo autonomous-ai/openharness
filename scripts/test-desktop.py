@@ -121,6 +121,20 @@ def summarize(log, selected):
     return {"files": files, "problems": problems, "reported_success": done[0] if len(done) == 1 else None}
 
 
+def unreached_files(paths, report):
+    """The files of an attempt that it never got through: not started, or with tests still to run when it stopped. A file
+    that passed, failed a test or could not load was reached; its own result says what happened."""
+    def reached(path):
+        result = report["files"].get(path)
+        if result is None:
+            return False
+        if result["status"] in {"passed", "startup_error"} or result["errors"]:
+            return True
+        registered = result["registered_cases"]
+        return registered is not None and result["passed"] + result["skipped"] >= registered
+    return [path for path in paths if not reached(path)]
+
+
 def retry_files(check, report):
     if check.get("status") != "failed" or check.get("exit_code") != 1 or check.get("cleanup_error"):
         return []
@@ -281,6 +295,14 @@ def main(argv=None):
         receipt["identity"] = identity
         print(f"Desktop VM: {len(selected)} files, {workers} workers, {args.timeout:g}s total budget", flush=True)
         first, report = attempt("desktop-vm", selected, workers)
+        # A shard out of time names what it never reached (task #3458), as text and as a GitHub error annotation.
+        unreached = unreached_files(selected, report) if first.get("status") == "timeout" else []
+        receipt["unreached_files"] = [str(Path(path).relative_to(desktop)) for path in unreached]
+        if unreached:
+            names = ", ".join(receipt["unreached_files"])
+            count = f"{len(unreached)} file" + ("s" if len(unreached) != 1 else "")
+            print(f"Not reached before the time limit ({count}): {names}", flush=True)
+            print(f"::error title=Desktop shard out of time::{count} not reached: {names}", flush=True)
         candidates = retry_files(first, report) if not args.no_loader_retry else []
         final_files = dict(report["files"])
         receipt["status"] = "passed" if passed(first, report) else "failed"
