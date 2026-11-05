@@ -18,7 +18,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
-import { waitingTagConversations } from '../src/superTabs/mentions.js'
+import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -122,6 +122,52 @@ async function writeGroup(tabId: string, key: string, at: number, change: (group
 }
 
 describe('first load (design 4.3)', () => {
+  it('counts waiting tags from quiet groups without fetching unrelated group payloads', async () => {
+    const quiet: string[] = []
+    const s = await scene(state => {
+      for (let i = 0; i < 21; i++) {
+        const id = state.group(`Quiet ${i}`)
+        state.edit(current => {
+          const group = current.conversations.find(each => each.id === id)!
+          group.dormant = true
+          group.brief = 'unused task detail '.repeat(220)
+        })
+        quiet.push(id)
+      }
+      return quiet
+    })
+    await db.superTabMention.createMany({ data: quiet.map((conversationId, i) => ({
+      id: `${s.tabId}-quiet-tag-${i}`, tabId: s.tabId, personId: peer.sub, projectId: 'lead', conversationId,
+      messageId: `${s.tabId}-quiet-message-${i}`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null,
+    })) })
+
+    const { state } = await new SuperTabStore(db, () => NOW).read(peer, s.tabId)
+    const stateWithoutQuietGroups = { ...state, conversations: state.conversations.filter(group => !quiet.includes(group.id)) }
+    await db.$runCommandRaw({ profile: 2 })
+    try {
+      const count = await waitingMentions(db as never, s.tabId, stateWithoutQuietGroups, { kind: 'person', userId: peer.sub, email: peer.email }, NOW)
+      expect(count.count).toBe(quiet.length)
+    } finally { await db.$runCommandRaw({ profile: 0 }) }
+
+    const profile = await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SwarmGroup$' } },
+      projection: { _id: 0, command: 1, responseLength: 1, nreturned: 1, docsExamined: 1, planSummary: 1 }, batchSize: 10_000 }) as unknown as
+      { cursor: { firstBatch: Array<{ command?: { pipeline?: Array<Record<string, any>>; hint?: Record<string, number> }; responseLength?: number;
+        nreturned?: number; docsExamined?: number; planSummary?: string }> } }
+    const rows = profile.cursor.firstBatch.filter(row => row.command?.pipeline?.some(stage =>
+      (stage.$match as { key?: { $in?: string[] } } | undefined)?.key?.$in?.includes(quiet[0]!)))
+    expect(rows).toHaveLength(1)
+    const [groupRead] = rows
+    expect(groupRead!.nreturned).toBe(quiet.length)
+    expect(groupRead!.planSummary).toMatch(/IXSCAN/)
+    expect(groupRead!.responseLength, `fetched ${groupRead!.nreturned} group documents, examined ${groupRead!.docsExamined}, returned ${groupRead!.responseLength} bytes`)
+      .toBeLessThan(20_000)
+    const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline: groupRead!.command!.pipeline!, cursor: {},
+      ...(groupRead!.command!.hint ? { hint: groupRead!.command!.hint } : {}) }, verbosity: 'executionStats' }) as unknown as
+      { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
+    expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
+    expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
+  })
+
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
     const s = await scene()
     clock = NOW
