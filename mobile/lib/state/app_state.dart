@@ -3635,6 +3635,8 @@ class AppNotifier extends ChangeNotifier {
     );
     if (agentNotices.system case final LocalSystemNotices notices) {
       notices.onAllowed = _syncPush;
+      // Android: the channels a push is drawn on, before the first can arrive (task #3248).
+      unawaited(notices.preparePush());
     }
     // Back from the phone's Settings, where notices may have been turned on or off.
     _pushLifecycle = AppLifecycleListener(onResume: _syncPush);

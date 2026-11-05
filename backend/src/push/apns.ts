@@ -2,7 +2,7 @@ import { sign } from 'node:crypto'
 import http2 from 'node:http2'
 import type { ApnsKey, ApnsKeys } from './keys.js'
 import type { PushDevice } from './devices.js'
-import { SEND_TIMEOUT_MS, SWARM_CHANNEL, withTimeout, type PhoneNotice, type Sender, type SendResult } from './sender.js'
+import { SEND_TIMEOUT_MS, SWARM_CHANNEL, swarmNoticeId, withTimeout, type PhoneNotice, type Sender, type SendResult } from './sender.js'
 
 /** One request to Apple: to its production host, or to the sandbox host a development build's token needs. */
 export interface ApnsRequest { sandbox: boolean; path: string; headers: Record<string, string>; body: string }
@@ -36,10 +36,14 @@ export function apnsSender(keys: ApnsKeys, options: { transport?: ApnsTransport;
   const noSandboxKey: SendResult = { outcome: 'unconfigured', reason: 'no APNs sandbox key' }
   const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(transport({
     sandbox, path: `/3/device/${device.token}`,
+    // The collapse id is the app's own notice id for the slot (task #3248): a newer push for it, or the app's notice, replaces
+    // the one shown instead of adding a second.
     headers: { authorization: `bearer ${bearer(sandbox ? keys.sandbox! : keys.production)}`, 'apns-topic': keys.topic, 'apns-push-type': 'alert', 'apns-priority': '10',
-      'apns-expiration': String(Math.floor(now() / 1000) + 24 * 60 * 60) },
-    body: JSON.stringify({ aps: { alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, sound: 'default',
-      'thread-id': SWARM_CHANNEL, category: SWARM_CHANNEL }, key: notice.key, link: notice.link }),
+      'apns-expiration': String(Math.floor(now() / 1000) + 24 * 60 * 60), 'apns-collapse-id': String(swarmNoticeId(notice.slot)) },
+    // A quiet push has no sound and is passive: it replaces its slot's notification without lighting the screen or a banner.
+    body: JSON.stringify({ aps: { alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body },
+      ...notice.quiet ? { 'interruption-level': 'passive' } : { sound: 'default' }, 'thread-id': SWARM_CHANNEL, category: SWARM_CHANNEL },
+    key: notice.key, link: notice.link, slot: notice.slot }),
   }, timeoutMs), timeoutMs)
   const judged = (answer: ApnsAnswer, sandboxNow: boolean): SendResult => {
     if (answer.status === 200) return { outcome: sandboxNow ? 'sandbox' : 'sent' }
