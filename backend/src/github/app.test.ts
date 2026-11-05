@@ -631,3 +631,41 @@ describe('watching a pull request', () => {
     expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
   })
 })
+
+describe('what installation tokens may never carry (task #1788)', () => {
+  it('installation tokens never ask for administration or repository creation', async () => {
+    const app = await import('./app.js')
+    const sets = Object.entries(app).filter(([name]) => name.endsWith('_PERMISSIONS')) as Array<[string, Record<string, string>]>
+    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS', 'PREPARE_PERMISSIONS']))
+    for (const [, permissions] of sets) {
+      for (const never of app.NEVER_ON_INSTALLATION_TOKENS) expect(Object.keys(permissions)).not.toContain(never)
+    }
+    const { github, app: gh } = setup()
+    github.installed.set('acme/app', 91)
+    for (const never of app.NEVER_ON_INSTALLATION_TOKENS) {
+      await expect(gh.createToken(91, repo, { [never]: 'write', metadata: 'read' })).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS_FORBIDDEN' })
+    }
+    expect(github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+  })
+})
+
+describe('whether an organization lets Harness create repositories (task #1788)', () => {
+  it('says whether an organization lets Harness create repositories', async () => {
+    const { app, github, time } = setup()
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'not-installed', installUrl: 'https://github.com/apps/harness-fixture/installations/new' })
+    expect(github.calls.map(c => c.path)).toEqual(['/orgs/acme/installation'])
+    github.owners.set('acme', 91)
+    time.advance(60_001)
+    github.grants.set(91, { contents: 'write', metadata: 'read' })
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'not-accepted' })
+    time.advance(10 * 60_000 + 1)
+    github.grants.set(91, { contents: 'write', metadata: 'read', repository_creation: 'write' })
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'ready', installation: 91, canAdd: false })
+    time.advance(10 * 60_000 + 1)
+    github.grants.set(91, { repository_creation: 'write', installation_repositories: 'write' })
+    expect(await app.ownerReadiness('Acme')).toEqual({ state: 'ready', installation: 91, canAdd: true })
+    const asked = github.calls.length
+    expect(await app.ownerReadiness('ACME')).toEqual({ state: 'ready', installation: 91, canAdd: true })
+    expect(github.calls).toHaveLength(asked)
+  })
+})

@@ -126,6 +126,8 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/attachments/:attachmentId/voice', `${t}/attachments/${MISSING}/voice?lang=en`, {}),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/github', `${t}/projects/${project}/github`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
+    json('GET', 'GET /api/super-tabs/:tabId/github/owners/:owner', `${t}/github/owners/acme`),
+    json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/repository', `${t}/projects/${project}/github/repository`, { owner: 'acme', name: 'notes', private: true }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
     // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
@@ -178,7 +180,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
       // So does a GitHub token, which needs the same app.
-      const expected = /\/github\/approve$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
+      const expected = /\/github\/approve$|\/github\/repository$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
       for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
     }
   })
@@ -192,7 +194,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     for (const [chat, project] of [['lead', 'lead'], [buddyChat, 'lead'], [f.privateChat, f.privateProject]] as const) {
       for (const [i, call] of calls(f.tab, chat, project).entries()) {
         const cases = { owner: await answer(call, owner), member: await answer(call, member), outsider: await answer(call, outsider), missing: await answer(missing[i]!, owner) }
-        const expected = /\/github\/approve$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
+        const expected = /\/github\/approve$|\/github\/repository$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
         for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
       }
     }
@@ -209,7 +211,8 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'POST /api/super-tabs/:tabId/attachments',
       'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard']))
     // Checked before the chat: a terminal opens for one agent (made up here), and approving needs the server's GitHub App.
-    const before = ['POST /api/super-tabs/:tabId/native', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve']
+    const before = ['POST /api/super-tabs/:tabId/native', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
+      'POST /api/super-tabs/:tabId/projects/:projectId/github/repository']
     for (const call of named) {
       const got = await answer(call, member), absent = await answer(missing[hidden.indexOf(call)]!, member)
       expect(got, call.url).toEqual(absent)

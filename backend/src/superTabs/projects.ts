@@ -94,6 +94,24 @@ export interface SwarmProject {
   githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
+  /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
+   *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
+  repositoryCreation?: RepositoryCreation
+}
+
+/** A new repository asked for a project (store.ts startRepositoryCreation, finishRepositoryCreation). [at] (ms) and [by]
+ *  name the ask an outcome answers. */
+export interface RepositoryCreation {
+  owner: string
+  name: string
+  private: boolean
+  by: string
+  at: number
+  /** 'creating' once GitHub's callback claimed the ask, so a replay of it changes nothing (security review 2 of #3201). */
+  state: 'waiting' | 'creating' | 'created' | 'taken' | 'refused' | 'failed' | 'cancelled'
+  repositoryUrl?: string
+  reachable?: boolean
+  reason?: string
 }
 
 /** The GitHub access states a check records (github/projectAccess.ts): the others are no answer from GitHub. */
@@ -545,6 +563,16 @@ export function sameProject(state: SuperTabState, group: Conversation, target: A
 
 export function mutableProjects(state: SuperTabState): SwarmProject[] {
   return state.projects ??= projectsOf(state)
+}
+
+/** The project [actor] may ask a new repository for (task #1788): a person, its owner, while it has no repository address. */
+export function repositoryCreator(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
+  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project\'s repository.', 403)
+  const project = readProject(state, actor, projectId)
+  author(state, actor, true)
+  if (!ownsProject(state, actor.userId, project)) fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can create its repository.', 403)
+  if (project.repository?.repositoryUrl) fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.', 409)
+  return project
 }
 
 export function manageProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
