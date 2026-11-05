@@ -611,7 +611,7 @@ describe('a Buddy\'s proposal to the PM', () => {
       expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: 'Offline drafts' }, buddy,
         okayed(f, [], 'Send this to the PM: Offline drafts please'))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN' })) }
     expect(send('Keep drafts\noffline', ['I\'ll post this as you: “Keep drafts offline”'])).toBe('Keep drafts\noffline')
-    expect(send('Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I’ll post this as you: Fix the jump-to freeze'])).toBe('Fix the jump-to freeze')
+    expect(send('Fix the jump-to freeze', ['In Secret, Ken said the client is leaving. I’ll post this as you: “Fix the jump-to freeze”'])).toBe('Fix the jump-to freeze')
     // Words the owner never saw: not in their ask, not in a line shown before it.
     // A shown line or the ask whole, never a piece cut from it (security review 1 of #3024): every word seen, not that line.
     const both = 'I\'ll post this as you: “Fix the login. Don\'t delete the old accounts table.” OK?'
@@ -656,17 +656,50 @@ describe('a Buddy\'s proposal to the PM', () => {
     // The rest of the message around the first quoted line, which passed whole, is not a line the owner was shown to post.
     expect(passes('“Fix the login” or, if you prefer, “Delete the old accounts table', [two])).toBe(false)
     expect(passes('"Keep drafts offline" OK?', ['I\'ll post this as you: "Keep drafts offline" OK?'])).toBe(false)
-    // An unquoted line after the marker is still taken whole, as today, and never a piece of it or a quote inside it.
-    expect(passes('Fix the "login" page', ['I’ll post this as you: Fix the "login" page'])).toBe(true)
+    // A quote inside an unquoted offer never makes that offer safe to send.
+    expect(passes('Fix the "login" page', ['I’ll post this as you: Fix the "login" page'])).toBe(false)
     expect(passes('login', ['I’ll post this as you: Fix the "login" page'])).toBe(false)
     // Only a pair of the same kind closes the line (security review 2 of #3055): a straight quote inside a curly one, or a
-    // curly one opened inside it, is part of the line the owner read, never its end. An unclosed one leaves all of it whole, as today.
+    // curly one opened inside it, is part of the line the owner read, never its end. An unclosed offer cannot be posted.
     for (const [text, shown] of [['Ship it', 'I\'ll post this as you: “Ship it" is wrong, wait for the fix”'],
       ['We merge', 'I\'ll post this as you: "We merge” only after Ken signs off"'],
       ['A “B', 'I\'ll post this as you: “A “B” C”'], ['ship it', 'I\'ll post this as you: “Keep drafts offline" and then “ship it”']] as const)
       expect(passes(text, [shown])).toBe(false)
     expect(passes('We merge” only after Ken signs off', ['I\'ll post this as you: "We merge” only after Ken signs off"'])).toBe(true)
-    expect(passes('“Keep drafts offline', ['I\'ll post this as you: “Keep drafts offline'])).toBe(true)
+    expect(passes('“Keep drafts offline', ['I\'ll post this as you: “Keep drafts offline'])).toBe(false)
+  })
+
+  it('refuses an unquoted offer followed by private sentences and tells the Buddy to show it again quoted', () => {
+    const { f } = asked()
+    const line = 'Fix the login'
+    const privateText = 'This next sentence is only for you. Please keep my plans private.'
+    const shown = `I'll post this as you: ${line}\n\n${privateText}`
+    for (const text of [line, `${line}\n\n${privateText}`, privateText]) {
+      expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy,
+        okayed(f, [shown]))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN', message: expect.stringContaining('quotes') }))
+      expect(group(f, f.chat).proposals).toBeUndefined()
+    }
+  })
+
+  it.each([['"', '"'], ['“', '”']])('posts exactly the line between %s and %s, never the private sentences after it', (open, close) => {
+    const { f } = asked()
+    const line = 'Fix the login'
+    const privateText = 'This next sentence is only for you. Please keep my plans private.'
+    const shown = `I'll post this as you: ${open}${line}${close}\n\n${privateText}`
+    for (const text of [`${line}\n\n${privateText}`, privateText]) expect(passes(text, [shown])).toBe(false)
+    const sent = f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text: line }, buddy,
+      okayed(f, [shown])).messages.filter(m => m.conversationId === f.app.conversationId)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ text: line, author: { kind: 'person', id: 'peer' } })
+    expect(JSON.stringify(sent)).not.toContain(privateText)
+  })
+
+  it.each(['Fix the login', '“Fix the login', '"Fix the login', '“Fix “the login” now”', ''])('invalidates older consent when the newest offer is not a complete quoted line: %s', after => {
+    const older = 'I\'ll post this as you: “Keep drafts offline”'
+    const newer = `I'll post this as you: ${after}`
+    expect(passes('Keep drafts offline', [newer, older])).toBe(false)
+    expect(passes('Keep drafts offline', [`${older}\n${newer}`])).toBe(false)
+    expect(passes(after, [newer])).toBe(false)
   })
 
   // Task #2989: the Buddy showed one line, then replaced it; the owner's ok is for the newest one only.
