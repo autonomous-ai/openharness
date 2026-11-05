@@ -10,7 +10,7 @@
 import type { Prisma } from '@prisma/client'
 import { sizeOf } from '../cache.js'
 import { recordCache } from '../cacheStats.js'
-import { ms } from './light.js'
+import { ms, rawPartRow } from './light.js'
 import { groupsBy, type GroupIndex } from './indexed.js'
 import { partId, type PartRow } from './write.js'
 
@@ -19,8 +19,6 @@ type Where = Record<string, unknown>
 
 /** What every process may hold, all Swarms together, measured as the read cache measures (cache.ts sizeOf). */
 export const HELD_MAX_BYTES = 32 * 1024 * 1024
-/** More changed machine parts than this are read in one query of them all, not one by id each. */
-const FEW = 4
 
 interface Held { columns: string; value: unknown; bytes: number; read: number }
 interface Tab { tabId: string; parts: Map<string, Held>; reads: number; bytes: number }
@@ -119,8 +117,10 @@ export class HeldRead {
     }
     if (!changed.length) recordCache('held-machines', 'hit')
     else {
-      const read = changed.length > FEW ? (await all()).filter(row => !rows.has(row.key))
-        : (await Promise.all(changed.map(key => tx.swarmMachine.findUnique({ where: { id: partId(tabId, key) } })))).filter(row => !!row && !row.deleted) as unknown as PartRow[]
+      // However many changed, one read by id: one `findUnique` each was a top slow shape on prod (task #3119). Raw, so the ids
+      // are a plain `$in` on `_id`.
+      const read = (await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: changed.map(key => partId(tabId, key)) }, deleted: false } }] }) as
+        unknown as Array<Record<string, unknown>>).map(rawPartRow)
       for (const row of this.kept('machine', read, 'parts')) rows.set(row.key, row)
     }
     return byKey([...rows.values()])

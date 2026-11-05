@@ -60,6 +60,20 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
   bool get _wasAtEnd =>
       _settledPixels != null && _settledPixels! >= _settledMax! - .5;
 
+  // Whether the reader is pulling the list: a drag, and the fling or bounce
+  // that follows it. Only they take the view past the end of the list.
+  bool _pulled = false;
+
+  @override
+  void beginActivity(ScrollActivity? newActivity) {
+    if (newActivity is DragScrollActivity) {
+      _pulled = true;
+    } else if (newActivity is! BallisticScrollActivity) {
+      _pulled = false;
+    }
+    super.beginActivity(newActivity);
+  }
+
   @override
   void correctBy(double correction) {
     // The list moved every row and the view together: nothing on screen
@@ -82,7 +96,14 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
 
   @override
   bool applyContentDimensions(double minScrollExtent, double maxScrollExtent) {
-    final target = _keptPixels(maxScrollExtent);
+    // Nothing the chat does leaves the view past the end of the list: the
+    // newest row shrinking under a kept place, or a jump to a row, would show
+    // blank under it until a Mac's bouncing scroll sprang back, every few
+    // seconds with no input (Scholes, #3124). Before anything is painted.
+    var target = _keptPixels(maxScrollExtent);
+    if (!_pulled && (target ?? pixels) > maxScrollExtent) {
+      target = maxScrollExtent;
+    }
     if (target != null && (target - pixels).abs() > .5) {
       correctPixels(target);
       return false;
