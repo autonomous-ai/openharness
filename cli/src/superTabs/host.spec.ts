@@ -5882,3 +5882,61 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(lead.lists).toBe(2)
   }, 60_000)
 })
+
+// Task #3403 (anh Dee's Swarm redesign, 11-05): nothing is typed into a busy agent. A list row that waits for the turn end
+// (backend turnEnd.ts) is held while its agent works, as a refused write is, and typed once when the agent is idle, with the
+// same claim. A row the server lets go (a status change, 15 minutes) types as before; an older server's row has no field.
+describe('a delivery that waits for the agent\'s turn to end', () => {
+  const waiting = (t: ReturnType<typeof setup>, waits: () => boolean | undefined) => {
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      const answer = await original(method, path, body) as { status: number; body: { data: unknown } }
+      const value = waits()
+      if (method === 'GET' && path.endsWith('/deliveries') && Array.isArray(answer.body.data) && value !== undefined) {
+        answer.body.data = answer.body.data.map(row => ({ ...(row as object), waitsForTurnEnd: value }))
+      }
+      return answer
+    })
+  }
+  const claims = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([, , body]) => (body as { type?: string })?.type === 'claim')
+  const working = (t: ReturnType<typeof setup>, state: () => string) =>
+    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state()])))
+
+  it('is held while the agent works, then typed once when it is idle, with one claim', async () => {
+    const t = setup(), host = t.open()
+    let state = 'working'
+    waiting(t, () => true); working(t, () => state)
+    await host.tick(); t.wait(1_000); await host.tick(); t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+    state = 'idle'
+    t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(claims(t)).toHaveLength(1)
+    t.event('delivered'); t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack' })])
+  })
+
+  it('types while the agent works once the server lets it go', async () => {
+    const t = setup(), host = t.open()
+    let waits = true
+    waiting(t, () => waits); working(t, () => 'working')
+    await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    // The agent said its status, or 15 minutes passed: the list, read again at least every 30 s while held, says so.
+    waits = false
+    t.wait(31_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('types as before while the agent works when the row does not wait, or comes from an older server', async () => {
+    for (const value of [false, undefined]) {
+      const t = setup(), host = t.open()
+      waiting(t, () => value); working(t, () => 'working')
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.core.agents.activity).not.toHaveBeenCalled()
+    }
+  })
+})
