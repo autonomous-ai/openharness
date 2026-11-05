@@ -616,6 +616,26 @@ class SuperTabBuddyBar extends StatelessWidget {
     return false;
   }
 
+  /// Why Start again cannot run now, in words, or null when it can: new work
+  /// paused in the Swarm, or [agent]'s machine paused or offline there.
+  String? _restartHeld(
+    SuperTabController c,
+    SuperTabAgent agent,
+    String machine,
+  ) {
+    if (c.snapshot!.paused) {
+      return 'New work is paused. Start your Buddy again once it resumes.';
+    }
+    final target = buddyMachines(
+      c,
+      app: app,
+    ).where((m) => m.id == agent.machineId).firstOrNull;
+    final block = target == null ? null : buddyMachineBlock(target);
+    return block == null
+        ? null
+        : "$machine is $block. Start your Buddy again once it's back.";
+  }
+
   /// A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
   /// removed, then started on the same machine and engine. Its chat and its
   /// name stay. Unlike a down Buddy's Start again, which the server replaces
@@ -660,6 +680,8 @@ class SuperTabBuddyBar extends StatelessWidget {
       access,
     ].join(' · ');
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
+    final offer = agent.downSince == null && _mustStartAgain(c, agent);
+    final held = offer ? _restartHeld(c, agent, machine) : null;
     return Padding(
       key: const ValueKey('super-buddy-bar'),
       padding: _padding,
@@ -699,23 +721,21 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
-          if (agent.downSince == null && _mustStartAgain(c, agent))
+          if (offer)
             Row(
               key: const ValueKey('super-buddy-start-again'),
               children: [
                 Expanded(
                   child: Text(
-                    c.snapshot!.paused
-                        ? 'New work is paused. Start your Buddy again once '
-                              'it resumes.'
-                        : 'Start your Buddy again to switch its model.',
+                    held ?? 'Start your Buddy again to switch its model.',
                     style: DesktopChrome.control(),
                   ),
                 ),
-                // While new work is paused the server refuses a start: the
-                // Buddy is not removed for a start that cannot follow.
+                // The server refuses a start while new work is paused, in the
+                // Swarm or on the Buddy's machine: the Buddy is not removed
+                // for a start that cannot follow (reviews of #3171).
                 TextButton(
-                  onPressed: busy || c.snapshot!.paused
+                  onPressed: busy || held != null
                       ? null
                       : () => unawaited(_startAgain(c, agent)),
                   child: const Text('Start again'),
@@ -787,6 +807,10 @@ class _BuddyStartState extends State<_BuddyStart> {
   String _engine = 'claude';
   bool _adding = false;
 
+  /// [_machine] is a restart's target, kept while it cannot be used, until
+  /// the reader chooses another (Guide's second review of #3171).
+  bool _keepTarget = false;
+
   @override
   void initState() {
     super.initState();
@@ -795,6 +819,7 @@ class _BuddyStartState extends State<_BuddyStart> {
     if (_restartTargets[c]?[widget.projectId] case final target?) {
       _machine = target.machineId;
       _engine = target.engine;
+      _keepTarget = true;
     }
   }
 
@@ -840,7 +865,11 @@ class _BuddyStartState extends State<_BuddyStart> {
   Widget build(BuildContext context) {
     if (!c.canWrite) return const SizedBox.shrink();
     final machines = buddyMachines(c, app: widget.app);
-    final machine = pickedBuddyMachine(machines, _machine);
+    final kept = _keepTarget
+        ? machines.where((m) => m.id == _machine).firstOrNull
+        : null;
+    final keptBlock = kept == null ? null : buddyMachineBlock(kept);
+    final machine = kept ?? pickedBuddyMachine(machines, _machine);
     final busy = c.saving || c.hasPendingAction || _adding;
     return Padding(
       key: const ValueKey('super-buddy-start'),
@@ -866,7 +895,11 @@ class _BuddyStartState extends State<_BuddyStart> {
                   busy: busy,
                   fitNames: true,
                   onChanged: (value) {
-                    if (!busy) setState(() => _machine = value);
+                    if (busy) return;
+                    setState(() {
+                      _machine = value;
+                      _keepTarget = false;
+                    });
                   },
                 ),
                 const SizedBox(width: 8),
@@ -889,13 +922,21 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: busy || machine == null
+                  onPressed: busy || machine == null || keptBlock != null
                       ? null
                       : () => unawaited(_start(machine)),
                   child: const Text('Start'),
                 ),
               ],
             ),
+          if (keptBlock != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${kept!.name} is $keptBlock. Your Buddy starts there once '
+              "it's back, or choose another machine.",
+              style: DesktopChrome.control(),
+            ),
+          ],
           if (machines.isNotEmpty && machine == null) ...[
             const SizedBox(height: 4),
             BuddyNoMachine(machines: machines),

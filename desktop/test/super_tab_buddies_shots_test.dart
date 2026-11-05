@@ -195,6 +195,8 @@ void main() {
       ('-200', 2.0),
       ('-paused', 1.0),
       ('-refused', 1.0),
+      ('-machine-paused', 1.0),
+      ('-kept', 1.0),
     ]) {
       testWidgets(
         'Buddy Start again$state after a held switch in ${brightness.name}',
@@ -208,7 +210,11 @@ void main() {
           addTearDown(tester.view.reset);
           final server = sharedModels();
           if (state == '-paused') server.state['paused'] = true;
-          if (state == '-refused') {
+          Map ownMac() => (server.state['machines'] as List)
+              .cast<Map>()
+              .firstWhere((m) => m['machineId'] == 'ken-mac');
+          if (state == '-machine-paused') ownMac()['paused'] = true;
+          if (state == '-refused' || state == '-kept') {
             (server.state['agents'] as List).cast<Map>().firstWhere(
               (a) => a['id'] == 'wren',
             )['configuration'] = {
@@ -254,9 +260,14 @@ void main() {
             find.byKey(const ValueKey('super-buddy-start-again')),
             findsOneWidget,
           );
-          if (state == '-refused') {
+          if (state == '-refused' || state == '-kept') {
             await tester.tap(find.widgetWithText(TextButton, 'Start again'));
             await tester.pumpAndSettle();
+            if (state == '-kept') {
+              ownMac()['paused'] = true;
+              await c.refresh();
+              await tester.pumpAndSettle();
+            }
             expect(
               find.byKey(const ValueKey('super-buddy-start')),
               findsOneWidget,
