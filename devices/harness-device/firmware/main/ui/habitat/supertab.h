@@ -43,6 +43,9 @@ typedef struct {
     ht_lead_t leads[HT_SUPERTAB_LEADS_MAX];
 } ht_supertab_t;
 typedef enum { HT_RECAP_NONE, HT_RECAP_LOADING, HT_RECAP_LOADED, HT_RECAP_EMPTY } ht_recap_state_t;
+// How many Leads' last recaps the dial remembers, so a swipe back shows one at once.
+enum { HT_RECAP_REMEMBERED = 8 };
+typedef struct { char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], thread[ID_MAX], text[HT_SUPERTAB_TEXT]; uint32_t at, used; bool empty; } ht_recap_memo_t;
 typedef struct {
     ht_supertab_t tabs[HT_SUPERTABS_MAX];   // the records that have arrived, in arrival order
     int n;
@@ -51,6 +54,11 @@ typedef struct {
     // One slot: the recap of the Lead on the face, and nothing else.
     // `chat_id`: the chat the text is the last message of ("" from a daemon without swarmChat).
     struct { char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], thread[ID_MAX], text[HT_SUPERTAB_TEXT]; uint32_t at, asked_ms; ht_recap_state_t state; } recap;
+    // The last recaps of the Leads that were on the face (LOADED or EMPTY), each for its chat and thread; `used` 0 is free.
+    // Opening a Lead shows its own at once while the fresh one is asked for (Diego's dial, 2026-11-05: a swipe showed the
+    // resting pet until it came).
+    ht_recap_memo_t remembered[HT_RECAP_REMEMBERED];
+    uint32_t remembered_n;   // a counter for `used`, the newest the highest
 } ht_supertabs_t;
 typedef enum { HT_LEAD_RAISED_ASK, HT_LEAD_RAISED_STUCK, HT_LEAD_CLEARED } ht_lead_event_kind_t;
 typedef struct { ht_lead_event_kind_t kind; char tab[ID_MAX], lead[ID_MAX]; } ht_lead_event_t;
@@ -77,7 +85,8 @@ const ht_supertab_t *ht_supertabs_find(const ht_supertabs_t *, const char *id);
 const ht_supertab_t *ht_supertabs_at(const ht_supertabs_t *, int i);
 const ht_supertab_t *ht_supertabs_for_desk(const ht_supertabs_t *, const char *desk_tab_id);
 const ht_lead_t *ht_supertabs_lead_by_local(const ht_supertabs_t *, const char *harness_id, const ht_supertab_t **tab);
-// LOADING with no text; an empty lead closes the slot (NONE). A held recap is kept only for the same chat and thread.
+// LOADING with no text; an empty lead closes the slot (NONE). A held recap is kept only for the same chat and thread, and a
+// Lead opened again takes its remembered one (LOADED or EMPTY) for that chat and thread.
 void ht_supertabs_recap_open(ht_supertabs_t *, const char *tab, const char *lead, uint32_t now_ms);
 // false: not the open Lead, or not the chat on its face (`chat_id` "" is the Lead's own, from a daemon without swarmChat),
 // or not its thread (`thread` "" or NULL is the main chat).
