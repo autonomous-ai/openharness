@@ -506,7 +506,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                     trailing: Icon(
                       AppIcons.chevronDown,
                       size: 14,
-                      color: DesktopChrome.muted,
+                      color: grid.SidebarInk.muted(context),
                     ),
                   ),
                 ),
