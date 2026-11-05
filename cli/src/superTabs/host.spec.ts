@@ -518,7 +518,7 @@ describe('Super Tab native delivery handoff', () => {
       const original = vi.mocked(t.call).getMockImplementation()!
       vi.mocked(t.call).mockImplementation(async (method, path, body) => (body as Record<string, unknown> | undefined)?.type === 'claim'
         ? { status: 403, body: { success: false, error: { code: 'DELIVERY_REVOKED', message: 'This instruction is no longer authorized.' } } }
-        : method === 'GET' && path.endsWith('/deliveries') ? { status: 200, body: { success: true, data: [] } }
+        : method === 'GET' && /\/deliveries(\?|$)/.test(path) ? { status: 200, body: { success: true, data: [] } }
           : original(method, path, body))
       t.event('rejected', 'team_waiting_busy')
       await host.tick().catch(() => {})
@@ -647,7 +647,7 @@ describe('Super Tab native delivery handoff', () => {
         return { status: 200, body: { success: true, data: { id: 'delivery', status: 'confirmed' } } }
       }
       // Resolved, it is no longer open: its list, read before the receipt is asked, no longer shows it.
-      if (method === 'GET' && path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path)) return { status: 200, body: { success: true, data: [] } }
       return original(method, path, body)
     })
     await host.tick(); await host.reconcileReceipts()
@@ -662,7 +662,7 @@ describe('Super Tab native delivery handoff', () => {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'answered' } } }
-      if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { success: true, data: [] } }
       return original(method, path, body)
     })
     await host.tick(); await host.reconcileReceipts()
@@ -676,7 +676,7 @@ describe('Super Tab native delivery handoff', () => {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
-      if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { success: true, data: [] } }
       return original(method, path, body)
     })
     await host.tick(); await host.reconcileReceipts()
@@ -696,7 +696,7 @@ describe('Super Tab native delivery handoff', () => {
           if (s.refusal) return { status: s.refusal.status, body: { success: false, error: { code: s.refusal.code, message: 'Refused.' } } }
         }
         if (s.ended && method === 'GET' && path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
-        if (s.ended && method === 'GET' && path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+        if (s.ended && method === 'GET' && /\/deliveries(\?|$)/.test(path)) return { status: 200, body: { success: true, data: [] } }
         return original(method, path, body)
       })
       return s
@@ -864,7 +864,7 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup(), host = t.open()
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
-      if (method === 'GET' && path.endsWith('/deliveries')) {
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path)) {
         return { status: 200, body: { success: true, data: [{ id: 'delivery', conversationId: 'lead', claimId: null, status: 'queued' }, { id: 'second', conversationId: 'lead', claimId: null, status: 'queued' }] } }
       }
       if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
@@ -1603,7 +1603,7 @@ describe('a delivery poll or claim that keeps failing', () => {
     const claims = { n: 0 }
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
-      const list = method === 'GET' && path.endsWith('/deliveries'), claim = method === 'POST' && path.endsWith('/deliveries/delivery')
+      const list = method === 'GET' && /\/deliveries(\?|$)/.test(path), claim = method === 'POST' && path.endsWith('/deliveries/delivery')
       if ((list && refuseList) || (claim && refuseClaim)) {
         if (claim) claims.n++
         return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
@@ -1628,7 +1628,7 @@ describe('a delivery poll or claim that keeps failing', () => {
     const claims: Record<string, number> = { first: 0, second: 0 }
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
-      if (method === 'GET' && path.endsWith('/deliveries')) {
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path)) {
         return { status: 200, body: { success: true, data: ['first', 'second'].map(id => ({ id, conversationId: 'lead', claimId: null, status: 'queued' })) } }
       }
       const claim = /\/deliveries\/(first|second)$/.exec(path)
@@ -1657,7 +1657,7 @@ describe('a delivery poll or claim that keeps failing', () => {
     let gone = false
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
-      if (method === 'GET' && path.endsWith('/deliveries') && gone) return { status: 200, body: { success: true, data: [] } }
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path) && gone) return { status: 200, body: { success: true, data: [] } }
       if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
         claims.n++
         return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
@@ -1678,7 +1678,7 @@ describe('a delivery poll or claim that keeps failing', () => {
   // 2026-10-28: a Lead's list failed for 45 minutes and the log said only "This already exists, so nothing new was saved."
   it('says whose delivery list keeps failing, with the backend\'s code, since when and how often', async () => {
     const t = setup(), host = t.open()
-    failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    failing(t, (method, path) => method === 'GET' && /\/deliveries(\?|$)/.test(path))
     await host.tick()
     t.wait(1_000); await host.tick()
     expect(t.log.mock.calls.slice(-2).map(call => call[0])).toEqual([
@@ -1691,7 +1691,7 @@ describe('a delivery poll or claim that keeps failing', () => {
 
   it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {
     const t = setup(), host = t.open()
-    const lists = failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    const lists = failing(t, (method, path) => method === 'GET' && /\/deliveries(\?|$)/.test(path))
     await host.tick()
     await host.tick()
     expect(lists.n).toBe(1)
@@ -3666,7 +3666,7 @@ describe('built-in skill text after a CLI update', () => {
         fetched.push(role)
         return texts[role] ? { status: 200, body: { data: texts[role] } } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This role is unavailable.' } } }
       }
-      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { data: [] } }
       const refusal = request?.command?.type === 'message.send' ? refuse?.(request) : undefined
       if (refusal) { refused.push(request); return refusal }
       if (request?.command?.type === 'message.send') {
@@ -4042,7 +4042,7 @@ describe('project instructions from the roster', () => {
           coordinatorName: 'Product Manager', notesRevision: 1, ...(read[2] === 'a-pm' ? { builtIn } : {}),
           ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
       }
-      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { data: [] } }
       if (request?.command?.type === 'message.send') {
         const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
         if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
@@ -5466,7 +5466,7 @@ describe('a machine its owner removed from a Swarm', () => {
 // the server has not said it pushes.
 describe('deliveries the server pushes', () => {
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
-    .filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+    .filter(([method, path]) => method === 'GET' && /\/deliveries(\?|$)/.test(path)).length
   const announced: BackendNotice = { type: 'super_tab_deliveries' }
   const waiting: BackendNotice = { type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' }
   async function seconds(t: ReturnType<typeof setup>, host: SuperTabHost, count: number) {
@@ -5629,7 +5629,7 @@ describe('deliveries the server pushes', () => {
 // when the server says something changed.
 describe('a delivery held by a busy pane', () => {
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
-    .filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+    .filter(([method, path]) => method === 'GET' && /\/deliveries(\?|$)/.test(path)).length
   const claims = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
     .filter(([method, , body]) => method === 'POST' && (body as Record<string, unknown> | undefined)?.type === 'claim').length
   const writes = (t: ReturnType<typeof setup>) => vi.mocked(t.core.turns.deliver).mock.calls.length
@@ -5726,7 +5726,7 @@ describe('a delivery held by a busy pane', () => {
     // A second delivery arrives while the first is still being written; claiming it takes 3 s.
     const original = vi.mocked(t.call).getMockImplementation()!
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
-      if (method === 'GET' && path.endsWith('/deliveries')) {
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path)) {
         return { status: 200, body: { success: true, data: [{ id: 'delivery', conversationId: 'lead', claimId: 'x', status: 'claimed' },
           { id: 'second', conversationId: 'lead', claimId: null, status: 'queued' }] } }
       }
@@ -5755,7 +5755,7 @@ describe('receipt checks', () => {
     const original = vi.mocked(t.call).getMockImplementation()!
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
       if (method === 'GET' && path.endsWith('/deliveries/delivery')) return answer()
-      if (method === 'GET' && path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path)) return { status: 200, body: { success: true, data: [] } }
       return original(method, path, body)
     })
     await host.tick()
@@ -5876,7 +5876,7 @@ describe('Swarm changes the server pushes', () => {
   // 250 ms were 5 extra list reads. A push inside the feed's one-second gap is left to the next tick.
   it('starts no host pass for a push its feed will not read yet, so a busy list is not read again per push', async () => {
     const t = setup(), host = t.open()
-    const lists = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+    const lists = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && /\/deliveries(\?|$)/.test(path)).length
     t.push(pushes)
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
@@ -5989,7 +5989,7 @@ describe('requests per idle agent and machine per minute while the server pushes
     }
     const calls = vi.mocked(t.call).mock.calls
     const perMinute = (match: (method: string, path: string) => boolean) => calls.filter(([method, path]) => match(method, path)).length / 10
-    return { lists: perMinute((method, path) => method === 'GET' && path.endsWith('/deliveries')),
+    return { lists: perMinute((method, path) => method === 'GET' && /\/deliveries(\?|$)/.test(path)),
       pickups: perMinute((method, path) => method === 'POST' && path.endsWith('/terminal')) }
   }
 
@@ -6010,7 +6010,7 @@ describe('a delivery that waits for the agent\'s turn to end', () => {
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
       const answer = await original(method, path, body) as { status: number; body: { data: unknown } }
       const value = waits()
-      if (method === 'GET' && path.endsWith('/deliveries') && Array.isArray(answer.body.data) && value !== undefined) {
+      if (method === 'GET' && /\/deliveries(\?|$)/.test(path) && Array.isArray(answer.body.data) && value !== undefined) {
         answer.body.data = answer.body.data.map(row => ({ ...(row as object), waitsForTurnEnd: value }))
       }
       return answer
@@ -6273,5 +6273,44 @@ describe('a crew member at rest', () => {
     rows[0] = crewRow({ asleep: { since: 2 } })
     await t.poll(1_000)
     expect(t.closeMember).toHaveBeenCalledTimes(2)
+  })
+})
+
+// Task #3545: the PM's inbox goes when its turn ends. Its host says whether its turn is open with the PM's list read, and reads
+// that list again as soon as the turn ends, not on the PM's 30-second cadence. Another agent's read says nothing.
+describe('the PM\'s turn on its list read', () => {
+  const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && String(path).includes('/deliveries'))
+    .map(([, path]) => String(path).replace(/^.*\/deliveries/, ''))
+  const turn = (t: ReturnType<typeof setup>, state: () => string) =>
+    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state() as 'working' | 'idle' | 'unknown'])))
+
+  it('says busy while the PM works and idle once it does not, and nothing for another agent', async () => {
+    const t = setup(); t.row.lead = true; t.idle()
+    let state = 'working'
+    turn(t, () => state)
+    const host = t.open()
+    await host.tick()
+    state = 'idle'
+    t.wait(31_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy', '?turn=idle'])
+    const other = setup(); other.idle()
+    turn(other, () => 'working')
+    await other.open().tick()
+    expect(reads(other)).toEqual([''])
+  })
+
+  it('reads the PM\'s list on the tick its turn ends, within its 30 seconds', async () => {
+    const t = setup(); t.row.lead = true; t.idle()
+    let state = 'working'
+    turn(t, () => state)
+    const host = t.open()
+    // The server pushes deliveries, so a list is read when due, not every second.
+    t.push({ type: '__deliveries_lease' })
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy'])
+    state = 'idle'
+    t.wait(1_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy', '?turn=idle'])
   })
 })
