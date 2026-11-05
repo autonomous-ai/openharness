@@ -345,6 +345,44 @@ void main() {
     );
   }
 
+  testWidgets('project A to Z ignores # and stays fixed after new activity', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final server = ConversationServer();
+    final controller = await projectSidebar(server);
+    server.state['projects'] = [
+      projectFixture('lead', '# Zebra', 'lead'),
+      projectFixture('empty', 'alpha', 'empty-lead'),
+    ];
+    await controller.refresh();
+    await pumpSidebar(tester, controller, app);
+    for (final updated in [false, true]) {
+      if (updated) {
+        final lead = (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((c) => c['id'] == 'lead');
+        lead['lastMessageSequence'] = 99;
+        lead['changedAt'] = DateTime.utc(2030).millisecondsSinceEpoch;
+        await controller.refresh();
+        await tester.pumpAndSettle();
+      }
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('super-project-empty'))).dy,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
+              .dy,
+        ),
+      );
+      expect(superTabSidebarOrder(controller).take(2), ['empty-lead', 'lead']);
+    }
+    expect(tester.takeException(), isNull);
+    await disposeSidebar(tester, controller);
+  });
+
   testWidgets('reads like a chat app: Activity, Projects A to Z, Buddies, '
       'then Manage; no # product-managers, no tasks', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
