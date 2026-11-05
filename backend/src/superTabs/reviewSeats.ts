@@ -24,14 +24,14 @@ export type Standing = typeof STANDING[number]
 export const canStart = (s: Standing) => s === 'usable' || s === 'close to running out'
 
 /** The engine's quota reading for [pool]: its own, or for a Team account that spends its Mac's subscription, the Mac's. */
-function quotaOf(state: SuperTabState, pool: ContributedMachine, engine: string, now: number) {
+export function quotaOf(state: SuperTabState, pool: ContributedMachine, engine: string, now: number) {
   const own = pool.observation?.quotas.find(q => q.engine === engine)
   if (own?.known || !pool.hostMachineId || pool.observation?.quotaReasons?.[engine] !== RELAYED_QUOTA) return own
   const mac = state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId)
   return mac?.observation && now - mac.observation.receivedAt <= MACHINE_FRESH_MS ? mac.observation.quotas.find(q => q.engine === engine) : own
 }
 
-function resetMs(value: string | number | null): number | null {
+export function resetMs(value: string | number | null): number | null {
   if (typeof value === 'number') return value > 1e10 ? value : value * 1000
   if (typeof value === 'string') { const ms = Date.parse(value); return Number.isFinite(ms) ? ms : null }
   return null

@@ -38,7 +38,8 @@ function fixture(pools: Pool[] = [machine('mac'), machine('mini')], startedAgo =
   const ada = add('ada', false)
   ada.startedSession = { creationId: 'c', sessionId: 's', createdAt: new Date(NOW - startedAgo).toISOString() }
   ;(ada as Agent & { crew?: unknown }).crew = { role: 'Engineer', at: NOW - startedAgo, by: 'owner' }
-  state.machines = pools
+  const generation = state.people.find(p => p.id === 'owner')!.generation
+  state.machines = pools.map(pool => ({ ...pool, membershipGeneration: generation }))
   return { state, lead, ada }
 }
 const everywhere: CrewDeps = { admits: () => true }

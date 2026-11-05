@@ -20,7 +20,7 @@ export const SWITCH_UNCLAIMED_MS = 2 * 60_000
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
 /** The loaded groups an agent belongs to or worked in. */
-const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
+export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
   state.conversations.filter(c => c.agentIds.includes(target.id) || c.assignment?.agentId === target.id)
 
 /** When the agent last had anything to do: its start, its coordinator's keep, its own progress, or a message in one of its
@@ -28,7 +28,7 @@ const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
  *  groups, whose messages are about others' work: it is idle from its start or keep (Swarm autonomous-harness, 2026-10-29:
  *  one sat idle 18+ minutes, its time renewed by every message in a busy chat). One a person added by hand has no start of
  *  record, so its groups' messages count, from the one it joined in. Undefined when nothing tells when. */
-function idleSince(target: Agent, groups: Conversation[]): number | undefined {
+export function idleSince(target: Agent, groups: Conversation[]): number | undefined {
   const worked = !!target.lostTask || groups.some(g => g.assignment?.agentId === target.id) || !target.startedSession
   const seen = [time(target.startedSession?.createdAt), target.keptAt, ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === target.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
