@@ -394,6 +394,10 @@ export interface OwnerRelayLaunch { env: Record<string, string>; args: string[] 
  *  one. The launch refuses or holds with it, never starting signed out (security re-checks of #2089). */
 export interface OwnerRelayRefusal { refused: string }
 export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
+/** Why a Team-account Claude that has not signed in itself is not launched while the owner's grant cannot be read: a CLI
+ *  release restarts the owner's daemon and its relay, and a Claude launched in that gap started with no credentials and
+ *  sat on "Not logged in · Please run /login" (task #3301). A relaunch is held with it and launches once the grant reads. */
+export const NO_CLAUDE_RELAY = 'Waiting for the owner\'s subscription relay on this machine: Claude Code cannot sign in here without it.'
 
 export interface TeamRelayLaunchDeps {
   /** Whether this daemon runs team work only. */
@@ -418,8 +422,10 @@ export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunch
   if (!deps.team()) return null
   const home = engine === 'codex' ? codexHome : undefined
   // A Codex home of its own holds no sign-in but what it was given: with no relay it is refused, not launched signed out.
-  const none = home === undefined ? null : { refused: NO_PM_RELAY }
+  // Neither is a Claude the team account has not signed in itself, once its owner's relay is configured (task #3301).
+  const none = home !== undefined ? { refused: NO_PM_RELAY } : engine === 'claude' ? { refused: NO_CLAUDE_RELAY } : null
   const config = deps.config()
+  // No team config is no relay to wait for: only a Codex home of its own is refused then.
   if (!config) return home !== undefined && !await deps.signedIn(engine, home).catch(() => false) ? none : null
   if (await (home === undefined ? deps.signedIn(engine) : deps.signedIn(engine, home)).catch(() => false)) return null
   const grant = deps.read(config)
