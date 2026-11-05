@@ -1641,14 +1641,16 @@ class _SuperTabViewState extends State<SuperTabView>
         continue;
       }
       if ((top - anchor.top).abs() < .5) return;
-      // The list's extent is an estimate until laid out there: only the
-      // start bounds the jump, and the next frame measures the row again.
-      scroll.jumpTo(
-        (position.pixels + top - anchor.top).clamp(
-          position.minScrollExtent,
-          double.infinity,
-        ),
+      // The list's extent is an estimate until laid out there, and the next
+      // frame measures the row again. Never past the end: a jump there only
+      // ends in a bounce back (#3124), and its scroll ending near the top
+      // read the page before again, with no input.
+      final to = (position.pixels + top - anchor.top).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
       );
+      if ((to - position.pixels).abs() < .5) return;
+      scroll.jumpTo(to);
     }
   }
 

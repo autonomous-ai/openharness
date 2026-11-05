@@ -150,4 +150,47 @@ void main() {
       await close(tester, c);
     },
   );
+
+  testWidgets(
+    'a chat at its end with a thread summary and the day pill stays still '
+    'as polls and its relative times tick',
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    (tester) async {
+      // Scholes's chat: the day pill over the top row, and a thread summary
+      // ('8 replies, Last reply 1 min ago') near the end. Ruled out as the
+      // cause; kept so none of them starts moving the list.
+      final server = ConversationServer()..threads = true;
+      final now = DateTime.now().toUtc();
+      for (var i = 1; i <= 40; i++) {
+        server.append('Update $i: checking the offline queue and reconnects.');
+        server.messages.last
+          ..['author'] = lead
+          ..['createdAt'] = now
+              .subtract(Duration(minutes: 60 - i))
+              .toIso8601String();
+      }
+      final root = server.messages.last['id'] as String;
+      for (var i = 1; i <= 8; i++) {
+        server.append('Reply $i');
+        server.messages.last
+          ..['thread'] = root
+          ..['replyTo'] = root
+          ..['createdAt'] = now
+              .subtract(const Duration(minutes: 1))
+              .toIso8601String();
+      }
+      final c = await show(tester, server);
+      expect(find.byKey(const ValueKey('super-day-pill')), findsOneWidget);
+      expect(find.textContaining('Last reply'), findsOneWidget);
+      expect(position(tester).extentAfter, lessThan(1));
+      final group = (server.state['conversations'] as List).first as Map;
+      for (var poll = 0; poll < 4; poll++) {
+        group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+        await c.refresh();
+        await staysAtEnd(tester, root, frames: 30);
+        await tester.pump(const Duration(seconds: 30));
+      }
+      await close(tester, c);
+    },
+  );
 }

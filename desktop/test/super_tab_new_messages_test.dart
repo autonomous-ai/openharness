@@ -291,6 +291,9 @@ void main() {
     expect(c.messages('lead').any((m) => m.id == 'message-6'), isFalse);
     expect(find.byKey(_jump), findsNothing);
     expect(find.textContaining('0 new messages'), findsNothing);
+    // At the end the chat is read, and its mark saved.
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
   });
 
   // Review of #2131, item 2.
@@ -854,6 +857,9 @@ void main() {
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(find.byKey(_jump), findsNothing);
+    // At the end the chat is read, and its mark saved.
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
   });
 
   testWidgets('opened at a linked message above the line, the pill points '
