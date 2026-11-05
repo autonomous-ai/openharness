@@ -23,7 +23,7 @@ import { threadFacet } from '../src/superTabs/pageReads.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import type { Command, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import type { PhoneNotice } from '../src/push/sender.js'
+import { swarmNoticeId, type PhoneNotice } from '../src/push/sender.js'
 import { generateKeyPairSync } from 'node:crypto'
 import { sendPhoneNotices } from '../src/push/send.js'
 import { apnsSender, type ApnsRequest } from '../src/push/apns.js'
@@ -251,17 +251,18 @@ describe('Phone push end to end on the server: a write, its phones, and what App
       command: { type: 'message.send', conversationId: s.web, text: 'Peer answers: the secret plan', replyTo: root, recipientIds: [] } }) as { result: Record<string, unknown> }).result.messageId as string
     await Promise.all(sending)
     const row = await db.superTabActivity.findFirstOrThrow({ where: { tabId: s.tabId, personId: owner.sub, messageId: reply } })
-    const key = `reply:${s.tabId}:${row.id}`, link = `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}`
+    const key = `reply:${s.tabId}:${row.id}`, link = `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}`, slot = `thread:${s.tabId}:${s.web}:${root}`
     // Apple: one request, to the owner's iPhone alone.
     expect(apple.map(r => r.path)).toEqual([`/3/device/${iphone}`])
-    expect(apple[0]!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10' })
+    expect(apple[0]!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10',
+      'apns-collapse-id': String(swarmNoticeId(slot)) })
     const body = JSON.parse(apple[0]!.body)
     expect(body).toEqual({ aps: { alert: { title: expect.stringMatching(/ replied in a thread$/), subtitle: expect.any(String), body: 'Open Harness to read it.' },
-      sound: 'default', 'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' }, key, link })
-    // Google: one message, to the owner's Android phone, tagged with the same key so the app knows it.
+      sound: 'default', 'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' }, key, link, slot })
+    // Google: one message, to the owner's Android phone, tagged with the thread's slot, its key in its data so the app knows it.
     const messages = google.filter(c => c.url !== fcmAccount.tokenUri).map(c => JSON.parse(c.body).message)
     expect(messages).toEqual([{ token: android, notification: { title: body.aps.alert.title, body: `${body.aps.alert.subtitle} · Open Harness to read it.` },
-      android: { priority: 'high', notification: { channel_id: 'swarm-needs-you', tag: key, visibility: 'PRIVATE' } }, data: { key, link } }])
+      android: { priority: 'high', notification: { channel_id: 'swarm-needs-you', tag: slot, visibility: 'PRIVATE' } }, data: { key, link, slot } }])
     // Nothing written in the chat leaves the server.
     expect(JSON.stringify([apple, google])).not.toContain('secret plan')
     expect(JSON.stringify(apple)).not.toContain(authors)
@@ -351,7 +352,8 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(more).toEqual([])
     const row = await db.superTabActivity.findFirstOrThrow({ where: { tabId: s.tabId, personId: owner.sub, messageId: reply } })
     expect(notice).toEqual({ personId: owner.sub, key: `reply:${s.tabId}:${row.id}`, title: expect.stringMatching(/^.+ replied in a thread$/),
-      subtitle: await swarmName(s.tabId), body: 'Open Harness to read it.', link: `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}` })
+      subtitle: await swarmName(s.tabId), body: 'Open Harness to read it.', link: `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}`,
+      slot: `thread:${s.tabId}:${s.web}:${root}`, thread: { tabId: s.tabId, conversationId: s.web, threadId: root, rowId: row.id, at: row.createdAt.getTime() } })
     expect(notice!.title).not.toMatch(/^Someone /)
     expect(JSON.stringify(notice)).not.toContain('secret plan')
     // A project's own chat names that project.
@@ -360,20 +362,19 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(inOpen!.subtitle).toBe('Open')
   })
 
-  it('a reply reaches the thread\'s starter, the quoted message\'s author, people tagged earlier in it and people who replied, never its author', async () => {
+  it('a reply reaches the thread\'s starter, the quoted message\'s author and people tagged earlier in it, never its author nor one who only replied (Tony\'s rule)', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
     // The starter alone hears of the first reply; its author never.
     const peerReply = await send(s.tabId, s.web, 'Peer answers', peer, root)
-    // The owner tags outsider in the thread: outsider hears of that by the tag alone.
-    expect(await whom(() => tagging(s.tabId, s.web, 'Outsider, look', owner, root, [outsider.sub]))).toEqual([`mention:${outsider.sub}`, `reply:${peer.sub}`].sort())
-    // Outsider answers peer's reply: the starter, and peer as the quoted author (and a replier), hear of it; outsider never.
-    const answer = await whom(() => send(s.tabId, s.web, 'Outsider answers peer', outsider, peerReply))
-    expect(answer).toEqual([`reply:${owner.sub}`, `reply:${peer.sub}`].sort())
-    // The owner answers in their own thread: the people in it hear, the owner never.
+    // The owner tags outsider in the thread: outsider hears of that by the tag alone; peer, who only replied, hears nothing.
+    expect(await whom(() => tagging(s.tabId, s.web, 'Outsider, look', owner, root, [outsider.sub]))).toEqual([`mention:${outsider.sub}`])
+    // Outsider answers peer's reply: the starter, and peer as the quoted author, hear of it; outsider never.
+    expect(await whom(() => send(s.tabId, s.web, 'Outsider answers peer', outsider, peerReply))).toEqual([`reply:${owner.sub}`, `reply:${peer.sub}`].sort())
+    // The owner answers in their own thread: outsider, tagged in it, hears; peer, who only replied there, reads it in Activity.
     const ownAnswer = await whom(() => send(s.tabId, s.web, 'Owner again', owner, root))
-    expect(ownAnswer).toEqual([`reply:${outsider.sub}`, `reply:${peer.sub}`].sort())
-    expect(tellsIn(ownAnswer, 'reply', owner)).toBe(false)
+    expect(ownAnswer).toEqual([`reply:${outsider.sub}`])
+    expect((await items(s.tabId, peer)).some(i => i.text === 'Owner again')).toBe(true)
   })
 
   it('an agent\'s reply in a person\'s thread is worded with the agent\'s name', async () => {
@@ -394,8 +395,9 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
   it('a reply never reaches a person who muted the chat, unfollowed the thread, or can no longer read the chat', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.openChat, 'Owner root')
-    await send(s.tabId, s.openChat, 'Peer answers', peer, root)
-    await send(s.tabId, s.openChat, 'Outsider answers', outsider, root)
+    // Both are tagged in the thread, so each would hear of its replies.
+    await tagging(s.tabId, s.openChat, 'Peer and outsider, look', owner, root, [peer.sub, outsider.sub])
+    expect(await whom(() => send(s.tabId, s.openChat, 'Owner adds', owner, root))).toEqual([`reply:${outsider.sub}`, `reply:${peer.sub}`].sort())
     expect((await notify(s.tabId, s.openChat, 'muted', peer)).status).toBe(200)
     expect((await call('POST', `/api/super-tabs/${s.tabId}/conversations/${s.openChat}/threads/${root}/follow`, outsider, { follow: false })).status).toBe(200)
     expect(await whom(() => send(s.tabId, s.openChat, 'Owner again', owner, root))).toEqual([])
@@ -419,7 +421,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     const [inChat] = await pushed(async () => { top = await tagging(s.tabId, s.web, 'Peer, look', owner, null, [peer.sub]) })
     const row = await db.superTabMention.findFirstOrThrow({ where: { tabId: s.tabId, personId: peer.sub, messageId: top } })
     expect(inChat).toEqual({ personId: peer.sub, key: `mention:${row.id}`, title: expect.stringMatching(/^.+ tagged you$/), subtitle: await swarmName(s.tabId),
-      body: 'Open Harness to read it.', link: `swarm:${s.tabId}/${s.web}/message/${top}` })
+      body: 'Open Harness to read it.', link: `swarm:${s.tabId}/${s.web}/message/${top}`, slot: `mention:${row.id}` })
     let threadOnly = ''
     const [inThread] = await pushed(async () => { threadOnly = await tagging(s.tabId, s.web, 'Peer, in here', owner, top, [peer.sub]) })
     expect(inThread!.link).toBe(`swarm:${s.tabId}/${s.web}/message/${threadOnly}/thread/${top}`)
