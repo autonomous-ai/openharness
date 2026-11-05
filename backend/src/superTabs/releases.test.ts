@@ -112,6 +112,12 @@ describe('shipping', () => {
 describe('notePendingRelease', () => {
   const project = () => ({ id: 'p1' }) as SwarmProject
 
+  it('marks the task releasing, its parts not known yet', () => {
+    const p = project(), group = { id: 'a' } as Conversation
+    notePendingRelease(p, group, 'https://github.com/o/r/pull/1', vn(10))
+    expect(group.releasing).toEqual([])
+  })
+
   it('adds a merge once, oldest first', () => {
     const p = project()
     notePendingRelease(p, { id: 'b' }, 'https://github.com/o/r/pull/2', vn(11))
@@ -156,11 +162,17 @@ describe('settleReleases', () => {
 
   it('marks a task released once every release it needs carries it, and takes it off the list', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
+    const group = () => state.conversations.find(c => c.id === 'g12')!
+    settleReleases(state, 'p1', { resolved: [], releases: {} }, vn(20))
+    // River, 11-05: while on the list a task says which parts it still waits for, for the board's "merged, releasing".
+    expect(group().releasing).toEqual(['desktop', 'web'])
     const first = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, T)
     expect(first.shipped).toEqual([])
+    expect(group().releasing).toEqual(['web'])
     expect(ledgerOf(state).pending[0]!.shippedIn).toEqual({ desktop: 'v1.3.78_desktop' })
     const second = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease(), web: webRelease } }, T)
     expect(second.shipped).toEqual(['g12'])
+    expect(group()).not.toHaveProperty('releasing')
     expect(state.conversations.find(c => c.id === 'g12')!.released).toEqual({ at: T - 5 * MINUTE, tags: ['v1.3.78_desktop', 'v1.3.98_web'] })
     expect(ledgerOf(state).pending).toEqual([])
   })
@@ -175,9 +187,11 @@ describe('settleReleases', () => {
 
   it('ships work that changed no released part at its merge', () => {
     const state = swarm([entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: undefined })])
+    state.conversations.find(c => c.id === 'g13')!.releasing = []
     const outcome = settleReleases(state, 'p1', { resolved: [{ groupId: 'g13', url: 'https://github.com/o/r/pull/13', components: [] }], releases: {} }, vn(20))
     expect(outcome.shipped).toEqual(['g13'])
     expect(state.conversations.find(c => c.id === 'g13')!.released).toEqual({ at: T - MINUTE, tags: [] })
+    expect(state.conversations.find(c => c.id === 'g13')).not.toHaveProperty('releasing')
   })
 
   it('opens one release step for the Integrator inside the window, and no second one while it is open', () => {
@@ -246,7 +260,9 @@ describe('settleReleases', () => {
 
   it('drops a merge no release carried in 14 days', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - PENDING_MS - 1, components: ['desktop'] })])
+    state.conversations.find(c => c.id === 'g12')!.releasing = ['desktop']
     expect(settleReleases(state, 'p1', noFacts, vn(20)).dropped.map(e => e.groupId)).toEqual(['g12'])
+    expect(state.conversations.find(c => c.id === 'g12')).not.toHaveProperty('releasing')
     expect(ledgerOf(state).pending).toEqual([])
   })
 })

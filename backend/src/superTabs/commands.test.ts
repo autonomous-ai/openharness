@@ -5029,6 +5029,7 @@ describe('linked tasks', () => {
     const list = () => groupProject(f.state, f.state.conversations.find(c => c.id === R)!).releases?.pending
     f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
     expect(list()).toEqual([{ groupId: R, url, mergedAt: 900 }])
+    expect(f.state.conversations.find(c => c.id === R)!.releasing).toEqual([])
     f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
     expect(list()).toHaveLength(1)
   })
