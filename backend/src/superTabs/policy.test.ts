@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
@@ -119,6 +120,61 @@ const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.r
 const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<Command, { type: 'rules.set' }>> = {}): Command =>
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
+
+// Task #3475 (review of #3250): the merge train used these patterns before it read the record. They held a file at two reads
+// wherever they matched, and the seed must hold at least as much (River, 11-05: fail closed on the review table).
+const OLD_TRAIN_AREAS: ReadonlyArray<{ area: string; paths: RegExp }> = [
+  { area: 'Sign-in', paths: /(^|\/)(auth|login|sign_?in|signin|session)[^/]*$|^backend\/src\/middlewares\//i },
+  { area: 'Tokens', paths: /token|^backend\/src\/github\//i },
+  { area: 'Encryption', paths: /crypt|cipher|secret|credential|key(s|chain)?\b/i },
+  { area: 'Access', paths: /access|permission|audience|membership/i },
+  { area: 'Buddy guard', paths: /guard/i },
+  { area: 'Device links', paths: /device|harness_?links|pairing|join_?link/i },
+  { area: 'Deletion', paths: /purge|delet|cleanup|sweep|prune/i },
+]
+const oldTrainHeldAtTwo = (file: string) => OLD_TRAIN_AREAS.some(({ paths }) => paths.test(file))
+
+describe('the seed asks two reads wherever the merge train did', () => {
+  it('holds the files the review of #3250 named at two reads', () => {
+    for (const file of ['backend/src/lib/deviceRevoke.ts', 'backend/src/lib/deviceKeyLog.ts', 'backend/src/lib/deviceWs.ts',
+      'backend/src/push/devices.ts', 'backend/src/superTabs/sessionScope.ts', 'cli/src/core/terminals/sessions.ts',
+      'backend/src/push/keys.ts', 'backend/src/routes/deviceKeys.ts', 'cli/src/gateway/tabKey.ts', 'cli/src/lib/terminalKeys.ts',
+      'backend/src/superTabs/ruleGuard.ts', 'backend/src/superTabs/sweeps.ts', 'backend/src/lib/attachmentSweep.ts',
+      'backend/src/lib/chunkSweep.ts', 'backend/src/lib/harness_links.ts', 'mobile/lib/join_link.dart', 'backend/src/audience.ts',
+      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'desktop/lib/keys/store.dart']) {
+      expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
+    }
+  })
+
+  it('holds every file of this repository the old patterns held, at two reads', () => {
+    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
+    const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean)
+    expect(files.length).toBeGreaterThan(100)
+    const missed = files.filter(file => oldTrainHeldAtTwo(file) && requiredReads(SEED_RULES, [file]) < 2)
+    expect(missed, `${missed.length} files the train held at two now need one`).toEqual([])
+  })
+})
+
+describe('a saved record can raise a security area, never lower it below two reads', () => {
+  // River, 11-06 (#3475): the floor is code, whatever a saved record says.
+  const lowered = (reads: number): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
+    rows: SEED_RULES.reviews.rows.map(row => ({ ...row, reads })) } })
+  const removed = (): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews, rows: [] } })
+
+  it('keeps two reads on a security file when a record lowers or removes its area', () => {
+    for (const rules of [lowered(1), removed()]) {
+      expect(requiredReads(rules, ['backend/src/github/tokens.ts'])).toBe(2)
+      expect(requiredReads(rules, ['backend/src/lib/deviceRevoke.ts'])).toBe(2)
+      expect(requiredReads(rules, null)).toBe(2)
+      expect(requiredReads(rules, ['backend/src/superTabs/cards.ts'])).toBe(1)
+    }
+  })
+
+  it('takes a record that raises a security area', () => {
+    expect(requiredReads(lowered(3), ['backend/src/github/tokens.ts'])).toBe(3)
+    expect(requiredReads(lowered(3), null)).toBe(3)
+  })
+})
 
 describe('reads and tests a change needs', () => {
   it('matches globs as the review steps do: ** any folders, * and ? in one name, ignoring case', () => {

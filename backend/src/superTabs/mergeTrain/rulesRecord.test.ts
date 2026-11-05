@@ -56,15 +56,19 @@ describe('the merge train reads the project rules record', () => {
     expect((await batched(PAYMENTS, files, 3)).batched).toBe(true)
   })
 
-  it('takes what the record says for an area, fewer reads too, as the review steps will', async () => {
+  // River, 11-06: a saved record can raise a security area, never lower it below two reads (policy.ts floor).
+  it('never merges a security change on one read, whatever a saved record says', async () => {
     const one = { ...structuredClone(SEED_RULES), reviews: { ...structuredClone(SEED_RULES.reviews),
       rows: SEED_RULES.reviews.rows.map(row => ({ ...row, reads: 1 })) } }
-    expect((await batched(one, ['backend/src/github/tokens.ts'], 1)).batched).toBe(true)
-    expect((await batched(SEED_RULES, ['backend/src/github/tokens.ts'], 1)).batched).toBe(false)
+    for (const file of ['backend/src/github/tokens.ts', 'backend/src/lib/deviceRevoke.ts', 'backend/src/superTabs/ruleGuard.ts']) {
+      expect((await batched(one, [file], 1)).batched, file).toBe(false)
+      expect((await batched(one, [file], 2)).batched, file).toBe(true)
+    }
   })
 
-  // The review steps (task #3401) plan their reads with the record's own requiredReads: the train batches a change exactly
-  // when it has those reads, for the seed and a saved record, over every kind of change.
+  // The train batches a change exactly when it has the reads the record's requiredReads gives, for the seed and a saved record,
+  // over every kind of change. The review steps (task #3401, not on main yet) are to plan with the same requiredReads; this
+  // pins the train to that function, not to the review steps' own code (review of #3250).
   it('requires the same reads as the review steps for the same files', async () => {
     const changes = [
       ['backend/src/superTabs/cards.ts'],
