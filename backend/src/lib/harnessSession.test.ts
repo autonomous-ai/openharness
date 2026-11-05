@@ -70,8 +70,10 @@ const fakes = vi.hoisted(() => {
   const transaction = vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body({ harnessSession, machine }))
   const publishDown = vi.fn(async () => 1)
   const activeMachineKeys = vi.fn(async (_userId: string): Promise<Array<{ pub: string; machineId: string; kind: string }>> => [])
+  // Whether another account's Harness Team machine on the redeeming computer still has a Swarm cleanup (superTabs/computerMoves.ts).
+  const teamCleanupPending = vi.fn(async (_db: unknown, _of: { computerId: string; userId: string }) => false)
   return {
-    redis, ttls, sessions, users, machines, pub, harnessSession, machine, transaction, publishDown, activeMachineKeys,
+    redis, ttls, sessions, users, machines, pub, harnessSession, machine, transaction, publishDown, activeMachineKeys, teamCleanupPending,
     setFailRedis: (v: boolean) => { failRedis = v },
     get: vi.fn(async (id: string) => users.get(id) ?? null),
     findByEmail: vi.fn(),
@@ -80,6 +82,7 @@ const fakes = vi.hoisted(() => {
 
 vi.mock('./bus.js', () => ({ pub: fakes.pub, publishDown: fakes.publishDown }))
 vi.mock('./deviceKeyLog.js', () => ({ activeMachineKeys: fakes.activeMachineKeys }))
+vi.mock('../superTabs/computerMoves.js', () => ({ teamCleanupPending: fakes.teamCleanupPending }))
 vi.mock('./prisma.js', () => ({
   prisma: { harnessSession: fakes.harnessSession, machine: fakes.machine, $transaction: fakes.transaction },
   machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
@@ -282,6 +285,16 @@ describe('scan to sign in — the routes', () => {
       token === 'sso-token' ? signedIn : authenticateAccessToken(token, env, opts))
   })
 
+  it("answers a team sign-in refused for another account's pending Swarm cleanup in words its person can act on", async () => {
+    fakes.teamCleanupPending.mockResolvedValueOnce(true)
+    const { code } = await startHandoff(USER.id, 'team')
+    const redeemed = await app.inject({ method: 'POST', url: '/api/auth/handoff/redeem',
+      payload: { code, label: 'Mac · Team', computerId: 'ab12cd34ef56ab12cd34ef56ab12cd34' } })
+    expect(redeemed.statusCode).toBe(409)
+    expect(redeemed.json().error).toMatchObject({ code: 'TEAM_CLEANUP_PENDING' })
+    expect(JSON.stringify(redeemed.json())).toContain('Try Repair again in a few minutes')
+  })
+
   it('the computer mints a code, the phone redeems it, refreshes, and signs out', async () => {
     const minted = await app.inject({ method: 'POST', url: '/api/auth/handoff', headers: { authorization: 'Bearer sso-token' } })
     expect(minted.statusCode).toBe(200)
@@ -386,6 +399,19 @@ describe('team sessions — minting and redeeming', () => {
       expect(await redeemHandoff(code, 'x', COMPUTER)).toBeNull() // spent: a second try with a good id gets nothing either
     }
     expect(fakes.sessions).toHaveLength(0)
+  })
+
+  // Security review 2 of #3100: after a computer moved to another account, Repair signs its Harness Team account in for the
+  // new one. The old account's Team machine still has its Swarm folders to delete, and only its own sign-in can: replaced
+  // first, that cleanup could never finish, and the old Swarms' checkouts would stay where the new account's work runs.
+  it("a team code is refused while another account's Team machine on that computer still has a Swarm cleanup to do", async () => {
+    fakes.teamCleanupPending.mockResolvedValueOnce(true)
+    const { code } = await startHandoff(USER.id, 'team')
+    await expect(redeemHandoff(code, 'x', COMPUTER)).rejects.toThrow('still being cleaned up')
+    expect(fakes.teamCleanupPending).toHaveBeenCalledWith(expect.anything(), { computerId: COMPUTER, userId: USER.id })
+    expect(fakes.sessions).toHaveLength(0)
+    const again = await startHandoff(USER.id, 'team')
+    expect(await redeemHandoff(again.code, 'x', COMPUTER)).not.toBeNull()
   })
 
   it('a team code never binds to a computer the account already runs with a normal sign-in', async () => {

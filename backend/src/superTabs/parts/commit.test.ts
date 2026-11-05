@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, plainHost, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, sameData, visibilityChanged } from './commit.js'
+import { plainHost } from './write.js'
 import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {

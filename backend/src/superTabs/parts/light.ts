@@ -45,6 +45,13 @@ export function ms(value: unknown): number {
   return Number((date as { $numberLong?: string }).$numberLong)
 }
 
+/** A group part as `aggregateRaw` returns it, as the PartRow Prisma would. */
+export const rawGroupRow = (row: Record<string, unknown>): PartRow => ({ ...row, changedAt: new Date(ms(row.changedAt)) }) as unknown as PartRow
+/** Any part as `aggregateRaw` returns it: a Float ordinal can come wrapped, and a part stored before `deleted` lacks it. */
+export const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(row), version: Number(row.version), deleted: !!row.deleted,
+  ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
+    ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
+
 export function lightGroup(row: Record<string, unknown>): Part<GroupData> {
   const raw = (row.data ?? {}) as Partial<GroupData> & { task?: { owns?: string[] } }
   // A conversation with no work has nothing to project there; never read it as having work.

@@ -82,6 +82,22 @@
       }
       pin();
       new MutationObserver(pin).observe(document.head, { childList: true });
+      // The app is one fixed canvas laid out for the screen minus the keyboard (ViewRoom). When
+      // the keyboard comes up again after it was dismissed, Safari pans the page to reveal the
+      // focused field: the canvas leaves the screen, and the top bar and the message box are
+      // gone above blank space. The app never scrolls the page, so any pan is Safari's; put it
+      // back at the top, unless the visitor pinch-zoomed and is looking around on purpose.
+      var vv = window.visualViewport;
+      function unpan() {
+        if (vv && vv.scale > 1.01) return;
+        var panned = (vv && (vv.offsetTop || vv.offsetLeft)) || window.scrollX || window.scrollY;
+        if (panned) window.scrollTo(0, 0);
+      }
+      window.addEventListener('scroll', unpan);
+      if (vv) {
+        vv.addEventListener('scroll', unpan);
+        vv.addEventListener('resize', unpan);
+      }
     })();
   </script>
   <!-- Inline Flutter's generated loader so startup needs no extra script round trip. -->

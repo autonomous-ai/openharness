@@ -171,6 +171,11 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
 
+## Impact of a report
+- When a bug or failure is reported, decide its impact before anything else and say it, with the reason, in your reply. Impact 0: something that already shipped is broken, loses data, or stops people's or agents' work (a stuck workflow). Impact 1: needed by users soon. Impact 2: planned goals. Impact 3: tools, docs, process.
+- Impact 0 is a hotfix: give it an agent at once and put it ahead of everything else. Its reviews run in parallel. It ships in its own release as soon as its checks pass, outside the usual release spacing and inside the project's release hours unless a person says otherwise. The reporter hears the cause, the workaround and when the fix arrives.
+- Check open work against these impacts whenever a new report arrives, and do not wait for someone to say urgent.
+
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
@@ -495,6 +500,11 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
+
+## Impact of a report
+- When a bug or failure is reported, decide its impact before anything else and say it, with the reason, in your reply. Impact 0: something that already shipped is broken, loses data, or stops people's or agents' work (a stuck workflow). Impact 1: needed by users soon. Impact 2: planned goals. Impact 3: tools, docs, process.
+- Impact 0 is a hotfix: give it an agent at once and put it ahead of everything else. Its reviews run in parallel. It ships in its own release as soon as its checks pass, outside the usual release spacing and inside the project's release hours unless a person says otherwise. The reporter hears the cause, the workaround and when the fix arrives.
+- Check open work against these impacts whenever a new report arrives, and do not wait for someone to say urgent.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.

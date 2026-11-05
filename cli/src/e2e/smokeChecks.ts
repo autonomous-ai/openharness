@@ -1,7 +1,7 @@
 /**
  * smokeChecks — the scenario: what a person does with a coding tool, on its own account and then on
  * a grid model in the same session: read a file, create one, edit one, use an MCP server. Four
- * plain requests per side — worded the way a person types them, no reply formats.
+ * requests per side, each naming the engine's own tool and the exact path, no reply formats.
  *
  * Every step is proven by something the model cannot produce by talking:
  *
@@ -48,7 +48,7 @@ export const WEB_SEARCH_TOOL = 'mcp__harness__web_search'
 
 export interface SmokeCheck {
   id: CheckId
-  /** Typed into the agent's pane, verbatim. Plain, engine-agnostic wording (codex and claude). */
+  /** Typed into the agent's pane, verbatim. The engine's own wording (`scenarioFor`): its tool and the exact path. */
   prompt: string
   /** mcp: the log that must gain a line containing `logPattern`. */
   log?: LogKind
@@ -65,29 +65,57 @@ export interface SmokeCheck {
 
 const MISS = {
   read: 'the file was not read: the read tool (or the shell read) fails on this leg — the answer never showed the file\'s token',
-  write: 'the file was not created with the requested text: the write tool fails on this leg (codex: apply_patch Add File; claude: Write)',
-  edit: 'the file was not changed as asked: the edit tool fails on this leg (codex: apply_patch Update File; claude: Edit)',
+  write: 'the file was not created with the requested text: the write tool fails on this leg (codex: exec_command; claude: Write)',
+  edit: 'the file was not changed as asked: the edit tool fails on this leg (codex: exec_command; claude: Edit)',
   mcp: 'the MCP server was not called: the respawn dropped the MCP config, the resumed session did not reload servers, or it answered without calling it (no log line)',
   web: 'the web search was not called, or came back without results: the harness web MCP was not given to the engine on the grid, the engine could not read the tool (a namespace tool on llama.cpp / LM Studio), or it answered from its head',
 }
 
 /**
- * Plain requests, the way a person types them, and the same for every engine. A step passes on its
- * RESULT — the file really read, written, edited; the MCP server really called — never on
- * which of the engine's file tools got it there. Which tools it used (claude `Read` or
- * `Bash cat`, codex `apply_patch` or a shell write) is read back from the session file and REPORTED
- * (sessionTools.ts, the message's Tools line), never judged: an engine is free to reach a result its
- * own way, and a person asking for it would be.
+ * The request names the engine's OWN tool and the exact path. The switch is what is under test: the
+ * tool must still do file work after the move. Choosing a tool is not, so leaving a local model to
+ * discover one is not a test of the switch — DeepSeek on a grid spent ten minutes in `find`, then
+ * copied a wrapped absolute path that did not exist, and the step timed out. The request hands it
+ * the tool and the path instead.
  *
- * That report is still worth reading. It is how it was seen, on the first real runs, that claude
- * does file work through Bash unless asked otherwise, and that codex on a grid model writes files
- * through the shell where on its own account it uses apply_patch (a grid model is not in codex's
- * model catalog, so codex does not offer it apply_patch).
+ * The RESULT is still the proof, never the reply — the file really read, written, edited; the MCP
+ * server really called. Which tool got there is read back from the session file and REPORTED
+ * (sessionTools.ts), not judged.
  */
-const files = (n: 1 | 2): SmokeCheck[] => [
-  { id: 'read', prompt: `Read notes/info-${n}.txt and tell me what it says.`, answerFromFile: `notes/info-${n}.txt`, onMiss: MISS.read },
-  { id: 'write', prompt: `Create the file out/hello-${n}.txt with this text: hello from step ${n}`, file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
-  { id: 'edit', prompt: `In notes/todo-${n}.txt, change pending to done.`, file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
+interface Wording {
+  read: (n: 1 | 2) => string
+  write: (n: 1 | 2) => string
+  edit: (n: 1 | 2) => string
+  mcp: string
+  web: string
+}
+
+/**
+ * How each engine names the tool in its own CLI. `exec_command` is codex's declared shell tool
+ * (0.166 advertises `functions.exec` but does not declare it, so naming `exec_command` is what keeps
+ * it off that path); claude's file tools are `Read`, `Write`, `Edit`.
+ */
+const WORDING: Record<'codex' | 'claude', Wording> = {
+  codex: {
+    read: (n) => `Use exec_command to run this exact command from your current directory, then tell me what the file says: cat notes/info-${n}.txt`,
+    write: (n) => `Use exec_command to run this exact command from your current directory: printf '%s' 'hello from step ${n}' > out/hello-${n}.txt`,
+    edit: (n) => `Use exec_command to run this exact command from your current directory: sed -i 's/pending/done/' notes/todo-${n}.txt`,
+    mcp: "Use the e2e_calc MCP server's add tool with a=30 and b=12.",
+    web: 'Use the mcp__harness__web_search tool to search the web for the latest stable version of Node.js, then tell me the version number.',
+  },
+  claude: {
+    read: (n) => `Use the Read tool on notes/info-${n}.txt (relative to your current directory) and tell me what it says.`,
+    write: (n) => `Use the Write tool to create out/hello-${n}.txt (relative to your current directory) with exactly this text: hello from step ${n}`,
+    edit: (n) => `Use the Edit tool on notes/todo-${n}.txt (relative to your current directory) to change pending to done.`,
+    mcp: "Use the e2e_calc MCP server's add tool with a=30 and b=12.",
+    web: 'Use the mcp__harness__web_search tool to search the web for the latest stable version of Node.js, then tell me the version number.',
+  },
+}
+
+const files = (n: 1 | 2, w: Wording): SmokeCheck[] => [
+  { id: 'read', prompt: w.read(n), answerFromFile: `notes/info-${n}.txt`, onMiss: MISS.read },
+  { id: 'write', prompt: w.write(n), file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
+  { id: 'edit', prompt: w.edit(n), file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
 ]
 
 /**
@@ -97,21 +125,22 @@ const files = (n: 1 | 2): SmokeCheck[] => [
  * llama.cpp (autonomous-grid-cli#41). The own account has no harness web MCP (it is given only on a
  * grid, gridLaunch.ts), so that side keeps `e2e_calc`.
  */
-export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = {
-  subscription: [
-    ...files(1),
-    { id: 'mcp', prompt: 'Use the MCP server e2e_calc to add 30 and 12.', log: 'mcp', logPattern: 'add 30 12 = 42', onMiss: MISS.mcp },
-  ],
-  grid: [
-    ...files(2),
-    { id: 'web', prompt: 'Search the web for the latest stable version of Node.js and tell me the version number.', sessionTool: WEB_SEARCH_TOOL, onMiss: MISS.web },
-  ],
+export function scenarioFor(engine: string): Record<Leg, readonly SmokeCheck[]> {
+  const w = WORDING[engine as 'codex' | 'claude'] ?? WORDING.claude
+  return {
+    subscription: [
+      ...files(1, w),
+      { id: 'mcp', prompt: w.mcp, log: 'mcp', logPattern: 'add 30 12 = 42', onMiss: MISS.mcp },
+    ],
+    grid: [
+      ...files(2, w),
+      { id: 'web', prompt: w.web, sessionTool: WEB_SEARCH_TOOL, onMiss: MISS.web },
+    ],
+  }
 }
 
-/** The scenario an engine is given — the same plain requests for every engine (see above). */
-export function scenarioFor(_engine: string): Record<Leg, readonly SmokeCheck[]> {
-  return SCENARIO
-}
+/** The default wording (claude) for callers that want the flat list without an engine. */
+export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = scenarioFor('claude')
 
 /** Every step of every leg, for callers that want the flat list (the skill, the tests). */
 export const SMOKE_CHECKS: readonly SmokeCheck[] = LEGS.flatMap((leg) => SCENARIO[leg])

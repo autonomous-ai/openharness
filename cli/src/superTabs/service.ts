@@ -470,8 +470,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // Desktop names no Swarm and is offered as before.
           if ((payload.reason === 'join' || payload.reason === 'contribute') && identifier(payload.tabId)
             && !await teamAccountsIn(sources(), payload.tabId)) return { ok: true, state: 'not-used' }
+          // `signInAgain`: Set up on a row the Swarm says has no Team account while this Mac has one, so it serves another account
+          // (#3122). Only the person's own Set up: a check or an automatic moment signs nothing in again.
+          const signInAgain = payload.action === 'teamSetup' && payload.reason === 'manual' && payload.signInAgain === true
           return { ok: true, ...await (await setup()).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources()),
-            payload.action === 'teamSetupCheck') }
+            payload.action === 'teamSetupCheck', { signInAgain }) }
         }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))

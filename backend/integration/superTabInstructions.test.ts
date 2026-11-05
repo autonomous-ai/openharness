@@ -100,7 +100,7 @@ describe('project instructions storage', () => {
     expect(head.map(p => p.instructionsRevision)).toEqual([1, 1])
   })
 
-  it('refuses the second of two saves on the same revision with the first one\'s text, and posts one line per save', async () => {
+  it('refuses the second of two saves on the same revision with the first one\'s text, and posts no line for either save', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
     await invite(tab)
     const first = await post(owner, tab, save(1, 'Reviews run on Opus.', 'Reviews run on Opus'))
@@ -109,11 +109,11 @@ describe('project instructions storage', () => {
     expect(second.statusCode).toBe(409)
     expect(second.json().error).toMatchObject({ code: 'INSTRUCTIONS_STALE', revision: 2, text: 'Reviews run on Opus.' })
     expect((await post(peer, tab, save(2, 'Reviews run on Opus.\nTests run on the Mac.', 'Tests run on the Mac'))).statusCode).toBe(200)
+    // No chat line for a save (#3132); each stays a kept revision.
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
-    // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
-    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
-      // Its text adds a line to the same paragraph (no blank line), so the paragraph shows whole, as it was and as it is.
-      'peer changed the instructions: Tests run on the Mac.\n\nRemoved: Reviews run on Opus.\nAdded: Reviews run on Opus. Tests run on the Mac.'])
+    expect(lines).toEqual([])
+    expect((await db.superTabInstructionsRevision.findMany({ where: { tabId: tab, projectId: 'lead' }, orderBy: { revision: 'asc' } })).map(r => [r.revision, r.summary]))
+      .toEqual([[1, expect.any(String)], [2, 'Reviews run on Opus'], [3, 'Tests run on the Mac']])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
