@@ -3,7 +3,8 @@
  * Swarm and hands the answers here. Every unknown reads as "not yet": a pull request merged with too little evidence cannot
  * be taken back, and one that waits a pass costs ten minutes.
  */
-import type { Check, CheckVerdict, Conversation } from '../model.js'
+import { verdictCounts, type PullRequestHeads } from '../checkVerdicts.js'
+import type { Check, CheckVerdict, Conversation, PullRequestHead } from '../model.js'
 import { FAST_LANE, TRAIN_HOLD_LABELS } from './config.js'
 
 /** A pull request as the train reads it from GitHub this pass. */
@@ -22,10 +23,6 @@ export interface TrainCandidate {
   ciRequired: 'success' | 'failure' | 'pending' | null
 }
 
-/** The verdict fields task #3394 adds (checkVerdicts.ts there): the pull request and head it was given at, the head's patch
- *  id, and where it stopped counting. Optional here so this reads verdicts written before them, which never count. */
-type HeadVerdict = CheckVerdict & { pullRequest?: string; head?: string; patch?: string | null; stale?: unknown }
-interface PullRequestHead { head: string; patch: string | null; at: number }
 
 /** The parts of a task, and of its steps, the train reads. */
 export interface TrainTask {
@@ -39,20 +36,21 @@ export interface TrainTask {
 }
 
 const REVIEW_STEP = /review/i
-const MIN_PREFIX = 7
+/** A branch name with a control or format character (a zero-width space, a bidi override) can read as "main" on screen and
+ *  be another branch: the train reads nothing from one (task #3493). */
+const HIDDEN = /[\p{Cc}\p{Cf}]/u
+const plainBase = (base: string | undefined): base is string => !!base && !HIDDEN.test(base)
 
-/** Whether [verdict] counts at [url]'s current head [now]: given at that head (a 7+ character prefix of it, as #3394 reads
- *  one), or at a head whose patch is the same. A verdict with no head never counts here, though old clients still count it:
- *  merging needs the head it read. */
-function countsAt(verdict: HeadVerdict, url: string, now: PullRequestHead): boolean {
-  if (!verdict.head || verdict.stale || verdict.pullRequest !== url) return false
-  if (verdict.head.length >= MIN_PREFIX && now.head.startsWith(verdict.head)) return true
-  return !!verdict.patch && verdict.patch === now.patch
-}
+/** Whether [verdict] counts for [url]: the shared verdict check (checkVerdicts.ts, #3394: its head on its base, or the same
+ *  patch, whose id names its base), on a verdict naming this pull request and the head it read, and not marked stale (an
+ *  empty mark too: its head not read yet). Never a verdict without them, though the shared check reads one of those
+ *  against the task's latest watched head. */
+const countsFor = (verdict: CheckVerdict, url: string, heads: PullRequestHeads): boolean =>
+  verdict.pullRequest === url && !!verdict.head && verdict.stale === undefined && verdictCounts(verdict, heads)
 
 /** The checkers whose passes count on [check], or null when it has no pass that counts or a failure that does. */
-function passers(check: Check, url: string, now: PullRequestHead, ignored: ReadonlySet<string> = new Set()): string[] | null {
-  const counting = ((check.verdicts ?? []) as HeadVerdict[]).filter(v => !ignored.has(v.by) && countsAt(v, url, now))
+function passers(check: Check, url: string, heads: PullRequestHeads, ignored: ReadonlySet<string> = new Set()): string[] | null {
+  const counting = (check.verdicts ?? []).filter(v => !ignored.has(v.by) && countsFor(v, url, heads))
   if (!counting.length || counting.some(v => !v.passed)) return null
   return counting.map(v => v.by)
 }
@@ -63,17 +61,19 @@ function passers(check: Check, url: string, now: PullRequestHead, ignored: Reado
  * review step passed, or the task's own checks or another step (a test) did not pass at this head. A cancelled step does not
  * count either way; any other step must be done.
  */
-export function headReads(task: TrainTask, url: string, head: string): number | null {
-  const now = task.pullRequestHeads?.[url]
-  if (!now || now.head !== head) return null
-  if (!task.checks.every(check => passers(check, url, now))) return null
+export function headReads(task: TrainTask, url: string, head: string, base: string): number | null {
+  const heads = task.pullRequestHeads, now = heads?.[url]
+  // GitHub's live head and base must be the ones the watch read (task #3493, Ledger's case on #3218): a pull request retargeted
+  // since then carries verdicts read against another branch, which the shared check still counts until the watch reads it.
+  if (!heads || !now || now.head.toLowerCase() !== head.toLowerCase() || !plainBase(now.base) || !plainBase(base) || now.base !== base) return null
+  if (!task.checks.every(check => passers(check, url, heads))) return null
   const readers = new Set<string>(), builders = new Set(task.builders ?? [])
   let reviewed = false
   for (const step of task.steps) {
     const status = step.assignment?.status
     if (status === 'cancelled') continue
     if (status !== 'done' || !step.checks.length) return null
-    const found = step.checks.map(check => passers(check, url, now, builders))
+    const found = step.checks.map(check => passers(check, url, heads, builders))
     if (found.some(list => !list)) return null
     if (REVIEW_STEP.test(step.step ?? step.title)) {
       reviewed = true
