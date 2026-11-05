@@ -65,4 +65,27 @@ describe('pmAccounts', () => {
     })
     expect(pmAccounts(s.state, owner)).toEqual([])
   })
+
+  // Task #3222: what the PM spends of its account's week a day, from its machines' spend ledgers (pmSpend.ts), and when that
+  // week resets: the route keeps days to the reset × that share for it, in place of a fixed 20%.
+  it('carries the PM\'s daily share of its account\'s week and the reset, over the Mac and its Team account, once 3 days are measured', () => {
+    const s = twoPms()
+    const lead = s.state.agents.find(a => a.id === s.lead)!
+    const engine = lead.configuration!.engine
+    const today = Math.floor(NOW / 86_400_000) * 86_400_000
+    const reset = today + 2.5 * 86_400_000
+    const day = (back: number, used: number, sessions: Record<string, number>) => ({ day: today - back * 86_400_000, engine, weekly: { seen: 50, used },
+      resetsAt: reset, sessions: Object.fromEntries(Object.entries(sessions).map(([id, spent]) => [id, { seen: 0, spent }])) })
+    s.edit(draft => {
+      const host = draft.machines!.find(m => m.machineId === 'host')!
+      host.spendDays = [day(3, 10, { [lead.harnessId]: 1, other: 1 }), day(2, 10, { [lead.harnessId]: 1, other: 1 }), day(1, 10, { [lead.harnessId]: 1 })]
+      draft.machines!.push({ ...structuredClone(host), machineId: 'host-team', hostMachineId: 'host', spendDays: [day(1, 10, { teamWorker: 1 })] })
+    })
+    // 10 × 1/2, 10 × 1/2, 10 × 1/2 (the Team account's worker spent the other half of the last day).
+    expect(pmAccounts(s.state, owner).find(a => a.pm === (lead.displayName ?? lead.name))).toMatchObject({ daily: { share: 5, days: 3 }, resetsAt: reset })
+    s.edit(draft => { draft.machines!.find(m => m.machineId === 'host')!.spendDays = [day(1, 10, { [lead.harnessId]: 1 })] })
+    const fewer = pmAccounts(s.state, owner).find(a => a.pm === (lead.displayName ?? lead.name))!
+    expect(fewer).not.toHaveProperty('daily')
+    expect(fewer.resetsAt).toBe(reset)
+  })
 })
