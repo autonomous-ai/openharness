@@ -654,8 +654,10 @@ export class GitHubApp {
 
   /** A pull request's files with their patches (GET /repos/{owner}/{repo}/pulls/{number}/files), for its patch id
    *  (superTabs/pullRequestPatch.ts, #3394), read with the watch's token ([PULL_WATCH_PERMISSIONS]) once per new head. Null
-   *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. */
-  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<PullRequestFile[] | null> {
+   *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. With
+   *  [head], null too unless the pull request's head is still that one once the files are read: a push in between would
+   *  give a newer head's files to the older head. */
+  async pullRequestFiles(repository: GitHubRepository, number: number, token: string, head?: string): Promise<PullRequestFile[] | null> {
     const files: PullRequestFile[] = []
     const text = (value: unknown) => typeof value === 'string' ? value : undefined
     try {
@@ -667,7 +669,12 @@ export class GitHubApp {
           if (!filename || !status || sha === undefined) return null
           files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
         }
-        if (answer.body.length < 100) return files
+        if (answer.body.length < 100) {
+          if (head === undefined) return files
+          const pull = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
+          const now = pull.status === 200 ? (pull.body as { head?: { sha?: unknown } }).head?.sha : undefined
+          return typeof now === 'string' && now.toLowerCase() === head.toLowerCase() ? files : null
+        }
       }
       return null
     } catch (error) {

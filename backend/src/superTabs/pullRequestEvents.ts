@@ -143,9 +143,9 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
   }
   return {
     watch: url => read(url, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
-    // The files as they are now: the pass asks right after reading [head], and a head pushed in between reads stale at worst.
-    patch: url => read(url, async (repository, number, granted) => {
-      const files = await app.pullRequestFiles(repository, number, granted)
+    // The files at [head]: none when the head moved meanwhile, so a newer head's patch is never [head]'s.
+    patch: (url, head) => read(url, async (repository, number, granted) => {
+      const files = await app.pullRequestFiles(repository, number, granted, head)
       return files && patchId(files)
     }),
     botLogin: () => app.botLogin(),
