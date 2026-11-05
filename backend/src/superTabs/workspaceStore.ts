@@ -228,6 +228,22 @@ export class SwarmWorkspaces {
     })
   }
 
+  /** Withdraws a pending invitation, for owners and admins, and only one for a role they may give (task #3173). */
+  async revokeInvitation(user: AuthUser, workspaceId: string, email: string) {
+    const address = email.trim().toLowerCase()
+    return this.deps.transaction(async tx => {
+      await this.workspace(tx, user, workspaceId)
+      const me = await requireWorkspaceRole(tx, workspaceId, user.sub, 'workspace.invite')
+      const invitation = await tx.swarmWorkspaceInvitation.findUnique({ where: { id: `${workspaceId}:${address}` } })
+      if (!invitation || invitation.expiresAt.getTime() <= this.deps.now()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
+      if (!mayAssignRole(me.role, invitation.role as WorkspaceRole)) {
+        fail('WORKSPACE_ROLE_REQUIRED', `Your role in this ${WORKSPACE_LABEL} cannot revoke an invitation as ${invitation.role}.`, 403)
+      }
+      await tx.swarmWorkspaceInvitation.delete({ where: { id: invitation.id } })
+      return { email: address, revoked: true as const }
+    })
+  }
+
   /** Invitations waiting for the signed-in person. */
   async invitationsFor(user: AuthUser) {
     const rows = await this.db.swarmWorkspaceInvitation.findMany({ where: { email: user.email.trim().toLowerCase(), expiresAt: { gt: new Date(this.deps.now()) } }, take: 100 })

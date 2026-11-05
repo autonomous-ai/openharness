@@ -75,6 +75,7 @@ const workspaceName = z.string().trim().min(1).max(160)
 const workspaceCreate = z.object({ operationId: id, name: workspaceName }).strict()
 const workspaceRename = z.object({ name: workspaceName }).strict()
 const workspaceInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceRevoke = z.object({ email: z.email().max(320) }).strict()
 const workspaceRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
 const workspaceTransfer = z.object({ userId: id }).strict()
 const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
@@ -481,6 +482,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceInvite> }>('/api/super-tabs/workspaces/:workspaceId/invitations',
     { preHandler: [validateParams(workspaceParams), validateBody(workspaceInvite)] },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invite(req.user!, req.params.workspaceId, req.body.email, req.body.role) }))
+  // A POST, not a DELETE, for the daemon (below).
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRevoke> }>('/api/super-tabs/workspaces/:workspaceId/invitations/revoke',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRevoke)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.revokeInvitation(req.user!, req.params.workspaceId, req.body.email) }))
   app.post<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/accept', { preHandler: validateParams(workspaceParams) },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.accept(req.user!, req.params.workspaceId) }))
   app.post<{ Params: z.infer<typeof workspaceMemberParams>; Body: z.infer<typeof workspaceRole> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId',
