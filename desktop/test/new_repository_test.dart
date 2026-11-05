@@ -103,18 +103,15 @@ void main() {
       'id': id,
       'repository': ?(url == null ? null : {'repositoryUrl': url}),
     };
-    final snapshot = SuperTabSnapshot.fromJson({
-      'id': 'tab',
-      'projects': [
-        project('a', 'https://github.com/autonomous-ai/openharness'),
-        project('b', null),
-        project('c', 'https://gitlab.com/acme/site'),
-        project('d', 'https://github.com/Acme/notes.git'),
-        project('e', 'https://github.com/AUTONOMOUS-AI/website'),
-        project('f', 'git@github.com:acme/api.git'),
-      ],
-    });
-    expect(newRepositoryOwners(snapshot), ['autonomous-ai', 'Acme']);
+    final projects = [
+      project('a', 'https://github.com/autonomous-ai/openharness'),
+      project('b', null),
+      project('c', 'https://gitlab.com/acme/site'),
+      project('d', 'https://github.com/Acme/notes.git'),
+      project('e', 'https://github.com/AUTONOMOUS-AI/website'),
+      project('f', 'git@github.com:acme/api.git'),
+    ].map(SuperTabProject.fromJson);
+    expect(newRepositoryOwners(projects), ['autonomous-ai', 'Acme']);
   });
 
   group('what GitHub\'s sign-in made of an ask', () {
