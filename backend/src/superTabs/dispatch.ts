@@ -6,7 +6,7 @@
  */
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
-import { activeWork, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, handed, occupiesAgent, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
@@ -93,14 +93,6 @@ export function crewClock(group: Conversation, worker: Agent, assignment: Assign
   if (now - since >= rules.returnAfterMs) return 'return'
   return now - since >= rules.nudgeAfterMs && !(assignment.nudgedAt !== undefined && assignment.nudgedAt >= since) ? 'nudge' : null
 }
-
-/** A task its own Engineer handed over: ready for review (its own `review` status), still its own, its Engineer free for the
- *  next (task #3399, handed.ts; until that lands, the same rule here). A step's review status is not a hand-over. */
-export const handed = (group: Conversation): boolean => !group.reviewOf && group.assignment?.status === 'review'
-/** Work that keeps its agent from a new task: what work.assign refuses as AGENT_BUSY, which today is any active work, a handed
- *  task too. #3399 (handed.ts occupiesAgent) leaves handed tasks out of both; until then a pick for a member with a handed
- *  task would be refused on every pass (review 1 of #3230). */
-export const occupiesAgent = (group: Conversation): boolean => activeWork(group)
 
 /** Moving off a failing machine (task #3398, crewMove.ts): work.assign refuses it until the move lands. Read without a type
  *  until #3398 declares it, as #3397 does. */
