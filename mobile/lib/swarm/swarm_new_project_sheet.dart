@@ -1024,8 +1024,15 @@ class SwarmNewProjectSteps with ChangeNotifier {
     DateTime Function() now,
   ) async {
     if (_creation case final sent?) {
+      // Judged only from a read that came back: a failed one leaves the last
+      // read in place, and a deadline passed on it would give up a request
+      // GitHub may have answered meanwhile (Guide's second review).
+      final reads = reader.reads.value;
       await reader.refresh();
       check();
+      if (reader.reads.value == reads) {
+        throw const SwarmRepositoryFailure(swarmRepositoryUnchecked);
+      }
       final project = reader.snapshot?.projectById(projectId);
       if (project == null) {
         if (await _deleted(projectId, check) ?? false) _gone();
@@ -1749,6 +1756,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       ),
       Flexible(
         child: SingleChildScrollView(
+          key: const ValueKey('swarm-new-project-scroll'),
           padding: EdgeInsets.fromLTRB(
             AppSpace.l,
             0,
@@ -1761,13 +1769,21 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
           ),
         ),
       ),
+      // In sight at its own height; past four tenths of the screen (a short
+      // phone at large text) it scrolls, so its last way out is never off the
+      // sheet (Guide's second review of #3204: 320 points, 200%).
       if (footer.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.all(AppSpace.l).copyWith(top: 0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: footer,
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .4,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(AppSpace.l).copyWith(top: 0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: footer,
+            ),
           ),
         ),
     ],
@@ -1972,6 +1988,36 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
               lines: 3,
             ),
           ),
+        // Out in GitHub: what it waits for, and whether GitHub opened.
+        if (creating != null && _error == null && !_busy) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              'Creating ${creating.owner}/${creating.name}…',
+              key: const ValueKey('swarm-new-project-creating'),
+              lines: 6,
+            ),
+          ),
+          if (steps!.openFailed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                AppSpace.s,
+                AppSpace.xs,
+                0,
+              ),
+              child: SwarmRow.line(
+                swarmRepositoryOpenFailed,
+                key: const ValueKey('swarm-new-project-open-failed'),
+                lines: 4,
+              ),
+            ),
+        ],
         if (_unreachableLine case final line?) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -2038,17 +2084,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         // Out in GitHub: what it waits for, a way to look again, and to open
         // GitHub again (it may not have opened, or been closed).
         else if (creating != null && _error == null && !_busy) ...[
-          if (steps!.openFailed) ...[
-            SwarmRow.line(
-              swarmRepositoryOpenFailed,
-              key: const ValueKey('swarm-new-project-open-failed'),
-              lines: 2,
-            ),
-            const SizedBox(height: AppSpace.s),
-          ],
+          // Its words are above, where they scroll: a long name at large text
+          // never pushes the ways out off the sheet (Guide's second review).
           SwarmButton(
             key: const ValueKey('swarm-new-project-create'),
-            label: 'Creating ${creating.owner}/${creating.name}…',
+            label: 'Creating…',
             style: SwarmButtonStyle.fill,
             wide: true,
             onPressed: null,
@@ -2060,7 +2100,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             icon: LucideIcons.externalLink300,
             style: SwarmButtonStyle.link,
             wide: true,
-            onPressed: () => unawaited(steps.openSignIn()),
+            onPressed: () => unawaited(steps!.openSignIn()),
           ),
           const SizedBox(height: AppSpace.s),
           SwarmButton(
@@ -3052,68 +3092,76 @@ class _Field extends StatelessWidget {
                 horizontal: AppSpace.l,
                 vertical: AppSpace.m,
               ),
-              child: Row(
-                children: [
-                  Text(
-                    label,
-                    style: AppType.label(color: AppPalette.textSecondary),
-                  ),
-                  const SizedBox(width: AppSpace.m),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          value,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.end,
-                          style: AppType.label(
-                            color: enabled
-                                ? AppPalette.textPrimary
-                                : AppPalette.textSecondary,
-                            height: 1.3,
-                          ),
-                        ),
-                        if (detail case final detail?) ...[
-                          const SizedBox(height: 3),
+              child: LayoutBuilder(
+                builder: (context, box) => Row(
+                  children: [
+                    // Its own width, at most under half the row: it wraps,
+                    // rather than overflows, on a narrow phone at large text
+                    // (Guide's second review of #3204: 320 points, 200%).
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: box.maxWidth * .45),
+                      child: Text(
+                        label,
+                        style: AppType.label(color: AppPalette.textSecondary),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpace.m),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           Text(
-                            detail,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.end,
-                            style: AppType.caption(
-                              color: AppPalette.textSecondary,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                        if (hint case final hint?) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            hint,
+                            value,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
-                            style: AppType.caption(
-                              color: AppPalette.textFaint,
-                              height: 1.35,
+                            style: AppType.label(
+                              color: enabled
+                                  ? AppPalette.textPrimary
+                                  : AppPalette.textSecondary,
+                              height: 1.3,
                             ),
                           ),
+                          if (detail case final detail?) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              detail,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                              style: AppType.caption(
+                                color: AppPalette.textSecondary,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                          if (hint case final hint?) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              hint,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                              style: AppType.caption(
+                                color: AppPalette.textFaint,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                  if (enabled) ...[
-                    const SizedBox(width: AppSpace.s),
-                    Icon(
-                      LucideIcons.chevronDown300,
-                      size: 18,
-                      color: AppPalette.textFaint,
-                    ),
+                    if (enabled) ...[
+                      const SizedBox(width: AppSpace.s),
+                      Icon(
+                        LucideIcons.chevronDown300,
+                        size: 18,
+                        color: AppPalette.textFaint,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

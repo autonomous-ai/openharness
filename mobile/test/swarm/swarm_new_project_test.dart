@@ -2351,10 +2351,7 @@ void main() {
       await pickMachine(tester, 'mac-1');
       await tap(tester, 'swarm-new-project-create');
       final error = key('swarm-new-project-error');
-      final scroll = find.descendant(
-        of: key('swarm-new-project-sheet'),
-        matching: find.byType(SingleChildScrollView),
-      );
+      final scroll = key('swarm-new-project-scroll');
       // Scrolled into sight as it appears, over Create.
       final first = tester.getRect(error);
       expect(first.top, greaterThanOrEqualTo(tester.getRect(scroll).top));
@@ -2894,10 +2891,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
 
-        final scroll = find.descendant(
-          of: key('swarm-new-project-sheet'),
-          matching: find.byType(SingleChildScrollView),
-        );
+        final scroll = key('swarm-new-project-scroll');
         final create = tester.getRect(key('swarm-new-project-create'));
         expect(create.bottom, lessThanOrEqualTo(568 - 260));
         final view = tester.getRect(scroll);

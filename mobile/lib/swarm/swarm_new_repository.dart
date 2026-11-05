@@ -90,6 +90,12 @@ const swarmRepositorySignInTtl = Duration(minutes: 10);
 bool swarmSignInExpiredAt(int at, DateTime now) =>
     now.millisecondsSinceEpoch - at > swarmRepositorySignInTtl.inMilliseconds;
 
+/// The Swarm did not answer the read that would say how New repository's
+/// sign-in went: the request is kept, and checked again (Guide's second review
+/// of #3204).
+const swarmRepositoryUnchecked =
+    'Couldn’t check on the new repository: the Swarm didn’t answer. Check again.';
+
 /// GitHub's sign-in did not open in the browser (Guide's review of #3204).
 const swarmRepositoryOpenFailed =
     'GitHub didn’t open. Open it again to continue.';
