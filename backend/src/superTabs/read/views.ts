@@ -96,8 +96,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
-  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it. What the PM owes is
+  // its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)

@@ -56,6 +56,10 @@ export interface SwarmProject {
    *  the daily tidy was last asked, and the instructions revision its last save made; `tidyPending`: asked, and no save has
    *  followed yet (pmSchedule.ts tidyRequest; tasks #3022, #3151). */
   schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number; tidyPending?: boolean }
+  /** The oldest message a person sent its PM in the last day that the PM has not answered, and when it was sent, as the worker's
+   *  time checks last found it (timeChecks.ts owedAsk); absent when it owes none. Its PM's host restarts a PM that hangs while it
+   *  owes one (task #3385). Readers never get it: it may name a message in a person's private chat with the PM. */
+  owed?: { messageId: string; since: number }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null

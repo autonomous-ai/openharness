@@ -363,3 +363,27 @@ describe('the time checks\' pass', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(awake)
   })
 })
+
+describe('what a PM owes', () => {
+  // Task #3385: each pass reads, per PM, its oldest unanswered message from a person, on [tabId, agentId, status, createdAt].
+  it('reads the PM\'s unanswered deliveries of the last day alone, by the delivery index', async () => {
+    const { owedAsk, OWED_REACH_MS } = await import('../src/superTabs/timeChecks.js')
+    const delivery = (agentId: string, status: string, at: number, authorKind = 'person') => ({ id: randomUUID(), tabId: 'owed-tab', conversationId: 'lead',
+      messageId: randomUUID(), agentId, machineId: 'm', membershipGeneration: 'g', authorKind, authorId: 'a', authorGeneration: 'g', status, createdAt: new Date(at) })
+    const asked = delivery('pm', 'delivered', NOW - 3_600_000)
+    await db.superTabDelivery.createMany({ data: [
+      ...Array.from({ length: 20 }, () => delivery('pm', 'answered', NOW - 60_000)),
+      ...Array.from({ length: 20 }, () => delivery('pm', 'delivered', NOW - OWED_REACH_MS - 60_000)),
+      ...Array.from({ length: 20 }, () => delivery('other', 'queued', NOW - 60_000)),
+      asked, delivery('pm', 'queued', NOW - 60_000),
+    ] })
+    let owed: Awaited<ReturnType<typeof owedAsk>> = null
+    const entries = await profiled(db, async () => { owed = await owedAsk(db, 'owed-tab', 'pm', NOW) })
+    expect(owed).toEqual({ messageId: asked.messageId, since: NOW - 3_600_000 })
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'agentId', 'status', 'createdAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, agentId: 1, status: 1, createdAt: 1/)
+    // The two unanswered rows of the last day, at most one key past each status's range.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)
+  })
+})

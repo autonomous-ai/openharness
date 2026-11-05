@@ -297,6 +297,9 @@ export interface HostAgentRow {
      *  reads again when it moves, as it does for `revision`. */
     builtInHash?: string } | null
   lead: boolean
+  /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
+   *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */
+  owed: { messageId: string; since: number; restartAfterMs: number } | null
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null
   /** The conversation this agent leads, when it is a project's Product Manager. */

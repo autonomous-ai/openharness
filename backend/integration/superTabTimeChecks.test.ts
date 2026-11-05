@@ -171,13 +171,15 @@ describe('what the PM owes', () => {
     await f.execute({ type: 'message.send', conversationId: f.group, text: 'Halfway there.', replyTo: null, recipientIds: [f.lead] } as Command, host, f.worker)
     await f.timed.runTimeChecks(f.tab)
     expect(await owedOf(f)).toBeUndefined()
-    const asked = f.clock.now
     const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Where is my parser?', replyTo: null, recipientIds: [] } as Command)
     f.clock.now += MINUTE
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the docs?', replyTo: null, recipientIds: [] } as Command)
+    const next = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the docs?', replyTo: null, recipientIds: [] } as Command)
     f.clock.now += MINUTE
     await f.timed.runTimeChecks(f.tab)
     const messageId = String(sent.result.messageId)
+    // When its delivery to the PM was written, as the server's clock read then.
+    const sentAt = async (id: unknown) => (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: String(id), agentId: f.lead } })).createdAt.getTime()
+    const asked = await sentAt(messageId)
     expect(await owedOf(f)).toEqual({ messageId, since: asked })
     expect((await pmRow(f)).owed).toEqual({ messageId, since: asked, restartAfterMs: 20 * MINUTE })
     expect((await pmRow(f, f.worker)).owed).toBeNull()
@@ -185,6 +187,6 @@ describe('what the PM owes', () => {
     expect((await f.timed.read(owner, f.tab)).state.projects![0]).not.toHaveProperty('owed')
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Parser ships today.', replyTo: null, recipientIds: [], answers: messageId } as Command, host, f.lead)
     await f.timed.runTimeChecks(f.tab)
-    expect((await owedOf(f) as { messageId: string; since: number }).since).toBe(asked + MINUTE)
+    expect(await owedOf(f)).toEqual({ messageId: String(next.result.messageId), since: await sentAt(next.result.messageId) })
   })
 })

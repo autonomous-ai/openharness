@@ -63,6 +63,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
+import { owedAsk } from './timeChecks.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -4615,6 +4616,14 @@ export class SuperTabStore {
         const busy = new Set((await tx.superTabDelivery.findMany({ where: { tabId, status: { in: [...OPEN_DELIVERY] } },
           select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
         for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
+      }
+      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing.
+      for (const project of projects) {
+        const pm = state.conversations.find(c => c.id === project.leadConversationId)!.leadId!
+        const owed = await owedAsk(tx, tabId, pm, now)
+        if (owed?.messageId === project.owed?.messageId && owed?.since === project.owed?.since) continue
+        if (owed) project.owed = owed
+        else delete project.owed
       }
       // It frees the agents whose task the checks just lost, as the PM's poll did.
       await this.endRuns(tx, tabId, loaded.state, state)

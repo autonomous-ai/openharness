@@ -1015,7 +1015,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(p => {
+    visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
+      // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
       if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
       if (chat && canReadGroup(state, actor, chat)) return p

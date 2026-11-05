@@ -12,6 +12,7 @@ import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contr
 import { hostEtag } from './hostEtag.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, instructionsHash, roleNameOf } from '../instructions.js'
 import { PM_SCHEDULE_TEXT } from '../pmSchedule.js'
+import { PM_RESTART_AFTER_MS } from '../timeChecks.js'
 
 /** The built-in PM schedule's hash, once: it changes only with a backend release. */
 const BUILT_IN_HASH = instructionsHash(PM_SCHEDULE_TEXT)
@@ -98,6 +99,8 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       coordinatorName: coordinatorNameOf(home), ...ledProject(state, target.id)?.id === home.id ? { builtInHash: BUILT_IN_HASH } : {} } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
+    // What a PM owes people, and how long it may while it hangs: its host restarts it after that (timeChecks.ts, cli host.ts).
+    owed: (() => { const owed = ledProject(state, target.id)?.owed; return owed ? { ...owed, restartAfterMs: PM_RESTART_AFTER_MS } : null })(),
     // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.
     leadsConversationId: null,
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
