@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Backend and CLI skill text, plus Desktop/phone delete-only eligibility authorized by River on November 5; no new protocol, dependencies or core code.
+- This PR owns backend and CLI skill text; River assigned the companion Desktop/phone delete-only eligibility to task #3330 on November 5, in a separate PR based on this branch. No new protocol, dependencies or core code.
 - Two independent security reviews before merge; Integrator owns review/test routing and shipping.
 - Commit this plan first, then each task's failing tests before implementation. Push the draft and each completed task.
 - Keep the owner's direct-word consent path and existing quote styles and whitespace normalization.
@@ -49,10 +49,10 @@ Run focused backend consent/message-edit unit files, the CLI skill spec, and bot
 
 **Interfaces:** Preserve `okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean`. `shownLine` returns null only when there is no marker, and an empty non-consenting value for a marker without a valid quoted line, so older consent is not revived.
 
-- [ ] Commit tests rejecting an unquoted public line followed by private sentences, the unquoted line alone, unclosed/malformed quotes, and fallback to an older quoted offer. Assert the quoted line posts verbatim and appended/private-only text is refused. Require quote guidance in the generated skill and refusal.
-- [ ] Run `vitest run src/superTabs/buddies.test.ts --maxWorkers=2` in backend and `vitest run src/lib/swarmSkills.spec.ts --maxWorkers=2` in CLI; record expected consent/wording failures.
-- [ ] Remove the unquoted fallback, retain newest-marker invalidation, and require quotes in the skill example and server recovery text.
-- [ ] Run the same files green, record evidence, commit and push.
+- [x] Commit tests rejecting an unquoted public line followed by private sentences, the unquoted line alone, unclosed/malformed quotes, and fallback to an older quoted offer. Assert the quoted line posts verbatim and appended/private-only text is refused. Require quote guidance in the generated skill and refusal.
+- [x] Run `vitest run src/superTabs/buddies.test.ts --maxWorkers=2` in backend and `vitest run src/lib/swarmSkills.spec.ts --maxWorkers=2` in CLI; record expected consent/wording failures.
+- [x] Remove the unquoted fallback, retain newest-marker invalidation, and require quotes in the skill example and server recovery text.
+- [x] Run the consent file and affected skill cases green, record evidence, commit and push. The full skill file had 12 pre-existing Windows failures; its full Linux run belongs to CI.
 
 ### Task 2: Let only the owner delete their proposal
 
@@ -60,14 +60,15 @@ Run focused backend consent/message-edit unit files, the CLI skill spec, and bot
 
 **Interfaces:** Extend internal `MessageChangeTarget` with optional `proposalOwnerId`, derived only from stored `buddy-proposal` source. `deleteMessage` allows matching person author/source owner; `editMessage` keeps the plain-message rule. Existing return/effect shapes remain unchanged.
 
-- [ ] Commit tests for owner deletion with and without replies; reject other members, Swarm owner, agents, mismatched source owner and unrelated system rows. Add store tests creating a real Buddy proposal, deleting it, preserving replies without proposal content, cancelling pending delivery and refusing reuse of the original ask.
-- [ ] Run `vitest run src/superTabs/messageEdits.test.ts --maxWorkers=2`; record owner deletion failing before the fix.
-- [ ] Derive trusted proposal ownership, permit delete only, and remove source metadata when retaining a deleted root.
-- [ ] Run focused unit files/typechecks, record evidence and push. Mark Ready with red/green evidence, then hand the stable revision to the Integrator for two security reviews and independent testing.
+- [x] Commit tests for owner deletion with and without replies; reject other members, Swarm owner, agents, mismatched source owner and unrelated system rows. Add store tests creating a real Buddy proposal, deleting it, preserving replies without proposal content, cancelling pending delivery and refusing reuse of the original ask.
+- [x] Run `vitest run src/superTabs/messageEdits.test.ts --maxWorkers=2`; record owner deletion failing before the fix.
+- [x] Derive trusted proposal ownership, permit delete only, and remove source metadata when retaining a deleted root.
+- [x] Run focused unit files/typechecks, record evidence and push: 710 backend tests, 3 Buddy skill cases and both typechecks passed. [Red/green evidence](https://github.com/autonomous-ai/openharness/pull/3180#issuecomment-6657171229).
+- [ ] Full automatic CI and two security reviews, shared with #3330, plus independent testing. Integrator owns these steps and shipping.
 
-### Task 3: Offer owner-only Delete in Desktop and phone
+### Companion task #3330: Offer owner-only Delete in Desktop and phone
 
-River expanded the task after inspection found `canChange` hides both actions for every proposal. This Windows session has no Flutter/Dart toolchain; push the backend first and ask River to assign the app work on a Mac, in this task and branch.
+River assigned the app work to #3330 on a Mac with Flutter after inspection found `canChange` hides both actions for every proposal. Its own PR builds on this branch, so the two Engineers never push the same branch. Both PRs go to the same two security reviewers. The following is the app handoff, not additional implementation in this PR.
 
 **Files:** Desktop `lib/super_tabs/profile_actions.dart`, `lib/super_tabs/view.dart`, their focused tests, and the matching phone eligibility/menu code and tests.
 
