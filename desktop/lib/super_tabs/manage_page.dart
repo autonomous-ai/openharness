@@ -15,6 +15,8 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'leaderboard/models_section.dart';
 import 'leaderboard/reader.dart';
+import 'scorecard.dart';
+import 'scorecard_view.dart';
 import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
@@ -28,9 +30,9 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// What Manage shows (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10,
 /// 10b, 10c): what used to stand in the sidebar and the Swarm dropdown, one
 /// click away. Devices is the devices pane the view already holds.
-enum SuperTabManageTab { machines, models, devices, swarm, backlog }
+enum SuperTabManageTab { machines, models, devices, swarm, backlog, scorecard }
 
-/// Machines, Models, Devices, Swarm, Backlog, under Manage's heading.
+/// Machines, Models, Devices, Swarm, Backlog, Scorecard, under Manage's heading.
 class SuperTabManageTabs extends StatelessWidget {
   const SuperTabManageTabs({
     super.key,
@@ -69,6 +71,7 @@ class SuperTabManageTabs extends StatelessWidget {
           if (devices) tab(SuperTabManageTab.devices, 'Devices'),
           tab(SuperTabManageTab.swarm, 'Swarm'),
           tab(SuperTabManageTab.backlog, 'Backlog'),
+          tab(SuperTabManageTab.scorecard, 'Scorecard'),
         ],
       ),
     );
@@ -147,6 +150,7 @@ class SuperTabManagePage extends StatelessWidget {
           now: now,
           onOpenConversation: (id) => onOpenConversation?.call(id),
         ),
+        SuperTabManageTab.scorecard => _ManageScorecard(controller: controller),
       },
     ),
   );
@@ -410,4 +414,33 @@ class _ManageSwarmState extends State<_ManageSwarm> {
       .where((tab) => tab.isSuperTab && tab.superTabId == c.tabId)
       .firstOrNull
       ?.id;
+}
+
+/// Manage's Scorecard: its reader lives while the tab shows.
+class _ManageScorecard extends StatefulWidget {
+  const _ManageScorecard({required this.controller});
+  final SuperTabController controller;
+
+  @override
+  State<_ManageScorecard> createState() => _ManageScorecardState();
+}
+
+class _ManageScorecardState extends State<_ManageScorecard> {
+  late final _reader = SuperTabScorecardReader(
+    tabId: widget.controller.tabId,
+    request: widget.controller.request,
+  );
+
+  @override
+  void dispose() {
+    _reader.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SuperTabScorecardView(
+    projects: widget.controller.snapshot?.projects ?? const [],
+    projectId: widget.controller.selected?.projectId,
+    reader: _reader,
+  );
 }

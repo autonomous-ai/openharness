@@ -51,7 +51,9 @@ void main() {
         _day('2026-11-05', {'starts': 31, 'startsFailed': 3}),
       );
       expect(
-        scorecardRows.firstWhere((r) => r.label == 'Agent starts (failed)').cell(day),
+        scorecardRows
+            .firstWhere((r) => r.label == 'Agent starts (failed)')
+            .cell(day),
         '31 (3)',
       );
       expect(scorecardRows.first.cell(null), '–');
@@ -74,7 +76,9 @@ void main() {
     test('reads one project and says when the server is too old', () async {
       final asked = <String>[];
       var answer = <String, dynamic>{
-        'days': [_day('2026-11-05', {'asksShipped': 9})],
+        'days': [
+          _day('2026-11-05', {'asksShipped': 9}),
+        ],
       };
       Object? failure;
       final reader = SuperTabScorecardReader(
@@ -88,7 +92,11 @@ void main() {
       await reader.show('p0');
       expect(asked, ['GET /api/super-tabs/tab/scorecard?projectId=p0']);
       expect(reader.days.single.figures['asksShipped'], 9);
-      failure = const SuperTabFailure('NOT_FOUND', 'Not found', statusCode: 404);
+      failure = const SuperTabFailure(
+        'NOT_FOUND',
+        'Not found',
+        statusCode: 404,
+      );
       answer = const {};
       await reader.refresh();
       expect(reader.days, isEmpty);
@@ -144,10 +152,12 @@ void main() {
     expect(find.text('Asks shipped'), findsOneWidget);
     expect(find.text('11-05'), findsOneWidget);
     expect(find.text('3h10'), findsOneWidget);
-    expect(find.text('95m'), findsOneWidget);
+    expect(find.text('1h35'), findsOneWidget);
     final shipped = find.byKey(const ValueKey('scorecard-asksShipped'));
     final cells = tester
-        .widgetList<Text>(find.descendant(of: shipped, matching: find.byType(Text)))
+        .widgetList<Text>(
+          find.descendant(of: shipped, matching: find.byType(Text)),
+        )
         .map((t) => t.data)
         .toList();
     expect(cells.take(4), ['Asks shipped', '9', '–', '7']);
