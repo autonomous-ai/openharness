@@ -662,11 +662,11 @@ void main() {
         'shipped',
       ]);
       expect(summary(tester), (working: 1, review: 1, shipped: 1));
-      // Scholes's mockup (#2774): number and title; then agent, machine and
-      // state with a project chip; the pull request's chip and how long ago
-      // at the right.
+      // Scholes's mockup (#2774): number, priority (#3117) and title; then
+      // agent, machine and state with a project chip; the pull request's
+      // chip and how long ago at the right.
       final working = rowText(tester, 'working');
-      expect(working, contains('#11 | Sidebar task groups'));
+      expect(working, contains('#11 | P2 | Sidebar task groups'));
       expect(working, contains('Kestrel · Mac Studio · Working'));
       expect(working, contains('web-project'));
       expect(working, contains('PR 2733'));
