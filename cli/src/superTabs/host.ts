@@ -4,6 +4,8 @@ import { CrewFolders, crewRest, pruneBranches } from './crewFolders.js'
 const CREW_PRUNE_EVERY_MS = 60 * 60_000
 /** How long a folder drop the Swarm's removal refused waits before it is tried again. */
 const CREW_DROP_RETRY_MS = 60 * 60_000
+/** How long a folder restore that failed waits before it is tried again. */
+const CREW_RESTORE_RETRY_MS = 60_000
 import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
@@ -1186,8 +1188,14 @@ export class SuperTabHost {
         continue
       }
       // Rested here, or dropped before this host restarted (its record is on disk): the folder comes back first.
-      if ((this.rested.delete(restKey) || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId))))
-        void this.crewFolders().restore(target.tabId, target.agent.harnessId)
+      // One restore at a time, and the keep-alive below waits for it, so the session reopens in its folder, not a missing one.
+      // A failed one waits CREW_RESTORE_RETRY_MS, so the keep-alive (which backs off itself) is never held back for good.
+      if (!this.restoring.has(restKey) && (this.restoreRetryAt.get(restKey) ?? 0) <= this.now() && (this.rested.delete(restKey)
+        || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId)))) {
+        this.restoring.set(restKey, this.crewFolders().restore(target.tabId, target.agent.harnessId).catch(() => 'failed' as const)
+          .then(result => { if (result === 'failed') this.restoreRetryAt.set(restKey, this.now() + CREW_RESTORE_RETRY_MS); else this.restoreRetryAt.delete(restKey) })
+          .finally(() => { this.restoring.delete(restKey) }))
+      }
       if ((target.agent as { crew?: unknown }).crew) this.pruneCrewBranches(target.tabId, target.agent.harnessId)
       if (row.lead === true || target.agent.switchLanded) {
         if (row.lead === true) leads.add(target.agent.harnessId)
@@ -1196,7 +1204,7 @@ export class SuperTabHost {
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
         leads.add(target.agent.harnessId)
-        this.keepAlive(target.agent.harnessId, true)
+        if (!this.restoring.has(restKey)) this.keepAlive(target.agent.harnessId, true)
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1356,6 +1364,10 @@ export class SuperTabHost {
   /** Crew members closed for rest, by tab and harness, with what closed them: closed once per rest, and when one wakes, its
    *  dropped folder comes back before its keep-alive reopens it (crewFolders.ts). */
   private readonly rested = new Map<string, 'sleep' | 'drop' | 'moving'>()
+  /** A dropped folder being brought back, by the same key: its keep-alive waits for it (review of #3229). */
+  private readonly restoring = new Map<string, Promise<unknown>>()
+  /** When a failed folder restore is tried again, by the same key. */
+  private readonly restoreRetryAt = new Map<string, number>()
   /** When a refused folder drop is tried again, by the same key. */
   private readonly dropRetry = new Map<string, number>()
   private crewFoldersInstance?: CrewFolders
