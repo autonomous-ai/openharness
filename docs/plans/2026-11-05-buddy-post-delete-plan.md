@@ -36,9 +36,9 @@ No new storage, synchronization, identity, query or migration. Growth, concurren
 
 **Interfaces:** Consume SuperTabMessage author/source and current controller access. Produce `bool canDelete(SuperTabMessage message)`; preserve `canChange` for Edit.
 
-- [ ] Commit widget tests asserting owner proposal offers Delete but no Edit; another person's and agent-authored proposals offer neither. Add eligibility coverage for mismatched source ownership and restricted messages.
-- [ ] Run affected tests and record the expected missing Delete failure.
-- [ ] Add delete-only eligibility and wire the existing menu; run affected tests green and commit.
+- [x] Commit widget tests asserting owner proposal offers Delete but no Edit; another person's and agent-authored proposals offer neither. Add eligibility coverage for mismatched source ownership and restricted messages.
+- [x] Run affected tests and record the expected missing Delete failure.
+- [x] Add delete-only eligibility and wire the existing menu; run affected tests green and commit.
 
 ## Task 2: Phone owner deletion
 
@@ -46,12 +46,14 @@ No new storage, synchronization, identity, query or migration. Growth, concurren
 
 **Interfaces:** Consume SuperTabMessage and SwarmConversation access. Produce `bool mayDelete(SuperTabMessage message)`; preserve `mayChange` for Edit; use in chat and thread menus.
 
-- [ ] Commit widget tests for owner Delete/no Edit and denial for other-person, agent and mismatched source proposals, including thread menu.
-- [ ] Run affected tests and record expected missing Delete failure.
-- [ ] Implement and wire delete-only eligibility, run affected tests green and commit.
+- [x] Commit widget tests for owner Delete/no Edit and denial for other-person, agent and mismatched source proposals, including thread menu.
+- [x] Run affected tests and record expected missing Delete failure.
+- [x] Implement and wire delete-only eligibility, run affected tests green and commit.
 
 ## Validation and handoff
 
-- [ ] Run affected Desktop profile/message tests and phone message edit tests with Flutter 3.47.2/Dart 3.13.2; run `python3 scripts/check-ui-style.py`.
-- [ ] Capture light/dark menus in both apps with in-memory/fake sign-in fixtures.
+- [x] Run affected Desktop profile/message tests and phone message edit tests with Flutter 3.47.2/Dart 3.13.2; run `python3 scripts/check-ui-style.py`.
+- [x] Capture light/dark menus in both apps with in-memory/fake sign-in fixtures.
 - [ ] Add red/green evidence to PR comment, mark Ready and hand off to Integrator for shared security reviews and independent UI testing. CI supplies touched component suites.
+
+Evidence: Desktop red at 5bca9b57 (Delete absent); phone chat and thread red at 5e769b79 (Delete absent). Green at cc261e22: 29 Desktop and 23 phone tests, with light/dark menu captures. The inherited backend plan-only update was merged; no backend code changed here. Screenshot fixture initially failed compilation due to an unqualified font name; corrected before the final green runs.
