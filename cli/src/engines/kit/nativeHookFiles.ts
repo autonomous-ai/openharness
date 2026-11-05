@@ -10,7 +10,13 @@ import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 import { HookPreparationHeld } from './hookHeld.js'
 // Every importer of the class from here keeps working; windowsFiles.ts imports it from the leaf, with no cycle.
 export { HookPreparationHeld }
-const version = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+/** A file's version. Without its change time on Windows, which moves when a file's last handle closes, after the rename that
+ *  published it (measured 2026-11-05): a publication that read it first then took its own close for someone else's edit. */
+export function hookFileVersion(info: BigIntStats, platform: NodeJS.Platform = process.platform): string {
+  const written = `${info.dev}:${info.ino}:${info.uid}:${info.mode}:${info.size}:${info.mtimeNs}`
+  return platform === 'win32' ? written : `${written}:${info.ctimeNs}`
+}
+const version = (info: BigIntStats) => hookFileVersion(info)
 const fileIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}`
 export interface HookFilePublication { verify(): void }
 export interface HookPreparationProof {

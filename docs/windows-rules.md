@@ -62,7 +62,25 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
 
-## 3. Testing on Windows
+## 3. Files
+
+- **A file's change time moves when its last handle closes**, after a rename that published it. Measured 2026-11-05: `ctimeNs`
+  differed before and after `close`. Do not compare it across a close: three plugins were written and then reported as failed
+  (`hookFileVersion` in `cli/src/engines/kit/nativeHookFiles.ts`).
+- **A rename over a read-only file fails with `EPERM`.** A file we write read-only stops every later refresh unless it is made
+  writable first (`writeCopies` in `cli/src/superTabs/buddyHome.ts`).
+- **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
+  quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
+- **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
+
+## 4. Screens a person sees
+
+- **A mouse has no sideways scroll.** Anything that overflows sideways needs arrows and the wheel, or what falls off the end looks
+  deleted (`scrollsTabsByMouse` in `desktop/lib/widgets/workspace_tab_scroller.dart`).
+- **A window that nobody asked for is rule 1.** A prompt nobody can answer in a hidden pane is its sibling: answer the exact screen
+  safely or fail the start with a reason (`cli/src/superTabs/startScreen.ts`).
+
+## 5. Testing on Windows
 
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
@@ -71,7 +89,7 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - Check the machine chip says This Computer before you start anything: a new Harness can default to another machine.
 - Files and secrets: read a config file by key name. Never print `config.toml` or similar: it can hold a plain API key.
 
-## 4. Words
+## 6. Words
 
 Windows people read "Windows" or "this computer", never "Mac", "Finder", "Terminal.app" or `~/`. Text shared by all
 platforms says "this computer". See the [Naming System](naming-system.md).

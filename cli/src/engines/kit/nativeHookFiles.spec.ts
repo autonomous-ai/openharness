@@ -2,7 +2,17 @@ import { constants, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { hookFileVersion, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+
+// Windows moved a just-published file's change time when its handle closed (measured on DESKTOP-0TFH0OJ, 2026-11-05), after the
+// publication had read it: Kilo's, Pi's and Amp's plugins were written, then reported as failed, at every start.
+it('leaves the change time out of a file\'s version on Windows alone', () => {
+  const stat = { dev: 1n, ino: 2n, uid: 0n, mode: 0o644n, size: 5n, mtimeNs: 7n }
+  const closed = (ctimeNs: bigint) => ({ ...stat, ctimeNs }) as never
+  expect(hookFileVersion(closed(8n), 'win32')).toBe(hookFileVersion(closed(9n), 'win32'))
+  expect(hookFileVersion(closed(8n), 'darwin')).not.toBe(hookFileVersion(closed(9n), 'darwin'))
+  expect(hookFileVersion({ ...stat, mtimeNs: 70n, ctimeNs: 8n } as never, 'win32')).not.toBe(hookFileVersion(closed(8n), 'win32'))
+})
 
 const fault = vi.hoisted(() => ({ sync: false, write: false, windows: false, writableOpens: 0, onSync: undefined as ((fd: number) => void) | undefined, openAs: undefined as string | undefined, onStat: undefined as ((file: unknown, options: unknown) => void) | undefined }))
 vi.mock('./windowsFiles.js', async original => {

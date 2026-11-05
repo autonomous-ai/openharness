@@ -573,7 +573,7 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
   },
   pi: {
     basenames: [/^pi$/],
-    entrypoints: [/pi-coding-agent[\/\\]dist[\/\\]cli\.js$/],
+    entrypoints: [/pi-coding-agent[\/\\]dist[\/\\](?:bundle[\/\\])?cli\.js$/],
   },
   // The release binary is a single executable named `omp` (measured: /proc/<pid>/comm and exe).
   omp: {
