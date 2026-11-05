@@ -14,10 +14,10 @@ import 'swarm_attachment_fakes.dart';
 
 /// A voice message as both apps draw it (task #2584):
 ///
-///     ( ▶ )  ıllıllııılllıı.ılıı.ıll   1:21        →A
+///     ( ▶ )  ıllıllııılllıı.ılıı.ıll   1:21
 ///
-/// Play hears it, from a copy of the file on the phone; →A shows its words
-/// under it, and a second tap hides them.
+/// Play hears it, from a copy of the file on the phone. It plays only: no
+/// words and no option to show them (anh Dee, 11-04).
 void main() {
   final cachedCopy = swarmVoiceFile;
   final clip = SuperTabAttachment.fromJson({
@@ -78,30 +78,37 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets('shows play, its waveform, its length and →A, and no words', (
+  // Voice messages play only, as Telegram draws them: no →A, no words, no
+  // option to show them (anh Dee, 11-04, and 11-05 "I already told you NO").
+  testWidgets('plays only: play, its waveform and its length; no →A', (
     tester,
   ) async {
     await pump(tester);
     expect(key('swarm-voice-play'), findsOneWidget);
     expect(key('swarm-voice-bars'), findsOneWidget);
     expect(find.text('1:21'), findsOneWidget);
-    expect(key('swarm-voice-words-toggle'), findsOneWidget);
+    expect(find.text('→A'), findsNothing);
+    expect(key('swarm-voice-words-toggle'), findsNothing);
+    expect(
+      find.bySemanticsLabel(RegExp('words', caseSensitive: false)),
+      findsNothing,
+    );
+    expect(
+      find.textContaining(RegExp('transcri', caseSensitive: false)),
+      findsNothing,
+    );
     expect(find.text('Ship the parser today.'), findsNothing);
   });
 
-  testWidgets('→A shows its words under it, and a second tap hides them', (
-    tester,
-  ) async {
+  testWidgets('a tap anywhere on it never shows its words', (tester) async {
     await pump(tester);
-    await tester.tap(key('swarm-voice-words-toggle'));
-    await tester.pump();
-    expect(find.text('Ship the parser today.'), findsOneWidget);
-    await tester.tap(key('swarm-voice-words-toggle'));
+    await tester.tap(key('swarm-voice-bubble-clip'));
+    await tester.tap(find.text('1:21'));
     await tester.pump();
     expect(find.text('Ship the parser today.'), findsNothing);
   });
 
-  testWidgets('without words, →A says why', (tester) async {
+  testWidgets('a clip without words says nothing about words', (tester) async {
     final quiet = SuperTabAttachment.fromJson({
       'id': 'quiet',
       'name': 'Voice message.wav',
@@ -116,9 +123,12 @@ void main() {
       },
     });
     await pump(tester, file: quiet, words: '');
-    await tester.tap(key('swarm-voice-words-toggle'));
-    await tester.pump();
-    expect(find.text(swarmVoiceNoWordsLimit), findsOneWidget);
+    expect(find.text('0:02'), findsOneWidget);
+    expect(find.text('→A'), findsNothing);
+    expect(
+      find.textContaining(RegExp('transcri', caseSensitive: false)),
+      findsNothing,
+    );
   });
 
   testWidgets('Play hears a copy of the file on the phone, and shows pause', (
@@ -262,6 +272,44 @@ void main() {
       await closed(tester);
     });
 
+    // anh Dee, 11-05 18:45: his own 0:20 voice message, just sent in a
+    // project chat, said "Couldn't play it". Its clip went up through a
+    // direct upload, whose signed headers are what storage serves it with
+    // (backend attachments.ts linkHeaders); the phone keeps it as .wav.
+    testWidgets('a voice message just sent plays on the phone', (tester) async {
+      storage.headers = {
+        'content-type': 'application/octet-stream',
+        'content-disposition':
+            "attachment; filename*=UTF-8''Voice%20message.wav",
+        'cache-control': 'private, max-age=600',
+      };
+      await tester.runAsync(() => swarmAttachments.keepOnly('person-dee'));
+      final sent = SuperTabAttachment.fromJson({
+        'id': 'sent-clip',
+        'name': 'Voice message.wav',
+        'mime': 'audio/wav',
+        'size': 640044,
+        'url': 'https://cdn.example.test/super-tabs/tab/f00/Voice_message.wav',
+        'link':
+            'https://storage.googleapis.com/harness-cdn/super-tabs/tab/f00/'
+            'Voice_message.wav?X-Goog-Signature=fresh',
+        'expiresAt': DateTime(2100).millisecondsSinceEpoch,
+        'voice': {
+          'durationMs': 20000,
+          'waveform': List.generate(48, (i) => (i * 7) % 32),
+          'transcribed': true,
+        },
+      });
+      await pump(tester, file: sent);
+      expect(find.text('0:20'), findsOneWidget);
+      await tester.tap(key('swarm-voice-play'));
+      final source = await played(tester);
+      expect(source.path, endsWith('.wav'));
+      expect(await tester.runAsync(source.readAsBytes), _Storage.wav);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      await closed(tester);
+    });
+
     testWidgets('a copy kept as .bin before is fetched again, never played', (
       tester,
     ) async {
@@ -295,18 +343,23 @@ class _Storage extends http.BaseClient {
   final asked = <Uri>[];
   bool named = true;
 
+  /// What it answers with, when set, in place of the plain answer.
+  Map<String, String>? headers;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     asked.add(request.url);
     return http.StreamedResponse(
       Stream.value(wav),
       HttpStatus.ok,
-      headers: {
-        'content-type': 'application/octet-stream',
-        if (named)
-          'content-disposition':
-              "attachment; filename*=UTF-8''Voice%20message.wav",
-      },
+      headers:
+          headers ??
+          {
+            'content-type': 'application/octet-stream',
+            if (named)
+              'content-disposition':
+                  "attachment; filename*=UTF-8''Voice%20message.wav",
+          },
     );
   }
 }
