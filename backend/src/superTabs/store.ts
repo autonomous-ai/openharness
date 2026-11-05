@@ -55,6 +55,7 @@ import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
+import { CARRIES_KEPT } from './mergeCarry.js'
 import { swarmUsernames } from './usernames.js'
 import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -5030,7 +5031,7 @@ export class SuperTabStore {
    *  give it (undefined: not read, null: unreadable). [stepIds]: the task's steps (Conversation.stepIds), loaded even when
    *  dormant, as a new head re-derives their checks. A done task records its heads and posts nothing (#3394). */
   async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null,
-    stepIds: readonly string[] = [], lookedUp = false): Promise<number> {
+    stepIds: readonly string[] = [], lookedUp = false, merged: string | null = null): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return 0
@@ -5051,8 +5052,13 @@ export class SuperTabStore {
           group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
         }
         // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
+        // A new head that is git's own merge of another head and main carries that head's verdicts, and those it carried when
+        // it was the head before, on the same base (mergeCarry.ts, #3553); a head re-read for its patch keeps what it carries.
+        const carries = !newHead ? known!.carries
+          : merged ? [merged, ...known && known.base === watch.base && known.head.toLowerCase() === merged.toLowerCase() ? known.carries ?? [] : []].slice(0, CARRIES_KEPT)
+            : undefined
         group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
-          at: patch === undefined ? 0 : now }, group.pullRequestUrls)
+          at: patch === undefined ? 0 : now, ...carries?.length ? { carries } : {} }, group.pullRequestUrls)
         for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }

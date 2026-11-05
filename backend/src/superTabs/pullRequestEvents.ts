@@ -7,6 +7,7 @@ import { PULL_PATCH_PERMISSIONS, PULL_WATCH_PERMISSIONS, type GitHubApp } from '
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import type { SuperTabStore } from './store.js'
 import type { PullRequestHead } from './model.js'
+import { cleanMainMergeOf } from './mergeCarry.js'
 import { patchId } from './pullRequestPatch.js'
 import { watchedLinks } from './checkVerdicts.js'
 import { logger } from '../utils/logger.js'
@@ -116,6 +117,9 @@ export interface PullRequestReader {
   watch(url: string): Promise<PullRequestWatch | null>
   /** [base]: the branch the watch read it merging into; no id when GitHub's answer for the comparison names another. */
   patch(url: string, head: string, base: string): Promise<string | null>
+  /** The head whose verdicts [head] carries, when it is git's own merge of that head and a commit of [base] (mergeCarry.ts,
+   *  task #3553), else null: judged from GitHub's comparisons, never from what the pull request says. */
+  merge(url: string, head: string, base: string): Promise<string | null>
   botLogin(): Promise<string | null>
   done(): Promise<void>
 }
@@ -159,6 +163,12 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
     patch: (url, head, base) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
       const read = await app.pullRequestPatchFiles(repository, number, granted, head)
       return read && read.base === base ? patchId(read.files, read.base) : null
+    }),
+    // Whether the head is git's own merge of its first parent and main, against the base the watch saw: an answer naming
+    // another branch carries nothing.
+    merge: (url, head, base) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
+      const read = await app.mainMergeSides(repository, number, granted, head)
+      return read && read.base === base ? cleanMainMergeOf(read.sides) : null
     }),
     botLogin: () => app.botLogin(),
     async done() {
@@ -209,12 +219,21 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     const patchNeeded = (known: PullRequestHead | undefined, watch: PullRequestWatch) =>
       known?.head !== watch.head || known.base !== watch.base || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
     // Each task's newest links (watchedLinks), with their pull request as GitHub has it now and a patch where one is needed.
-    const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined }> = []
+    // A head new to a task is asked whether it is git's own merge of another head and main (#3553), once a pass.
+    const merges = new Map<string, Promise<string | null>>()
+    const mergeOf = (url: string, head: string, base: string) => {
+      const key = `${url}@${head}@${base}`
+      if (!merges.has(key)) merges.set(key, reader.merge(url, head, base).catch(() => null))
+      return merges.get(key)!
+    }
+    const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined; merged: string | null | undefined }> = []
     for (const row of rows) {
       for (const url of watchedLinks(row.urls)) {
         const watch = await watchOf(url)
         if (watch?.state !== 'open') continue
-        seen.push({ row, watch, patch: patchNeeded(row.heads?.[url] ?? undefined, watch) ? await patchOf(url, watch.head, watch.base) : undefined })
+        const known = row.heads?.[url] ?? undefined, newHead = known?.head !== watch.head || known.base !== watch.base
+        seen.push({ row, watch, patch: patchNeeded(known, watch) ? await patchOf(url, watch.head, watch.base) : undefined,
+          merged: newHead ? await mergeOf(url, watch.head, watch.base) : undefined })
       }
     }
     // A task whose links moved past a head it keeps (review of #3218, round 3): that head is no longer read, so it is dropped
@@ -235,10 +254,10 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       }
     }
     let posted = 0
-    for (const { row, watch, patch } of seen) {
+    for (const { row, watch, patch, merged } of seen) {
       try {
         const lookedUp = listed.get(`${row.tabId}:${row.key}`)
-        posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
+        posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch, row.steps ?? lookedUp ?? [], lookedUp !== undefined, merged ?? null)
       } catch (error) {
         logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
       }
