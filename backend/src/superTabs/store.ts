@@ -69,7 +69,7 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
+import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -4994,8 +4994,7 @@ export class SuperTabStore {
       const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
       const ledger = head?.projects?.find(p => p.id === projectId)?.releases
       if (!ledger) return null
-      const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
-      const loaded = await loadRow(tx, requireParts(row), { groupIds })
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: ledgerGroupIds(ledger) })
       const state = cloneData(loaded.state)
       const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
       // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.

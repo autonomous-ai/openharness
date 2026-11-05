@@ -78,7 +78,14 @@ export function compareTags(a: string, b: string): number {
  *  release (done, cancelled or archived: the release may still be running). */
 export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
 /** A project's release list (SwarmProject.releases). The server alone writes it; readers never get it. */
-export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>> }
+export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>>
+  /** Tasks the cap pushed off the list with no other merge left on it: the merge's write may not hold them, so the next settle
+   *  loads them and clears their `releasing` (review of #3267). */
+  leaving?: string[] }
+
+/** The groups a settle of [ledger] loads: the tasks waiting, the open release steps, the tasks leaving. */
+export const ledgerGroupIds = (ledger: ReleaseLedger): string[] =>
+  [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId), ...ledger.leaving ?? []])]
 
 /** At most this many tasks wait on a project's list; the oldest leaves first, with a warning. */
 export const PENDING_MAX = 100
@@ -112,7 +119,11 @@ export function notePendingRelease(project: SwarmProject, group: Pick<Conversati
   group.releasing ??= []
   ledger.pending.push({ groupId: group.id, url, mergedAt })
   ledger.pending.sort((a, b) => a.mergedAt - b.mergedAt)
-  return ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
+  const dropped = ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
+  for (const { groupId } of dropped) {
+    if (!ledger.pending.some(e => e.groupId === groupId) && !ledger.leaving?.includes(groupId)) (ledger.leaving ??= []).push(groupId)
+  }
+  return dropped
 }
 
 /** How long a step that ended without a verified release still holds its component: a release workflow that is still
@@ -177,7 +188,8 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   const fresh = ledger.pending.filter(e => e.mergedAt > now - PENDING_MS)
   outcome.dropped = ledger.pending.filter(e => !fresh.includes(e))
   ledger.pending = fresh
-  const left = new Set<string>(outcome.dropped.map(e => e.groupId))
+  const left = new Set<string>([...outcome.dropped.map(e => e.groupId), ...ledger.leaving ?? []])
+  delete ledger.leaving
 
   for (const component of RELEASE_COMPONENTS) {
     const read = facts.releases[component.id]
