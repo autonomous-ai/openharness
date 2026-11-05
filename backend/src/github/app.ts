@@ -38,16 +38,27 @@ export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read'
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
  *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
+/** What reading a pull request head's patch may do (superTabs/pullRequestPatch.ts, #3394): read the pull request, and the
+ *  comparison of its base and head commits, which is repository contents. Read only, revoked when the watch's pass ends. */
+export const PULL_PATCH_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
 /** The most files GitHub lists for a pull request (GET /pulls/{number}/files). */
 export const PULL_FILES_MAX = 3000
-/** The `ref` of a GitHub contents link (`.../contents/PATH?ref=SHA`), or undefined. */
-function refOf(url: unknown): string | undefined {
-  if (typeof url !== 'string') return undefined
-  try { return new URL(url).searchParams.get('ref') ?? undefined } catch { return undefined }
-}
+/** The most files GitHub gives for a comparison of two commits (GET /compare/{base}...{head}). */
+export const COMPARE_FILES_MAX = 300
 const PUSH_ORIGINS_KEPT = 1000
+/** GitHub's files of a pull request or a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
+function filesOf(body: unknown[]): PullRequestFile[] | null {
+  const text = (value: unknown) => typeof value === 'string' ? value : undefined
+  const files: PullRequestFile[] = []
+  for (const file of body as Array<Record<string, unknown>>) {
+    const filename = text(file?.filename), status = text(file?.status), sha = text(file?.sha), patch = text(file?.patch), previousFilename = text(file?.previous_filename)
+    if (!filename || !status || sha === undefined) return null
+    files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
+  }
+  return files
+}
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 /** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
@@ -657,38 +668,46 @@ export class GitHubApp {
     }
   }
 
-  /** A pull request's files with their patches (GET /repos/{owner}/{repo}/pulls/{number}/files), for its patch id
-   *  (superTabs/pullRequestPatch.ts, #3394), read with the watch's token ([PULL_WATCH_PERMISSIONS]) once per new head. Null
-   *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. With
-   *  [head], null too unless the pull request's head is still that one once the files are read: a push in between would
-   *  give a newer head's files to the older head; and unless each file listed is [head]'s (its contents link's ref: the head,
-   *  or for a removed file the pull request's base). */
-  async pullRequestFiles(repository: GitHubRepository, number: number, token: string, head?: string): Promise<PullRequestFile[] | null> {
-    const files: PullRequestFile[] = [], refs: Array<string | undefined> = []
-    const text = (value: unknown) => typeof value === 'string' ? value : undefined
+  /** A pull request's files with their patches (GET /repos/{owner}/{repo}/pulls/{number}/files), read with a token of
+   *  [PULL_WATCH_PERMISSIONS]: what it changes now. Null when GitHub cannot say, or lists as many as it ever lists
+   *  ([PULL_FILES_MAX]), as it may then have left some out. Never a head's patch: a push between pages mixes heads, and a
+   *  removed file's link names the base, which ties it to no head (pullRequestPatchFiles). */
+  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<PullRequestFile[] | null> {
+    const files: PullRequestFile[] = []
     try {
       for (let page = 1; files.length < PULL_FILES_MAX; page++) {
         const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
         if (answer.status !== 200 || !Array.isArray(answer.body)) return null
-        for (const file of answer.body as Array<Record<string, unknown>>) {
-          const filename = text(file.filename), status = text(file.status), sha = text(file.sha), patch = text(file.patch), previousFilename = text(file.previous_filename)
-          if (!filename || !status || sha === undefined) return null
-          files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
-          refs.push(refOf(file.contents_url)?.toLowerCase())
-        }
-        if (answer.body.length < 100) {
-          if (head === undefined) return files
-          // Each file listed is [head]'s (security review of #3218): a push and a push back between pages, or a diff GitHub has
-          // not recomputed yet, would list another head's. A removed file's contents link names the base, where it still is
-          // (review of #3218, as GitHub answers for #3147); every other file's names the head. Both read after the files.
-          const pull = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
-          const shas = pull.status === 200 ? pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown } } : {}
-          const now = text(shas.head?.sha)?.toLowerCase(), base = text(shas.base?.sha)?.toLowerCase()
-          if (now !== head.toLowerCase() || !base) return null
-          return files.every((file, i) => refs[i] === (file.status === 'removed' ? base : now)) ? files : null
-        }
+        const listed = filesOf(answer.body)
+        if (!listed) return null
+        files.push(...listed)
+        if (answer.body.length < 100) return files
       }
       return null
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /** The files of a pull request at [head], for its patch id (superTabs/pullRequestPatch.ts, #3394), read with a token of
+   *  [PULL_PATCH_PERMISSIONS]: the comparison of the base and head commits the pull request names in one answer
+   *  (GET /pulls/{number}, then GET /compare/{base}...{head}), two fixed commits no push changes (review of #3218, round 3:
+   *  a listing's removed files tie it to no head). Null unless the pull request still names [head], and when GitHub cannot
+   *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. */
+  async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<PullRequestFile[] | null> {
+    const base = `/repos/${repository.owner}/${repository.name}`
+    const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
+    try {
+      const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
+      if (pull.status !== 200) return null
+      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown } }
+      const at = sha(named.head?.sha), from = sha(named.base?.sha)
+      if (!at || !from || at !== head.toLowerCase()) return null
+      const compared = await this.call('GET', `${base}/compare/${from}...${at}?per_page=1`, `Bearer ${token}`)
+      const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
+      if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
+      return filesOf(listed)
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error

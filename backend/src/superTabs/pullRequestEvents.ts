@@ -3,7 +3,7 @@
 // webhook reaches the backend, so the singleton worker reads them every minute with the Harness GitHub App
 // (docs/plans/2026-11-03-pr-events-to-engineer-plan.md).
 import type { PrismaClient } from '@prisma/client'
-import { PULL_WATCH_PERMISSIONS, type GitHubApp } from '../github/app.js'
+import { PULL_PATCH_PERMISSIONS, PULL_WATCH_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import type { SuperTabStore } from './store.js'
 import type { PullRequestHead } from './model.js'
@@ -134,25 +134,27 @@ export const PATCH_RETRY_MS = 15 * 60_000
 /** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
  *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
 export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
+  // One token per repository and permission set: the watch's, and the patch reads' with contents read (PULL_PATCH_PERMISSIONS).
   const tokens = new Map<string, Promise<string | null>>()
-  const token = (repository: GitHubRepository) => {
-    const key = repository.fullName.toLowerCase()
+  const token = (repository: GitHubRepository, permissions: typeof PULL_WATCH_PERMISSIONS | typeof PULL_PATCH_PERMISSIONS) => {
+    const key = `${repository.fullName.toLowerCase()} ${Object.keys(permissions).sort().join(',')}`
     if (!tokens.has(key)) tokens.set(key, (async () => {
       const installation = await app.installation(repository)
-      return installation === null ? null : (await app.createToken(installation, repository, PULL_WATCH_PERMISSIONS)).token
+      return installation === null ? null : (await app.createToken(installation, repository, permissions)).token
     })().catch(() => null))
     return tokens.get(key)!
   }
-  const read = async <T>(url: string, body: (repository: GitHubRepository, number: number, granted: string) => Promise<T | null>) => {
+  const read = async <T>(url: string, permissions: typeof PULL_WATCH_PERMISSIONS | typeof PULL_PATCH_PERMISSIONS,
+    body: (repository: GitHubRepository, number: number, granted: string) => Promise<T | null>) => {
     const match = PULL.exec(url), repository = match ? githubRepository(`https://github.com/${match[1]}`) : null
-    const granted = repository ? await token(repository) : null
+    const granted = repository ? await token(repository, permissions) : null
     return granted ? body(repository!, Number(match![2]), granted) : null
   }
   return {
-    watch: url => read(url, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
-    // The files at [head]: none when the head moved meanwhile, so a newer head's patch is never [head]'s.
-    patch: (url, head) => read(url, async (repository, number, granted) => {
-      const files = await app.pullRequestFiles(repository, number, granted, head)
+    watch: url => read(url, PULL_WATCH_PERMISSIONS, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
+    // The files at [head], from the comparison of the commits the pull request names: none once it names another head.
+    patch: (url, head) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
+      const files = await app.pullRequestPatchFiles(repository, number, granted, head)
       return files && patchId(files)
     }),
     botLogin: () => app.botLogin(),
@@ -172,7 +174,7 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
  * pullRequestSeen). One group's failure is logged and skips that group alone. A pass that posted, or could not read a pull
  * request, says so in one line: the measure of this feature (ENGINEERING.md 6 and 8). The messages posted.
  */
-export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, now: number,
+export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: PullRequestReader, now: number,
   limit = WATCH_GROUPS, doneLimit = WATCH_DONE_GROUPS): Promise<number> {
   try {
     // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
@@ -211,8 +213,23 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
         seen.push({ row, watch, patch: patchNeeded(row.heads?.[url] ?? undefined, watch.head) ? await patchOf(url, watch.head) : undefined })
       }
     }
-    // A task from before steps were listed, at a new head: its dormant steps are looked up once, then listed (listedSteps).
-    const listed = await listedSteps(db, seen.filter(s => s.patch !== undefined && !Array.isArray(s.row.steps)).map(s => s.row))
+    // A task whose links moved past a head it keeps (review of #3218, round 3): that head is no longer read, so it is dropped
+    // and the task's verdicts on it stop counting, whether or not any head it reads changed.
+    const moved = rows.filter(row => {
+      const window = new Set(watchedLinks(row.urls))
+      return Object.keys(row.heads ?? {}).some(url => !window.has(url))
+    })
+    // A task from before steps were listed, at a new head or dropping one: its dormant steps are looked up once, then listed.
+    const unlisted = [...seen.filter(s => s.patch !== undefined).map(s => s.row), ...moved].filter(row => !Array.isArray(row.steps))
+    const listed = await listedSteps(db, unlisted)
+    for (const row of moved) {
+      try {
+        const lookedUp = listed.get(`${row.tabId}:${row.key}`)
+        await store.pullRequestHeadsWatched(row.tabId, row.key, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
+      } catch (error) {
+        logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
     let posted = 0
     for (const { row, watch, patch } of seen) {
       try {
@@ -250,7 +267,7 @@ export async function listedSteps(db: PrismaClient, tasks: ReadonlyArray<{ tabId
 }
 
 /** Runs the pass every minute in the singleton worker, one at a time. */
-export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
+export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
   let running = false
   const run = () => {
     if (running) return

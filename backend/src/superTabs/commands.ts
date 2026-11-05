@@ -2322,10 +2322,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         checks: storedChecks(command.checks, operationId),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
-      // Its task lists it, so a new head of the task's pull request re-derives its checks even once it is dormant (#3394).
+      // Its task lists it, so a new head of the task's pull request re-derives its checks even once it is dormant (#3394). A
+      // task from before lists none until its PR watch looks its dormant steps up (review of #3218, round 3): listing only
+      // this one would hide those.
       if (command.reviewOf) {
         const reviewedTask = conversation(state, command.reviewOf)
-        reviewedTask.stepIds = [...reviewedTask.stepIds ?? [], operationId].slice(-STEPS_LISTED)
+        if (reviewedTask.stepIds) reviewedTask.stepIds = [...reviewedTask.stepIds, operationId].slice(-STEPS_LISTED)
       }
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
       const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined

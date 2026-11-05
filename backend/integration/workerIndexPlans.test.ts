@@ -280,7 +280,7 @@ describe('the pull request watch', () => {
     ] })
     const asked: string[] = []
     const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
-    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2, 0))
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0, pullRequestHeadsWatched: async () => false }, reader, NOW, 2, 0))
     expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
     const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
@@ -307,7 +307,7 @@ describe('the pull request watch of done tasks', () => {
     ] })
     const asked: string[] = []
     const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
-    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 0, 5))
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0, pullRequestHeadsWatched: async () => false }, reader, NOW, 0, 5))
     const done = asked.filter(url => url.includes('/done/'))
     expect(done.slice(0, 2)).toEqual(['https://github.com/acme/done/pull/28', 'https://github.com/acme/done/pull/26'])
     expect(done).toHaveLength(5)

@@ -20,16 +20,17 @@ const sameHead = (full: string, head: string) => full.toLowerCase() === head.toL
 export const HEADS_KEPT = 50
 
 /** The head a verdict's pull request is at now: its own pull request's, or for one recorded with none (from before heads,
- *  or before the task linked one), the one its task's watch read last. Undefined while the task has none watched; null while
- *  it has, but none of the verdict's own pull request (not read yet, or no longer kept). */
+ *  or before the task linked one), the one its task's watch read last. Undefined while the task was never watched; null
+ *  once it was, but has no head of the verdict's own pull request (not read yet, or no longer watched: review of #3218,
+ *  round 3, even when no head is left). */
 function currentHead(verdict: CheckVerdict, heads: PullRequestHeads | undefined): PullRequestHead | null | undefined {
-  const watched = Object.values(heads ?? {})
-  if (!watched.length) return undefined
-  if (verdict.pullRequest) return heads![verdict.pullRequest] ?? null
-  return watched.reduce((a, b) => b.at > a.at ? b : a)
+  if (heads === undefined) return undefined
+  if (verdict.pullRequest) return heads[verdict.pullRequest] ?? null
+  const watched = Object.values(heads)
+  return watched.length ? watched.reduce((a, b) => b.at > a.at ? b : a) : null
 }
 
-/** Whether [verdict] counts against [heads]. While its task has no watched head, it counts as verdicts always did. Then only
+/** Whether [verdict] counts against [heads]. While its task was never watched, it counts as verdicts always did. Then only
  *  at the head it names of its own pull request, or at a head whose patch id is its own; a patch nobody could read (null)
  *  matches nothing, so only that exact head counts there. A verdict naming no head counts at none (security review of #3218:
  *  the head watched last may be a push nobody read), and one whose pull request has no watched head is unverified (review of

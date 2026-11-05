@@ -74,7 +74,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
-import { keepHead, refreshChecks } from './checkVerdicts.js'
+import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -4702,6 +4702,32 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /** The task's links moved past a pull request whose head it keeps (review of #3218, round 3): the heads it no longer reads
+   *  (watchedLinks) are dropped, and the checks of the task and its steps, [stepIds] loaded even when dormant, count against
+   *  what is left: a verdict on a dropped one is unverified (checkVerdicts.ts verdictCounts), even with no head left. Whether
+   *  it wrote. */
+  async pullRequestHeadsWatched(tabId: string, groupId: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      if (!group?.pullRequestHeads || group.archived || group.reviewOf) return false
+      const window = new Set(watchedLinks(group.pullRequestUrls ?? []))
+      const kept = Object.fromEntries(Object.entries(group.pullRequestHeads).filter(([url]) => window.has(url)))
+      if (Object.keys(kept).length === Object.keys(group.pullRequestHeads).length) return false
+      group.pullRequestHeads = kept
+      if (lookedUp && !group.stepIds) {
+        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
+      }
+      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, kept)
+      }
+      await this.save(tx, loaded, state, clock.next())
+      return true
     })
   }
 
