@@ -5,9 +5,10 @@
  * carries released, and inside the release window it opens a release step for the project's Integrator: Desktop, CLI and web
  * right after a visible merge, the backend at most every two hours and never in its morning pause. Everything here is pure.
  */
+import { agentDisplayName } from './agentNames.js'
 import { localNow } from './digest.js'
-import type { Conversation } from './model.js'
-import type { SwarmProject } from './projects.js'
+import { activeWork, nextConversationNumber, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { agentProjectId, projectsOf, type SwarmProject } from './projects.js'
 
 /** The release window and pace, in the shape of the project rules record's `releaseWindow` and `releasePace` (task #3393,
  *  policy.ts). Until that record lands, these constants are the one place the numbers live. */
@@ -65,8 +66,9 @@ export interface PendingRelease { groupId: string; url: string; mergedAt: number
 /** A component's newest verified release: its tag, the tag's commit and when that commit landed on main, and when its
  *  release ran (the pace counts from it). */
 export interface VerifiedRelease { tag: string; sha: string; at: number; committedAt: number }
-/** The release step open for a component, and when the Swarm opened it. */
-export interface ReleaseStep { groupId: string; at: number }
+/** The release step open for a component, when the Swarm opened it, and when it first saw that step over without a verified
+ *  release (done, cancelled or archived: the release may still be running). */
+export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
 /** A project's release list (SwarmProject.releases). The server alone writes it; readers never get it. */
 export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>> }
 
@@ -105,4 +107,119 @@ export function notePendingRelease(project: SwarmProject, group: Pick<Conversati
   ledger.pending.push({ groupId: group.id, url, mergedAt })
   ledger.pending.sort((a, b) => a.mergedAt - b.mergedAt)
   return ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
+}
+
+/** How long a step that ended without a verified release still holds its component: a release workflow that is still
+ *  running (Desktop's verifies nine downloads) lands within it. After it, the next pass opens a new step. */
+export const STEP_GRACE_MS = 60 * 60_000
+
+/** The project's Integrator: an agent of [projectId] whose crew role (task #3397) or role name is Integrator. */
+export function integratorOf(state: SuperTabState, projectId: string): Agent | undefined {
+  const role = (agent: Agent) => ((agent as Agent & { crew?: { role?: string } }).crew?.role ?? agent.roleName ?? '').trim().toLowerCase()
+  return state.agents.find(agent => role(agent) === 'integrator' && agentProjectId(state, agent) === projectId)
+}
+
+/** What the worker read from GitHub for one project's release list (releaseWatch.ts). */
+export interface ReleaseFacts {
+  /** Pending entries' components, from their pull requests' files. */
+  components: Array<{ groupId: string; url: string; components: ReleaseComponentId[] }>
+  /** Each component's newest verified release on main; a component GitHub could not read is absent, and nothing of it changes. */
+  releases: Partial<Record<ReleaseComponentId, VerifiedRelease>>
+}
+/** What a settle did: rows to write, the tasks it marked released, the release step it opened, the entries it dropped. */
+export interface SettledReleases { messages: MessageDraft[]; shipped: string[]; opened: string | null; dropped: PendingRelease[] }
+
+const ended = (group: Conversation | undefined): boolean => !group || group.archived || (!!group.assignment && !activeWork(group))
+const named = (state: SuperTabState, groupId: string): string => {
+  const group = state.conversations.find(c => c.id === groupId)
+  return group ? `#${group.number} ${group.title}` : 'a task no longer here'
+}
+const joined = (words: string[]): string => words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+
+/**
+ * Settles [projectId]'s release list in [state] (a copy the caller writes) at [now]: [facts]' components fill their entries;
+ * each component's newer verified release is kept, marks the entries it carries, and says so in its open release step, which
+ * it frees; an entry every release it needs carries is marked released on its task and leaves the list; one past PENDING_MS
+ * leaves too. A step that ended without a verified release frees its components STEP_GRACE_MS later. Then, when components are
+ * due (releaseDue), one release step opens for them all, naming the Integrator. Deterministic in [now]: a retried write opens
+ * the same step id.
+ */
+export function settleReleases(state: SuperTabState, projectId: string, facts: ReleaseFacts, now: number, rules: ReleaseRules = RELEASE_RULES): SettledReleases {
+  const outcome: SettledReleases = { messages: [], shipped: [], opened: null, dropped: [] }
+  const project = projectsOf(state).find(p => p.id === projectId)
+  const ledger = project?.releases
+  if (!project || !ledger) return outcome
+  const chat = state.conversations.find(c => c.id === project.leadConversationId)
+  const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
+  const row = (conversationId: string, text: string, recipients: string[], key: string): MessageDraft | null => lead ? {
+    id: stableId('release', state.id, projectId, key, String(now)), conversationId, replyTo: null, recipients, text, source: { kind: 'release' },
+    author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
+  } : null
+  const say = (draft: MessageDraft | null) => { if (draft) outcome.messages.push(draft) }
+
+  for (const read of facts.components) {
+    const entry = ledger.pending.find(e => e.groupId === read.groupId && e.url === read.url)
+    if (entry && !entry.components) entry.components = [...read.components]
+  }
+  const fresh = ledger.pending.filter(e => e.mergedAt > now - PENDING_MS)
+  outcome.dropped = ledger.pending.filter(e => !fresh.includes(e))
+  ledger.pending = fresh
+
+  for (const component of RELEASE_COMPONENTS) {
+    const release = facts.releases[component.id]
+    const known = ledger.last?.[component.id]
+    if (!release || (known && known.at >= release.at)) continue
+    ;(ledger.last ??= {})[component.id] = release
+    const carried = waitingFor(ledger, component.id).filter(e => carries(release, e))
+    for (const entry of carried) (entry.shippedIn ??= {})[component.id] = release.tag
+    const step = ledger.steps?.[component.id]
+    if (step && release.at >= step.at) {
+      const tasks = carried.map(e => named(state, e.groupId))
+      if (state.conversations.some(c => c.id === step.groupId)) {
+        say(row(step.groupId, `Verified ${release.tag}: ${tasks.length ? `it carries ${joined(tasks)}` : 'no task waited for it'}.`, [], `verified-${release.tag}`))
+      }
+      delete ledger.steps![component.id]
+    }
+  }
+
+  ledger.pending = ledger.pending.filter(entry => {
+    if (!shipped(entry)) return true
+    const group = state.conversations.find(c => c.id === entry.groupId)
+    const tags = [...new Set(Object.values(entry.shippedIn ?? {}))].sort()
+    const at = Math.max(entry.mergedAt, ...entry.components!.map(c => ledger.last?.[c]?.at ?? entry.mergedAt))
+    if (group) {
+      group.released = { at, tags }
+      outcome.shipped.push(group.id)
+    }
+    return false
+  })
+
+  for (const component of RELEASE_COMPONENTS) {
+    const step = ledger.steps?.[component.id]
+    if (!step || !ended(state.conversations.find(c => c.id === step.groupId))) continue
+    step.endedAt ??= now
+    if (now - step.endedAt >= STEP_GRACE_MS) delete ledger.steps![component.id]
+  }
+
+  const due = RELEASE_COMPONENTS.filter(c => releaseDue(ledger, c.id, now, rules))
+  if (!due.length || state.paused) return outcome
+  const id = stableId('release-step', state.id, projectId, due.map(c => c.id).join(','), String(now))
+  if (state.conversations.some(c => c.id === id)) return outcome
+  const integrator = integratorOf(state, projectId)
+  const waiting = [...new Set(due.flatMap(c => waitingFor(ledger, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
+  const names = joined(due.map(c => c.name)), window = rules.releaseWindow
+  const brief = [`Release ${names}: ${waiting.length} merged ${waiting.length === 1 ? 'task waits' : 'tasks wait'} for it (${waiting.join('; ')}).`,
+    `Release between ${window.start} and ${window.end} (${window.timeZone}), applying the merged pull requests' rollout notes first, and verify each release is live.`,
+    'The Swarm marks those tasks shipped once each tag\'s release workflow succeeds, and says so here.'].join('\n')
+  const number = nextConversationNumber(state)
+  state.groupCounter = number
+  state.conversations.push({ id, projectId, number, title: `Release ${names}`, leadId: chat?.leadId ?? null,
+    agentIds: [...chat?.leadId ? [chat.leadId] : [], ...integrator ? [integrator.id] : []], archived: false, brief, priority: 'P1',
+    assignment: null, lastMessageSequence: 0, checks: [] } as unknown as Conversation)
+  for (const component of due) (ledger.steps ??= {})[component.id] = { groupId: id, at: now }
+  outcome.opened = id
+  say(row(id, integrator
+    ? `${integrator.displayName ?? integrator.name}, this release is yours: assign it to yourself and release ${names}.\n${brief}`
+    : `${brief}\nNo Integrator in this project: the PM assigns it.`, integrator ? [integrator.id] : [], 'opened'))
+  return outcome
 }
