@@ -36,6 +36,9 @@ export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
  *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
+/** The release watch (superTabs/releaseWatch.ts): release workflow runs, where their tags sit on the default branch, and a
+ *  pull request's files. */
+export const RELEASE_READ_PERMISSIONS = { contents: 'read', pull_requests: 'read', actions: 'read', metadata: 'read' } as const
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
@@ -448,6 +451,14 @@ export class GitHubApp {
 
   /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as
    *  done. */
+  /** One GET of [path] with an installation [token], for readers that page and judge answers themselves (superTabs/releaseWatch.ts):
+   *  its status, body, and the next page's path from the Link header. Throws [GitHubAppError] when GitHub does not answer. */
+  async get(path: string, token: string): Promise<{ status: number; body: unknown; next?: string }> {
+    const answer = await this.call('GET', path, `Bearer ${token}`)
+    const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
+    return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
+  }
+
   async revoke(token: string): Promise<void> {
     const answer = await this.call('DELETE', '/installation/token', `Bearer ${token}`)
     if (answer.status === 204 || answer.status === 401) return
