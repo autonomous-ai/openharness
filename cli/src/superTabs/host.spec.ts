@@ -1056,9 +1056,9 @@ describe('Super Tab native delivery handoff', () => {
         const inner = vi.mocked(w.t.call).getMockImplementation()!
         const pageReads: string[] = []
         vi.mocked(w.t.call).mockImplementation(async (method, path, body) => {
-          const latest = /\/conversations\/([a-z0-9]+)\/messages\?asAgentId=agent$/.exec(path)
+          const latest = /\/conversations\/([a-z0-9]+)\/messages\?asAgentId=agent(?:&before=\d+&beforeId=[a-z0-9]+)?$/.exec(path)
           if (latest) { pageReads.push(latest[1]!); return ok(pages.latest ? pages.latest() : LATEST) }
-          const thread = /\/conversations\/([a-z0-9]+)\/messages\?asAgentId=agent&thread=([a-z0-9]+)$/.exec(path)
+          const thread = /\/conversations\/([a-z0-9]+)\/messages\?asAgentId=agent&thread=([a-z0-9]+)(?:&before=\d+&beforeId=[a-z0-9]+)?$/.exec(path)
           if (thread) { pageReads.push(`${thread[1]} thread ${thread[2]}`); return ok(pages.thread?.[thread[2]!] ?? page([])) }
           return inner(method, path, body)
         })

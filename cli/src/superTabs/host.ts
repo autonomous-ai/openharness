@@ -31,7 +31,7 @@ import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { coordinatorInOwnTask, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
+import { ADDED_MAX, coordinatorInOwnTask, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
 import { isCoordinator } from './agentContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 import { projectsRoot } from '../lib/projectFolder.js'
@@ -2210,6 +2210,14 @@ export class SuperTabHost {
     const group = String(message.conversationId)
     const lines: string[] = []
     const wait = this.contextWaitMs
+    // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
+    // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
+    // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
+    // Read beside the Swarm read and the PM's page read, never after them (review 1 of #3114, ENGINEERING.md section 4): a PM's
+    // reply in a task's thread waits on two reads in a row at most, as before #3114. Its failure is thrown where it was.
+    const root = identifier(message.thread) && message.thread !== message.id ? message.thread : null
+    const threadRead = root
+      ? within(this.threadOf(entry, group, root), wait).then(value => ({ value }), (error: unknown) => ({ error })) : null
     // Task #3114 (Ken, 11-05): the coordinator's delivery in a task or step says what the task waits on.
     let inTask = false
     if (!buddy) try {
@@ -2228,7 +2236,7 @@ export class SuperTabHost {
       if (taskState) {
         inTask = true
         lines.push(taskState)
-        const recent = await this.recentOf(entry, message, group, wait)
+        const recent = await this.recentOf(entry, message, group, wait, ADDED_MAX - taskState.length - 1)
         if (recent) lines.push(recent)
       }
       const work = workLine(state, entry.agentId)
@@ -2236,12 +2244,10 @@ export class SuperTabHost {
     } catch (error) {
       this.log(`context for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
     }
-    // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
-    // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
-    // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
-    const root = message.thread
-    if (identifier(root) && root !== message.id) {
-      const thread = await within(this.threadOf(entry, group, root), wait)
+    if (root && threadRead) {
+      const read = await threadRead
+      if ('error' in read) throw read.error
+      const thread = read.value
       // Its only reply so far is this one, whose root is quoted already; the coordinator in a task gets the line still (#3114).
       if (thread && (thread.replies === null || thread.replies > (inTask ? 0 : 1))) {
         lines.push(threadLine(thread.root, thread.replies, thread.authors,
@@ -2253,14 +2259,16 @@ export class SuperTabHost {
 
   /** The latest messages before [message] in its conversation, or its thread's replies before it, quoted as data (#3114): one
    *  page read as the agent, bounded like the rest of the context. Null when there is none or the read fails. */
-  private async recentOf(entry: Entry, message: Json, group: string, wait: number): Promise<string | null> {
+  private async recentOf(entry: Entry, message: Json, group: string, wait: number, max: number): Promise<string | null> {
     const root = message.thread
     const thread = identifier(root) && root !== message.id ? `&thread=${root}` : ''
+    // The rows before this one, which the server reads on a secondary once it holds them (task #2970), not the newest page.
+    const before = Number.isSafeInteger(message.sequence) && identifier(message.id) ? `&before=${String(message.sequence)}&beforeId=${message.id}` : ''
     try {
-      const page = await within(backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/conversations/${group}/messages?asAgentId=${entry.agentId}${thread}`), wait)
+      const page = await within(backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/conversations/${group}/messages?asAgentId=${entry.agentId}${thread}${before}`), wait)
       if (!page) throw new Error(`no answer in ${wait} ms`)
       const rows = (Array.isArray(object(page).messages) ? object(page).messages as unknown[] : []).map(object).filter(m => m.conversationId === undefined || m.conversationId === group)
-      return recentLines(rows, message)
+      return recentLines(rows, message, max)
     } catch (error) {
       this.log(`latest messages for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
       return null
