@@ -113,6 +113,44 @@ void main() {
     });
   });
 
+  testWidgets(
+    'a newest day with no row shows as a dash, not a shorter table (review of #3212, 3)',
+    (tester) async {
+      final reader = SuperTabScorecardReader(
+        tabId: 'tab',
+        request: (method, path, {body}) async => {
+          // Yesterday (11-05) failed every try: only 11-04 is stored.
+          'through': '2026-11-05',
+          'days': [
+            _day('2026-11-04', {'asksShipped': 7}),
+          ],
+        },
+      );
+      addTearDown(reader.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabScorecardView(
+              projects: _projects,
+              projectId: 'p0',
+              reader: reader,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final shipped = find.byKey(const ValueKey('scorecard-asksShipped'));
+      final cells = tester
+          .widgetList<Text>(
+            find.descendant(of: shipped, matching: find.byType(Text)),
+          )
+          .map((t) => t.data)
+          .toList();
+      expect(cells.take(3), ['Asks shipped', '–', '7']);
+      expect(find.text('11-05'), findsOneWidget);
+    },
+  );
+
   testWidgets('Manage has a Scorecard tab', (tester) async {
     SuperTabManageTab? chosen;
     await tester.pumpWidget(

@@ -130,8 +130,10 @@ describe('the nightly scorecard', () => {
       headers: { authorization: `Bearer ${user.sub}` } })
     const mine = await read(owner)
     expect(mine.statusCode).toBe(200)
-    const body = mine.json() as { data?: { days: Array<{ on: string }> }; days?: Array<{ on: string }> }
+    const body = mine.json() as { data?: { days: Array<{ on: string }>; through?: string }; days?: Array<{ on: string }>; through?: string }
     expect((body.data ?? body).days!.map(d => d.on)).toEqual(['2026-11-05', '2026-11-04'])
+    // The last day there should be a row for: yesterday in the project's zone, whether or not its row exists (review of #3212, 3).
+    expect((body.data ?? body).through).toBe('2026-11-05')
     expect((await read(outsider)).statusCode).toBeGreaterThanOrEqual(403)
   })
 })
