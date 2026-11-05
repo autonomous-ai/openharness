@@ -240,7 +240,7 @@ void main() {
     testWidgets('Archived counts its conversations only once they are read to '
         'the end, and starts no read', (tester) async {
       final server = swarm();
-      (server.state['conversations'] as List).addAll([
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
         {
           ...conversationFixture('old', 'Old work'),
           'archived': true,
