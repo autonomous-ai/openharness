@@ -411,6 +411,9 @@ export interface Conversation {
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
+  /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
+   *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
+  owed?: import('./pulse.js').OwedAsk[]
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
