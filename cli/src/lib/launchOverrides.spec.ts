@@ -654,3 +654,21 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
     expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/chosen' } } })
   })
 })
+
+// Task #3395 (anh Dee, 11-05): a Product Manager launched on Opus at xhigh was reopened (the Swarm's keep-alive, a restore)
+// with no flags, so it ran its engine's own default, the machine's last-used Claude Code model (Sonnet medium).
+describe('buildLaunchOverrides — the model the session was launched with', () => {
+  it('launches every relaunch with it again', async () => {
+    const result = await buildLaunchOverrides(deps().d, 'claude', { launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'opus', '--effort', 'xhigh'] } })
+  })
+
+  it('leaves it to a grid launch and to a model remembered off a grid, and to an engine with no launch flags', async () => {
+    const grid = await buildLaunchOverrides(deps().d, 'claude', { gridLaunch: GRID, launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(grid.ok && grid.overrides.extraArgs).not.toContain('--effort')
+    const home = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'sonnet', launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(home).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_MODEL: 'sonnet' }, extraArgs: [] } })
+    const codex = await buildLaunchOverrides(deps().d, 'codex', { launchModel: { model: 'gpt-6', effort: 'high' } }, 'a')
+    expect(codex).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"'] } })
+  })
+})
