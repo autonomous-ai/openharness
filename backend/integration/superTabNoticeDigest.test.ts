@@ -835,9 +835,12 @@ describe('a crew member\'s messages wait for its turn to end', () => {
   const listed = async (f: Awaited<ReturnType<typeof swarm>>, messageId: string, agentId = f.worker) =>
     (await f.timed.deliveries(host, f.tab, agentId) as Array<Record<string, unknown>>).find(d => d.messageId === messageId)
 
-  it('an agent\'s post to a crew member waits, until 15 minutes pass', async () => {
+  /** Another agent of the task than its PM: the Reviewer whose verdict waits for the Engineer's turn to end. */
+  const reviewer = (f: Awaited<ReturnType<typeof swarm>>) => f.add(f.group, 'test-host', 'Reviewer')
+
+  it('another agent\'s post to a crew member waits, until 15 minutes pass', async () => {
     const f = await swarm()
-    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: With fixes.', f.lead)
+    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: With fixes.', await reviewer(f))
     expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
     f.clock.now += 15 * MINUTE - 1_000
     expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
@@ -847,7 +850,7 @@ describe('a crew member\'s messages wait for its turn to end', () => {
 
   it('goes once the crew member changes its own status', async () => {
     const f = await swarm()
-    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: No.', f.lead)
+    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: No.', await reviewer(f))
     expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
     await f.status('working', 'Fixing the review findings')
     expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: false })
@@ -860,6 +863,12 @@ describe('a crew member\'s messages wait for its turn to end', () => {
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
     const cancel = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'desc' } })).find(m => m.text.includes('cancelled this task'))!
     expect((await deliveryOf(cancel.id, f.worker)).waitsUntil).toBeNull()
+  })
+
+  it('the PM\'s own post to a crew member goes at once: a redirect never waits (River, 11-05)', async () => {
+    const f = await swarm()
+    const redirect = await f.write(undefined, f.worker, f.group, 'Stop the parser; take the lexer first.', f.lead)
+    expect(await listed(f, redirect)).toMatchObject({ waitsForTurnEnd: false })
   })
 
   it('a person\'s own message to a crew member goes at once', async () => {
