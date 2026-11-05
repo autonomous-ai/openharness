@@ -85,8 +85,8 @@ class ProjectSidebar extends StatelessWidget {
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
 
-  /// What the three rows count; without it Decisions and Mentions count what
-  /// the server says waits, and Threads nothing.
+  /// What the three rows read, to be bold or grey; without it Decisions and
+  /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
 
   /// The reader's places, for the back and forward arrows at the top;
@@ -133,10 +133,8 @@ class ProjectSidebar extends StatelessWidget {
     required IconData icon,
     required VoidCallback? onTap,
     bool selected = false,
-    int badge = 0,
     Widget? trailing,
     bool? unread,
-    bool quiet = false,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
@@ -183,15 +181,13 @@ class ProjectSidebar extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       // A row that reads or not ([unread] given) is drawn as
                       // conversations are: muted when read, full strength
-                      // and bold when not. A [quiet] row is muted the same
-                      // way but never bold (Decisions, Mentions).
+                      // and bold when not.
                       style:
                           SwarmType.sidebar(
                             compact: compact,
                             medium: selected,
                             color:
-                                onTap == null ||
-                                    ((unread == false || quiet) && !selected)
+                                onTap == null || (unread == false && !selected)
                                 ? grid.SidebarInk.inkMuted
                                 : grid.SidebarInk.ink,
                           ).copyWith(
@@ -203,8 +199,7 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing ?? (badge > 0 ? SuperTabCountBadge(badge) : null)
-                  case final mark?)
+              if (trailing case final mark?)
                 Padding(padding: const EdgeInsets.only(right: 10), child: mark),
             ],
           ),
@@ -213,28 +208,24 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// Threads: bold with a plain count while followed threads have unread
-  /// replies, never red (anh Dee, 11-05).
-  Widget _threadsRow(ValueChanged<SwarmPage> onPage) {
-    final count = activity?.threadsCount ?? 0;
-    return _navigationRow(
-      key: 'super-threads',
-      label: 'Threads',
-      icon: AppIcons.messagesSquare,
-      onTap: () => onPage(SwarmPage.threads),
-      selected: page == SwarmPage.threads,
-      unread: count > 0,
-      trailing: count > 0
-          ? Text(
-              '$count',
-              style: SwarmType.sidebar(
-                compact: compact,
-                color: grid.SidebarInk.ink,
-              ).copyWith(fontWeight: grid.AppFont.semibold),
-            )
-          : null,
-    );
-  }
+  /// A page row of Decisions, Mentions or Threads: no number and no red,
+  /// bold at full strength while something waits, grey when nothing does
+  /// (anh Dee, 11-05, task #3128).
+  Widget _pageRow(
+    ValueChanged<SwarmPage> onPage, {
+    required SwarmPage target,
+    required String key,
+    required String label,
+    required IconData icon,
+    required int waiting,
+  }) => _navigationRow(
+    key: key,
+    label: label,
+    icon: icon,
+    onTap: () => onPage(target),
+    selected: page == target,
+    unread: waiting > 0,
+  );
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
   Widget _arrows(SuperTabPlaces places) => Row(
@@ -681,6 +672,7 @@ class ProjectSidebar extends StatelessWidget {
     final reading = _SidebarReading(controller, attention);
     final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
     final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
+    final threads = activity?.threadsCount ?? 0;
     return Material(
       // The page's color: the rule at its edge is what separates them. A
       // theme may give the sidebar its own (Plum's plum).
@@ -714,31 +706,36 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                   ),
                 // Three rows, each one thing, in anh Dee's order (11-05, task
-                // #2996): only Decisions and Mentions are ever red, and each
-                // is grey while nothing waits (task #3128). The Swarm
-                // switcher stands apart from them by a control gap.
+                // #2996): bold when something waits, grey when not, and no
+                // numbers (task #3128). The Swarm switcher stands apart from
+                // them by a control gap.
                 if (onPage case final onPage?) ...[
                   if (app != null && onNewSwarm != null)
                     const SizedBox(height: DesktopChrome.controlGap),
-                  _navigationRow(
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.decisions,
                     key: 'super-decisions',
                     label: 'Decisions',
                     icon: AppIcons.flag,
-                    onTap: () => onPage(SwarmPage.decisions),
-                    selected: page == SwarmPage.decisions,
-                    badge: decisions,
-                    quiet: decisions == 0,
+                    waiting: decisions,
                   ),
-                  _navigationRow(
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.mentions,
                     key: 'super-mentions',
                     label: 'Mentions',
                     icon: AppIcons.atSign,
-                    onTap: () => onPage(SwarmPage.mentions),
-                    selected: page == SwarmPage.mentions,
-                    badge: mentions,
-                    quiet: mentions == 0,
+                    waiting: mentions,
                   ),
-                  _threadsRow(onPage),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.threads,
+                    key: 'super-threads',
+                    label: 'Threads',
+                    icon: AppIcons.messagesSquare,
+                    waiting: threads,
+                  ),
                 ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(

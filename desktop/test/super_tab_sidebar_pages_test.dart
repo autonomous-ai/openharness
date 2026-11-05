@@ -111,58 +111,60 @@ void main() {
     expect(inRow('super-threads', find.text('Threads')), findsOneWidget);
   });
 
-  testWidgets('Decisions and Mentions have red counts; Threads is bold with '
-      'a plain count, never red', (tester) async {
-    await show(tester);
-    SuperTabCountBadge badge(String row) => tester.widget<SuperTabCountBadge>(
-      inRow(row, find.byType(SuperTabCountBadge)),
-    );
-    expect(badge('super-decisions').count, 1);
-    expect(badge('super-mentions').count, 2);
-    expect(
-      inRow('super-threads', find.byType(SuperTabCountBadge)),
-      findsNothing,
-    );
-    expect(inRow('super-threads', find.text('1')), findsOneWidget);
-    final label = tester.widget<Text>(
-      inRow('super-threads', find.text('Threads')),
-    );
-    expect(label.style?.fontWeight, grid.AppFont.semibold);
-  });
-
-  // Anh Dee, 11-05, task #3128: a row with nothing waiting is grey, as
-  // Threads is, so Decisions no longer shouts when there is nothing to decide.
+  // Anh Dee, 11-05, task #3128: each page row is bold at full strength while
+  // something waits and grey when nothing does; no number, no red circle.
+  FontWeight? weight(WidgetTester tester, String row, String label) =>
+      tester.widget<Text>(inRow(row, find.text(label))).style?.fontWeight;
   Color? ink(WidgetTester tester, String row, String label) =>
       tester.widget<Text>(inRow(row, find.text(label))).style?.color;
+  const rows = [
+    ('super-decisions', 'Decisions'),
+    ('super-mentions', 'Mentions'),
+    ('super-threads', 'Threads'),
+  ];
 
-  testWidgets('Decisions, Mentions and Threads are grey with nothing waiting, '
-      'and none shows a count', (tester) async {
+  testWidgets('Decisions, Mentions and Threads are grey and regular with '
+      'nothing waiting', (tester) async {
     await show(tester, waiting: false);
-    for (final (row, label) in [
-      ('super-decisions', 'Decisions'),
-      ('super-mentions', 'Mentions'),
-      ('super-threads', 'Threads'),
-    ]) {
+    for (final (row, label) in rows) {
       expect(ink(tester, row, label), grid.SidebarInk.inkMuted, reason: row);
-      expect(inRow(row, find.byType(SuperTabCountBadge)), findsNothing);
+      expect(weight(tester, row, label), isNot(grid.AppFont.semibold));
     }
   });
 
-  testWidgets('Decisions and Mentions are full strength with a red count '
+  testWidgets('Decisions, Mentions and Threads are bold at full strength '
       'while something waits', (tester) async {
     await show(tester);
     expect(grid.SidebarInk.ink, isNot(grid.SidebarInk.inkMuted));
-    for (final (row, label) in [
-      ('super-decisions', 'Decisions'),
-      ('super-mentions', 'Mentions'),
-    ]) {
+    for (final (row, label) in rows) {
       expect(ink(tester, row, label), grid.SidebarInk.ink, reason: row);
-      expect(inRow(row, find.byType(SuperTabCountBadge)), findsOneWidget);
-      // Colour only: the weight is what it was before (task #3128).
-      expect(
-        tester.widget<Text>(inRow(row, find.text(label))).style?.fontWeight,
-        isNot(grid.AppFont.semibold),
-      );
+      expect(weight(tester, row, label), grid.AppFont.semibold, reason: row);
+    }
+  });
+
+  testWidgets('no page row carries a number or a red circle, waiting or not', (
+    tester,
+  ) async {
+    for (final waiting in [true, false]) {
+      await show(tester, waiting: waiting);
+      for (final (row, _) in rows) {
+        expect(
+          inRow(row, find.byType(SuperTabCountBadge)),
+          findsNothing,
+          reason: '$row, waiting: $waiting',
+        );
+        expect(
+          inRow(
+            row,
+            find.byWidgetPredicate(
+              (w) => w is Text && RegExp(r'^\d+$').hasMatch(w.data ?? ''),
+            ),
+          ),
+          findsNothing,
+          reason: '$row, waiting: $waiting',
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
     }
   });
 
