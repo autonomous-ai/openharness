@@ -601,6 +601,73 @@ void main() {
       expect((await again(server)).threadDraft('message-1'), isEmpty);
     });
 
+    test('each conversation keeps its open thread when switching away', () async {
+      final server = threaded();
+      server.append('Offline topic.', conversationId: 'offline');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      c.openThread('message-1');
+      await c.select('offline');
+      c.openThread('message-6');
+      await c.select('lead');
+      expect(c.threadOnScreen, 'message-1');
+      await c.select('offline');
+      expect(c.threadOnScreen, 'message-5');
+    });
+
+    test('open threads survive a saved view restart per conversation', () async {
+      final server = threaded();
+      server.append('Offline topic.', conversationId: 'offline');
+      final c = server.controller();
+      await c.refresh();
+
+      c.openThread('message-1');
+      await c.select('offline');
+      c.openThread('message-6');
+      await c.flush();
+      c.dispose();
+
+      final next = await again(server);
+      expect(next.threadOnScreen, 'message-6');
+      await next.select('lead');
+      expect(next.threadOnScreen, 'message-1');
+    });
+
+    test('closing one conversation thread keeps the others saved', () async {
+      final server = threaded();
+      server.append('Offline topic.', conversationId: 'offline');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      c.openThread('message-1');
+      await c.select('offline');
+      c.openThread('message-6');
+      c.closeThread();
+      await c.flush();
+      await c.select('lead');
+      expect(c.threadOnScreen, 'message-1');
+      expect(server.saved?['openThreads'], {'lead': 'message-1'});
+    });
+
+    test('a saved thread whose root is gone restores closed', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'deleted-root'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
     test(
       'the newest 500 are kept, and writing in one again makes it newest',
       () async {
