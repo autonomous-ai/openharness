@@ -683,6 +683,20 @@ void main() {
       });
     });
 
+    test('going to the agent ends its cooldown: its next question buzzes', () {
+      inFakeTime((time, a) {
+        ask(a);
+        time.elapse(grace);
+        // The person opens the agent and answers there, then leaves its pane.
+        a.seen(ref);
+        a.questionClosed(ref, requestId: 'q1');
+        ask(a, id: 'q2');
+        time.elapse(grace);
+        expect(quietness(), [false, false]);
+        expect(chimes, 2);
+      });
+    });
+
     test('the cooldown is the agent\'s own: another agent still buzzes', () {
       inFakeTime((time, a) {
         ask(a);
