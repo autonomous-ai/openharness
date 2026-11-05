@@ -120,6 +120,10 @@ export function notePendingRelease(project: SwarmProject, group: Pick<Conversati
 /** How long a step that ended without a verified release still holds its component: a release workflow that is still
  *  running (Desktop's verifies nine downloads) lands within it. After it, the next pass opens a new step. */
 export const STEP_GRACE_MS = 60 * 60_000
+/** Why a release step names no requester: the Swarm opens it on its schedule (the task contract's recorded reason, #3389). */
+export const RELEASE_NO_REQUESTER = 'scheduled release'
+/** The one check of a release step: what tells the Integrator it is done. */
+export const RELEASE_CHECK = 'Each release here is verified (its tag\'s release workflow passed) and live, and the Swarm said so in this task'
 
 /** The project's Integrator: an agent of [projectId] whose crew role (task #3397) or role name is Integrator. */
 export function integratorOf(state: SuperTabState, projectId: string): Agent | undefined {
@@ -230,11 +234,14 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   state.groupCounter = number
   state.conversations.push({ id, projectId, number, title: `Release ${names}`, leadId: chat?.leadId ?? null,
     agentIds: [...chat?.leadId ? [chat.leadId] : [], ...integrator ? [integrator.id] : []], archived: false, brief, priority: 'P1',
-    assignment: null, lastMessageSequence: 0, checks: [] } as unknown as Conversation)
+    assignment: null, lastMessageSequence: 0,
+    // The task contract (#3389) holds for what the Swarm opens too: a check, a priority, and why nobody is named as its requester.
+    checks: [{ id: stableId(id, 'check', '0'), description: RELEASE_CHECK, independent: false, evidence: null, passedBy: null }],
+    ledger: { askedAt: now, noRequesterReason: RELEASE_NO_REQUESTER } as Conversation['ledger'] } as unknown as Conversation)
   for (const component of due) (ledger.steps ??= {})[component.id] = { groupId: id, at: now }
   outcome.opened = id
   say(row(id, integrator
-    ? `${integrator.displayName ?? integrator.name}, this release is yours: assign it to yourself and release ${names}.\n${brief}`
-    : `${brief}\nNo Integrator in this project: the PM assigns it.`, integrator ? [integrator.id] : [], 'opened'))
+    ? `${integrator.displayName ?? integrator.name}, this release is yours: assign it to yourself and release ${names}.\n${brief}\n\nNo requester: ${RELEASE_NO_REQUESTER}`
+    : `${brief}\nNo Integrator in this project: the PM assigns it.\n\nNo requester: ${RELEASE_NO_REQUESTER}`, integrator ? [integrator.id] : [], 'opened'))
   return outcome
 }
