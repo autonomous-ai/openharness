@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { activeWork, type Actor, type Assignment, type Conversation, type WorkStatus } from '../model.js'
 import { canReadGroup } from '../projects.js'
@@ -63,5 +64,53 @@ describe('the light conversation projection (parts/light.ts)', () => {
     // The readers differ over the groups, or "the same" proves little.
     expect(reads).toContain(true)
     expect(reads).toContain(false)
+  })
+})
+
+/** The lines of [text] from the line that starts with [open] to the next one that starts with [close], both left out. */
+function block(text: string, open: string, close: string): string[] {
+  const lines = text.split('\n'), from = lines.findIndex(line => line.startsWith(open))
+  expect(from, open).toBeGreaterThanOrEqual(0)
+  const to = lines.findIndex((line, i) => i > from && line.startsWith(close))
+  return lines.slice(from + 1, to)
+}
+/** How many entries [line] holds at its top level: commas outside brackets, braces, parentheses and quotes, a trailing one aside. */
+function entriesOn(line: string): number {
+  let depth = 0, quote: string | null = null, commas = 0
+  const body = line.trim().replace(/,$/, '')
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue }
+    if (c === "'" || c === '"' || c === '`') quote = c
+    else if ('[{('.includes(c)) depth++
+    else if (']})'.includes(c)) depth--
+    else if (c === ',' && depth === 0) commas++
+  }
+  return commas + 1
+}
+const sorted = (names: string[]) => [...names].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+
+// Task #3519: on 11-05 nearly every merge batch left the next pull requests conflicting here, as each feature appended its field
+// to the same one-line lists. One entry per line in a fixed order lets git merge two additions cleanly.
+describe('the field lists stay one entry per line, in order', () => {
+  it('lists each of GROUP_FIELDS\' fields on its own line, sorted', () => {
+    const lines = block(readFileSync(new URL('./light.ts', import.meta.url), 'utf8'), 'export const GROUP_FIELDS = {', '} as const')
+    for (const list of Object.keys(GROUP_FIELDS) as Array<keyof typeof GROUP_FIELDS>) {
+      const entries = block(lines.join('\n'), `  ${list}: [`, '  ],')
+      expect(entries.every(line => /^ {4}'[^']+',$/.test(line)), `${list}: one quoted field a line`).toBe(true)
+      const names = entries.map(line => line.trim().slice(1, -2))
+      expect(names, list).toEqual(sorted(names))
+      expect(names, list).toEqual([...GROUP_FIELDS[list]])
+    }
+  })
+
+  it('writes the test\'s every-field fixtures one field a line, sorted', () => {
+    const text = readFileSync(new URL('./light.test.ts', import.meta.url), 'utf8')
+    for (const open of ['const assignment: Required<Assignment> = {', 'const conversation: Required<Conversation> = {']) {
+      const lines = block(text, open, '}')
+      expect(lines.filter(line => !/^ {2}[A-Za-z]+: /.test(line) || entriesOn(line) !== 1), open).toEqual([])
+      const keys = lines.map(line => line.trim().split(':')[0]!)
+      expect(keys, open).toEqual(sorted(keys))
+    }
   })
 })
