@@ -1722,8 +1722,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
-      // At high effort or above (leadStart.ts leadEffort), before anything is placed.
-      const { type: _type, projectId: _projectId, ...asked } = leadEffort(command, name)
+      // At high effort or above (leadStart.ts leadEffort), before anything is placed. Its person named no model (Switch
+      // PM's "Default"): the coordinator's built-in default on its engine, as lead.start gives, never the engine's own
+      // last-used model (task #3395, anh Dee 11-05: a PM came back on Sonnet medium).
+      const { type: _type, projectId: _projectId, ...asked } = leadEffort(withRoleDefaults(command, BUILT_IN_ROLE_DEFAULTS.lead), name)
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
@@ -3474,6 +3476,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      if (!command.agentOnly) effects.messages.at(-1)!.post = true
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
