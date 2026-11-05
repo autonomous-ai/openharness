@@ -315,7 +315,7 @@ void main() {
   group('Home', () {
     final mobileAt = now.subtract(const Duration(hours: 2));
 
-    /// One Swarm: Mobile, with g1 unread; and Web, read and quiet for
+    /// One Swarm: Mobile, with its project chat unread; and Web, read and quiet for
     /// [webAgo], with what waits in [mentions].
     FakeSwarm backend({
       Duration webAgo = const Duration(hours: 1),
@@ -355,6 +355,10 @@ void main() {
             ],
           ),
           groups: [
+            {
+              ...groupData(leadChat, title: 'Mobile', lastMessageSequence: 5),
+              'lastPersonSequence': 5,
+            },
             groupData('g1', title: 'Fix login', lastMessageSequence: 5),
             {
               ...groupData(webLead, title: 'Web', lastMessageSequence: 1),
