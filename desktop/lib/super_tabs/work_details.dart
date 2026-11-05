@@ -213,6 +213,12 @@ String superTabCheckLabel(Map<String, dynamic> check) {
     orElse: () => const {},
   );
   if (stale.isEmpty) return 'Not verified';
+  // Same head, another target branch (security review of #3218): the diff it
+  // read was against the branch it names.
+  if (stale['head'] is String && stale['head'] == stale['stale']) {
+    final base = stale['base'] is String ? ' against ${stale['base']}' : '';
+    return 'Stale: read ${short(stale['head'])}$base, PR targets another branch';
+  }
   final read = stale['head'] is String
       ? 'read ${short(stale['head'])}'
       : 'no head named';
