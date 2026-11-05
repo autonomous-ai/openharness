@@ -240,6 +240,8 @@ void main() {
           shots,
           'join-account-own-${brightness.name}',
         );
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump();
         await tester.pumpWidget(
           MaterialApp(
             theme: grid.buildAppTheme(brightness: brightness),
@@ -250,6 +252,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        expect(find.byType(SwarmJoinDialog), findsNothing);
+        expect(find.byType(SwarmJoinAccountDialog), findsOneWidget);
         await captureWindow(
           tester,
           shots,

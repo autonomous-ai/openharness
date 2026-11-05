@@ -4,6 +4,19 @@ import '../core/machine_resources.dart';
 import '../core/models.dart' show sameMachineId;
 import 'controller.dart';
 
+/// A join waiting for the local person's account choice. Never persisted;
+/// closing the UI cancels it without enabling own-account work.
+class SwarmJoinAccountRequest {
+  SwarmJoinAccountRequest(this.swarmName, this.accountId);
+  final String swarmName, accountId;
+  final _answer = Completer<bool?>();
+  bool get answered => _answer.isCompleted;
+  Future<bool?> get answer => _answer.future;
+  void complete(bool? ownAccount) {
+    if (!answered) _answer.complete(ownAccount);
+  }
+}
+
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
 const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;

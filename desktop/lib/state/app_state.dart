@@ -2771,18 +2771,23 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
 
-  /// A Swarm [tabId] just joined at this computer, as [role]: adds this
-  /// computer to it with Add machine's defaults (super_tabs/join_machine.dart),
-  /// then offers the Harness Team account, the one step macOS asks a password
-  /// for. A viewer, someone who was already a member, and a computer that
-  /// cannot make a Team account here are left as they are.
+  /// Joins awaiting the local person's choice, including ones discovered
+  /// before the Desktop host has mounted. Each expires after 15 minutes.
+  final _joinAccountRequests = <SwarmJoinAccountRequest>[];
+  SwarmJoinAccountRequest? get joinAccountRequest =>
+      _joinAccountRequests.where((r) => !r.answered).firstOrNull;
+
+  /// Adds a new collaborator's computer, using the choice made on the join
+  /// surface or asking before contribution. Existing members/viewers and
+  /// systems without local Team accounts are left alone.
   Future<void> addMachineOnJoin(
     String tabId, {
     required String role,
     bool alreadyMember = false,
+    bool? ownAccount,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
-    await _addMachineToSwarm(tabId, joined: true);
+    await _addMachineToSwarm(tabId, joined: true, ownAccount: ownAccount);
   }
 
   /// Swarm discovery's list ([listed]), however each was joined: a domain
@@ -2824,7 +2829,11 @@ class AppNotifier extends ChangeNotifier {
   /// they are known to be one before the Swarm is read; a Swarm only listed
   /// that cannot be read says nothing yet, since they may be a viewer, and is
   /// asked about again on the next discovery.
-  Future<void> _addMachineToSwarm(String tabId, {required bool joined}) async {
+  Future<void> _addMachineToSwarm(
+    String tabId, {
+    required bool joined,
+    bool? ownAccount,
+  }) async {
     final here = _teamAccountHere();
     final accountId = currentUser?.id;
     if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
@@ -2873,16 +2882,48 @@ class AppNotifier extends ChangeNotifier {
       collaborator = role == 'collaborator';
       await _joinRecord?.mark(accountId, tabId);
       if (!collaborator) return;
-      final note = await SwarmJoinMachine(
-        machineRequest: superTabMachineRequest,
-        readResources: readMachineResources,
-        wake: wakeSuperTabHost,
-      ).add(c, machineId: here, machineName: machineName, current: current);
+      if (!snapshot.teamAccounts ||
+          !c.canWrite ||
+          snapshot.machines.any((m) => m['machineId'] == here) ||
+          snapshot.removedMachines.any((id) => sameMachineId(id, here))) {
+        return;
+      }
+      if (ownAccount == null) {
+        final request = SwarmJoinAccountRequest(snapshot.name, accountId);
+        _joinAccountRequests.add(request);
+        notifyListeners();
+        try {
+          ownAccount = await request.answer.timeout(
+            const Duration(minutes: 15),
+            onTimeout: () {
+              appLog.info('super-tabs', 'join account choice expired');
+              return null;
+            },
+          );
+        } finally {
+          request.complete(null);
+          _joinAccountRequests.remove(request);
+          if (!_disposed) notifyListeners();
+        }
+        if (!current() || ownAccount == null) return;
+      }
+      final note =
+          await SwarmJoinMachine(
+            machineRequest: superTabMachineRequest,
+            readResources: readMachineResources,
+            wake: wakeSuperTabHost,
+          ).add(
+            c,
+            machineId: here,
+            machineName: machineName,
+            current: current,
+            ownAccount: ownAccount,
+          );
       if (note == null || !current()) return;
       _joinedMachines.add(note);
       // Joined by the person at this computer: the system asks once for the
       // Harness Team account (cli/src/team/autoSetup.ts).
-      if (!note.added) return;
+      if (!note.added || ownAccount) return;
       if (!await offerTeamAccount('join', tabId: tabId) && current()) {
         _joinedMachines.add(note.withoutTeamOffer());
       }
@@ -24010,6 +24051,9 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
+    for (final request in _joinAccountRequests) {
+      request.complete(null);
+    }
     unawaited(_teamSetupAsks.close());
     unawaited(_joinedMachines.close());
     super.dispose();

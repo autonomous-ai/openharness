@@ -41,22 +41,33 @@
 **Files:** desktop/lib/super_tabs/join_machine.dart, desktop/lib/super_tabs/join_machine_note.dart; desktop/test/swarm_join_machine_test.dart.
 **Interfaces:** Extend SwarmJoinMachine.add with optional ownAccount=false; return the actual choice and a visible configuration failure in SwarmJoinedMachine. Consume existing machine.ownAccountWork command.
 
-- [ ] Add and commit failing tests: own-account consent follows contribution; default sends no consent; refusal/account change never reports consent; note describes actual access.
-- [ ] Run affected test file and record expected failures.
-- [ ] Implement minimal choice handling, retaining teamAccountOnly and existing eligibility checks; use controller retry for uncertain commands.
-- [ ] Run affected tests, then commit and push implementation.
+- [x] Add and commit failing tests: own-account consent follows contribution; default sends no consent; refusal/account change never reports consent; note describes actual access.
+- [x] Run affected test file and record expected failures.
+- [x] Implement minimal choice handling, retaining teamAccountOnly and existing eligibility checks; use controller retry for uncertain commands.
+- [x] Run affected tests, then commit and push implementation.
 
 ### Task 2: Offer the choice throughout first join
 
 **Files:** desktop/lib/super_tabs/join_dialog.dart; new desktop/lib/super_tabs/join_account_choice.dart; desktop/lib/state/app_state.dart; desktop/test/swarm_sharing_test.dart and relevant app join tests.
 **Interfaces:** Shared SwarmJoinAccountChoice control; selected own-account value reaches addMachineOnJoin and SwarmJoinMachine.add. A pending request on AppNotifier lets SwarmJoinHost present the same choice for joins without the link dialog.
 
-- [ ] Add and commit failing widget/app tests for Team default, own-account selection and warning, setup skipped only after successful own-account setting, Team setup preserved, viewer/existing member suppression, cancellation, sign-out and invitation/discovery joins.
-- [ ] Run targeted tests and record expected failures.
-- [ ] Implement shared choice in the existing join surface, fallback dialog in the join host, and app orchestration without changing existing machine settings.
-- [ ] Run affected tests on macOS; analyze changed files and run check-ui-style. Capture light/dark UI screenshots using fake account/memory store.
-- [ ] Commit/push, add red/green evidence to PR, mark Ready and hand off to Integrator for two security reviews and independent Tester.
+- [x] Add and commit failing widget/app tests for Team default, own-account selection and warning, setup skipped only after successful own-account setting, Team setup preserved, viewer/existing member suppression, cancellation, sign-out and invitation/discovery joins.
+- [x] Run targeted tests and record expected failures.
+- [x] Implement shared choice in the existing join surface, fallback dialog in the join host, and app orchestration without changing existing machine settings.
+- [x] Run affected tests on macOS; analyze changed files and run check-ui-style. Capture light/dark UI screenshots using fake account/memory store.
+- [x] Commit/push, add red/green evidence to PR, mark Ready and hand off to Integrator for two security reviews and independent Tester.
 
 ## Validation scope
 
 Flutter 3.47.2 / Dart 3.13.2 on macOS. Run swarm_join_machine_test, swarm_sharing_test, team_account_offer_test, team_account_lock_test, swarm_join_any_test, super_tab_sharing_auto_join_test, and new choice tests; additional importers only if behavior changes affect them. Deterministic checks cover changed Dart files plus pubspec.lock and this SDK. PR CI supplies component Linux suite; no full local suite. Record implementation/validation/waiting separately; merge/publication belong to Integrator.
+
+
+## Execution evidence
+
+- Plan first: cff2edc7. Task 1 tests: e3e1d8b8; implementation: 72c351d1. Task 2 failing tests: 724f72b8, e86621d0 and 1328dfd5 before implementation.
+- Task 1 behavioral red: 15 passed, 5 expected failures with API declarations present; green: 20 passed.
+- Task 2 behavioral red: 12 passed, 9 expected failures; initial green: 21 passed. Queued-account regression red: 1 expected failure; final affected checks: 155 passed, 15 existing skips.
+- `make validate ARGS=".harness/juniper12-validation-plan.json"`: affected checks plus analysis and UI style, Flutter 3.47.2/Dart 3.13.2 on macOS. Analyzer has 16 existing informational brace lints in unrelated AppNotifier methods; no errors or warnings in changed code.
+- Light/dark widget screenshots for Team, own-account and invitation/discovery surfaces are captured with fake sign-in and memory state. The tester still verifies the current head independently; two security reviews precede merge.
+- No migration or new backend/CLI command. Rollback is reverting the UI; the existing per-Swarm setting remains switchable from Machines.
+- Timing (Vietnam time, November 5): approval waiting 18:12–18:16; implementation and targeted red/green checks from 18:16; final validation started 18:29. Review, merge, publication and release waiting are separate and pending with the Integrator.
