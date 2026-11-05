@@ -36,3 +36,31 @@ export function onComputerSignedIn(next: Listener | null): void {
 export async function computerSignedIn(signIn: ComputerSignIn): Promise<void> {
   await listener?.(signIn)
 }
+
+/** What the one-time cleanup found: each computer with live rows of two or more accounts, the one seen last, and the others. */
+export interface CleanUp { computers: Array<{ signedIn: { machineId: string; ownerId: string }; others: string[] }>; moved: number }
+
+/**
+ * The one-time cleanup of computers listed under two accounts before moves existed (Scholes, 11-05: MacBooks-MacBook-Pro-7 three
+ * times): the account seen last on each is the one signed in there, and its sign-in moves the others' entries as a connect does
+ * (store.ts computerSignedIn). A computer whose last two accounts were seen at the same moment, or never, is left. With [write]
+ * false it only lists them. Safe to run again: an entry moved is gone, and nothing else is written.
+ */
+export async function cleanUpComputers(db: Reader, store: { computerSignedIn(signIn: ComputerSignIn): Promise<number> }, autonomousEnv: string,
+  { write }: { write: boolean }): Promise<CleanUp> {
+  const groups = await db.machine.aggregateRaw({ pipeline: [
+    { $match: { computerId: { $type: 'string' }, autonomousEnv, authMode: 'remote', sessionKind: { $ne: 'team' }, deletedAt: null } },
+    { $group: { _id: '$computerId', accounts: { $addToSet: '$userId' }, rows: { $push: { machineId: '$machineId', userId: '$userId', seen: '$lastSeenAt' } } } },
+    { $match: { 'accounts.1': { $exists: true } } }],
+  options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ _id: string; rows: Array<{ machineId: string; userId: string; seen?: { $date: string } | null }> }>
+  const result: CleanUp = { computers: [], moved: 0 }
+  for (const group of groups) {
+    const seen = (row: (typeof group.rows)[number]) => row.seen ? Date.parse(row.seen.$date) : 0
+    const [last, next] = [...group.rows].sort((a, b) => seen(b) - seen(a))
+    if (!last || !seen(last) || (next && seen(next) === seen(last))) continue
+    result.computers.push({ signedIn: { machineId: last.machineId, ownerId: last.userId },
+      others: group.rows.filter(row => row.userId !== last.userId).map(row => row.machineId) })
+    if (write) result.moved += await store.computerSignedIn({ machineId: last.machineId, ownerId: last.userId, computerId: group._id, autonomousEnv })
+  }
+  return result
+}
