@@ -32,20 +32,11 @@ type Owns = (harnessId: string) => Promise<boolean>
 
 /** What the keeper knows of one crew session here: since when its engine has been seen working without a break. */
 interface Watch { workingSince: number; said?: string }
-/** A continue still owed to a reopened session: when it may be tried next, how many tries it has left, and whether this
- *  reopen typed its text already (only then is Enter owed; review 2 of #3222: after a second crash the restored history
- *  shows the first continue, over an empty composer). */
-interface Owed { at: number; tries: number; typed: boolean }
-
-/** How many of a screen's last lines hold its composer, wrapped text and the footer under it. */
-const COMPOSER_LINES = 8
-
-/** Its text, its whitespace left out: a narrow pane wraps the typed line. */
-const squeezed = (text: string) => text.replace(/\s+/g, '')
-
-/** Whether [screen]'s composer, its last lines, holds the continue. */
-const inComposer = (screen: string) =>
-  squeezed(screen.split('\n').filter(line => line.trim()).slice(-COMPOSER_LINES).join('\n')).includes(squeezed(CREW_CONTINUE))
+/** A continue still owed to a reopened session: when it may be tried next, how many tries it has left, and the screen this
+ *  reopen's own typing left, whose Enter is still owed (null until it typed, or once that screen is gone). Only that exact
+ *  screen takes the Enter: after a second crash the history shows an earlier continue over an empty composer, and a prompt
+ *  answered meanwhile may have cleared it (reviews 2 and 3 of #3222). At worst the text is typed twice, never a bare Enter. */
+interface Owed { at: number; tries: number; typed: string | null }
 
 /**
  * Restarts a frozen crew session and continues a reopened one. The keep-alive itself is the host's (host.ts keepAlive),
@@ -81,7 +72,7 @@ export class CrewKeeper {
 
   /** The keep-alive reopened crew session [harnessId]: it is told to continue once its screen takes input. */
   reopened(harnessId: string): void {
-    this.owed.set(harnessId, { at: 0, tries: CREW_CONTINUE_TRIES, typed: false })
+    this.owed.set(harnessId, { at: 0, tries: CREW_CONTINUE_TRIES, typed: null })
     this.watches.delete(harnessId)
   }
 
@@ -132,20 +123,17 @@ export class CrewKeeper {
       return read?.ok && (read.hold === null || !WAITING.has(read.hold)) ? read.text : null
     }
     // A prompt or an unreadable screen waits, a look later, and costs no try.
-    let screen = await ready()
+    if (await ready() === null) return void (owed.at = now + CREW_LOOK_MS)
+    // The screen its typing left is back (a prompt answered): only its Enter is owed.
+    if (owed.typed !== null) {
+      if ((await this.core.superTabs!.inputIfScreen(harnessId, ['Enter'], owed.typed)).ok) return void this.owed.delete(harnessId)
+      owed.typed = null
+    }
+    const typed = await this.core.superTabs!.input(harnessId, CREW_CONTINUE, [])
+    if (!typed.ok) return again(typed.error)
+    const screen = await ready()
     if (screen === null) return void (owed.at = now + CREW_LOOK_MS)
-    if (!owed.typed) {
-      const typed = await this.core.superTabs!.input(harnessId, CREW_CONTINUE, [])
-      if (!typed.ok) return again(typed.error)
-      owed.typed = true
-      screen = await ready()
-      if (screen === null) return void (owed.at = now + CREW_LOOK_MS)
-    }
-    // Its composer no longer holds it (cleared meanwhile): typed again on the next try, never an Enter on an empty prompt.
-    if (!inComposer(screen)) {
-      owed.typed = false
-      return again('its composer did not keep the text')
-    }
+    owed.typed = screen
     const entered = await this.core.superTabs!.inputIfScreen(harnessId, ['Enter'], screen)
     if (!entered.ok) return again(entered.error)
     this.owed.delete(harnessId)
