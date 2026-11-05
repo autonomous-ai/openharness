@@ -231,10 +231,13 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
   it('tells the coordinator to fix a contradicted line in the same save, and to settle a conflict without asking', () => {
     const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
     expect(text).toContain('fix every line it contradicts in that same save')
-    expect(text).toContain('so the instructions never say two things')
-    expect(text).toContain('When two rules still disagree, don\'t ask')
-    expect(text).toContain('the rule written for this case beats the general one, the newer beats the older')
-    expect(text).toContain('an account owner\'s rule beats a default about their account')
+    // Review of #3134: replacing a line drops another person's rule, which the tidy keeps.
+    expect(text).toContain('replace a line only when it names no one or the same person gave both')
+    expect(text).toContain('When two rules still disagree, don\'t ask; settle it by the first that applies')
+    // A rule that says to ask a person (spending money, say) is never overridden by this order.
+    expect(text).toContain('a rule that says to ask a person still holds')
+    expect(text).toContain('an account owner\'s rule beats a default about their account; the newer beats the older')
+    expect(text).toContain('say what you changed')
   })
 
   it('says in the built-in section when the Swarm wakes it for them', () => {
