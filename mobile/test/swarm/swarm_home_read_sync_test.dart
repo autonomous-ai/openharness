@@ -30,6 +30,12 @@ void main() {
     for (final family in ['.AppleSystemUIFont', 'Roboto']) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
     }
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    for (final family in ['.AppleSystemUIFontMonospaced', 'monospace']) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
+    }
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
     for (final entry in manifest.cast<Map<String, dynamic>>()) {
