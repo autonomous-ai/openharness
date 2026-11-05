@@ -135,6 +135,63 @@ void main() {
     keepsItsContent(stuck, ['No access', 'Sync']);
   });
 
+  // Task #3029: an agent of the reader's task at a prompt in its terminal, as
+  // the backend lists it for them (superTabs/promptWaits.ts).
+  SuperTabSnapshot atPrompt({bool listed = true}) => SuperTabSnapshot.fromJson(
+    SuperTabParts.firstLoad(
+      firstLoad(
+        groups: [
+          {
+            ...groupData(
+              'g1',
+              title: 'Flash the board',
+              number: 4,
+              status: 'working',
+            ),
+            'assignment': {
+              'id': 'attempt-g1',
+              'agentId': 'agent-builder',
+              'status': 'working',
+            },
+          },
+        ],
+        derived: {
+          if (listed)
+            'promptsWaiting': [
+              {
+                'agentId': 'agent-builder',
+                'agentName': 'Nova',
+                'conversationId': 'g1',
+                'conversationTitle': 'Flash the board',
+                'projectId': 'p1',
+                'projectName': 'Mobile',
+              },
+            ],
+        },
+      ),
+    ).state,
+  );
+
+  test('an agent at a prompt in the reader\'s task is a notice of its own, '
+      'whoever owns the project, and goes when the read drops it', () {
+    // The backend chose the reader: no partner or owner rule here.
+    final waiting = swarmWaitingWork(atPrompt(), 'person-requester').single;
+    expect(waiting.atPrompt, isTrue);
+    expect(waiting.status, 'prompt');
+    final notice = swarmNotice(SwarmWorkNeed(tab, waiting));
+    expect(notice.title, 'Nova is waiting at a prompt');
+    expect(notice.subtitle, 'Mobile');
+    expect(notice.body, 'Open Harness to answer it.');
+    expect(notice.target.conversationId, 'g1');
+    keepsItsContent(notice, ['Flash the board']);
+    // A key of its own: a needs_human of the same task is another notice.
+    expect(SwarmWorkNeed(tab, waiting).key, contains(':prompt'));
+    expect(
+      swarmWaitingWork(atPrompt(listed: false), 'person-requester'),
+      isEmpty,
+    );
+  });
+
   test('each need is its own notice, and the same need replaces itself', () {
     expect(swarmNotice(decision()).key, swarmNotice(decision()).key);
     expect(swarmNotice(decision()).key, isNot(swarmNotice(mention()).key));

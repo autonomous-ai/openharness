@@ -589,6 +589,31 @@ void main() {
       await close(tester, view);
     });
 
+    testWidgets('a decision\'s notice lights its row on Decisions for a moment '
+        '(task #3029)', (tester) async {
+      final server = ConversationServer()
+        ..ask(['Ship it behind a flag?', 'Keep the old route?']);
+      final view = await showView(tester, server);
+      view.controller.openNotice('decision', 'decision-1');
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('super-activity-lit:decision:decision-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-activity-lit:decision:decision-2')),
+        findsNothing,
+      );
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-activity-lit:decision:decision-1')),
+        findsNothing,
+      );
+      await close(tester, view);
+    });
+
     testWidgets('from the menu bar: its Swarm tab comes forward and opens it', (
       tester,
     ) async {
