@@ -55,6 +55,9 @@ export interface ContributedMachine {
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
    *  (commands.ts dropIdleBuddyMachines), or becomes an ordinary machine when its person adds it with Add machine. */
   buddyOnly?: true
+  /** Who had this computer's entry before the account signed in on it now (commands.ts machine.moved, #3122), and until when:
+   *  Machines says "Was kelvin until 5 Nov". Only the last one; gone with the entry. */
+  previousOwner?: { personId: string; until: string }
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
