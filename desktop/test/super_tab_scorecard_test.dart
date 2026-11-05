@@ -11,6 +11,8 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/scorecard.dart';
 import 'package:harness/super_tabs/scorecard_view.dart';
 
+import 'package:harness/widgets/desktop_chrome.dart';
+
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
 
@@ -243,6 +245,19 @@ void main() {
   // Task #3462: a crew time's median · slowest is the widest cell; it stays on one line in its row.
   testWidgets('keeps a crew move time on one line', (tester) async {
     await loadPreviewFonts();
+    // Width is a property of a real face: without one (Linux CI has neither the system face nor Roboto), Flutter's test font
+    // draws every glyph an em wide, so "i" and "W" measure the same and nothing here means anything. Roboto at the table's
+    // 13 px puts "9m59 · 9m59" at 76 px, inside the 96 px cell.
+    double width(String text) => (TextPainter(
+      text: TextSpan(text: text, style: DesktopChrome.control()),
+      textDirection: TextDirection.ltr,
+    )..layout()).width;
+    if (width('i') == width('W')) {
+      markTestSkipped(
+        'needs a real text face to measure; the test font is one em per glyph',
+      );
+      return;
+    }
     final reader = SuperTabScorecardReader(
       tabId: 'tab',
       request: (method, path, {body}) async => {
