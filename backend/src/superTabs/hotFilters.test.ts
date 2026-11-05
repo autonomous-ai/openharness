@@ -464,6 +464,8 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])
   })
 
+  /** Room for the whole-tree scan below on a busy runner. */
+  const SCAN_TIMEOUT_MS = 30_000
   it('allows only the uses already listed, and the list only shrinks', () => {
     const current = counted(sources(join(ROOT, 'src')).flatMap(path => hotFilters(relative(ROOT, path), readFileSync(path, 'utf8'))))
     if (process.env.UPDATE_HOT_FILTERS) writeFileSync(ALLOWED, `${JSON.stringify(current, null, 2)}\n`)
@@ -473,5 +475,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(added, 'A Prisma in/has filter on a hot Swarm collection is sent as $expr, which no index bounds. Read through a named index (parts/indexed.ts readBy) with a plan test instead. An `unresolved` call is one whose collection this test cannot tell: name the delegate (db.swarmGroup, or a parameter typed Prisma.XDelegate), or list it after checking it is not a hot collection.').toEqual([])
     const fewer = Object.entries(allowed).filter(([key, count]) => count > (current[key] ?? 0)).map(([key, count]) => `${key}: ${current[key] ?? 0} (listed ${count})`)
     expect(fewer, 'Fewer uses than listed: lower them in hotFilters.allowed.json (UPDATE_HOT_FILTERS=1 rewrites it).').toEqual([])
-  })
+    // It reads and parses every backend source file: about 2 s on a Mac, past vitest's 5 s default on a loaded CI runner
+    // (timed out in batch #3205 and on #3227, 2026-11-05).
+  }, SCAN_TIMEOUT_MS)
 })
