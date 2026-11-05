@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { pendingKey } from '../src/superTabs/releases.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
 
 // Task #3405: a recorded merge joins its project's release list; the worker's settle marks the tasks a verified release carries
 // released, and opens one release step for the Integrator inside the window, through the store and a fresh replica set.
@@ -97,5 +98,39 @@ describe('releases scheduled by the Swarm', () => {
     expect((await s.store.settleReleases(s.tab, 'lead', facts))!.opened).toBeNull()
     const groups = await db.swarmGroup.findMany({ where: { tabId: s.tab }, select: { data: true } })
     expect(groups.filter(g => (g.data as unknown as Conversation).title === 'Release CLI')).toHaveLength(1)
+  })
+
+  // River, 11-06: the window and pace come from the project rules record (#3393), which people edit without a release.
+  it('reads the window from the project\'s rules record: a window from 10:00 opens no step at 09:30', async () => {
+    const s = await swarm()
+    await s.add('Shipper', 'lead', { roleName: 'Integrator' })
+    const shipIt = await s.task('Later window')
+    const url = 'https://github.com/example/app/pull/43'
+    await s.run({ type: 'conversation.merged', conversationId: shipIt, pullRequestUrl: url, mergedAt: new Date(T - MINUTE).toISOString() }, host, s.lead)
+    await s.run({ type: 'rules.set', projectId: 'lead', baseRevision: 0, summary: 'Releases start at 10',
+      rules: { ...structuredClone(SEED_RULES), releaseWindow: { ...SEED_RULES.releaseWindow, start: '10:00' },
+        releasePace: { ...SEED_RULES.releasePace, backendPause: null } } } as Command)
+    const facts = { resolved: [{ groupId: shipIt, url, components: ['cli' as const] }], releases: {} }
+    // 09:30 in Vietnam: inside the seed's window, outside this project's.
+    s.clock.set(Date.UTC(2026, 10, 6, 2, 30))
+    expect((await s.store.settleReleases(s.tab, 'lead', facts))!.opened).toBeNull()
+    s.clock.set(Date.UTC(2026, 10, 6, 3, 0))
+    expect((await s.store.settleReleases(s.tab, 'lead', facts))!.opened).toEqual(expect.any(String))
+  })
+
+  it('reads the backend pause from the record, the seed\'s only while the project has none', async () => {
+    const s = await swarm()
+    await s.add('Shipper', 'lead', { roleName: 'Integrator' })
+    const shipIt = await s.task('Morning backend')
+    const url = 'https://github.com/example/app/pull/44'
+    await s.run({ type: 'conversation.merged', conversationId: shipIt, pullRequestUrl: url, mergedAt: new Date(T - 3 * 60 * MINUTE).toISOString() }, host, s.lead)
+    const facts = { resolved: [{ groupId: shipIt, url, components: ['backend' as const] }], releases: {} }
+    // 09:30 in Vietnam, in the seed's 09:00-10:00 backend pause: no record yet, so no step.
+    s.clock.set(Date.UTC(2026, 10, 6, 2, 30))
+    expect((await s.store.settleReleases(s.tab, 'lead', facts))!.opened).toBeNull()
+    await s.run({ type: 'rules.set', projectId: 'lead', baseRevision: 0, summary: 'No morning pause',
+      rules: { ...structuredClone(SEED_RULES), releasePace: { ...SEED_RULES.releasePace, backendPause: null } } } as Command)
+    s.clock.set(Date.UTC(2026, 10, 6, 2, 35))
+    expect((await s.store.settleReleases(s.tab, 'lead', facts))!.opened).toEqual(expect.any(String))
   })
 })
