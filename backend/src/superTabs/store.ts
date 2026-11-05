@@ -4697,6 +4697,12 @@ export class SuperTabStore {
       // these tasks is loaded.
       const { state } = await loadRow(this.db as unknown as Transaction, requireParts(row), { groupIds: keys })
       if (state.paused) continue
+      // Every earlier attempt's agent, from the attempts record's [tabId, conversationId, createdAt] index: a builder is never
+      // its own task's review (review 1 of #3226). A plain $in: Prisma would send `in` as one OR branch per task.
+      const earlier = await this.db.superTabAttempt.aggregateRaw({ pipeline: [
+        { $match: { tabId, conversationId: { $in: keys } } },
+        { $project: { _id: 0, conversationId: 1, agentId: '$snapshot.assignment.agentId' } },
+      ] }) as unknown as Array<{ conversationId: string; agentId?: unknown }>
       const found = new Map<string, TrainProject>()
       for (const key of keys) {
         const group = state.conversations.find(c => c.id === key)
@@ -4710,8 +4716,11 @@ export class SuperTabStore {
         for (const url of group.pullRequestUrls ?? []) {
           const own = projectPullRequestUrl(url, repositoryUrl)
           if (!own) continue
+          const builders = [...new Set([group.assignment?.agentId, group.lostAttempt?.agentId,
+            ...earlier.filter(a => a.conversationId === group.id).map(a => a.agentId)].filter((id): id is string => typeof id === 'string' && !!id))]
+            .map(id => `agent:${id}`)
           entry.pulls.push({ taskId: group.id, url: own, task: { checks: group.checks,
-            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps } })
+            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps, builders } })
         }
       }
       projects.push(...found.values())

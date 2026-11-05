@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { teamWrittenTask } from '../src/superTabs/teamWritten.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Task #3402: the merge train reads its candidates from the Swarm, records each merge on its task with the original pull
 // request's link (never the batch's), and tells a task's Engineer once per key. A fresh loopback replica set, created here.
@@ -78,8 +79,18 @@ describe('the merge train in the Swarm', () => {
   it('names the task\'s builders, its assignee and every earlier attempt\'s agent, so none counts as its review', async () => {
     const f = await swarm()
     await db.superTabAttempt.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: f.task, snapshot: { assignment: { agentId: 'agent-before' } } } })
-    const [project] = (await f.store.trainProjects(f.clock.now)).filter(p => p.tabId === f.tab)
+    // Other tasks' attempts, which the read's index bounds out.
+    await db.superTabAttempt.createMany({ data: Array.from({ length: 20 }, (_, i) => ({ id: randomUUID(), tabId: f.tab, conversationId: `other-${i}`,
+      snapshot: { assignment: { agentId: `other-${i}` } } })) })
+    let projects: Awaited<ReturnType<typeof f.store.trainProjects>> = []
+    const entries = await profiled(db, async () => { projects = await f.store.trainProjects(f.clock.now) })
+    const [project] = projects.filter(p => p.tabId === f.tab)
     expect([...project!.pulls[0]!.task.builders!].sort()).toEqual([`agent:${f.worker}`, 'agent:agent-before'].sort())
+    // One read of the attempts by their [tabId, conversationId, createdAt] index, examining only this Swarm's tasks' rows.
+    const rows = reads(entries, 'SuperTabAttempt', ['tabId', 'conversationId']).filter(r => JSON.stringify(r.command).includes(f.tab))
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, conversationId: 1, createdAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
   })
 
   it('records a merge with the original link, once, and marks nothing Team-written', async () => {

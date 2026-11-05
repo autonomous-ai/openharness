@@ -219,7 +219,7 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       let tip = main
       const members: Member[] = []
       for (const member of group) {
-        const merged = await github.mergeInto(branch, member.head, `Merge #${member.number} into the merge train's batch`)
+        const merged = await github.mergeInto(branch, member.head, `Merge #${member.number} into the merge train's batch`, tip)
         if (merged === 'conflict') { await tellConflict(swarm, member); continue }
         // In main already (merged by hand meanwhile): nothing of it to batch.
         if (merged === 'already') continue
@@ -231,11 +231,15 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
         ...members.map(m => `- #${m.number} at ${short(m.head)}: ${m.title}`), '',
         'It merges when ci/required is green here and every pull request is still at the head listed. Do not push to this branch.'].join('\n')
       const opened = await github.openPull(branch, `Merge train: ${members.map(m => `#${m.number}`).join(' ')}`, body)
+      // Opened at another head than the tip built: someone pushed onto the branch. Never a batch (review 1 of #3226).
+      if (opened.head !== tip) { await closeBatch(opened.number, branch, 'its branch changed while the train built it'); continue }
       memory.batches.set(opened.number, { number: opened.number, url: opened.url, branch, tip, base: main, startedAt: now, members })
       line.built++
     } catch (error) {
       if (!(error instanceof TrainReadError)) throw error
       line.unreadable++
+      // Whatever it holds, a branch the train could not finish building is never left behind to be opened later.
+      await github.deleteBranch(branch).catch(() => {})
     }
   }
   return line

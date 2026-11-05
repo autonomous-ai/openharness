@@ -33,6 +33,9 @@ export interface TrainTask {
   /** Each linked pull request's head and patch id as the PR watch last read them (task #3394). */
   pullRequestHeads?: Record<string, PullRequestHead>
   steps: Array<Pick<Conversation, 'step' | 'title' | 'checks' | 'archived' | 'assignment'>>
+  /** Who built the task, as verdicts name checkers (`agent:ID`): its assignee and every earlier attempt's agent. Their verdicts
+   *  on its steps count for nothing: a builder is never its own review or test (review 1 of #3226). */
+  builders?: string[]
 }
 
 const REVIEW_STEP = /review/i
@@ -48,8 +51,8 @@ function countsAt(verdict: HeadVerdict, url: string, now: PullRequestHead): bool
 }
 
 /** The checkers whose passes count on [check], or null when it has no pass that counts or a failure that does. */
-function passers(check: Check, url: string, now: PullRequestHead): string[] | null {
-  const counting = ((check.verdicts ?? []) as HeadVerdict[]).filter(v => countsAt(v, url, now))
+function passers(check: Check, url: string, now: PullRequestHead, ignored: ReadonlySet<string> = new Set()): string[] | null {
+  const counting = ((check.verdicts ?? []) as HeadVerdict[]).filter(v => !ignored.has(v.by) && countsAt(v, url, now))
   if (!counting.length || counting.some(v => !v.passed)) return null
   return counting.map(v => v.by)
 }
@@ -64,13 +67,13 @@ export function headReads(task: TrainTask, url: string, head: string): number | 
   const now = task.pullRequestHeads?.[url]
   if (!now || now.head !== head) return null
   if (!task.checks.every(check => passers(check, url, now))) return null
-  const readers = new Set<string>()
+  const readers = new Set<string>(), builders = new Set(task.builders ?? [])
   let reviewed = false
   for (const step of task.steps) {
     const status = step.assignment?.status
     if (status === 'cancelled') continue
     if (status !== 'done' || !step.checks.length) return null
-    const found = step.checks.map(check => passers(check, url, now))
+    const found = step.checks.map(check => passers(check, url, now, builders))
     if (found.some(list => !list)) return null
     if (REVIEW_STEP.test(step.step ?? step.title)) {
       reviewed = true

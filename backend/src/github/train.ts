@@ -52,9 +52,10 @@ export interface TrainGitHub {
   files(number: number): Promise<string[]>
   ciRequired(sha: string): Promise<'success' | 'failure' | 'pending' | null>
   createBranch(name: string, sha: string): Promise<void>
-  /** Merges [sha] into the train's [branch]: the new merge commit, `conflict`, or `already` when the branch (which starts at
-   *  main) holds it already. */
-  mergeInto(branch: string, sha: string, message: string): Promise<{ sha: string } | 'conflict' | 'already'>
+  /** Merges [sha] into the train's [branch], whose head must be [tip]: the new merge commit, `conflict`, or `already` when the
+   *  branch (which starts at main) holds it already. A merge whose parents are not exactly [tip] then [sha] throws: someone
+   *  pushed onto the branch (review 1 of #3226). */
+  mergeInto(branch: string, sha: string, message: string, tip: string): Promise<{ sha: string } | 'conflict' | 'already'>
   openPull(branch: string, title: string, body: string): Promise<TrainPull>
   /** Squash-merges pull request [number] only if its head is still [sha]: the commit on main. */
   squash(number: number, sha: string, title: string, message: string): Promise<{ sha: string }>
@@ -155,14 +156,16 @@ export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
       own(name, 'create branch')
       await expect('POST', '/git/refs', [201], { ref: `refs/heads/${name}`, sha: sha(from, 'branch base') })
     },
-    async mergeInto(branch, head, message) {
+    async mergeInto(branch, head, message, tip) {
       own(branch, 'merge')
       const answer = await expect('POST', '/merges', [201, 204, 409], { base: branch, head: sha(head, 'merge head'), commit_message: message })
       if (answer.status === 409) return 'conflict'
       if (answer.status === 204) return 'already'
       const body = object(answer.body), merged = sha(body.sha, 'merge')
-      // Always a merge commit of its own, with the member as its second parent: never the member's commit itself.
-      if (merged === head || !Array.isArray(body.parents) || body.parents.length !== 2) throw new TrainReadError('merge: not a merge commit', 201)
+      // Always a merge commit of its own, never the member's commit itself, with exactly the tip the train built as its first
+      // parent and the member as its second: a commit anyone pushed onto the branch meanwhile never gets into a batch.
+      const parents = Array.isArray(body.parents) ? body.parents.map(p => text(object(p).sha)) : []
+      if (merged === head || parents.length !== 2 || parents[0] !== tip || parents[1] !== head) throw new TrainReadError('merge: unexpected parents', 201)
       return { sha: merged }
     },
     async openPull(branch, title, body) {

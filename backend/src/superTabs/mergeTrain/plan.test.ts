@@ -67,11 +67,13 @@ describe('headReads', () => {
     expect(headReads(task({ steps: [...task().steps, same] }), URL, HEAD)).toBe(1)
   })
   it('never counts the task\'s own builders as reads: its assignee or an earlier attempt\'s agent', () => {
-    // review step passed by agent:r0 (the step helper's checker)
-    expect(headReads(task({ builders: ['agent:r0'] }), URL, HEAD)).toBe(0)
+    // The review step is passed by agent:r0 (the step helper's checker): as the builder, its pass counts for nothing, so the
+    // step has no pass at all and the pull request may not merge, however many other steps passed.
+    expect(headReads(task({ builders: ['agent:r0'] }), URL, HEAD)).toBe(null)
     const two = step([check([{ passed: true, head: HEAD }])], { step: 'Security review 2', title: 'Security review 2' })
     two.checks[0]!.verdicts![0]!.by = 'agent:other'
-    expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:r0'] }), URL, HEAD)).toBe(1)
+    expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:r0'] }), URL, HEAD)).toBe(null)
+    expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:someone-else'] }), URL, HEAD)).toBe(2)
   })
   it('never counts a builder\'s pass of a test step, but keeps the builder\'s own task checks', () => {
     const tested = step([check([{ passed: true, head: HEAD }])], { step: 'Test', title: 'Test' })
