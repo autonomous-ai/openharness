@@ -321,8 +321,8 @@ export function createInput(deps: InputDeps) {
     if (loggedDeliveries.has(deliveryId)) return false
     loggedDeliveries.add(deliveryId)
     if (loggedDeliveries.size > 256) {
-      const oldest = loggedDeliveries.values().next().value
-      if (oldest !== undefined) loggedDeliveries.delete(oldest)
+      // Above 256 entries the set always has a first one; the type says `undefined` because an empty set has none.
+      loggedDeliveries.delete(loggedDeliveries.values().next().value!)
     }
     return true
   }
