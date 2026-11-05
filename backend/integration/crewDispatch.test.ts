@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { DISPATCH_PM_RETRY_MS, SuperTabStore } from '../src/superTabs/store.js'
+import { DISPATCH_RETRY_MS, SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Agent, Conversation } from '../src/superTabs/model.js'
@@ -178,7 +178,7 @@ describe('the crew dispatch pass', () => {
       await db.machine.create({ data: { machineId: 'owner-mac', userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     }
     // Its access is back, in the same round of the same task: the next try after the short wait assigns it.
-    s.advance(DISPATCH_PM_RETRY_MS)
+    s.advance(DISPATCH_RETRY_MS)
     expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
     expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
@@ -189,6 +189,36 @@ describe('the crew dispatch pass', () => {
     await editAgent(s.tab, s.pm, agent => ({ ...agent, teamAccount: true }))
     expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
     expect(await s.holders()).toEqual({ Api: null })
+  })
+
+  it('assigns once the Swarm resumes, after a pause that came while the pass read GitHub', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await s.execute({ type: 'tab.pause', paused: true })
+      return undefined
+    })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    expect(await s.holders()).toEqual({ Api: null })
+    // Resumed in the same round, with no time passing: the pause left nothing behind.
+    await s.execute({ type: 'tab.pause', paused: false })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
+  })
+
+  it('assigns within the short retry once the repository is approved, and not before it', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    // Ash runs in a Team account, which reaches the repository only through the GitHub App (repositoryReach.ts).
+    await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, teamAccount: true }))
+    const store = s.store as unknown as { repositoryReachFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'repositoryReachFor').mockResolvedValueOnce({ state: 'not-approved', repository: 'owner/repo' })
+    const refused = await s.store.dispatchCrew(s.tab)
+    expect(refused).toMatchObject({ assigned: 0, skipped: { REPOSITORY_UNREACHABLE: 1 } })
+    // Approved now, in the same round. The pick waits its short retry, then goes.
+    expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
+    s.advance(DISPATCH_RETRY_MS)
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
   it('does not assign a task postponed while the pass read GitHub', async () => {
