@@ -1128,6 +1128,21 @@ describe('decisions asked of one person (v2)', () => {
     expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
   })
 
+  it('keeps quiet conversation titles in waiting and earlier tag lists', async () => {
+    const s = await scene()
+    const tag = await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Please look.', replyTo: null,
+      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)
+    expect(tag.status).toBe(200)
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
+
+    const waiting = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(waiting.map(row => row.conversationTitle)).toContain('Web')
+
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
+    const earlier = (await get(`/api/super-tabs/${s.tabId}/mentions?state=earlier`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(earlier.map(row => row.conversationTitle)).toContain('Web')
+  })
+
   it('reads waiting tags once in a changes poll while keeping its count and digest', async () => {
     const s = await scene()
     clock = NOW

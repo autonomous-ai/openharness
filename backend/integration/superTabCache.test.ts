@@ -168,6 +168,21 @@ describe('reads through the cache', () => {
     await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
+  it('checks a changed format at hold expiry and refuses an invalid legacy row', async () => {
+    const { tabId } = await privateScene()
+    let now = Date.now()
+    const { store } = pod()
+    const reads = new SwarmReads(store, { now: () => now })
+    await reads.firstLoad(people.owner, tabId)
+
+    // Simulate an incompatible format transition: the fenced v2 state cannot be migrated as a legacy v1 state.
+    await db.superTab.update({ where: { id: tabId }, data: { format: 1 } })
+    now += 2_999
+    await expect(reads.firstLoad(people.owner, tabId)).resolves.toBeDefined()
+    now += 1
+    await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'SWARM_MIGRATING' })
+  })
+
   it('reads a Swarm whose stamp did not move without asking Mongo for its parts', async () => {
     const { tabId } = await privateScene()
     const { reads } = pod()
