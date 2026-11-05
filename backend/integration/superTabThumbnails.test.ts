@@ -11,11 +11,14 @@ import sharp from 'sharp'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore, MemoryAvatarStore, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
-import { thumbKeyOf } from '../src/superTabs/thumbnails.js'
+import { thumbKeyOf, thumbnailsReserve as realReserve } from '../src/superTabs/thumbnails.js'
 
 // The thumbnailer's queue is full while this says so (thumbnails.ts thumbnailsBusy).
 const queue = vi.hoisted(() => ({ busy: false }))
-vi.mock('../src/superTabs/thumbnails.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/superTabs/thumbnails.js')>(), thumbnailsBusy: () => queue.busy }))
+vi.mock('../src/superTabs/thumbnails.js', async importOriginal => {
+  const original = await importOriginal<typeof import('../src/superTabs/thumbnails.js')>()
+  return { ...original, thumbnailsReserve: () => queue.busy ? null : original.thumbnailsReserve() }
+})
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { PURGE_MARGIN_MS, purgeDeletedSwarms, purgeFiles } from '../src/superTabs/purge.js'
 import { SWARM_DELETE_GRACE_MS } from '../src/superTabs/deletion.js'
@@ -165,6 +168,28 @@ describe('when thumbnails are backed up', () => {
       expect(attachment).toMatchObject({ name: 'big.jpg', size: original.byteLength })
       expect(attachment.thumb).toBeUndefined()
     } finally { queue.busy = false }
+  })
+})
+
+describe('the places a picture holds while it waits for its thumbnail', () => {
+  it('are all given back: many uploads in a row, finished or failed, are all thumbnailed', async () => {
+    const f = await swarm()
+    const picture = await jpeg(1200, 900)
+    // A client that drops the connection after the picture's first bytes.
+    const dropped = () => f.store.upload(owner, f.tab, 'lead', { name: 'cut.jpg', mime: 'image/jpeg',
+      body: Readable.from((async function* () { yield picture.subarray(0, 2000); throw new Error('client dropped') })()) }).catch(() => null)
+    for (let i = 0; i < 9; i++) await dropped()
+    for (let i = 0; i < 9; i++) expect((await f.upload(picture)).thumb, `upload ${i}`).toBeDefined()
+  })
+
+  it('are limited: with every place taken a picture upload is not held and gets no thumbnail', async () => {
+    const f = await swarm()
+    const taken = Array.from({ length: 16 }, () => realReserve())
+    try {
+      const file = await f.upload(await jpeg(1200, 900))
+      expect(file.thumb).toBeUndefined()
+    } finally { taken.forEach(release => release?.()) }
+    expect((await f.upload(await jpeg(1200, 900))).thumb).toBeDefined()
   })
 })
 

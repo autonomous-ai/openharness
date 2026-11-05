@@ -167,6 +167,31 @@ describe('the thumbnailer\'s limits', () => {
     expect(thumbnailer.busy()).toBe(false)
   })
 
+  it('lets only as many pictures be held as it could work on, and takes a place back when it is given up', async () => {
+    const thumbnailer = createThumbnailer({ atOnce: 1, maxWaiting: 1, giveUpMs: 1_000, decode: async () => facts })
+    const first = thumbnailer.reserve(), second = thumbnailer.reserve()
+    expect(first).toBeTypeOf('function')
+    expect(second).toBeTypeOf('function')
+    expect(thumbnailer.busy()).toBe(true)
+    expect(thumbnailer.reserve()).toBeNull()
+    first!()
+    first!()
+    expect(thumbnailer.busy()).toBe(false)
+    const third = thumbnailer.reserve()
+    expect(third).toBeTypeOf('function')
+    expect(thumbnailer.reserve()).toBeNull()
+    second!(); third!()
+    expect(thumbnailer.reserve()).toBeTypeOf('function')
+  })
+
+  it('still makes the thumbnail of a picture that holds its place', async () => {
+    const thumbnailer = createThumbnailer({ atOnce: 1, maxWaiting: 1, giveUpMs: 1_000, decode: async () => facts })
+    const held = [thumbnailer.reserve(), thumbnailer.reserve()]
+    expect(thumbnailer.busy()).toBe(true)
+    expect(await thumbnailer.make(bytes)).toEqual(facts)
+    held.forEach(release => release?.())
+  })
+
   it('a decode that throws is nothing, and frees its place', async () => {
     let calls = 0
     const thumbnailer = createThumbnailer({ atOnce: 1, giveUpMs: 1_000, maxWaiting: 1, decode: async () => { if (calls++ === 0) throw new Error('boom'); return facts } })
