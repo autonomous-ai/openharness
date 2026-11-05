@@ -89,7 +89,7 @@ void main() {
     });
   });
 
-  // Swarm's look draws Set up Intern 3 only with no computer, and Leave the sample in the first
+  // Swarm's look with no computer, and Leave the sample in the first
   // card beside Usage: both are rows the signed-in cases above never draw there.
   testWidgets('opened from Swarm, with no machines', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {

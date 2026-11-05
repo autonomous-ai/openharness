@@ -70,7 +70,7 @@ describe('one-field machine preparation', () => {
   })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
-    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 8, maxAvailableAgents: 16 })
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'codex'], signedIn: ['claude'], maxAgents: 8, maxAvailableAgents: 16 })
     expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20000)
     expect(f.deps.prepare).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalledOnce()
@@ -137,6 +137,31 @@ describe('one-field machine preparation', () => {
     f.deps.capacity.mockResolvedValueOnce({ error: 'INVALID_REQUEST' } as never)
     await expect(f.run()).rejects.toThrow('project folder')
     expect(f.close).toHaveBeenCalledTimes(2)
+  })
+  // Owner, 2026-11-05: the phone setting up a new computer asks for Claude Code, so its Buddy can start there.
+  it('installs Claude Code when the phone asks and neither engine is here, then says what is signed in', async () => {
+    const f = fixture()
+    const install = vi.fn(async () => {})
+    f.request.mockResolvedValueOnce({ engines: [] })
+      .mockResolvedValueOnce({ engines: [{ engine: 'claude', installed: true, signedIn: false }] })
+    const result = await prepareContribution(f.core, { tabId: 'tab', installEngine: 'claude' }, { ...f.deps, install } as never)
+    expect(install).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ state: 'ready', engines: ['claude'], signedIn: [] })
+  })
+  it('installs nothing unless asked, nor when an engine is already here', async () => {
+    const f = fixture()
+    const install = vi.fn(async () => {})
+    f.request.mockResolvedValueOnce({ engines: [] })
+    await expect(prepareContribution(f.core, { tabId: 'tab' }, { ...f.deps, install } as never)).rejects.toThrow('Install Claude Code or Codex')
+    const result = await prepareContribution(f.core, { tabId: 'tab', installEngine: 'claude' }, { ...f.deps, install } as never)
+    expect(install).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ engines: ['claude', 'codex'], signedIn: ['claude'] })
+  })
+  it('still refuses when the install left no engine behind', async () => {
+    const f = fixture()
+    f.request.mockResolvedValue({ engines: [] })
+    await expect(prepareContribution(f.core, { tabId: 'tab', installEngine: 'claude' }, { ...f.deps, install: vi.fn(async () => {}) } as never))
+      .rejects.toThrow('Install Claude Code or Codex')
   })
   it('keeps a slow clone in one bounded receipt and preserves errors for polling', async () => {
     let resolve!: (value: Record<string, unknown>) => void

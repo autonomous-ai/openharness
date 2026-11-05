@@ -486,6 +486,13 @@ export class ContributedMachines {
     this.readingFailures.set(tabId, reason)
     this.log(`Could not send this machine's reading to Swarm ${tabId}: ${reason}`)
   }
+  /** An engine was just signed in here (claudeSignIn.ts): read the engines again at the next pass, and let it run now, not
+   *  [READINESS_MS] on. The Buddy that phone starts next is refused while the reading still says signed out (backend
+   *  engineHealth.ts engineUnusable; the Dell, 2026-11-05). */
+  engineSignedIn(): void {
+    this.engineRead = null
+    this.next = 0
+  }
   /** One pass at a time, one [MACHINE_POLL_MS] after the last began (or a beat after one that failed). */
   tick(): Promise<void> {
     if (this.stopped || this.deps.now() < this.next) return Promise.resolve()

@@ -750,6 +750,11 @@ export class SuperTabHost {
     this.native ??= new NativeRecorder(this.core, this.machineId)
     return this.native.prepare(tabId, contextId, renew, closed)
   }
+  /** An engine was just signed in on this machine: its reading says so now (machines.ts engineSignedIn). */
+  engineSignedIn(): void {
+    this.contributed().engineSignedIn()
+    this.pollMachines()
+  }
   /** The machine report sends when each agent's screen last changed, from this host's own screen reads. */
   private contributed(): ContributedMachines {
     return this.machines ??= new ContributedMachines(this.core, this.machineId,
