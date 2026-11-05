@@ -74,15 +74,45 @@ the granted-permission filter, exclude both), so a later change cannot widen age
   installation, which widens what a leaked key reaches. Today a leaked key already writes contents on every installed
   repository. The key stays in the backend's secret store only (unchanged), and the installation-access permission is
   needed only for *Only select repositories* installs.
-  - **Option A (recommended)**: request both permissions. New repository works on either kind of install.
-  - **Option B**: request **Repository creation** only. Where the install is on *Only select repositories*, the new
-    repository is made, but an owner of the organization must add it to Harness by hand before teammates' agents can
-    use it (failure state F7). Smaller blast radius for a leaked key, and one more step for those organizations.
-- **Spike before code (15 minutes, on a test organization)**: confirm (1) that a user token with Repository creation
-  but no Administration can call `POST /orgs/{org}/repos`, (2) whether GitHub already adds a repository created through
-  the app to a *select repositories* installation by itself (if it does, Option B costs nothing), and (3) that
-  `PUT /user/installations/{id}/repositories/{repo_id}` accepts the user token. The answers go in this doc before the
-  plan.
+  - **Option A**: request both permissions. A repository GitHub somehow left off a *select repositories* install is
+    added by Harness right after it is made.
+  - **Option B (recommended, now that GitHub documents (2) below)**: request **Repository creation** only. GitHub
+    gives the app access to the repositories it creates, on either kind of install. The leaked-key reach does not grow.
+    If GitHub ever leaves one off, the person sees F7 and an owner adds it by hand.
+  - **The code works either way.** It adds the repository to the installation only where the installation has
+    granted *installation repository access*, read the same way Harness reads Workflows and Issues today. Ken's choice
+    is a setting on the app on GitHub, not a code change.
+
+### What GitHub documents (settled from its docs, 2026-11-05; no spike)
+
+1. **A user token with Repository creation, and without Administration, can create an organization repository.**
+   `POST /orgs/{org}/repos` is listed under the *Repository creation* repository permission, for both user access
+   tokens and installation access tokens
+   ([Permissions required for GitHub Apps](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps?apiVersion=2022-11-28),
+   "Repository permissions for Repository creation"). A user token succeeds only where the person may also do it
+   ([Choosing permissions for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app):
+   "The success of an API request with a user access token depends on the user's permissions as well as the app's
+   permissions"), and the person must be a member of the organization
+   ([Create an organization repository](https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#create-an-organization-repository)).
+   The permission was added on 2026-10-13
+   ([GitHub changelog](https://github.blog/changelog/2026-10-13-github-app-improvements-for-least-privilege-and-management/)),
+   and an organization owner still approves it.
+2. **The app gets access to repositories it creates, even on *Only select repositories*.** "Your app is automatically
+   given access to repositories it creates"
+   ([Choosing permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app));
+   "If the app creates any repositories, the app will automatically be granted access to those repositories as well"
+   ([Installing your own GitHub App](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app));
+   "When the repository is created, the app or user that created it will be given access to it" (changelog above).
+   The docs don't say outright whether this holds when the app acts through a person's user token. So after creating,
+   Harness checks the installation covers the repository, and adds it or says F7 when it doesn't.
+3. **The person's user token can add a repository to the installation.**
+   `PUT /user/installations/{installation_id}/repositories/{repository_id}` is listed under *GitHub App installation
+   repository access* for user access tokens and installation tokens (permissions page above). "If the caller is a
+   user, they must also be an organization owner or an administrator on the repository in question" (changelog above),
+   and the creator is the new repository's administrator.
+
+**Left to confirm live:** once Ken adds Repository creation to our app and autonomous-ai accepts it, one real New
+repository run on a throwaway name confirms (1) and (2) against GitHub. It is listed in the pull request.
 
 ### Who may use it (Harness side)
 
@@ -122,16 +152,17 @@ not set it).
                                  user token ──► POST /orgs/{owner}/repos ─►
                                             ──► add to installation (select installs)
                                             ──► revoke token
-                                 approval recorded {created: true}
+                                 approval recorded; the project's
+                                 repositoryCreation: created
                                  page: "acme/notes is ready. Go back to Harness."
- back in the app: reads
-   .../github/repository ◄────── {state: created, url}
+ back in the app: the Swarm state
+   brings repositoryCreation ◄── {state: created, repositoryUrl}
         ──► lead.start {repositoryUrl}  (as today)
         ──► project.rename (as today)
 ```
 
-The sheet stays open while the browser is out. Coming back (app resume on the phone, window focus on Desktop) reads the
-result once. A "Check again" button covers a missed resume. Nothing polls in the background.
+The sheet stays open while the browser is out. The outcome comes back in the Swarm state the app already syncs (the
+project's `repositoryCreation`), so nothing polls. **Check again** re-reads the state if the sheet missed it.
 
 ## Failure states
 
@@ -273,19 +304,23 @@ and dark screenshots of each changed screen come with the pull request.
 
 ## Design
 
-- **Growth**: one `GitHubRepositoryApproval` row per created repository (an existing collection), with a new optional
-  `created: true` and the creator's user id. It is deleted with its project or Swarm, as approvals are today. Nothing
-  else is stored. The user token is never stored.
+- **Growth**: one small `repositoryCreation` object on the project in the Swarm state (owner, name, private, who,
+  when, outcome), replaced by the next attempt and deleted with the project. One `GitHubRepositoryApproval` row per
+  created repository (an existing collection), deleted with its project or Swarm as today. The user token is never
+  stored.
 - **Concurrency**: GitHub's unique name per organization is the lock. Two creates of the same name: one gets 201, the
-  other F2 (or F10 if it is the same person's retry). The approval row's existing unique index makes recording it
-  idempotent.
-- **Read cost**: the app reads one small endpoint once on resume or focus, or on Check again. No polling and no new
-  Swarm-state field. Organization choices come from repositories the client already has.
+  other F2 (or F10 if it is the same person's retry). The outcome is written in one Swarm-state transaction, and only
+  over the waiting request it answers (same person, same time), so a late callback never overwrites a newer attempt.
+  The approval row's existing unique index makes recording it idempotent.
+- **Read cost**: no new read. The outcome arrives with the Swarm state the apps already sync. Checking an organization
+  (F4, F5) is one small read when the person picks it, using the installation lookups the server already caches for 10
+  minutes. Organization choices come from repositories the client already has.
 - **Scale (10x)**: creation is a rare, person-paced action (a few a day). The first metric to warn is GitHub's
   secondary rate limit on content creation per user. Repository creation is far below it. Each create uses at most
   four GitHub calls on the person's own quota, plus the installation lookup that is already cached for 10 minutes.
-- **Compatibility**: a new endpoint and a new menu row. Old apps don't show the row and keep paste and clone. A new app
-  on an old server gets 404 on the endpoint and hides the row. `lead.start` is unchanged.
+- **Compatibility**: two new endpoints, one new optional project field and a new menu row. Old apps ignore the field,
+  don't show the row, and keep paste and clone. A new app on an old server gets 404 from the organization check and
+  hides the row. `lead.start` is unchanged.
 - **Migration and rollback**: no data migration. Rollback is the previous backend (endpoint gone, so the apps hide the
   row). Repositories already created stay on GitHub, as if made there. The GitHub-side permissions can be removed from
   the app's settings at any time.
