@@ -366,6 +366,20 @@ describe('requires.access and the start check (design section 3)', () => {
     expect(lastStart(f).machineId).toBe('gray-team')
   })
 
+  it('starts a recorded route\'s Mac candidate on the Mac only for a task that names the shared entry (security review 2)', () => {
+    const f = swarm()
+    const id = f.add('Lamp')
+    f.access({ action: 'change', entryId: id, teammates: true })
+    const named = f.group('lead', owner, { access: ['Lamp'] })
+    const routed = f.run({ type: 'route.record', conversationId: named, decision: record([candidate('c0', 'gray-mac')]) } as Command, owner)
+    expect(routed.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c0' }], excluded: [] } })
+    f.start(named)
+    expect(lastStart(f).machineId).toBe('gray-mac')
+    // Named in the route alone, not the task: the start goes to the Team account, which the route offers in its place.
+    f.start(f.group('lead', owner))
+    expect(lastStart(f).machineId).toBe('gray-team')
+  })
+
   it('sends Team-written code to the Team account even for a shared entry, and refuses it there', () => {
     const f = swarm()
     const id = f.add('Lamp')

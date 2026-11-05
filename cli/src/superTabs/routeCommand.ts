@@ -93,24 +93,36 @@ export function closestAccessName(name: string, names: readonly string[]): strin
  * machine off the Machines list, which lists nothing. [names]: every name the Swarm's machines list, for "Did you mean".
  */
 export function accessReasons(pool: Json | undefined, mac: Json | undefined, projectOwner: unknown, needed: readonly string[], people: Json[],
-  names: readonly string[]): string[] {
+  names: readonly string[],
+  /** Whether the task itself names every needed name: a shared own-account entry keeps a start on the Mac only then (backend
+   *  teamMachineFor reads the task's access), so a route asked with needs.access alone never counts one. */
+  taskNamed = true): string[] {
   const account = typeof pool?.hostMachineId === 'string' ? 'team' : 'own'
   const owner = (() => { const p = people.find(x => x.id === mac?.contributorId); return text(p?.name) ?? text(p?.username) ?? 'its owner' })()
   const teammate = projectOwner !== mac?.contributorId
   const ownAccountWork = typeof object(mac?.teamWork).ownAccount === 'string'
+  const onlyNamed = (e: Json) => `${String(e.name)} is shared from ${owner}'s own account only with tasks that name it in their access.`
   return needed.flatMap(name => {
     const entry = pool && mac ? entryOf(mac, name, account) : undefined
     if (!entry) {
       const other = pool && mac ? entryOf(mac, name, account === 'own' ? 'team' : 'own') : undefined
       if (other && account === 'own') return [`${String(other.name)} is in the Harness Team account on ${String(mac!.name)}, which runs only teammates' work.`]
+      if (other && teammate && other.teammates === true && other.state === 'ok' && !taskNamed) return [onlyNamed(other)]
       if (other && teammate) return [`${String(other.name)} is in ${owner}'s own account, not shared with teammates.`]
       const closest = closestAccessName(name, names)
       return [`No ${name} here.${closest ? ` Did you mean ${closest}?` : ''}`]
     }
     if (entry.state !== 'ok') return [`${String(entry.name)} on ${String(mac!.name)} is waiting for ${owner} to confirm.`]
+    if (account === 'own' && teammate && !ownAccountWork && entry.teammates === true && !taskNamed) return [onlyNamed(entry)]
     if (account === 'own' && teammate && entry.teammates !== true && !ownAccountWork) return [`${String(entry.name)} is in ${owner}'s own account, not shared with teammates.`]
     return []
   })
+}
+/** What the route notes on a candidate whose account would use a production system: access is never permission (design section 4). */
+export function productionNotes(pool: Json | undefined, mac: Json | undefined, needed: readonly string[]): string[] {
+  const account = typeof pool?.hostMachineId === 'string' ? 'team' : 'own'
+  const production = needed.map(name => entryOf(mac, name, account)).filter((e): e is Json => !!e && e.production === true).map(e => String(e.name))
+  return production.length ? [`${production.join(', ')} ${production.length > 1 ? 'are production systems' : 'is a production system'}: writes still need a person's go.`] : []
 }
 /** A note on a new agent there, not a filter (project instructions, phase 4): the agent choosing may still try it. */
 export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up); its owner can check the machine. This clears once a start there succeeds, its Harness is updated, or 30 minutes pass.'
@@ -319,6 +331,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     assessment = { ...assessment, needs: { ...assessment.needs, access } }
   }
   const needed = assessment.needs.access ?? []
+  // Only what the task itself names keeps a teammate's start in the owner's account (backend teamMachineFor).
+  const taskNamed = needed.length > 0 && needed.every(n => required.access.some(r => accessKey(r) === accessKey(n)))
   const projectId = String(group.projectId ?? 'lead')
   const project = list(state.projects).find(p => p.id === projectId)
   // Every idle agent is a candidate, whatever its role: the coordinator, and an agent an older client started as a Reviewer.
@@ -334,7 +348,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the route tries that machine
   // too, but a member there is unknown, never offline.
   const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
-  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[] }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[]; accessNotes?: string[] }>()
   for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The routing agent's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
@@ -361,7 +375,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const repository = object(project?.repository)
     const teamWork = object(original.teamWork)
     // A teammate's task that needs only entries its owner shared runs on the Mac, in the owner's account: said, not refused.
-    const shared = projectOwner !== original.contributorId && sharedOwnAccess(original, needed)
+    const shared = projectOwner !== original.contributorId && taskNamed && sharedOwnAccess(original, needed)
     const ownerName = (() => { const p = people.find(x => x.id === original.contributorId); return text(p?.name) ?? text(p?.username) ?? 'its owner' })()
     const pool: Json = { ...original,
       // Offline is said once, by the reading's own age below.
@@ -385,7 +399,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
   for (const [machineId, machine] of machines) {
     const listed = list(state.machines).find(m => m.machineId === machineId)
-    if (needed.length) machine.access = accessReasons(listed, listed && macPoolOf(listed), projectOwner, needed, people, accessNames)
+    if (needed.length) {
+      machine.access = accessReasons(listed, listed && macPoolOf(listed), projectOwner, needed, people, accessNames, taskNamed)
+      machine.accessNotes = productionNotes(listed, listed && macPoolOf(listed), needed)
+    }
     machine.stalled = stalled(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
     machine.held = heldByStarts(list(state.starts), machineId)
   }
@@ -396,7 +413,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
     // A teammate's task needing only what the owner shared stays on the Mac (backend teamMachineFor): its Team account folds.
-    const onMac = projectOwner === pool.contributorId || sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed)
+    const onMac = projectOwner === pool.contributorId || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
     machines.get(onMac ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
@@ -659,7 +676,7 @@ function loadOf(resources: Json, agents: number | null, cwd: string | undefined)
     cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId), access: unreached = [] }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[] },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId), access: unreached = [], accessNotes: noted = [] }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[]; accessNotes?: string[] },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
@@ -730,10 +747,10 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const closed = Array.isArray(observed.closedHarnessIds) && observed.closedHarnessIds.includes(m.harnessId)
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, closed, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...kept, ...teammates(m.contributorId), ...unreached] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount]), ...(fresh ? { load } : {}) }
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount, ...noted]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount, ...noted]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
