@@ -137,6 +137,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', scope: 'agent' },
+  // Its project's rules record, which a Team-account PM reads for the revision it saves on (superTabs/policy.ts).
+  { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/rules', scope: 'agent' },
   // What the route ranks by: the project's measured costs and its CI load (superTabs/costs/read.ts, github/ciLoad.ts). Missing
   // here until 2026-11-03, so a Team PM routed without them and the CI hold never applied.
   { method: 'GET', url: '/api/super-tabs/:tabId/costs', scope: 'agent' },

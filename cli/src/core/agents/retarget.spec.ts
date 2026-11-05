@@ -595,6 +595,22 @@ describe('retargeting an agent', () => {
       expect(vi.mocked(validateLaunchOverrides).mock.lastCall?.[2]).toMatchObject({ subscriptionModel: null })
     })
 
+    // Task #3449: the move home is built from its own source, so it dropped the launch model, and a PM came back from a grid
+    // without its xhigh (lib/launchOverrides.ts ranks the launch model above the remembered one).
+    it('back home: the launch model rides with the remembered model; a move onto a grid carries none', async () => {
+      const launchModel = { model: 'opus', effort: 'xhigh' }
+      const home = setup(agent({ grid: { baseUrl: 'x' }, subscriptionModel: 'opus', launchModel } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never,
+      })
+      expect(await home.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
+      expect(vi.mocked(validateLaunchOverrides).mock.lastCall?.[2]).toEqual({ gridLaunch: null, codexHome: undefined, subscriptionModel: 'opus', launchModel })
+      expect(home.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchModel }), expect.any(Function), undefined)
+      const away = setup(agent({ launchModel } as Partial<RegisteredSession>))
+      await away.retarget({ agentId: 'a1', grid })
+      expect(away.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ launchModel: expect.anything() }),
+        expect.any(Function), undefined)
+    })
+
     it('on a ptyhost pane: swapped through that pane\'s own backend, the grid\'s names cleared by the respawn on the way home', async () => {
       const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%3' }
       const ptyBackend = { name: 'ptyhost', holdOpen: vi.fn(), respawn: vi.fn(), releaseHold: vi.fn(async () => {}) }

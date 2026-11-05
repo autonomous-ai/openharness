@@ -665,7 +665,8 @@ describe('work waiting for its review', () => {
   // 2026-10-29: five Engineers who had pushed and handed over lost their tasks after 30 quiet minutes waiting for a Reviewer.
   // Project instructions, phase 4: the review status waits; a failed check is a finding that moves nothing. An older skill's
   // working hand-off waits too while agents on those skills exist (this release), until someone else's verdict finds problems.
-  it('stays with its Engineer through 45 quiet minutes in review, a failed check included, and counts 30 once it is working again', async () => {
+  // Task #3399: a failed check brings a task in review back to its Engineer, which keeps it for 60 minutes to pick it up.
+  it('stays with its Engineer through 45 quiet minutes in review and 45 more once a failed check brings it back, and counts 30 once it is working again', async () => {
     const f = await swarm({ independent: true })
     const handedOver = f.clock.now
     const status = (status: 'review' | 'working', result: string) =>
@@ -683,8 +684,9 @@ describe('work waiting for its review', () => {
     expect((await f.assignment()).status).toBe('review')
     const check = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
     await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: check, passed: false, evidence: 'Two findings' })
+    expect(await f.assignment()).toMatchObject({ status: 'working', reopened: { at: f.clock.now } })
     await quiet(f.clock.now, 45)
-    expect((await f.assignment()).status).toBe('review')
+    expect((await f.assignment()).status).toBe('working')
     expect(await f.lostRows()).toEqual([])
     // Back to working, as an older skill hands over: that hand-off waits too, until a person's verdict finds problems in it.
     await status('working', 'Ready for review: PR #7 at 4f9c2e1')
