@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from './model.js'
-import { DISPATCH_RULES, dispatchPlan, freeCrew, laneOf, returnReason } from './dispatch.js'
+import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
+import { DISPATCH_RULES, dispatchPlan, freeCrew, laneOf, nudgeLine, returnReason } from './dispatch.js'
+import { sweepLiveness } from './liveness.js'
 
 const NOW = Date.parse('2026-11-05T15:00:00Z')
 
@@ -175,5 +176,62 @@ describe('what a free crew member gets', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
     s.state.paused = true
     expect(s.picks()).toEqual([])
+  })
+})
+
+describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours puts the task back in its lane', () => {
+  const HOUR = 3_600_000, AT = 1000
+  /** Ash (crew, backend) working on Api since AT; Birch (crew, backend) free. */
+  function working() {
+    const s = crewSwarm(['Ash', 'Birch'])
+    for (const name of ['Ash', 'Birch']) s.state.agents.find(a => a.id === s.ids[name])!.crew = { role: 'Engineer', lane: 'backend', at: AT, by: 'owner' }
+    const api = s.task('Api', ['backend/src/a.ts'])
+    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
+    /** The liveness sweep at [now], with the machine reporting every session running and busy on screen till then. */
+    const sweep = (now: number) => {
+      s.state.machines = [{ machineId: 'host', name: 'Mac', observation: { runningHarnessIds: s.state.agents.map(a => a.harnessId),
+        stoppedHarnessIds: [], receivedAt: now, harnessProgress: Object.fromEntries(s.state.agents.map(a => [a.harnessId, now])) } }] as never
+      return sweepLiveness(s.state, now)
+    }
+    const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
+    return { ...s, api, sweep, lines }
+  }
+
+  it('tells the member once at 2 hours, and again only after a new spell of quiet', () => {
+    const s = working()
+    expect(s.lines(s.sweep(AT + 2 * HOUR - 60_000))).toEqual([])
+    expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([nudgeLine('backend')])
+    expect(nudgeLine('backend')).toBe('No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the backend lane.')
+    expect(s.lines(s.sweep(AT + 2 * HOUR + 30_000))).toEqual([])
+    expect(s.group(s.api).assignment!.status).toBe('working')
+    // Its own post at 2 h 10 restarts both clocks.
+    s.run({ type: 'message.send', conversationId: s.api, text: 'Halfway: the store is done.', replyTo: null, recipientIds: [] }, s.as(s.ids.Ash!), { now: AT + 2 * HOUR + 10 * 60_000 })
+    expect(s.lines(s.sweep(AT + 3 * HOUR))).toEqual([])
+    expect(s.group(s.api).assignment!.status).toBe('working')
+    expect(s.lines(s.sweep(AT + 4 * HOUR + 10 * 60_000))).toEqual([nudgeLine('backend')])
+  })
+
+  it('returns the task to its lane at 3 hours with the reason, for another member, not the same one', () => {
+    const s = working()
+    s.sweep(AT + 2 * HOUR)
+    s.sweep(AT + 3 * HOUR)
+    const group = s.group(s.api)
+    expect(group.assignment!.status).toBe('lost')
+    expect(group.assignment!.lost!.reason).toBe('no progress for 3 hours: back in the backend lane')
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, AT + 3 * HOUR).map(p => [p.agentId, p.conversationId])).toEqual([[s.ids.Birch!, s.api]])
+  })
+
+  it('never ticks while it waits on a person or a review, nor for a worker not in the crew', () => {
+    const s = working()
+    s.group(s.api).assignment!.status = 'needs_human'
+    s.sweep(AT + 4 * HOUR)
+    expect(s.group(s.api).assignment!.status).toBe('needs_human')
+    s.group(s.api).assignment!.status = 'review'
+    s.sweep(AT + 5 * HOUR)
+    expect(s.group(s.api).assignment!.status).toBe('review')
+    s.group(s.api).assignment!.status = 'working'
+    delete s.state.agents.find(a => a.id === s.ids.Ash)!.crew
+    expect(s.lines(s.sweep(AT + 6 * HOUR))).toEqual([])
+    expect(s.group(s.api).assignment!.status).toBe('working')
   })
 })
