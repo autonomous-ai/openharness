@@ -71,8 +71,8 @@ import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
-import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
-import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
+import { freeze, readHostStamp, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
+import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, recordHolds, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
@@ -3450,10 +3450,11 @@ export class SuperTabStore {
   private async fastReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, host: MachineHost,
     loaded?: MachinePart | null): Promise<{ version: number } | { sweep: true } | null> {
     if (stampOwed(tabId)) return null
-    const [stamps, record] = await Promise.all([readStamps([tabId]), this.reports.get(tabId, machineId)])
+    const [stamps, record] = await Promise.all([readHostStamp(tabId, machineId), this.reports.get(tabId, machineId)])
     const now = this.now()
-    // A record holds for RECORD_TTL_MS after its own full report, whatever other machines of the Swarm write since.
-    if (!record || stamps?.get(tabId)?.main !== record.stamp || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
+    // A record holds for RECORD_TTL_MS after its own full report, whatever other machines of the Swarm write since, and
+    // whatever changed there that this machine's host does not read (machineReports.ts recordHolds).
+    if (!record || !stamps || !recordHolds(record, stamps) || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
     // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
     if ((record.team && !isTeamSession(user)) || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
     const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
@@ -3497,7 +3498,7 @@ export class SuperTabStore {
   private async fullReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, sweep: boolean | null,
     { owned }: MachineHost): Promise<{ version: number }> {
     // The Swarm's stamp before anything is loaded: the next reports may skip the load only while it holds (machineReports.ts).
-    const before = (await readStamps([tabId]))?.get(tabId)?.main
+    const before = await readHostStamp(tabId, machineId)
     const { version, record } = await transaction(this.db, async (tx): Promise<{ version: number; record?: Omit<ReportRecord, 'stamp'> }> => {
       // Only the conversations its checks read (parts/load.ts loadObserved): the whole Swarm was ~1.1 MB a report (#876).
       const row = await this.row(tx, user, tabId)
@@ -3622,7 +3623,7 @@ export class SuperTabStore {
         team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
         preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
     })
-    if (record && before !== undefined && !stampOwed(tabId)) await this.reports.set(tabId, machineId, { ...record, stamp: before })
+    if (record && before && !stampOwed(tabId)) await this.reports.set(tabId, machineId, { ...record, stamp: before.main, hosts: { host: before.host, all: before.all } })
     return { version }
   }
 

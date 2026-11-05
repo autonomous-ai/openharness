@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { extracted } from './write.js'
+import { ALL_HOSTS } from '../cache.js'
+import { extracted, writeHosts } from './write.js'
 import type { GroupData } from './types.js'
 
 describe('the host-fields digest a conversation write stores (group 3b)', () => {
@@ -44,5 +45,36 @@ describe('the finished-work mark a conversation write stores', () => {
   it('is never set on a linked group: it closes with its task', () => {
     const linked = (status: string | null) => ({ ...group(status), reviewOf: 'built' })
     for (const status of [null, 'lost', 'stopped', 'done', 'cancelled', 'working', 'review']) expect(extracted('group', linked(status), 1).workFinished).toBe(false)
+  })
+})
+
+// The host stamps that keep a machine's reading-only reports off the Swarm's load (task #3119) move by the rule the host read
+// wakes by: a write this table leaves out would let a reading skip a change its full report decides from.
+describe('which hosts a write concerns', () => {
+  const update = (kind: Parameters<typeof writeHosts>[0]['kind'], data: unknown, host?: { hostChangedAt?: Date; hostMachineIds?: string[] }) =>
+    writeHosts({ op: 'update', kind, key: 'k', seen: 1, data, ...host ? { host } : {} })
+
+  it('is every host for the head, a member, a machine\'s settings, and a part whose host its data does not name', () => {
+    expect(update('head', {})).toEqual([ALL_HOSTS])
+    expect(update('member', {})).toEqual([ALL_HOSTS])
+    expect(update('machine', {}, { hostChangedAt: new Date(1) })).toEqual([ALL_HOSTS])
+    expect(update('group', {})).toEqual([ALL_HOSTS])
+    expect(update('agent', {})).toEqual([ALL_HOSTS])
+    expect(update('start', { request: {} })).toEqual([ALL_HOSTS])
+  })
+
+  it('is an agent\'s or a start\'s machine, and the machines a group\'s marker names, added or removed alike', () => {
+    expect(update('agent', { machineId: 'A' })).toEqual(['A'])
+    expect(update('start', { request: { machineId: 'B' } })).toEqual(['B'])
+    expect(update('group', {}, { hostMachineIds: ['A', 'C'] })).toEqual(['A', 'C'])
+    expect(update('group', {}, { hostMachineIds: [] })).toEqual([])
+    expect(writeHosts({ op: 'remove', kind: 'agent', key: 'k', seen: 1, data: { machineId: 'A' } })).toEqual(['A'])
+    expect(writeHosts({ op: 'insert', kind: 'start', key: 'k', ordinal: 1, data: { request: { machineId: 'B' } } })).toEqual(['B'])
+  })
+
+  it('is none for a machine\'s own reading, a touch, or project progress', () => {
+    expect(update('machine', {})).toEqual([])
+    expect(writeHosts({ op: 'touch', kind: 'head', key: 'head', seen: 1 })).toEqual([])
+    expect(update('progress', {})).toEqual([])
   })
 })
