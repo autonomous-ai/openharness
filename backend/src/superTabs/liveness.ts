@@ -1,3 +1,4 @@
+import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
 import { failedSessionStart } from './buddySessions.js'
@@ -299,10 +300,15 @@ export function nextLossAt(state: SuperTabState, machineId: string): number | un
   return ends.length ? Math.min(...ends) : undefined
 }
 
+/** A crew member whose session went down less than CREW_REOPEN_GRACE_MS ago, which its host is reopening. */
+const reopening = (worker: Agent, now: number): boolean =>
+  isCrew(worker) && !!worker.downSince && now - Date.parse(worker.downSince) < CREW_REOPEN_GRACE_MS
+
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
+  // A crew member's host reopens its session in place (crew.ts): it keeps its task for the reopen's grace.
+  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !reopening(worker, now)) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited

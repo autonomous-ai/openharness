@@ -1,4 +1,5 @@
 import { isBuddy } from './buddies.js'
+import { isCrew } from './crew.js'
 import { MACHINE_FRESH_MS, productManagerOn, teamAccountPool, teamWorkCheck, type MachineObservation } from './machines.js'
 import { activeWork, type Agent, type RemovedSession, type SuperTabState } from './model.js'
 import { agentProjectId, canReadProject, isConfidential, ledProject, onTeamAccount, projectsOf } from './projects.js'
@@ -17,9 +18,10 @@ export const REMOVED_KEEP_MS = 30 * 24 * 60 * 60_000
  *  one stopped for a moment before it is back (security reviews of #2569). */
 export const STOPPED_REMOVE_MS = 30_000
 
-/** Whether [target] could ever leave this way: not a coordinator, a Buddy, one kept or being stopped. */
+/** Whether [target] could ever leave this way: not a coordinator, a Buddy, crew (its host reopens it in place, crew.ts), one
+ *  kept or being stopped. */
 const removable = (state: SuperTabState, target: Agent): boolean =>
-  !isBuddy(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
+  !isBuddy(target) && !isCrew(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
 /** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
  *  very generation, since an older host lists the earlier run stopped and cannot say which. */
