@@ -36,21 +36,25 @@ export function hiddenPromptReason(hold: MessageHold): string {
   return `Its engine stopped on ${KINDS[hold] ?? 'a screen'} that nobody here can answer.`
 }
 
-/** What the host did with the screen: answered it, failed the start for it, or nothing (no screen waits, or none read). */
+/** What the host did with the screen: answered it, failed the start for it, saw it once (`screen`, to compare with the next
+ *  pass's), or nothing (no screen waits, or none read). */
 export async function settleHiddenScreen(terminal: Terminal | undefined, harnessId: string, request: Record<string, unknown>,
-  fail: (reason: string) => Promise<void>, log: (line: string) => void): Promise<'answered' | 'failed' | null> {
-  if (!terminal) return null
+  previous: string | undefined, fail: (reason: string) => Promise<void>, log: (line: string) => void,
+): Promise<{ outcome: 'answered' | 'failed' | 'seen' | null; screen?: string }> {
+  if (!terminal) return { outcome: null }
   const read = await terminal.screen(harnessId, 0).catch(() => null)
-  if (!read?.ok || !read.hold || !WAITING.has(read.hold as MessageHold)) return null
+  if (!read?.ok || !read.hold || !WAITING.has(read.hold as MessageHold)) return { outcome: null }
   const keys = request.engine === 'codex' && request.projectSettings === 'off' ? openRestrictedKeys(read.text) : null
   if (keys) {
     // A pane that changed meanwhile is read again on the next pass, never answered blind.
     const typed = await terminal.inputIfScreen(harnessId, keys, read.text).catch(() => null)
     if (typed?.ok) log(`Opened the Team-written checkout restricted for session ${harnessId.slice(0, 8)}, as its engine asked`)
-    return typed?.ok ? 'answered' : null
+    return { outcome: typed?.ok ? 'answered' : null }
   }
-  const reason = hiddenPromptReason(read.hold as MessageHold)
-  await fail(reason)
+  // Security review 1 of #3063: one read of a screen still drawing failed a start that would have gone on, and two failures in
+  // a row suspend its engine there. Failed only once the next pass, 5 s or more later, reads the very same screen.
+  if (previous !== read.text) return { outcome: 'seen', screen: read.text }
+  await fail(hiddenPromptReason(read.hold as MessageHold))
   log(`Failed a start at once: session ${harnessId.slice(0, 8)} stopped on a ${read.hold.replace(/_open$/, '')} screen`)
-  return 'failed'
+  return { outcome: 'failed' }
 }

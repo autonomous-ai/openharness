@@ -230,8 +230,8 @@ export function untrustCheckout(home: string, checkout: string): void {
   let resolved = checkout
   try { resolved = realpathSync(checkout) } catch { /* A folder not made yet is named as written. */ }
   const config = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  // A TOML basic string takes JSON's escapes for a quote, a backslash and control characters.
-  const tables = [...new Set([checkout, resolved])].map(folder => `[projects.${JSON.stringify(folder)}]`).filter(table => !config.includes(table))
+  // A TOML basic string is a JSON string, except that DEL must be escaped too (engines/kit/folderTrust.ts recordToml).
+  const tables = [...new Set([checkout, resolved])].map(folder => `[projects.${JSON.stringify(folder).replace(/\x7f/g, '\\u007f')}]`).filter(table => !config.includes(table))
   if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 

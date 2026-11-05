@@ -230,6 +230,8 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Per start, the waiting screen its engine showed on the last pass (startScreen.ts), until the next pass reads it again. */
+  private readonly hiddenScreens = new Map<string, string>()
   /** The starts whose host reports the backend refused (a 403), with its refusal, as this machine's passes met them. Named in
    *  the next reading so the backend fails each at once (backend liveness.ts failRefusedStarts), where it waited out its 3
    *  minutes with the refusal in this log alone (task #2441). */
@@ -499,6 +501,7 @@ export class ContributedMachines {
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const id of this.refused.keys()) if (!pendingIds.has(id)) this.refused.delete(id)
     for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
+    for (const id of this.hiddenScreens.keys()) if (!pendingIds.has(id)) this.hiddenScreens.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const [id, launch] of this.agentless) if (!pendingIds.has(id) && !launch.checking) void this.failedEarly(id, launch, where)
@@ -738,12 +741,14 @@ export class ContributedMachines {
               // the start now rather than at the backend's 3 minutes (startScreen.ts, task #3009). Its agent goes as any failed
               // start's does, through [abandoned], which [remember] above keeps it for.
               if (result.error === 'START_PENDING' && result.state !== 'pending' && identifier(result.harnessId)) {
-                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request),
+                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request), this.hiddenScreens.get(start.id),
                   async error => { await scoped({ action: 'command', operationId: `hidden-screen-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error } }) },
                   line => this.log(line))
-                if (settled === 'failed') { this.refusedSince.delete(start.id); continue }
-              }
-              const held =result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
+                if (settled.screen !== undefined) this.hiddenScreens.set(start.id, settled.screen)
+                else this.hiddenScreens.delete(start.id)
+                if (settled.outcome === 'failed') { this.refusedSince.delete(start.id); continue }
+              } else this.hiddenScreens.delete(start.id)
+              const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
               if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
               else {
                 const since = this.heldSince.get(start.id) ?? began
