@@ -348,6 +348,14 @@ describe('requires.access and the start check (design section 3)', () => {
     expect(f.state.starts ?? []).toEqual([])
   })
 
+  it('refuses a start on a machine off the Machines list, which lists nothing it can reach', () => {
+    const f = swarm()
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    expect(refusal(() => f.run({ type: 'agent.start', request: { conversationId: work, machineId: 'owner-laptop', engine: 'codex', name: 'Builder',
+      cwd: '/somewhere', worktree: true, requirements } }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })))
+      .toMatchObject({ code: 'ACCESS_MISSING', message: 'No Lamp here.' })
+  })
+
   it('refuses an entry waiting for its owner to confirm', () => {
     const f = swarm()
     f.add('Lamp', { account: 'team', askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('owner'))
