@@ -842,9 +842,9 @@ function prepareBuddyFolder(root: string, key: string): void {
   ignoreBuddyFiles(root)
 }
 /** Why a Buddy is not prepared in a Harness Team account: the server's own words (backend buddyContract.ts). */
-const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
+export const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
 /** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
-const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
+export const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
