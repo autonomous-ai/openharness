@@ -8,7 +8,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
-import 'package:harness_mobile/ws/ws_conn.dart';
 
 import 'devices_fixture.dart';
 
