@@ -5,6 +5,7 @@
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
+import { heldView } from '../heldReason.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
@@ -70,7 +71,9 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }), ...readers }
+  const held = heldView(group)
+  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+    ...(held ? { held } : {}), ...readers }
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */

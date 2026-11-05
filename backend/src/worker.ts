@@ -27,6 +27,9 @@ import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
+import { startMergeTrain } from './superTabs/mergeTrain/run.js'
+import { teamAccountRequired } from './superTabs/machines.js'
+import { PrismaApprovals } from './github/approvals.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
@@ -80,6 +83,7 @@ async function start(): Promise<void> {
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
   let stopTimeChecks = (): void => {}
+  let stopMergeTrain = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
   let stopCompaction = (): void => {}
@@ -102,6 +106,7 @@ async function start(): Promise<void> {
     stopArchive()
     stopPullRequestWatch()
     stopTimeChecks()
+    stopMergeTrain()
     stopDeliveries()
     stopRepush()
     stopCompaction()
@@ -163,6 +168,13 @@ async function start(): Promise<void> {
   // Every 30 s, each active Swarm's time checks: lost and stalled work, failed starts and idle agents, told to its PM whether or
   // not the PM is up (superTabs/timeChecks.ts, task #3385). The PM's poll ran them before, so a hung PM stopped them.
   stopTimeChecks = startTimeChecks(prisma, swarms)
+  // Every minute, each project whose merge train is switched on (its rules; off until then) merges what passed at its head, in
+  // batches through the app (superTabs/mergeTrain/, task #3402). Only where an agent's token could be had for the repository.
+  if (githubApp) {
+    const approvals = new PrismaApprovals(prisma)
+    stopMergeTrain = startMergeTrain({ store: swarms, app: githubApp,
+      approved: async (project, repository) => !teamAccountRequired() || approvals.approved(project.autonomousEnv, project.tabId, project.projectId, repository) })
+  }
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
