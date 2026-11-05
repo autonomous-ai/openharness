@@ -62,6 +62,20 @@ describe('a task agent waiting at a prompt (task #3029)', () => {
     expect(promptWaits(s.state, peer)).toEqual([])
   })
 
+  it('reaches the machine\'s owner when a step\'s task needs a device on that machine: a step carries no requirements of its own', () => {
+    const s = scene()
+    const bench = s.group('Flash the board')
+    s.edit(state => { const task = state.conversations.find(c => c.id === bench)!; task.task = { ...task.task!, requires: { devices: ['/dev/cu.usbmodem1'] } } })
+    const test = s.run({ type: 'conversation.create', title: 'Test Flash the board', brief: 'Test it on the board.', checks: [], reviewOf: bench }).conversationId as string
+    const tester = s.add('tester', test, false, peer, 'peer-mac', peer.userId)
+    s.run({ type: 'work.assign', conversationId: test, agentId: tester })
+    s.edit(state => { state.agents.find(a => a.id === tester)!.alerting = ['prompt'] })
+    expect(promptWaits(s.state, peer).map(w => [w.agentId, w.conversationId])).toEqual([[tester, test]])
+    // The task's device is on another machine: not this machine's owner's to handle.
+    s.edit(state => { const task = state.conversations.find(c => c.id === bench)!; task.task = { ...task.task!, requires: { machines: ['host'], devices: ['/dev/cu.usbmodem1'] } } })
+    expect(promptWaits(s.state, peer)).toEqual([])
+  })
+
   it('reaches the requester of the task a step reviews, and nobody for an agent with no task', () => {
     const s = scene()
     s.run({ type: 'conversation.requester', conversationId: s.web, personId: peer.userId })
