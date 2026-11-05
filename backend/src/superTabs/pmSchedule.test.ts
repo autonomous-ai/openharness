@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
-import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot } from './pmSchedule.js'
+import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot } from './pmSchedule.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
 
 /** 10:00 on 4 November in Vietnam (03:00 UTC): a slot's first millisecond. */
@@ -112,5 +112,78 @@ describe('the built-in PM schedule', () => {
     expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
     expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
     expect(PM_SCHEDULE_TEXT).toContain('nightly reflection')
+  })
+})
+
+// Task #3022, as River amended it after Ken's proposal (11-05): lamp's PM forgot a rule 15 to 60 minutes after it was taught,
+// so the 30-minute wake also asks the coordinator to catch what people taught it, and once a day to tidy the instructions.
+describe('the built-in wake\'s jobs for what people teach the coordinator', () => {
+  const HOUR = 60 * 60_000
+  const chat = (state: SuperTabState) => state.conversations.find(c => c.id === 'lead-p1')!
+  /** Nothing to sweep: the one task has its agent working. */
+  const busy = () => swarm(task(1, work('working')))
+  const project = (state: SuperTabState) => state.projects![0]!
+
+  it('wakes the coordinator when a person wrote to it since the last wake, with nothing to sweep', () => {
+    const state = busy()
+    chat(state).heardAt = T - 1
+    const scheduled = wake(state)!
+    expect(scheduled.jobs).toEqual(['heard'])
+    expect(scheduled.draft.text).toContain('- What people taught you:')
+    expect(scheduled.draft.text).not.toContain('- Open-task sweep:')
+  })
+
+  it('does not wake it when nobody wrote to it since the last wake', () => {
+    const state = busy()
+    expect(wake(state)).toBeNull()
+    chat(state).heardAt = T - HOUR
+    project(state).schedule = { lastSlot: SLOT - 1, heardAt: T - HOUR }
+    expect(wake(state)).toBeNull()
+  })
+
+  it('names every job due in one wake', () => {
+    const state = swarm(task(1, null))
+    chat(state).heardAt = T - 1
+    project(state).instructionsRevision = 3
+    const scheduled = wake(state)!
+    expect(scheduled.jobs).toEqual(['sweep', 'heard', 'tidy'])
+    for (const line of ['- Open-task sweep:', '- What people taught you:', '- Daily tidy:']) expect(scheduled.draft.text).toContain(line)
+  })
+
+  it('tidies once a local day, and only when the instructions changed since the last tidy', () => {
+    const state = busy()
+    project(state).instructionsRevision = 3
+    const first = wake(state)!
+    expect(first.jobs).toEqual(['tidy'])
+    recordWake(project(state), first, T, first.draft.id)
+    expect(project(state).schedule).toMatchObject({ lastSlot: SLOT, tidiedOn: '2026-11-04', tidiedRevision: 3 })
+    // A new revision the same day waits for the next day.
+    project(state).instructionsRevision = 4
+    expect(wake(state, T + SCHEDULE_SLOT_MS)).toBeNull()
+    // 00:00 on 5 November in Vietnam.
+    const midnight = Date.UTC(2026, 10, 4, 17, 0)
+    expect(wake(state, midnight)!.jobs).toEqual(['tidy'])
+    // No change since the last tidy: no tidy the next day either.
+    project(state).instructionsRevision = 3
+    expect(wake(state, midnight)).toBeNull()
+  })
+
+  it('records what a written wake carried, and only the slot of one held back, so its jobs stay due', () => {
+    const state = busy()
+    chat(state).heardAt = T - 1
+    project(state).instructionsRevision = 2
+    const held = wake(state)!
+    recordWake(project(state), held, T, null)
+    expect(project(state).schedule).toEqual({ lastSlot: SLOT })
+    expect(wake(state, T + SCHEDULE_SLOT_MS)!.jobs).toEqual(['heard', 'tidy'])
+    const next = wake(state, T + SCHEDULE_SLOT_MS)!
+    recordWake(project(state), next, T + SCHEDULE_SLOT_MS, 'wake-2')
+    expect(project(state).schedule).toEqual({ lastSlot: SLOT + 1, wakeId: 'wake-2', heardAt: T + SCHEDULE_SLOT_MS, tidiedOn: '2026-11-04', tidiedRevision: 2 })
+    expect(wake(state, T + 2 * SCHEDULE_SLOT_MS)).toBeNull()
+  })
+
+  it('says in the built-in section when the Swarm wakes it for them', () => {
+    expect(PM_SCHEDULE_TEXT).toContain('when a person wrote to you since the last wake')
+    expect(PM_SCHEDULE_TEXT).toContain('Once a day, when the instructions changed')
   })
 })
