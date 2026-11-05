@@ -518,10 +518,7 @@ class _PulseSheet extends StatelessWidget {
       ),
       title: name ?? 'A person',
       detail: SwarmRow.line(
-        [
-          if (ask.at case final at?) '${swarmPulseAge(now.difference(at))} ago',
-          ?where,
-        ].join(' · '),
+        ['${swarmPulseAge(now.difference(ask.at))} ago', ?where].join(' · '),
       ),
       onTap: () => unawaited(
         Navigator.of(context).push(

@@ -689,11 +689,7 @@ class SuperTabSnapshot {
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
-      pulses = Map.unmodifiable({
-        if (row['pulse'] case final Map pulses)
-          for (final MapEntry(:key, :value) in pulses.entries)
-            if (key is String) key: ?SuperTabPulse.read(value),
-      }),
+      pulses = SuperTabPulse.readAll(row['pulse']),
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,

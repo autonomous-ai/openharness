@@ -235,7 +235,9 @@ void main() {
     }
 
     test('is read into each project of the snapshot', () async {
-      final now = DateTime.utc(2026, 11, 5, 12);
+      // Local, as Desktop's model (pulse_model.dart) reads the server's
+      // times.
+      final now = DateTime(2026, 11, 5, 12);
       final reader = await read(
         {
           'pulse': {
@@ -544,7 +546,7 @@ void main() {
   // read differently, the oldest ask's age or a rule turning red, never on a
   // fixed tick.
   group('when the strip wakes', () {
-    final now = DateTime.utc(2026, 11, 5, 12);
+    final now = DateTime(2026, 11, 5, 12);
     SuperTabPulse pulse(Map<String, dynamic> data) => SuperTabPulse.read(data)!;
 
     test('never, with no ask and no rule still to turn red', () {

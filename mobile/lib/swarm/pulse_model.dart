@@ -1,183 +1,105 @@
-/// A project's board pulse (task #3384), as the server works it out at read
-/// time and sends it in the read's `derived.pulse[projectId]` (backend
-/// superTabs/pulse.ts; contract in docs/plans/2026-11-05-board-pulse-plan.md):
-/// what waits for the project's PM, who works, and what is next up, lost and
-/// held. The phone holds no threshold: a rule is red once the server's
-/// `redAt` for it has come ([SuperTabPulse.isRed]).
+/// A project's board pulse (task #3384): what waits for its PM and who works,
+/// as the server works it out per read (backend superTabs/pulse.ts) and sends
+/// it in `derived.pulse`. The server decides when each count turns red
+/// (`redAt`); the app holds no threshold of its own.
 library;
 
-/// The rules that turn a part of the pulse red, by their `redAt` key: an ask
-/// waiting too long ([asks]), nobody working while work waits ([idle], on
-/// Working), a task with no agent ([lost]) and a hold with no reason ([held]).
-enum SuperTabPulseRule { asks, idle, lost, held }
+/// A rule that turns a segment of the pulse red.
+enum SuperTabPulseRule {
+  /// An ask has waited too long for the PM.
+  asks,
 
-/// One message a person sent the PM that the PM has not settled yet.
+  /// Nobody has worked while work waited.
+  idle,
+
+  /// A lost task has had no agent too long.
+  lost,
+
+  /// A hold has no reason.
+  held,
+}
+
+/// A person's message to the PM not yet settled.
 typedef SuperTabPulseAsk = ({
   String conversationId,
   String messageId,
   String? personId,
-  DateTime? at,
+  DateTime at,
 });
 
-/// A held task and why it is held: null when nobody said.
+/// A held task and why, null when nobody said.
 typedef SuperTabPulseHold = ({String conversationId, String? reason});
 
-class SuperTabPulseAsks {
-  const SuperTabPulseAsks({
-    required this.count,
-    this.oldestAt,
-    this.personId,
-    this.list = const [],
-  });
-
-  final int count;
-
-  /// When the oldest ask was sent, and who sent it; null with none.
-  final DateTime? oldestAt;
-  final String? personId;
-
-  /// The asks, as many as the server lists.
-  final List<SuperTabPulseAsk> list;
-}
-
-class SuperTabPulseWorking {
-  const SuperTabPulseWorking({
-    required this.count,
-    required this.crew,
-    this.agentIds = const [],
-  });
-
-  /// The agents working, of the project's [crew].
-  final int count, crew;
-  final List<String> agentIds;
-}
-
-/// A count of tasks and which they are: Next up and Lost.
-class SuperTabPulseTasks {
-  const SuperTabPulseTasks({
-    required this.count,
-    this.conversationIds = const [],
-  });
-
-  final int count;
-  final List<String> conversationIds;
-}
-
-class SuperTabPulseHeld {
-  const SuperTabPulseHeld({
-    required this.count,
-    this.withoutReason = 0,
-    this.list = const [],
-  });
-
-  final int count;
-
-  /// How many of them have no reason.
-  final int withoutReason;
-  final List<SuperTabPulseHold> list;
-}
-
 class SuperTabPulse {
-  const SuperTabPulse({
-    this.pmId,
-    required this.asks,
-    required this.working,
-    required this.nextUp,
-    required this.lost,
-    required this.held,
-    this.redAt = const {},
-  });
+  SuperTabPulse._(Map<String, dynamic> row)
+    : pmId = _optional<String>(row['pmId']),
+      asks = _asks(_map(row['asks'])),
+      working = _working(_map(row['working'])),
+      nextUp = _tasks(_map(row['nextUp'])),
+      lost = _tasks(_map(row['lost'])),
+      held = _held(_map(row['held'])),
+      limits = switch (row['limits']) {
+        final Map limits => (
+          askMinutes: _optional<num>(limits['askMinutes'])?.toInt(),
+          idleMinutes: _optional<num>(limits['idleMinutes'])?.toInt(),
+          lostMinutes: _optional<num>(limits['lostMinutes'])?.toInt(),
+        ),
+        _ => (askMinutes: null, idleMinutes: null, lostMinutes: null),
+      },
+      redAt = Map.unmodifiable({
+        for (final rule in SuperTabPulseRule.values)
+          rule: ?_time(_map(row['redAt'])[rule.name]),
+      });
 
-  /// [value] read as the server sends it; null for anything that is not a
-  /// pulse, so the board draws no strip rather than a wrong one.
+  /// [value]'s pulse; null for one this build cannot read, so the board draws
+  /// no strip rather than a wrong one.
   static SuperTabPulse? read(Object? value) {
     if (value is! Map) return null;
-    final asks = value['asks'], working = value['working'];
-    final nextUp = value['nextUp'], lost = value['lost'];
-    final held = value['held'];
-    if (asks is! Map ||
-        working is! Map ||
-        nextUp is! Map ||
-        lost is! Map ||
-        held is! Map) {
+    try {
+      return SuperTabPulse._(Map<String, dynamic>.from(value));
+    } on FormatException {
       return null;
     }
-    final redAt = value['redAt'];
-    return SuperTabPulse(
-      pmId: _string(value['pmId']),
-      asks: SuperTabPulseAsks(
-        count: _count(asks['count']),
-        oldestAt: _time(asks['oldestAt']),
-        personId: _string(asks['personId']),
-        list: List.unmodifiable([
-          for (final ask in _list(asks['list']))
-            if (ask case {
-              'conversationId': final String conversationId,
-              'messageId': final String messageId,
-            })
-              (
-                conversationId: conversationId,
-                messageId: messageId,
-                personId: _string(ask['personId']),
-                at: _time(ask['at']),
-              ),
-        ]),
-      ),
-      working: SuperTabPulseWorking(
-        count: _count(working['count']),
-        crew: _count(working['crew']),
-        agentIds: _strings(working['agentIds']),
-      ),
-      nextUp: SuperTabPulseTasks(
-        count: _count(nextUp['count']),
-        conversationIds: _strings(nextUp['conversationIds']),
-      ),
-      lost: SuperTabPulseTasks(
-        count: _count(lost['count']),
-        conversationIds: _strings(lost['conversationIds']),
-      ),
-      held: SuperTabPulseHeld(
-        count: _count(held['count']),
-        withoutReason: _count(held['withoutReason']),
-        list: List.unmodifiable([
-          for (final hold in _list(held['list']))
-            if (hold case {'conversationId': final String conversationId})
-              (
-                conversationId: conversationId,
-                reason: switch (hold['reason']) {
-                  final String reason when reason.trim().isNotEmpty => reason,
-                  _ => null,
-                },
-              ),
-        ]),
-      ),
-      redAt: Map.unmodifiable({
-        if (redAt is Map)
-          for (final rule in SuperTabPulseRule.values)
-            rule: ?_time(redAt[rule.name]),
-      }),
-    );
   }
 
-  /// The project's PM, by agent id; null when it has none.
-  final String? pmId;
-  final SuperTabPulseAsks asks;
-  final SuperTabPulseWorking working;
-  final SuperTabPulseTasks nextUp, lost;
-  final SuperTabPulseHeld held;
+  /// Every project's pulse in `derived.pulse`, by project id; empty from a
+  /// server before it.
+  static Map<String, SuperTabPulse> readAll(Object? value) => Map.unmodifiable({
+    if (value is Map)
+      for (final MapEntry(:key, :value) in value.entries)
+        if (key is String) key: ?read(value),
+  });
 
-  /// When each rule turns red, as the server worked it out; a rule it is not
-  /// heading for is absent.
+  /// The project's PM, while it has one.
+  final String? pmId;
+  final ({
+    int count,
+    DateTime? oldestAt,
+    String? personId,
+    List<SuperTabPulseAsk> list,
+  })
+  asks;
+  final ({int count, int crew, List<String> agentIds}) working;
+  final ({int count, List<String> conversationIds}) nextUp, lost;
+  final ({int count, int withoutReason, List<SuperTabPulseHold> list}) held;
+
+  /// The limits behind `redAt`, only to say why a count is red.
+  final ({int? askMinutes, int? idleMinutes, int? lostMinutes}) limits;
+
+  /// When each rule turns red; a rule left out is not red.
   final Map<SuperTabPulseRule, DateTime> redAt;
 
-  /// Whether [rule] is red at [now]: its time has come.
-  bool isRed(SuperTabPulseRule rule, DateTime now) => switch (redAt[rule]) {
-    final at? => !at.isAfter(now),
-    null => false,
-  };
+  /// Whether [rule] is red at [now]: at its `redAt` or after it.
+  bool isRed(SuperTabPulseRule rule, DateTime now) {
+    final at = redAt[rule];
+    return at != null && !at.isAfter(now);
+  }
 
-  /// The soonest a rule not yet red turns red, after [now]; null when none
-  /// will.
+  /// Whether any rule is red at [now].
+  bool anyRed(DateTime now) =>
+      SuperTabPulseRule.values.any((rule) => isRed(rule, now));
+
+  /// The next time after [now] a rule turns red, null when none will.
   DateTime? nextRedAfter(DateTime now) {
     DateTime? next;
     for (final at in redAt.values) {
@@ -185,20 +107,82 @@ class SuperTabPulse {
     }
     return next;
   }
+
+  static ({
+    int count,
+    DateTime? oldestAt,
+    String? personId,
+    List<SuperTabPulseAsk> list,
+  })
+  _asks(Map<String, dynamic> row) => (
+    count: _count(row['count']),
+    oldestAt: _time(row['oldestAt']),
+    personId: _optional<String>(row['personId']),
+    list: List.unmodifiable([
+      for (final ask in _list(row['list']))
+        (
+          conversationId: _text(_map(ask)['conversationId']),
+          messageId: _text(_map(ask)['messageId']),
+          personId: _optional<String>(_map(ask)['personId']),
+          at: _time(_map(ask)['at']) ?? (throw const FormatException('at')),
+        ),
+    ]),
+  );
+
+  static ({int count, int crew, List<String> agentIds}) _working(
+    Map<String, dynamic> row,
+  ) => (
+    count: _count(row['count']),
+    crew: _count(row['crew']),
+    agentIds: _ids(row['agentIds']),
+  );
+
+  static ({int count, List<String> conversationIds}) _tasks(
+    Map<String, dynamic> row,
+  ) => (
+    count: _count(row['count']),
+    conversationIds: _ids(row['conversationIds']),
+  );
+
+  static ({int count, int withoutReason, List<SuperTabPulseHold> list}) _held(
+    Map<String, dynamic> row,
+  ) => (
+    count: _count(row['count']),
+    withoutReason: _count(row['withoutReason'] ?? 0),
+    list: List.unmodifiable([
+      for (final hold in _list(row['list']))
+        (
+          conversationId: _text(_map(hold)['conversationId']),
+          reason: switch (_map(hold)['reason']) {
+            final String reason when reason.trim().isNotEmpty => reason,
+            _ => null,
+          },
+        ),
+    ]),
+  );
+
+  static Map<String, dynamic> _map(Object? value) => value is Map
+      ? Map<String, dynamic>.from(value)
+      : throw const FormatException('Not a pulse object.');
+
+  static List<Object?> _list(Object? value) => switch (value) {
+    null => const [],
+    final List list => list,
+    _ => throw const FormatException('Not a pulse list.'),
+  };
+
+  static List<String> _ids(Object? value) =>
+      List.unmodifiable([for (final id in _list(value)) _text(id)]);
+
+  static String _text(Object? value) =>
+      value is String ? value : throw const FormatException('Not an id.');
+
+  static int _count(Object? value) => value is num
+      ? value.toInt()
+      : throw const FormatException('Not a count.');
+
+  static T? _optional<T>(Object? value) => value is T ? value : null;
+
+  static DateTime? _time(Object? value) =>
+      value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
 }
-
-String? _string(Object? value) =>
-    value is String && value.isNotEmpty ? value : null;
-
-int _count(Object? value) => value is num && value > 0 ? value.toInt() : 0;
-
-DateTime? _time(Object? value) => value is num
-    ? DateTime.fromMillisecondsSinceEpoch(value.toInt(), isUtc: true)
-    : null;
-
-List<Object?> _list(Object? value) => value is List ? value : const [];
-
-List<String> _strings(Object? value) => List.unmodifiable([
-  for (final item in _list(value))
-    if (item is String) item,
-]);
