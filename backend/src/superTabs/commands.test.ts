@@ -5458,6 +5458,33 @@ describe('lead.switch', () => {
     expect(own.agent().switchRequest).not.toHaveProperty('effort')
   })
 
+  // Task #3395 (anh Dee, 11-05): Switch PM's "Default" sent no model, and the new PM started on its engine's own
+  // default (the machine's last-used Claude Code model, Sonnet medium). Claude with no model gets the coordinator's
+  // built-in default, as lead.start does; a person's named model is kept.
+  it('gives a Claude switch with no model the PM default, on the same machine and on another, and keeps a named one', () => {
+    const here = setup()
+    here.f.run({ ...here.request, engine: 'claude', profileId: 'default' })
+    expect(here.agent().switchRequest).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+
+    const moved = setup()
+    const destination = structuredClone(moved.f.state.machines![0]!)
+    Object.assign(destination, { machineId: 'destination', name: 'Destination Mac', generation: 'g2' })
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    moved.f.state.machines!.push(destination)
+    moved.f.run({ ...moved.request, engine: 'claude', profileId: 'default', machineId: 'destination' })
+    expect(moved.agent().switchRequest).toMatchObject({ targetMachineId: 'destination', model: 'opus', effort: 'xhigh' })
+    expect(moved.f.state.starts).toContainEqual(expect.objectContaining({ request: expect.objectContaining({
+      machineId: 'destination', engine: 'claude', model: 'opus', effort: 'xhigh' }) }))
+
+    const picked = setup()
+    picked.f.run({ ...picked.request, engine: 'claude', profileId: 'default', model: 'sonnet' })
+    expect(picked.agent().switchRequest).toMatchObject({ model: 'sonnet', effort: 'high' })
+    const effort = setup()
+    effort.f.run({ ...effort.request, engine: 'claude', profileId: 'default', effort: 'max' })
+    expect(effort.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'max' })
+  })
+
   it('works while the Swarm is paused', () => {
     const s = setup()
     s.f.state.paused = true
