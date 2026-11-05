@@ -4,6 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
+import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
 import { heldView } from '../heldReason.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
@@ -73,8 +74,11 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
     ...(held ? { held } : {}), ...readers }
+  // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
+  if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
+  return view
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
