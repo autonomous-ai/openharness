@@ -14,11 +14,18 @@ class SuperTabProposal {
     : messageId = answer['messageId'] as String,
       title = answer['title'] as String? ?? '',
       personId = answer['personId'] as String?,
+      priority =
+          SuperTabTaskPriority.named(answer['priority']) ??
+          SuperTabTaskPriority.p2,
       at = DateTime.fromMillisecondsSinceEpoch(
         (answer['at'] as num? ?? 0).toInt(),
       );
   final String messageId, title;
   final String? personId;
+
+  /// What the task it asks for would be: the proposal's high, normal or low as
+  /// P1, P2 or P3 (task #3117); P2 when an older server sends none.
+  final SuperTabTaskPriority priority;
   final DateTime at;
 }
 
@@ -150,6 +157,13 @@ typedef SuperTabTaskEntry = ({
   String? state,
 });
 
+/// [entry]'s priority: its task's effective one, or its proposal's.
+SuperTabTaskPriority superTabEntryPriority(SuperTabTaskEntry entry) =>
+    switch (entry.task) {
+      final task? => superTabTaskPriority(task),
+      null => entry.proposal!.priority,
+    };
+
 /// Where [task] sits in its project's shared Next up: the rank a person or the
 /// PM gave it, else its number, so a new task joins the bottom.
 double _queueKey(SuperTabConversation task) =>
@@ -168,9 +182,10 @@ List<SuperTabConversation> superTabQueueOrder(
 ) => [...tasks]..sort(_queueOrder);
 
 /// The project's Tasks view, read by Board, List and the badges alike: every
-/// column, in order and empty or not, each listing what needs the reader
-/// first, then proposals oldest first, Next up in the shared order, Working
-/// and Waiting newest first, and Shipped by when it shipped, newest first.
+/// column, in order and empty or not, each listing by priority, P0 first
+/// (task #3117); within a priority what needs the reader first, then
+/// proposals oldest first, Next up in the shared order, Working and Waiting
+/// newest first, and Shipped by when it shipped, newest first.
 Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
   Iterable<SuperTabConversation> tasks, {
   Iterable<SuperTabProposal> proposals = const [],
@@ -211,6 +226,9 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
     SuperTabTaskEntry a,
     SuperTabTaskEntry b,
   ) {
+    final priority = superTabEntryPriority(a).index
+        .compareTo(superTabEntryPriority(b).index);
+    if (priority != 0) return priority;
     if (a.needsYou != b.needsYou) return a.needsYou ? -1 : 1;
     final (x, y) = (a.task, b.task);
     if (x == null || y == null) return 0;

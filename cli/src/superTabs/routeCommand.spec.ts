@@ -710,14 +710,45 @@ describe('routeTask', () => {
     expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
     expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
   })
+  // Task #3163: each candidate's weekly % left and reset go with its fit; a backend from before them refuses them, and the
+  // decision is then recorded without them, still with no pick, before any older shape is tried.
+  it('records each candidate\'s quota, and without it for a backend that refuses it, still with no pick', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"left"')
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0.fit: Unrecognized key: "left"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [quoted, unquoted, ...rest] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(rest).toEqual([])
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('left')
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('resetsAt')
+    expect(unquoted.operationId).toBe(quoted.operationId)
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision.candidates[0].fit).not.toHaveProperty('left')
+    expect(unquoted.command.decision.candidates[0].fit).toHaveProperty('status')
+  })
+  // Review of #3117: small work steps up to Opus or Astra after its second failed attempt (Routing, Models). The route counts
+  // the task's ended attempts from the history it reads; when that read fails it keeps both models.
+  it('offers Opus to a small task once two of its attempts ended, and both models when its attempts cannot be read', async () => {
+    const small = { ...input, assessment: { ...input.assessment, size: 'small' } }
+    const offered = async (history: Answer) => {
+      const answer = await routeTask(small, scoped({ history }), where as never, opener(), () => 'op')
+      return [...new Set((answer.candidates as Array<{ kind: string; engine: string; model: string }>).filter(c => c.kind === 'new' && c.engine === 'claude').map(c => c.model))].sort()
+    }
+    const ended = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `as-${i}`, agentId: `gone-${i}`, status: 'stopped', result: 'Review failed.' }))
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(1) } })).toEqual(['sonnet'])
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(2) } })).toEqual(['opus'])
+    expect(await offered({ error: 'BACKEND_UNAVAILABLE' })).toEqual(['opus', 'sonnet'])
+  })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
     s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
       ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    // With no pick, then with c0 standing in for one (task #2901), then in the shape from before phase 1.
-    const [current, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    // With no pick, then without the candidates' quota (task #3163), then with c0 standing in for one (task #2901), then in the
+    // shape from before phase 1.
+    const [current, unquoted, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(phase1.command.decision).toMatchObject({ pick: 'c0', assessment: { size: 'medium' } })
     expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
     expect(v1.operationId).toBe(phase1.operationId)
@@ -742,15 +773,16 @@ describe('routeTask', () => {
     const beforeKinds = refusing(['kind":"docs'])
     expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const kind = ['difficulty', 'risk', 'why', 'size', 'kind']
-    // Each refusal of the record with no pick tries it once more with c0 as the pick, the shape a backend from before task #2901 takes.
-    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size']])
+    // Each refusal of the record with no pick tries it without the candidates' quota (task #3163), then with c0 as the pick, the
+    // shape a backend from before task #2901 takes.
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size']])
     const beforePhase1 = refusing(['kind":"docs', 'size'])
     expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
     // A task with no kind never needs the extra try.
     const plain = refusing(['size'])
     await routeTask(input, plain, where as never, opener(), () => 'op')
-    expect(commands(plain)).toHaveLength(3)
+    expect(commands(plain)).toHaveLength(4)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
@@ -899,11 +931,13 @@ describe('route answers with no pick (task #2901)', () => {
     s.mockImplementation(async payload => payload.action === 'command' && !('pick' in payload.command.decision)
       ? { error: 'VALIDATION_ERROR', detail: 'decision.pick: Required', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, both(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions' })
-    const [current, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    const [current, unquoted, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(picked.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
     expect(picked.operationId).toBe(current.operationId)
-    expect(picked.command.decision.candidates).toEqual(current.command.decision.candidates)
+    // The candidates as the record without their quota sent them (task #3163).
+    expect(picked.command.decision.candidates).toEqual(unquoted.command.decision.candidates)
   })
 })
 
@@ -1567,8 +1601,10 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s as never, where, opener())
     expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
-    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those.
-    expect(sent).toEqual([16, 16, 12])
+    // With no pick, then without the candidates' quota, then with c0 as the pick (a backend from before task #2901), then the
+    // first 12 of those. The task gives no size, so each machine's Claude keeps both Opus and Sonnet (task #3163): 8 machines,
+    // 3 rows each.
+    expect(sent).toEqual([24, 24, 24, 12])
     const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
     for (const row of answer.candidates as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })
@@ -2108,5 +2144,119 @@ describe('routing by measured cost and results', () => {
     const result = await routeTask(built, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ model: 'sonnet' })]),
       warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is shown without it.']) })
+  })
+})
+
+// Task #3047, phase 1 of docs/design/2026-11-05-machine-access.md: a task names what it needs to reach, and the route leaves
+// out every machine and account that does not have it, with why. The backend refuses those starts too (machineAccess.ts).
+describe('needs.access', () => {
+  const reading = () => ({ receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
+    tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] })
+  const entry = (name: string, account: 'own' | 'team' = 'own', extra: Record<string, unknown> = {}) =>
+    ({ id: `e${name.length}${account}`, name, account, state: 'ok', addedBy: 'mate', addedAt: '2026-11-05T00:00:00.000Z', ...extra })
+  /** Mate's Mac, with its Harness Team account (healthy), and the list on the Mac's own entry. */
+  const mac = (access?: unknown[]) => ({ machineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/mate/swarm', engines: ['claude'], paused: false,
+    contributorId: 'mate', observation: reading(), teamWork: { allowed: true }, ...(access ? { access } : {}) })
+  const team = () => ({ machineId: 'm1-team', hostMachineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/team/swarm', engines: ['claude'], paused: false,
+    contributorId: 'mate', observation: reading(), teamWork: { allowed: true } })
+  /** The project owner's own machine. */
+  const other = (access?: unknown[]) => ({ machineId: 'm9', name: 'Studio', scope: 'swarm', cwd: '/owner/swarm', engines: ['claude'], paused: false,
+    contributorId: 'owner', observation: reading(), teamWork: { allowed: true }, ...(access ? { access } : {}) })
+  const people = [{ id: 'owner', name: 'Ken' }, { id: 'mate', name: 'Gray' }]
+  async function route(machines: Record<string, unknown>[], { needs = { access: ['Lamp'] } as Record<string, unknown>, requires, members = [] as unknown[], ownerId = 'owner' }:
+    { needs?: Record<string, unknown>; requires?: Record<string, unknown>; members?: unknown[]; ownerId?: string } = {}) {
+    const groups = conversations().map(g => g.id === 'g1' && requires ? { ...g, task: { requires } } : g)
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members, conversations: groups, machines, people,
+      projects: [{ id: 'lead', ownerId, repository: { repositoryUrl: 'https://github.com/example/project' } }] } },
+      policy: { policy, warnings: [] }, machines: [] } } })
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, opener())
+    const decision = s.mock.calls.find(c => c[0].action === 'command')?.[0].command.decision
+    return { answer, candidates: (decision?.candidates ?? []) as Array<{ machineId: string; kind: string; title: string; notes?: string[] }>,
+      excluded: (decision?.excluded ?? answer.excluded ?? []) as Array<{ title: string; reason: string }> }
+  }
+  const reasonsFor = (excluded: Array<{ title: string; reason: string }>, name: string) => excluded.filter(e => e.title.includes(name)).map(e => e.reason)
+
+  it('leaves out a machine without it, from needs.access or from the task\'s requires.access, names matched without case', async () => {
+    for (const ask of [{ needs: { access: ['  lamp '] } }, { needs: {}, requires: { access: ['Lamp'] } }]) {
+      const { candidates, excluded } = await route([mac([entry('Lamp', 'team')]), team(), other()], ask)
+      expect([...new Set(candidates.filter(c => c.kind === 'new').map(c => c.machineId))], JSON.stringify(ask)).toEqual(['m1-team'])
+      expect(reasonsFor(excluded, 'Studio'), JSON.stringify(ask)).toContain(`No ${ask.requires ? 'Lamp' : 'lamp'} here.`)
+    }
+  })
+
+  it('suggests the closest name it saw when nothing matches', async () => {
+    const { excluded } = await route([other([entry('Desk lamp')])], { ownerId: 'owner' })
+    expect(reasonsFor(excluded, 'Studio')).toContain('No Lamp here. Did you mean Desk lamp?')
+    const far = await route([other([entry('Fusion 360')])])
+    expect(reasonsFor(far.excluded, 'Studio')).toContain('No Lamp here.')
+    // The nearest of several: a letter off beats a longer name holding it.
+    const near = await route([other([entry('Desk lamp'), entry('Lamb'), entry('Lamps and more')])])
+    expect(reasonsFor(near.excluded, 'Studio')).toContain('No Lamp here. Did you mean Lamb?')
+  })
+
+  it('takes the task\'s access beside the Lead\'s, each name once', async () => {
+    const { excluded } = await route([other([entry('Lamp')])], { needs: { access: ['lamp'] }, requires: { access: ['Lamp', 'Fusion 360'] } })
+    expect(reasonsFor(excluded, 'Studio')).toEqual(expect.arrayContaining(['No Fusion 360 here.']))
+    expect(reasonsFor(excluded, 'Studio').some(r => /No lamp here/i.test(r))).toBe(false)
+  })
+
+  it('never offers a teammate\'s task the owner\'s unshared own-account entry, nor counts it for the Team account', async () => {
+    const { answer, excluded } = await route([mac([entry('Lamp')]), team()])
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(excluded.map(e => e.reason)).toContain('Lamp is in Gray\'s own account, not shared with teammates.')
+  })
+
+  it('offers the Mac itself, in its owner\'s account and saying so, when its owner shared that entry and the task names it', async () => {
+    const { answer, candidates } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()], { needs: {}, requires: { access: ['Lamp'] } })
+    expect([...new Set(candidates.filter(c => c.kind === 'new').map(c => c.machineId))]).toEqual(['m1'])
+    const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp is shared with teammates.')
+  })
+
+  // Security review 2: the start keeps a teammate's task on the Mac only for access its task names (backend teamMachineFor), so
+  // a route asked with needs.access alone never offers the owner's account: it would start in the Team account.
+  it('offers a shared own-account entry only to a task that names it, as the start places it', async () => {
+    const { candidates, excluded } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()])
+    expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
+    expect(excluded.map(e => e.reason)).toContain('Lamp is shared from Gray\'s own account only with tasks that name it in their access.')
+  })
+
+  it('notes a production system on every candidate that would use one', async () => {
+    const { answer } = await route([mac([entry('Prod DB read-only', 'team', { production: true })]), team()], { needs: { access: ['Prod DB read-only'] } })
+    const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain('Prod DB read-only is a production system: writes still need a person\'s go.')
+    const plain = await route([mac([entry('Lamp', 'team')]), team()])
+    expect(JSON.stringify(plain.answer)).not.toContain('production system')
+  })
+
+  it('names every shared entry the task needs on the Mac', async () => {
+    const { answer } = await route([mac([entry('Lamp', 'own', { teammates: true }), entry('Fusion 360', 'own', { teammates: true })]), team()],
+      { needs: {}, requires: { access: ['Lamp', 'Fusion 360'] } })
+    for (const row of answer.candidates as Array<{ title: string; notes?: string[] }>) {
+      expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp, Fusion 360 are shared with teammates.')
+    }
+  })
+
+  it('leaves out an entry waiting for its owner to confirm, and a Team-account entry for the owner\'s own project', async () => {
+    const waiting = await route([mac([entry('Lamp', 'team', { state: 'unconfirmed' })]), team()])
+    expect(waiting.excluded.map(e => e.reason)).toContain('Lamp on MacBook Pro is waiting for Gray to confirm.')
+    const own = await route([mac([entry('Lamp', 'team')]), team()], { ownerId: 'mate' })
+    expect(own.excluded.map(e => e.reason)).toContain('Lamp is in the Harness Team account on MacBook Pro, which runs only teammates\' work.')
+  })
+
+  it('leaves out a member on a machine without it too', async () => {
+    const member = { id: 'a1', name: 'Multiply', machineId: 'm9', harnessId: 'h1', contributorId: 'owner', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }
+    const { candidates, excluded } = await route([mac([entry('Lamp', 'team')]), team(), other()], { members: [member] })
+    expect(candidates.some(c => c.kind === 'member')).toBe(false)
+    expect(reasonsFor(excluded, 'Multiply')).toContain('No Lamp here.')
+  })
+
+  it('adds nothing to a start\'s requirements, which older hosts read strictly', async () => {
+    const { answer } = await route([mac([entry('Lamp', 'team')]), team()])
+    const requirements = String(answer.next).match(/"requirements":\{[^}]*\}/g) ?? []
+    expect(requirements.length).toBeGreaterThan(0)
+    for (const r of requirements) expect(r).not.toContain('access')
   })
 })

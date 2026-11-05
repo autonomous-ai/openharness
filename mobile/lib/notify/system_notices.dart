@@ -9,13 +9,15 @@ import 'agent_notice.dart';
 
 /// One notice about one agent, as the OS draws it: the agent's name, the
 /// machine it runs on, and the news — what the turn said, or what it is asking
-/// — the three lines of the dial's drawer row.
+/// — the three lines of the dial's drawer row. [quiet] posts it with no sound,
+/// no vibration and no banner ([AgentNotice.quiet]).
 typedef AgentNoticeMessage = ({
   AgentRef agent,
   NoticeKind kind,
   String title,
   String machine,
   String body,
+  bool quiet,
 });
 
 /// Where a Swarm notice leads: the Swarm, and the conversation it is about;
@@ -174,6 +176,10 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   @override
   final openedSwarm = ValueNotifier<SwarmNoticeTarget?>(null);
 
+  /// Told when the person has just allowed notices ([requestPermission]): the moment pushes can
+  /// start reaching them (`notify/push_tokens.dart`).
+  void Function()? onAllowed;
+
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
   /// thread each kind is grouped under.
@@ -260,7 +266,9 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
             AndroidFlutterLocalNotificationsPlugin
           >()
           ?.requestNotificationsPermission();
-      return ios ?? android;
+      final allowed = ios ?? android;
+      if (allowed == true) onAllowed?.call();
+      return allowed;
     } catch (error) {
       appLog.warn('notify', 'permission request failed', error: error);
       return null;
@@ -309,10 +317,19 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
             importance: Importance.high,
             priority: Priority.high,
             subText: message.machine,
+            // A quiet notice replaces or joins the list without a sound, a
+            // vibration or a heads-up, whatever its channel says.
+            silent: message.quiet,
           ),
           iOS: DarwinNotificationDetails(
             subtitle: message.machine,
             threadIdentifier: channel.id,
+            // Unset is the plugin's default, sound and banner. Without a sound
+            // here iOS plays none in the background either; passive neither
+            // lights the screen nor shows a banner, only the list.
+            presentSound: message.quiet ? false : null,
+            presentBanner: message.quiet ? false : null,
+            interruptionLevel: message.quiet ? InterruptionLevel.passive : null,
           ),
         ),
       );
@@ -499,4 +516,15 @@ AgentRef? decodeAgentPayload(String? payload) {
   if (parts == null || parts.length != 2) return null;
   if (parts[0].isEmpty || parts[1].isEmpty) return null;
   return (machineId: parts[0], agentId: parts[1]);
+}
+
+/// A tapped push (`notify/push_channel.dart`) opens the chat its `link` names: the app's own
+/// `swarm:` payload, which the server puts beside the notice's `key` (`backend/src/push/notices.ts`).
+/// Anything else (no link, an agent's or a device's payload) only opened the app.
+void openPushed(Map<String, String> data, SystemNotices notices) {
+  if (notices case final SwarmNotices swarm) {
+    if (decodeSwarmPayload(data['link']) case final target?) {
+      swarm.openedSwarm.value = target;
+    }
+  }
 }

@@ -44,6 +44,7 @@ import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 import { markNothingNew } from '../lib/routeLatency.js'
 import { onMachineRenamed } from '../superTabs/machineRenames.js'
+import { onComputerSignedIn } from '../superTabs/computerMoves.js'
 
 /** Runs a poll and marks its reply nothing-new for `route latency` when `empty` says so (spec 2026-11-02 poll cost, Part 0). */
 const noting = <T>(req: FastifyRequest, run: () => Promise<T>, empty: (result: T) => boolean) => async (): Promise<T> => {
@@ -75,6 +76,7 @@ const workspaceName = z.string().trim().min(1).max(160)
 const workspaceCreate = z.object({ operationId: id, name: workspaceName }).strict()
 const workspaceRename = z.object({ name: workspaceName }).strict()
 const workspaceInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceRevoke = z.object({ email: z.email().max(320) }).strict()
 const workspaceRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
 const workspaceTransfer = z.object({ userId: id }).strict()
 const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
@@ -312,6 +314,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const store = options.store ?? await productionStore(github)
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
+  // Another account's sign-in on a computer moves the computer's Swarm entries to it (computerMoves.ts).
+  onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
@@ -481,6 +485,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceInvite> }>('/api/super-tabs/workspaces/:workspaceId/invitations',
     { preHandler: [validateParams(workspaceParams), validateBody(workspaceInvite)] },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invite(req.user!, req.params.workspaceId, req.body.email, req.body.role) }))
+  // A POST, not a DELETE, for the daemon (below).
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRevoke> }>('/api/super-tabs/workspaces/:workspaceId/invitations/revoke',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRevoke)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.revokeInvitation(req.user!, req.params.workspaceId, req.body.email) }))
   app.post<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/accept', { preHandler: validateParams(workspaceParams) },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.accept(req.user!, req.params.workspaceId) }))
   app.post<{ Params: z.infer<typeof workspaceMemberParams>; Body: z.infer<typeof workspaceRole> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId',

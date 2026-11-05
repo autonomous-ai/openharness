@@ -30,7 +30,7 @@ describe('mine', () => {
       assignment: { id: 'a', agentId: 'dev1', status: 'working', result: 'Tests pass on main\nmore detail' },
       pullRequestUrls: ['https://github.com/o/r/pull/7'] })])
     expect(mineText(state, changed({ g12: NOW - 5 * MIN }), 'dev1', NOW)).toBe(
-      '#12 Fix login (conversation g12) — working, updated 5 min ago; last result: Tests pass on main; PR https://github.com/o/r/pull/7')
+      '#12 P2 Fix login (conversation g12) — working, updated 5 min ago; last result: Tests pass on main; PR https://github.com/o/r/pull/7')
   })
 
   it('leaves out a reused agent\'s finished task', () => {
@@ -58,8 +58,8 @@ describe('mine', () => {
       { ...task('g20', 20, 'Web work', 'pm-web', 'working'), projectId: 'web' }])
     expect(isCoordinator(state, 'pm')).toBe(true)
     const text = mineText(state, changed({}), 'pm', NOW)
-    expect(text).toContain('#12 Fix login (conversation g12) — Dev1, working')
-    expect(text).toContain('#14 Docs (conversation g14) — unassigned')
+    expect(text).toContain('#12 P2 Fix login (conversation g12) — Dev1, working')
+    expect(text).toContain('#14 P2 Docs (conversation g14) — unassigned')
     expect(text).not.toContain('#15')
     expect(text).not.toContain('Web work')
     // g12 and g14; g16 is a step of g12, shown under it.
@@ -96,7 +96,7 @@ describe('task', () => {
   it('shows goal, checks, attempts and linked tasks', () => {
     const state = swarm([group, task('g13', 13, 'Review: Fix login', 'rev1', 'working', { reviewOf: 'g12' })])
     const text = taskText(group, state, attempts, changed({ g12: NOW - 2 * MIN }), NOW)
-    expect(text.split('\n')[0]).toBe('#12 Fix login (conversation g12)')
+    expect(text.split('\n')[0]).toBe('#12 P2 Fix login (conversation g12)')
     expect(text).toContain('Project: App · Status: working · Assignee: Dev1 · Updated 2 min ago')
     expect(text).toContain('PR: https://github.com/o/r/pull/7')
     expect(text).toContain('Goal:\nSign in works offline.')
@@ -147,12 +147,12 @@ describe('steps', () => {
 
   it('mine shows the owner its task\'s steps on one line', () => {
     expect(mineText(withSteps(), changed({}), 'dev1', NOW)).toBe(
-      '#1835 Fix login (conversation g1835) — working\n  steps: Review (Rev1): working · Test (Dev1): done')
+      '#1835 P2 Fix login (conversation g1835) — working\n  steps: Review (Rev1): working · Test (Dev1): done')
   })
 
   it('the coordinator\'s open work counts tasks, not steps', () => {
     const text = mineText(withSteps(), changed({}), 'pm', NOW)
-    expect(text).toContain('#1835 Fix login (conversation g1835) — Dev1, working\n  steps: Review (Rev1): working · Test (Dev1): done')
+    expect(text).toContain('#1835 P2 Fix login (conversation g1835) — Dev1, working\n  steps: Review (Rev1): working · Test (Dev1): done')
     expect(text).not.toContain('#1918')
     expect(text.endsWith('1 open task.')).toBe(true)
   })
@@ -169,7 +169,7 @@ describe('steps', () => {
     const state = withSteps()
     const step = (state.conversations as Array<Record<string, unknown>>).find(c => c.id === 'g1918')!
     const text = taskText(step, state, [], changed({}), NOW)
-    expect(text.split('\n')[0]).toBe('#1835 Fix login (conversation g1835)')
+    expect(text.split('\n')[0]).toBe('#1835 P2 Fix login (conversation g1835)')
     expect(text).toContain('▶ Review (Rev1): working')
   })
 })
@@ -186,7 +186,7 @@ describe('the default project', () => {
         { ...task('g1', 1, 'Fix login', 'dev1', 'review'), projectId: 'lead' },
       ],
     }
-    expect(mineText(state, changed({}), 'pm', NOW)).toBe('#1 Fix login (conversation g1) — Dev1, review\n1 open task.')
+    expect(mineText(state, changed({}), 'pm', NOW)).toBe('#1 P2 Fix login (conversation g1) — Dev1, review\n1 open task.')
   })
 })
 
@@ -205,7 +205,7 @@ describe('a linked task with no step name', () => {
   it('is a step named by its title', () => {
     const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working'),
       task('g13', 13, 'Test: PR #7', 'rev1', 'working', { reviewOf: 'g12' })])
-    expect(mineText(state, changed({}), 'dev1', NOW)).toBe('#12 Fix login (conversation g12) — working\n  steps: Test: PR #7 (Rev1): working')
+    expect(mineText(state, changed({}), 'dev1', NOW)).toBe('#12 P2 Fix login (conversation g12) — working\n  steps: Test: PR #7 (Rev1): working')
     expect(mineText(state, changed({}), 'rev1', NOW)).toBe('#12 Fix login · Test: PR #7 (conversation g13) — working')
   })
 })
@@ -242,5 +242,40 @@ describe('a check with several checkers', () => {
       verdicts: [verdict('agent:gone', false, 'Crashes', 1), verdict('agent:rev1', true, 'Diff reads right', 2)] })
     expect(taskText(group, swarm([group]), [], changed({}), NOW, new Map([['gone', 'Plover']])))
       .toContain('✗ Signs in offline — failed by Plover: Crashes; passed by Rev1')
+  })
+})
+
+// Task #3117: every task line says its priority after its number, and mine lists P0 first, keeping the order within one.
+describe('priority', () => {
+  it('the coordinator\'s mine lists a P0 task before an older P2 one, each with its priority', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working', { priority: 'P2' }), task('g14', 14, 'Docs', null, null, { priority: 'P3' }),
+      task('g15', 15, 'Checkout fails', null, null, { priority: 'P0' }), task('g16', 16, 'Search', null, null)])
+    expect(mineText(state, changed({}), 'pm', NOW)).toBe([
+      '#15 P0 Checkout fails (conversation g15) — unassigned',
+      '#12 P2 Fix login (conversation g12) — Dev1, working',
+      '#16 P2 Search (conversation g16) — unassigned',
+      '#14 P3 Docs (conversation g14) — unassigned',
+      '4 open tasks.',
+    ].join('\n'))
+  })
+
+  it('reads a legacy "(urgent)" title with no field as P0', () => {
+    const state = swarm([task('g12', 12, 'Docs', null, null), task('g13', 13, 'Fix login (urgent)', null, null)])
+    expect(mineText(state, changed({}), 'pm', NOW).split('\n')[0]).toBe('#13 P0 Fix login (urgent) (conversation g13) — unassigned')
+  })
+
+  it('an agent\'s own lines show their priority, P0 first, and its step keeps its task\'s label', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working', { priority: 'P1' }), task('g14', 14, 'Hotfix', 'dev1', 'working', { priority: 'P0' }),
+      task('g20', 20, 'Docs', 'rev1', 'working', { priority: 'P0' }), task('g21', 21, 'Review', 'dev1', 'working', { reviewOf: 'g20', step: 'Review' })])
+    expect(mineText(state, changed({}), 'dev1', NOW).split('\n')).toEqual([
+      '#14 P0 Hotfix (conversation g14) — working',
+      '#20 Docs · Review (conversation g21) — working',
+      '#12 P1 Fix login (conversation g12) — working',
+    ])
+  })
+
+  it('task shows its priority on its first line', () => {
+    const group = task('g12', 12, 'Fix login', 'dev1', 'working', { priority: 'P1' })
+    expect(taskText(group, swarm([group]), [], changed({}), NOW).split('\n')[0]).toBe('#12 P1 Fix login (conversation g12)')
   })
 })

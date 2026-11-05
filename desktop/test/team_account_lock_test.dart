@@ -319,7 +319,7 @@ void main() {
     expect(
       outcome(tester),
       'macOS is asking for your password in a window titled “osascript”. '
-      'Setup then takes a minute or two, and Harness opens when it is done.',
+      'After that, setup goes on in the background and you can keep working.',
     );
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
@@ -473,7 +473,7 @@ void main() {
       expect(
         outcome(tester),
         'macOS is asking for your password in a window titled “osascript”. '
-        'Setup then takes a minute or two, and Harness opens when it is done.',
+        'After that, setup goes on in the background and you can keep working.',
       );
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
@@ -515,10 +515,11 @@ void main() {
   );
 
   // Scholes, 2026-11-04: the new member's setup did finish, after about 7
-  // minutes on a screen that showed no progress. It says the step and the
-  // time so far, and which step can take minutes.
+  // minutes on a screen that showed no progress. While the password is asked
+  // it says how long it has waited; past it, the lock steps aside and this
+  // Mac's row says the step and the time left (#3169).
   testWidgets(
-    'while it waits, it says the step setup is on and how long it has run',
+    'while it waits for the password it says how long, and past it the lock steps aside',
     (tester) async {
       daemon.statuses
         ..clear()
@@ -544,23 +545,17 @@ void main() {
       expect(
         outcome(tester),
         'macOS is asking for your password in a window titled “osascript”. '
-        'Setup then takes a minute or two, and Harness opens when it is done.',
+        'After that, setup goes on in the background and you can keep working.',
       );
       expect(find.text('1 s so far.'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 2));
-      expect(
-        outcome(tester),
-        'Installing Claude Code and Codex for Harness Team. '
-        'On a new Mac this can take several minutes.',
-      );
-      expect(
-        find.text(
-          'Step 5 of 8 · 2 min 5 s so far. Harness opens when it is done.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byKey(const Key('team-account-lock')), findsNothing);
+      expect(app.teamSetupLocked, isTrue);
+      expect(
+        TeamSetupWatch.of(app)!.line,
+        'Harness Team: setting up · step 2 of 4 · about 4 min left',
+      );
     },
   );
 

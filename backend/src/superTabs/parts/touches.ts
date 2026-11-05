@@ -115,6 +115,10 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.merged':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       break
+    // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
+    case 'work.priority':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)

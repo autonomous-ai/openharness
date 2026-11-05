@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
 import { RETENTION_MS } from './types.js'
-import { noteChange } from '../cache.js'
+import { ALL_HOSTS, noteChange } from '../cache.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -30,6 +30,47 @@ export type PartWrite =
 
 /** What a write tells host reads (read/host.ts), set by the commit that knows the part's data before and after. */
 export interface HostColumns { hostChangedAt?: Date; hostMachineIds?: string[] }
+
+/**
+ * Which host a part concerns from its data alone: every host of the Swarm for the head and its people (names, pause,
+ * observers), the machine of an agent or a start, none for the other kinds, whose writes leave markers instead (hostMarker).
+ * The one rule the host read wakes by (read/host.ts) and the push names hosts by (hostsToTell).
+ */
+export function plainHost(kind: PartKind, data: unknown): 'all' | string | null {
+  switch (kind) {
+    case 'head': case 'member': return 'all'
+    case 'agent': {
+      const machineId = (data as { machineId?: unknown } | null)?.machineId
+      return typeof machineId === 'string' ? machineId : null
+    }
+    case 'start': {
+      const machineId = (data as AgentStart | null)?.request?.machineId
+      return typeof machineId === 'string' ? machineId : null
+    }
+    default: return null
+  }
+}
+
+/**
+ * The hosts a write concerns (task #3119), by the rule the host read wakes by and the push tells (plainHost, commit.ts
+ * hostsToTell), as the host stamps that keep a machine's reading-only reports off the Swarm's load record them: an agent's or
+ * a start's machine, the machines a group's marker names, and every host (ALL_HOSTS) for the head, a member, a machine's
+ * settings, and any part whose host its data does not name. A machine's own reading, a touch and project progress concern
+ * none: a report neither decides from nor loads progress (parts/load.ts loadObserved).
+ */
+export function writeHosts(write: PartWrite): string[] {
+  if (write.op === 'touch') return []
+  switch (write.kind) {
+    case 'head': case 'member': return [ALL_HOSTS]
+    case 'agent': case 'start': {
+      const host = plainHost(write.kind, write.data)
+      return [host && host !== 'all' ? host : ALL_HOSTS]
+    }
+    case 'group': return write.host?.hostMachineIds ? [...write.host.hostMachineIds] : [ALL_HOSTS]
+    case 'machine': return write.host ? [ALL_HOSTS] : []
+    case 'progress': return []
+  }
+}
 
 /** The part model behind each kind. They share their columns (schema.prisma, Swarm state by parts). */
 export function delegate(tx: Transaction, kind: PartKind) {
@@ -118,7 +159,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
   // A machine's own reading leaves what its host hears of unmarked (commit.ts hostMarker): only the machine stamp moves, and
   // it is dated `readAt`, not `changedAt`, so the Swarm's newest change stays (load.ts lastChangedAt).
   const reading = write.kind === 'machine' && write.op === 'update' && !write.host
-  if (write.op !== 'touch') noteChange(tx, tabId, reading ? 'machine' : 'main')
+  if (write.op !== 'touch') noteChange(tx, tabId, reading ? 'machine' : 'main', writeHosts(write))
   if (write.op === 'insert') {
     let fields = { ...extracted(write.kind, write.data, stamp), ...write.head, ...write.host }
     // A part added again under the same key continues from its tombstone's version (spec ruling 6).

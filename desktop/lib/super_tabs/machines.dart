@@ -35,6 +35,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
+import 'machine_access.dart';
 import 'machine_projects.dart';
 import 'machine_allowance.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
@@ -758,12 +759,13 @@ Future<void> _machineSettingsDialog(
 
             final current = app.stateOf(existingId);
             final why = settingsUnavailable();
+            final title = superTabMachineName(
+              current?.machine.displayName ??
+                  existing['name'] as String? ??
+                  existingId,
+            );
             return SuperTabDetailDialog(
-              title: superTabMachineName(
-                current?.machine.displayName ??
-                    existing['name'] as String? ??
-                    existingId,
-              ),
+              title: title,
               body: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -778,6 +780,12 @@ Future<void> _machineSettingsDialog(
                       memoryEdited = false;
                       atMostEdited = next;
                     }),
+                  ),
+                  // What it can reach (#3047): sent at once, apart from Save; its owner's, on the Mac's own entry.
+                  SuperTabMachineAccessSetting(
+                    controller: c,
+                    machineId: existingId,
+                    machineName: title,
                   ),
                   // Why it cannot be removed, in words rather than a dimmed button alone.
                   if (view != null && canRemove(view.id))
@@ -861,6 +869,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// or when it cannot say.
   ({String state, String? detail})? _teamSetup;
   bool _teamSetupReading = false;
+
+  /// This Mac's setup while it runs in the background (#3169), for its row's
+  /// step and time left; null without the app's lock in the window.
+  TeamSetupWatch? _setupWatch;
+
+  void _followSetupWatch() {
+    final app = widget.app;
+    final watch = app == null ? null : TeamSetupWatch.of(app);
+    if (identical(watch, _setupWatch)) return;
+    _setupWatch?.removeListener(_setupMoved);
+    _setupWatch = watch?..addListener(_setupMoved);
+  }
+
+  /// The row says the step as it moves, and what the daemon remembers once
+  /// setup ends.
+  void _setupMoved() {
+    if (!mounted) return;
+    _changed();
+    if (_setupWatch?.running == false) unawaited(_readTeamSetup());
+  }
+
   SuperTabController get c => widget.controller;
   // Team agents only: a Buddy is listed nowhere, and its machine may be its
   // person's alone, outside the Swarm (backend buddyOnly).
@@ -879,6 +908,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void initState() {
     super.initState();
     c.machinesChanged.addListener(_machinesMoved);
+    _followSetupWatch();
     unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
@@ -1000,6 +1030,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       final read = await app.teamSetupStatus();
       if (!mounted) return;
       _teamSetup = read;
+      // Running and nobody following it (the app opened while it ran, or it
+      // was started from a terminal): followed from here, so it ends in a
+      // notice too.
+      if (read?.state == 'running') TeamSetupWatch.of(app)?.follow();
       _changed();
     } finally {
       _teamSetupReading = false;
@@ -1080,6 +1114,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _timer?.cancel();
     _tick?.cancel();
     c.machinesChanged.removeListener(_machinesMoved);
+    _setupWatch?.removeListener(_setupMoved);
     for (final beat in _rowBeats.values) {
       beat.dispose();
     }
@@ -1356,6 +1391,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
+    _followSetupWatch();
     final app = widget.app, snapshot = c.snapshot!;
     final shared = snapshot.pool(id);
     // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
@@ -1537,8 +1573,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app != null &&
         app.canSetUpTeamAccount &&
         app.stateOf(id)?.isLocalMachine == true;
-    // Its own person reads why: they cancelled, or setup failed and why.
-    final problem = setUpTeam
+    // While setup runs, its step and the time left, and that the person may
+    // go on working (#3169); otherwise its own person reads why: they
+    // cancelled, or setup failed and why.
+    final progress = setUpTeam ? _setupWatch?.line : null;
+    final problem = progress != null
+        ? '$progress\nKeep working. We\'ll tell you when it\'s ready.'
+        : setUpTeam
         ? superTabTeamSetupLine(_teamSetup) ?? line
         : line;
     return _MachineView(
@@ -1547,7 +1588,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       id: id,
       name: name,
       problem: problem,
-      setUpTeam: setUpTeam,
+      history: superTabMachineHistory(shared, snapshot.people),
+      // Set up would ask for the password again while one setup runs.
+      setUpTeam: setUpTeam && progress == null,
       setUpTeamLabel: superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
@@ -1565,6 +1608,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       engines: allowed,
       allowances: subscriptions.allowances,
       subscriptionsAside: subscriptions.aside,
+      // What it can reach, from the Mac's own entry, which holds its Team account's too (#3047).
+      access: SuperTabAccessEntry.listOf(shared),
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
@@ -2204,6 +2249,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               missing: _teamSetup?.state == 'incomplete'
                                   ? _teamSetup?.detail ?? ''
                                   : null,
+                              signInAgain: _teamSetup?.state == 'exists',
                             );
                             await _readTeamSetup();
                           }
@@ -2231,6 +2277,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               view.cleaning
                   ? 'Cleaning up'
                   : superTabMachineStateLabel(view.status),
+              ?view.history,
               ?view.problem,
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
@@ -2819,11 +2866,16 @@ class _MachineView {
     required this.subscriptionsAside,
     required this.tip,
     this.problem,
+    this.history,
     this.setUpTeam = false,
     this.setUpTeamLabel = 'Set up',
     this.apiModels = const [],
     this.localModels = const [],
+    this.access = const [],
   });
+
+  /// What the machine can reach, by account (#3047): the row's last section, for every member who sees it.
+  final List<SuperTabAccessEntry> access;
 
   final String id, name, details, tip;
 
@@ -2835,6 +2887,9 @@ class _MachineView {
 
   /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
   final String? problem;
+
+  /// Who had this computer's row before (superTabMachineHistory); null for a row never moved.
+  final String? history;
   final SuperTabPerson? owner;
   final String? contributor;
   final Map<String, dynamic>? shared;
@@ -2899,6 +2954,8 @@ String? superTabTeammatesPaused(Object? code) {
   final why = switch (code) {
     'MACHINE_OFFLINE' => 'Harness Team account offline',
     'TEAM_ACCOUNT_REQUIRED' => 'not set up',
+    // Its owner's Harness Team account is on it and joins on the Mac's next poll (backend machines.ts, #3122).
+    'TEAM_ACCOUNT_JOINING' => 'Harness Team is joining',
     'PRIVACY_UNCHECKED' => 'privacy not checked yet',
     'PRIVACY_CHECK_FAILED' => 'privacy check failed',
     'PRIVACY_CHECK_STALE' => 'privacy check out of date',
@@ -2921,15 +2978,43 @@ String? superTabTeamSetupLine(({String state, String? detail})? setup) {
     'incomplete' when detail != null && detail.isNotEmpty =>
       'Harness Team is not finished ($detail)',
     'incomplete' => 'Harness Team is not finished',
+    // The Swarm has no Team account for this row while this Mac has one: it serves another account of this computer,
+    // the one signed in here before (#3122).
+    'exists' => 'Harness Team on this computer works for another account',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";
 }
 
-/// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), else
-/// Set up.
+/// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), or it
+/// works for another account (#3122), else Set up.
 String superTabTeamSetupAction(({String state, String? detail})? setup) =>
-    setup?.state == 'incomplete' ? 'Repair' : 'Set up';
+    setup?.state == 'incomplete' || setup?.state == 'exists'
+    ? 'Repair'
+    : 'Set up';
+
+/// Who had this computer's row before the account signed in on it now, and until when: "Was kelvin until 5 Nov"
+/// (backend machines.ts previousOwner, #3122). Null for a row never moved, or one whose person is not in the Swarm.
+String? superTabMachineHistory(
+  Map<String, dynamic>? pool,
+  List<SuperTabPerson> people, {
+  DateTime? now,
+}) {
+  final previous = pool?['previousOwner'];
+  if (previous is! Map) return null;
+  final person = people.where((p) => p.id == previous['personId']).firstOrNull;
+  final until = DateTime.tryParse(previous['until']?.toString() ?? '');
+  if (person == null || until == null) return null;
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final local = until.toLocal();
+  final year = local.year == (now ?? DateTime.now()).year
+      ? ''
+      : ' ${local.year}';
+  return 'Was ${person.shownName} until ${local.day} ${months[local.month - 1]}$year';
+}
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
@@ -3128,21 +3213,30 @@ class _MachineLine extends StatelessWidget {
                           child: text,
                         )
                       : text;
-                  final problem = view.problem;
-                  if (problem == null) return title;
+                  final problem = view.problem, history = view.history;
+                  if (problem == null && history == null) return title;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       title,
-                      Text(
-                        problem,
-                        key: ValueKey('super-machine-problem-${view.id}'),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.metadata(),
-                      ),
-                      if (onSetUpTeam != null)
+                      if (history != null)
+                        Text(
+                          history,
+                          key: ValueKey('super-machine-history-${view.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      if (problem != null)
+                        Text(
+                          problem,
+                          key: ValueKey('super-machine-problem-${view.id}'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      if (problem != null && onSetUpTeam != null)
                         TextButton(
                           key: ValueKey('super-machine-team-setup-${view.id}'),
                           onPressed: onSetUpTeam,
@@ -3446,6 +3540,17 @@ class _MachineReadings extends StatelessWidget {
               if (view.localModels.isNotEmpty)
                 _models(AppIcons.cpu, 'Local', view.localModels, 'local'),
             ],
+          ),
+        ),
+      // Last, by account (#3047, design section 6).
+      if (view.access.isNotEmpty)
+        (
+          'Access',
+          null,
+          (_) => SuperTabMachineAccessLines(
+            key: ValueKey('super-machine-access-${view.id}'),
+            entries: view.access,
+            ownerName: view.owner?.shownName,
           ),
         ),
     ];

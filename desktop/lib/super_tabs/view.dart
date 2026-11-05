@@ -9,6 +9,7 @@ import 'package:flutter/rendering.dart'
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 
+import '../measurement/speed_marks.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -63,6 +64,13 @@ import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
+import 'backlog.dart'
+    show
+        SuperTabTaskPriority,
+        superTabCarriesPriority,
+        superTabTaskPriority,
+        superTabTitlePriority;
+import 'chip.dart' show SuperTabPriorityBadge;
 import 'message_link.dart';
 import 'message_link_swarms.dart';
 import 'message_link_preview.dart';
@@ -188,6 +196,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The card the board shows selected (task #2948): the task or proposal
   /// last opened from it, or the task whose chat the board was opened from.
   String? _tasksSelectedId;
+
+  /// Why the last priority change was refused, and for which task: said
+  /// beside that task's title (task #3117).
+  ({String taskId, String error})? _priorityRefusal;
 
   /// The Swarm's page holding the main pane, if one does: Decisions,
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
@@ -1637,14 +1649,16 @@ class _SuperTabViewState extends State<SuperTabView>
         continue;
       }
       if ((top - anchor.top).abs() < .5) return;
-      // The list's extent is an estimate until laid out there: only the
-      // start bounds the jump, and the next frame measures the row again.
-      scroll.jumpTo(
-        (position.pixels + top - anchor.top).clamp(
-          position.minScrollExtent,
-          double.infinity,
-        ),
+      // The list's extent is an estimate until laid out there, and the next
+      // frame measures the row again. Never past the end: a jump there only
+      // ends in a bounce back (#3124), and its scroll ending near the top
+      // read the page before again, with no input.
+      final to = (position.pixels + top - anchor.top).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
       );
+      if ((to - position.pixels).abs() < .5) return;
+      scroll.jumpTo(to);
     }
   }
 
@@ -2765,7 +2779,11 @@ class _SuperTabViewState extends State<SuperTabView>
               ? c.snapshot!.name
               : 'Choose a project'
         : _groupName(group);
-    if (name == null) return SuperTabWorkgroupName(group!, style: style);
+    if (name == null) {
+      return superTabCarriesPriority(group!)
+          ? _taskTitle(group, style)
+          : SuperTabWorkgroupName(group, style: style);
+    }
     if (group != null &&
         c.snapshot!.isProjectLead(group.id) &&
         !_devicesVisible &&
@@ -2797,6 +2815,101 @@ class _SuperTabViewState extends State<SuperTabView>
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: style,
+    );
+  }
+
+  /// A task's name in its header (task #3117): its number, its priority as a
+  /// button that opens the priority menu, then its title without a legacy
+  /// marker, which the badge now says; a refused change is said after it.
+  Widget _taskTitle(SuperTabConversation task, TextStyle style) {
+    final refusal = _priorityRefusal;
+    return Row(
+      key: const ValueKey('super-task-title'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (task.number case final number?) ...[
+          Text('$number', style: style.copyWith(color: DesktopChrome.muted)),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+        ],
+        _priorityMenu(task),
+        const SizedBox(width: grid.AppDesktop.controlGap),
+        Flexible(
+          child: Text(
+            superTabTitlePriority(task.title).title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+        if (refusal != null && refusal.taskId == task.id) ...[
+          const SizedBox(width: grid.AppDesktop.groupGap),
+          Flexible(
+            child: Text(
+              refusal.error,
+              key: const ValueKey('super-task-priority-error'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// The priority menu's widest: room for the longest meaning on one line.
+  static const double _priorityMenuWidth = 340;
+
+  /// [task]'s priority badge, `P1 ▾`, opening the four priorities with what
+  /// each means, the current one checked.
+  Widget _priorityMenu(SuperTabConversation task) {
+    final current = superTabTaskPriority(task);
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    return AppDropdown(
+      width: _priorityMenuWidth,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: [
+        for (final priority in SuperTabTaskPriority.values)
+          fingerTarget(
+            enabled: _phone,
+            AppMenuItem(
+              key: ValueKey('super-task-priority-${priority.name}'),
+              label: priority.badge,
+              // A sentence, so the row's second line: beside the label it
+              // would be cut ([AppMenuItem.detail]).
+              detail: priority.meaning,
+              selected: priority == current,
+              onPressed: editable
+                  ? () => unawaited(_setPriority(task, priority))
+                  : null,
+            ),
+          ),
+      ],
+      builder: (context, menu, _) => Tooltip(
+        message: 'Priority: ${current.meaning}',
+        child: InkWell(
+          key: const ValueKey('super-task-priority'),
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+          onTap: () => menu.isOpen ? menu.close() : menu.open(),
+          child: SuperTabPriorityBadge(current, menu: true),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setPriority(
+    SuperTabConversation task,
+    SuperTabTaskPriority priority,
+  ) async {
+    if (priority == superTabTaskPriority(task)) return;
+    setState(() => _priorityRefusal = null);
+    final refused = await c.setTaskPriority(task.id, priority);
+    if (!mounted) return;
+    setState(
+      () => _priorityRefusal = refused == null
+          ? null
+          : (taskId: task.id, error: refused),
     );
   }
 
@@ -3987,14 +4100,6 @@ class _SuperTabViewState extends State<SuperTabView>
             username: name,
       },
       references: _references,
-      onOpenInstructions: (saved) => unawaited(
-        showSuperTabInstructions(
-          context,
-          c,
-          saved.projectId,
-          revision: saved.revision,
-        ),
-      ),
       onOpenGroup: (id) {
         setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
@@ -5659,6 +5764,12 @@ class _BuiltRowState extends State<_BuiltRow> {
   @override
   Widget build(BuildContext context) {
     widget.rows[widget.id] = context;
+    // The first chat on screen after launch: marked once the frame is out.
+    if (speedMarks.awaitingFirstChat) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => speedMarks.firstChat(),
+      );
+    }
     return widget.child;
   }
 }

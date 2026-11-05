@@ -394,6 +394,7 @@ class SuperTabConversation {
             )
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
+      priority = row['priority'] as String?,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
@@ -496,6 +497,11 @@ class SuperTabConversation {
   /// (backend taskQueue.ts); null until someone moves it, when its number
   /// places it (task_groups.dart).
   final double? queueRank;
+
+  /// A task's priority as the server keeps it, `P0` to `P3` (backend
+  /// taskPriority.ts); null on a step, a chat, and a task from before it,
+  /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
+  final String? priority;
 
   /// The day before which its work may not start, a promise the PM keeps
   /// ("remove the preview route after Dec 4"); null when there is none.
@@ -1555,16 +1561,11 @@ class SuperTabMessage {
   /// The project chat's line when linked work is Done (ship_row.dart).
   bool get shipLine => source['kind'] == 'ship';
 
-  /// The project and revision an instructions save's chat line names, which
-  /// its "See revision" link opens (#3021); null for any other row.
-  ({String projectId, int revision})? get instructionsSave =>
-      switch ((source['kind'], source['projectId'], source['revision'])) {
-        ('instructions', final String projectId, final num revision) => (
-          projectId: projectId,
-          revision: revision.toInt(),
-        ),
-        _ => null,
-      };
+  /// A line the backend posted for an instructions save: no chat row and
+  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
+  /// #3165). The backend posts none since #3132; the History keeps every
+  /// revision.
+  bool get instructionsSave => source['kind'] == 'instructions';
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).

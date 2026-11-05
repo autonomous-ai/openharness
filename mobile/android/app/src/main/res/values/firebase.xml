@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Firebase project `autonomous-harness`, app ai.autonomous.harness.android: only what FCM needs,
+     from the console's google-services.json (Project settings ▸ General ▸ Your apps). Read by
+     Firebase at start-up (FirebaseOptions.fromResource), in place of the google-services Gradle
+     plugin, so the `.bench` copy (harnessIdSuffix) still builds. Not secrets: every APK carries
+     them. -->
+<resources>
+    <string name="google_app_id" translatable="false">1:833365259120:android:ba216b0b3278c0a6d455b5</string>
+    <string name="gcm_defaultSenderId" translatable="false">833365259120</string>
+    <string name="google_api_key" translatable="false">AIzaSyCv-lM0AryK9lnW1PWlq71zLyESSw2rVDw</string>
+    <string name="project_id" translatable="false">autonomous-harness</string>
+    <string name="google_storage_bucket" translatable="false">autonomous-harness.firebasestorage.app</string>
+</resources>

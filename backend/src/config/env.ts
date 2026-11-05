@@ -309,13 +309,18 @@ const envSchema = z.object({
   GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
   // Phone push (push/keys.ts, task #2905): a thread reply or a tag reaches a phone whose app is closed. APNs for iPhones: the
-  // key Apple generated in the developer account (the .p8 file, with its line breaks as \n, or base64 of it), its Key ID and
+  // Production key Apple generated in the developer account (the .p8 file, with its line breaks as \n, or base64 of it), its Key ID and
   // the Team ID; all three or none. FCM for Android: base64 of the Firebase service account's JSON key. Unset: that platform
   // gets no push, and each one skipped is counted and logged. A value that cannot be right stops the backend at startup, with
   // a message that never shows it.
   APNS_KEY_ID: z.string().default(''),
   APNS_TEAM_ID: z.string().default(''),
   APNS_PRIVATE_KEY: z.string().default(''),
+  // Apple's keys are per environment: the three above are the Production key, used on Apple's production host alone. The
+  // Sandbox key, for an Xcode build's tokens, is used on the sandbox host alone; both or neither, and only beside the
+  // production key. Unset: an Xcode build's push is skipped, and logged (Ken, 11-05).
+  APNS_SANDBOX_KEY_ID: z.string().default(''),
+  APNS_SANDBOX_PRIVATE_KEY: z.string().default(''),
   // The iPhone app's bundle id, which Apple sends to.
   APNS_TOPIC: z.string().default('ai.autonomous.harness.ios'),
   FCM_SERVICE_ACCOUNT: z.string().default(''),

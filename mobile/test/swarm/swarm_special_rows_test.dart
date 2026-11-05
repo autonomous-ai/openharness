@@ -398,6 +398,32 @@ void main() {
     expect(find.text('Terminal recording interrupted'), findsNothing);
   });
 
+  // Dee, 11-05 (task #3165): an instructions save's chat line gives a person
+  // nothing to do, so the ones already posted are no chat row. The History
+  // keeps every revision.
+  testWidgets('an instruction-change post is no chat row; others show', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        row(
+          'saved',
+          3,
+          'Lead changed the instructions for dee: Routing: no Haiku.\n\n'
+              'In Routing:\nRemoved: Haiku reviews.\nAdded: Opus reviews.',
+          {'kind': 'instructions', 'projectId': 'lead', 'revision': 8},
+        ),
+        row('later', 4, 'Next', {}),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(inRow('later', find.text('Next')), findsOneWidget);
+    expect(find.textContaining('changed the instructions'), findsNothing);
+    expect(find.textContaining('See revision'), findsNothing);
+  });
+
   group('an ordinary message says', () {
     testWidgets('Terminal answer above a terminal\'s answer', (tester) async {
       await show(

@@ -11,8 +11,6 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-/** A save's chat line: its summary line, above the change it shows. */
-const firstLine = (text: string) => text.split('\n')[0]
 
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -237,7 +235,7 @@ describe('instructions.save', () => {
   const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
     ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Reviews run on Opus', ...extra })
 
-  it('saves on the latest revision, announces it in the project chat and hands the text to the store', () => {
+  it('saves on the latest revision, posts nothing in any chat and hands the text to the store', () => {
     const f = fixture()
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     const effects = f.run(save(1, 'Reviews run on Opus.'))
@@ -245,34 +243,24 @@ describe('instructions.save', () => {
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.'), text: 'Reviews run on Opus.',
       summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ conversationId: 'lead', author: { kind: 'person', id: 'owner' }, recipients: [],
-      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
-    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
+    // Dee and Ken, 11-05 (#3132): a save is read in the Instructions history, never posted in the project chat or any other.
+    expect(effects.messages).toEqual([])
   })
 
-  // Ken, 11-05: the line named only the PM's summary, so "I wrote it into the instructions" could not be checked (#3021).
-  it('posts the lines the save really added and removed, from the revision it replaced, under the summary', () => {
+  // #3132: the chat line #3021 added is gone with the line; what the save changed stays readable as two kept revisions.
+  it('posts nothing for a save that changes lines, a long change or an unreadable earlier revision, and still records each revision', () => {
     const f = fixture()
     const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
     const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'instructions', projectId: 'lead', revision: 2 },
-      text: 'owner changed the instructions: Reviews run on Opus.\n\nIn Rules:\nRemoved: Haiku reviews.\nAdded: Sonnet reviews.\nAdded: Tests run first.' })])
-    // The summary never stands in for the change: a summary claiming a rule shows the lines the text really holds.
-    const claimed = f.run(save(2, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.\n- Ship daily.', { summary: 'Added the Haiku ban' }),
-      owner, { instructions: { revision: 2, text: '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.' } })
-    expect(claimed.messages[0]!.text).toBe('owner changed the instructions: Added the Haiku ban.\n\nIn Rules:\nAdded: Ship daily.')
-  })
-
-  it('shows 12 items of a long change and how many more, and says when the earlier revision could not be read', () => {
-    const f = fixture()
+    expect(effects.messages).toEqual([])
+    expect(effects.instructions).toMatchObject({ projectId: 'lead', revision: 2, summary: 'Reviews run on Opus' })
     const rules = Array.from({ length: 30 }, (_, i) => `- Rule ${i + 1}.`)
-    const long = f.run(save(1, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 1, text: '# Rules' } }).messages[0]!.text
-    expect(long).toBe(['owner changed the instructions: Reviews run on Opus.', '', 'In Rules:', ...rules.slice(0, 12).map(r => `Added: ${r.slice(2)}`), '',
-      'and 18 more changes.'].join('\n'))
-    // The store reads the current revision for every save (store.ts); one it could not read is said, never shown as no change.
-    expect(f.run(save(2, 'Other.'), owner, { instructions: null }).messages[0]!.text)
-      .toBe('owner changed the instructions: Reviews run on Opus.\n\nThe earlier revision could not be read, so the change is not shown.')
+    const long = f.run(save(2, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 2, text: '# Rules' } })
+    expect(long.messages).toEqual([])
+    expect(long.instructions).toMatchObject({ revision: 3 })
+    const unreadable = f.run(save(3, 'Other.'), owner, { instructions: null })
+    expect(unreadable.messages).toEqual([])
+    expect(unreadable.instructions).toMatchObject({ revision: 4 })
   })
 
   it('refuses a save on an older revision with the current revision and text, so the caller can merge', () => {
@@ -298,8 +286,7 @@ describe('instructions.save', () => {
     expect(() => f.run(save(1, 'PM text.', { askedBy: 'stranger' }), as(lead))).toThrow(expect.objectContaining({ code: 'ASKED_BY_UNAVAILABLE' }))
     const effects = f.run(save(1, 'PM text.', { askedBy: 'peer' }), as(lead))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer' })
-    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead } })
-    expect(firstLine(effects.messages[0]!.text)).toBe('lead changed the instructions for peer: Reviews run on Opus.')
+    expect(effects.messages).toEqual([])
     expect(() => f.run(save(2, 'Engineer text.', { askedBy: 'owner' }), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
     const buddy = f.add('buddy', group)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
@@ -309,13 +296,15 @@ describe('instructions.save', () => {
     expect(() => viewer.run(save(1, 'Viewer text.'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
-  it('names in the chat line the member a person saved for, and no one when they saved for themselves (review of phase 2)', () => {
+  it('records the member a person saved for, and posts no line naming them (review of phase 2, #3132)', () => {
     const f = fixture()
     f.invite()
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
-    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions for peer: Reviews run on Opus.')
-    expect(firstLine(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
+    expect(effects.messages).toEqual([])
+    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }))
+    expect(own.instructions).toMatchObject({ askedBy: 'owner' })
+    expect(own.messages).toEqual([])
   })
 
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {

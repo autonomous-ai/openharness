@@ -1820,9 +1820,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(revisions.map(r => [r.revision, r.askedBy, r.summary])).toEqual([[1, owner.sub, expect.any(String)],
       [2, owner.sub, 'Routing: Never use Haiku.'], [3, peer.sub, 'Routing: Haiku writes docs.']])
     expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    // The save's own row is the system's: quoting it names no one.
-    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.text.includes('changed the instructions'))!
-    await expect(run(tab, rule(row.id), host, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
+    // A save posts no row in the chat (#3132): the revisions above are where it is read.
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('changed the instructions'))).toEqual([])
   })
   it('lets a project\'s Lead write a rule from the owner\'s message into that project\'s instructions, and answers a removal', async () => {
     // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
@@ -1839,8 +1838,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await run(tab, { type: 'rule.remove', ruleId: 'old', askedIn }, host, lead)).result).toMatchObject({ ignored: true })
     expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
     const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
-    // After the row naming who added the Lead (#2207).
-    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/), 'Lead changed the instructions for owner: Routing: Only this Mac.\n\nIn Routing:\nAdded: Only this Mac.'])
+    // Only the row naming who added the Lead (#2207): the save posts none (#3132).
+    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/)])
     expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
   })
   it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
