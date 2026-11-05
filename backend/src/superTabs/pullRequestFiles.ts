@@ -30,9 +30,12 @@ export const projectPullRequestFiles = (app: PullRequestFilesApp) =>
     const own = urls.flatMap(url => {
       const match = PULL.exec(url)
       return match && match[1]!.toLowerCase() === repository.fullName.toLowerCase() ? [{ url, number: Number(match[2]) }] : []
-    }).slice(0, MAX_PULLS)
+    })
     if (!own.length) return null
     const read: PullRequestFilesRead = { urls: own.map(pull => pull.url), head: null, files: null }
+    // More than it reads: the ones left unread could change anything, so the plan is as strict as the rules go, never one
+    // made from some of them (security review 2 of #3227).
+    if (own.length > MAX_PULLS) return read
     let token: string | null = null
     try {
       const resolved = await app.resolve(repository)
