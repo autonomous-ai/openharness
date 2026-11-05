@@ -446,6 +446,13 @@ export class GitHubApp {
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not create a token for ${repository.fullName}.`, 502)
   }
 
+  /** One call with an installation [token] this server minted (the merge train's, github/train.ts): its status and JSON body.
+   *  Throws [GitHubAppError] GITHUB_UNAVAILABLE when GitHub does not answer. */
+  async installationCall(token: string, method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+    const answer = await this.call(method, path, `Bearer ${token}`, body)
+    return { status: answer.status, body: answer.body }
+  }
+
   /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as
    *  done. */
   async revoke(token: string): Promise<void> {
