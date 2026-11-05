@@ -503,6 +503,21 @@ describe('progress for the machine report', () => {
     expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
   })
 
+  // Task #3397: a crew session whose whole screen, status line and timer too, never changes while its engine works is frozen
+  // (crew.ts). The watch's own reads tell it, so the crew keeper reads no screen of its own.
+  it('records when the whole screen last changed, its status line included, from the same reads', async () => {
+    const t = setup({ screen: showing('✻ Working… (3s · esc to interrupt)\n❯ ') })
+    await t.host.tick([row()])
+    expect(t.host.stillSince('h1')).toBe(1_000_000)
+    t.showing(showing('✻ Working… (18s · esc to interrupt)\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    expect(t.host.stillSince('h1')).toBe(1_015_000)
+    t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.stillSince('h1')).toBe(1_015_000)
+    expect(t.host.stillSince('h2')).toBeUndefined()
+    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
+  })
+
   it('names only running agents, and forgets one once it stops or leaves', async () => {
     const t = setup({ live: ['h1', 'h2'] })
     await t.host.tick([row(), row('a2', 'h2', { stopRequested: true }), row('a3', 'h3')])
