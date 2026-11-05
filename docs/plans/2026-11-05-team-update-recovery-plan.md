@@ -78,3 +78,11 @@ River requested that status reflect a Team sign-in that no longer works. Regress
 - [ ] Post red/green evidence in a PR comment; mark ready at a stable head.
 - [ ] Hand the Integrator the PR for two security reviews and independent Team-account testing.
 - [ ] Resolve findings test first, record all task acceptance checks, then report the exact head and evidence through work status.
+
+## Security review correction: departing device-log archive
+
+SecLarch found that deleting the departing trust stash still left the same owner's device names, keys and suspensions in the device-log archive. The refresh and confirmed-review switch paths must both discard the departing log (including a pre-existing archived copy) for Team sign-ins. Ordinary sign-ins continue archiving. Historical stashes for unrelated owners and status recovery are recorded minor findings, outside this correction.
+
+- [x] Commit four regression cases before implementation: Team and ordinary switches, through refresh and confirmed review. Both Team cases fail without the fix.
+- [x] Apply the same Team epoch policy as trust-stash cleanup when archiving the departing log.
+- [ ] Validate device-log/store/trust tests and importer tests, publish red/green evidence, and request delta reviews at the new head.
