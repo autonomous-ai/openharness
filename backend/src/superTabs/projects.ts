@@ -33,7 +33,12 @@ export const roleVersion = (text: string): string => createHash('sha256').update
 export interface SwarmProject {
   id: string
   name: string
+  /** The owner's id; '' for a private project whose owner left with no member left to take it (settleOwners): nobody's. */
   ownerId: string
+  /** The owner's membership generation when they became its owner (task #3073): the same account at a later membership
+   *  owns nothing, as a member's listing works. Absent on projects from before 2026-11-05 until settleOwners fills it; until
+   *  then the owner matches by id, as before. */
+  ownerGeneration?: string
   leadConversationId: string
   /** Public means every member of this swarm, never anonymous internet access. */
   visibility: ProjectVisibility
@@ -160,6 +165,47 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
   return led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
 }
 
+/** Gives each project whose owner is gone a new owner (task #3073, River's ruling 2026-11-05): its owner left or was
+ *  removed, or is in the Swarm at a later membership. It passes to the earliest listed member still in the Swarm at the
+ *  membership they were listed with, who reads it already (one who can manage it first, else a viewer); else, for a public
+ *  project, to the Swarm's owner, who reads it too; else it is nobody's ('' owner): nobody reads it, and the Swarm's owner
+ *  sees only that it exists and may delete it (deletableProject). A project from before ownerGeneration whose owner is still
+ *  here gets their membership now, which is how the migration fills it. Each project that changed hands, in order. */
+export function settleOwners(state: SuperTabState): Array<{ projectId: string; from: string; to: string }> {
+  const changed: Array<{ projectId: string; from: string; to: string }> = []
+  const people = new Map(state.people.map(p => [p.id, p]))
+  for (const project of state.projects ?? []) {
+    if (!project.ownerId) continue
+    const current = people.get(project.ownerId)
+    if (current && project.ownerGeneration === undefined) project.ownerGeneration = current.generation
+    if (current && project.ownerGeneration === current.generation) continue
+    const listed = project.members.filter(m => m.id !== project.ownerId && people.get(m.id)?.generation === m.generation)
+    const next = listed.find(m => people.get(m.id)!.role !== 'viewer') ?? listed[0]
+    const swarmOwner = people.get(state.ownerId)
+    const to = next ? people.get(next.id)! : project.visibility === 'public' && swarmOwner ? swarmOwner : undefined
+    changed.push({ projectId: project.id, from: project.ownerId, to: to?.id ?? '' })
+    project.ownerId = to?.id ?? ''
+    if (to) project.ownerGeneration = to.generation
+    else delete project.ownerGeneration
+    if (next) project.members = project.members.filter(m => m !== next)
+  }
+  return changed
+}
+
+/** Adds [member] to the Swarm by any way in (invitation, link, domain or Workspace join): its projects are settled first, so
+ *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
+export function admitPerson(state: SuperTabState, member: Person): void {
+  settleOwners(state)
+  state.people.push(member)
+}
+
+/** Takes the people [leaving] out of the Swarm (a removal, a leave, a restore that keeps out those the Workspace lost), and
+ *  passes their projects on (settleOwners). */
+export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
+  state.people = state.people.filter(p => !leaving.has(p.id))
+  settleOwners(state)
+}
+
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
 export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
 
@@ -172,8 +218,17 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     return agentProjectId(state, target) === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
-  return !!member && (project.visibility === 'public' || project.ownerId === member.id ||
+  return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
     project.members.some(p => p.id === member.id && p.generation === member.generation))
+}
+
+/** Whether [userId] owns [project] now: its owner, in the Swarm at the membership they owned it in (task #3073). A former
+ *  owner who left or was removed and came back owns nothing, as a former member reads nothing. A project from before the
+ *  generation was stored matches by id until settleOwners fills it. */
+export function ownsProject(state: SuperTabState, userId: string, project: SwarmProject): boolean {
+  if (!userId || project.ownerId !== userId) return false
+  const member = state.people.find(p => p.id === userId)
+  return !!member && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation)
 }
 
 /** Whom a group's work is for, as its pull requests say (`requestedByLine`): the person who asked for it (`requesterId`) while
@@ -421,7 +476,7 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
  */
 export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): 'watch' | 'none' | 'member' | null {
   if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
-  if (actor.userId === projectOf(state, agentProjectId(state, target)).ownerId) return 'watch'
+  if (ownsProject(state, actor.userId, projectOf(state, agentProjectId(state, target)))) return 'watch'
   if (actor.userId === target.machineOwnerId) return 'none'
   return watchClosed(state, target, elsewhere) ? 'none' : 'member'
 }
@@ -492,11 +547,41 @@ export function mutableProjects(state: SuperTabState): SwarmProject[] {
 export function manageProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   const project = readProject(state, actor, projectId)
   author(state, actor, true)
-  if (actor.kind !== 'person' || actor.userId !== project.ownerId) {
+  if (actor.kind !== 'person' || !ownsProject(state, actor.userId, project)) {
     fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can manage this project.', 403)
   }
   mutableProjects(state)
   return projectOf(state, projectId)
+}
+
+/** The project [actor] may delete: one they manage, or, for the Swarm's owner, one that is nobody's (settleOwners), which they
+ *  may delete but never read (task #3073). */
+export function deletableProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
+  author(state, actor)
+  const project = projectsOf(state).find(p => p.id === projectId)
+  if (!project || !isOwnerless(project) || actor.kind !== 'person' || actor.userId !== state.ownerId) return manageProject(state, actor, projectId)
+  author(state, actor, true)
+  mutableProjects(state)
+  return projectOf(state, projectId)
+}
+
+/** The account of [project]'s owner, which the GitHub token and a start's preparation name the work for: nobody for a project
+ *  nobody owns, never looked up by its empty id, which is no ObjectId (the lookup would throw). */
+export async function ownerAccount(users: { findUnique(args: { where: { id: string }; select: { name: true; email: true } }): Promise<{ name: string | null; email: string } | null> },
+  project: SwarmProject): Promise<{ name: string | null; email: string } | null> {
+  return project.ownerId ? users.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } }) : null
+}
+
+/** A project nobody owns: its owner left with no member left to take it (settleOwners). */
+export const isOwnerless = (project: SwarmProject): boolean => !project.ownerId
+
+/** What the Swarm's owner reads of each project nobody owns (task #3073): that it exists, its name and its size (its chats in
+ *  this read), never what is in it. Anyone else reads nothing of them. */
+export function ownerlessProjects(state: SuperTabState, actor: Actor): Array<{ id: string; name: string; conversations: number }> | undefined {
+  if (actor.kind !== 'person' || actor.userId !== state.ownerId) return undefined
+  const ownerless = projectsOf(state).filter(isOwnerless)
+  return ownerless.length ? ownerless.map(p => ({ id: p.id, name: p.name,
+    conversations: state.conversations.filter(c => c.projectId === p.id).length })) : undefined
 }
 
 /** How long a start may stay pending before a project delete treats it as stuck: well past the 15 minutes the sweep gives a
@@ -509,7 +594,10 @@ export const STUCK_START_MS = 60 * 60_000
  * and it closed that agent's session when it was removed, so none of them ever settles (2026-11-04: 17 such starts on four
  * Macs, from agents stopped while a project was cleaned up, kept its owner from deleting it). */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string, orphaned: ReadonlySet<string> = new Set(), now?: number): void {
-  const project = manageProject(state, actor, projectId)
+  const project = deletableProject(state, actor, projectId)
+  // A project nobody owns is deleted by the Swarm's owner, who reads nothing of it: no refusal names what is in it, and its
+  // work, which nobody can resolve, goes with it.
+  const ownerless = isOwnerless(project)
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
@@ -526,11 +614,12 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
     (!s.harnessId || s.poolGeneration && !s.poolSettled && !orphaned.has(s.id)))
   // Each refusal names what holds it, so its owner can act on it: the ones before named nothing, and no read showed them.
   const titled = (id: string) => groups.find(c => c.id === id)?.title || 'the project chat'
+  if (pending.length && ownerless) fail('STARTS_PENDING', 'Agents of this project are still starting. Delete it once they have started or failed, within the hour.')
   if (pending.length) {
     fail('STARTS_PENDING', `Resolve this project’s pending agent starts before deleting it: ${pending.slice(0, 3)
       .map(s => `${s.request.name} in “${titled(s.request.conversationId)}”`).join(', ')}${pending.length > 3 ? ` and ${pending.length - 3} more` : ''}.`)
   }
-  const active = groups.filter(activeWork)
+  const active = ownerless ? [] : groups.filter(activeWork)
   if (active.length) {
     fail('WORK_ACTIVE', `Resolve this project’s active work before deleting it: ${active.slice(0, 3).map(c => `“${titled(c.id)}”`).join(', ')}${
       active.length > 3 ? ` and ${active.length - 3} more` : ''}.`)
