@@ -31,14 +31,34 @@ Desktop's `_hasUnread` keeps a project with tags in its work.
 ## Task 1: The project row reads as Desktop's
 
 **Files:** mobile/lib/swarm/swarm_unread.dart, mobile/lib/swarm/swarm_read_marks.dart,
-mobile/test/swarm/swarm_unread_test.dart, mobile/test/swarm/swarm_project_rows_read_test.dart (new)
+mobile/test/swarm/swarm_unread_test.dart, mobile/test/swarm/swarm_project_rows_read_test.dart (new), mobile/lib/swarm/swarm_home_list.dart,
+mobile/test/swarm/swarm_home_read_sync_test.dart (new), existing Home and notification tests
 
 **Interfaces:** `SwarmReadMarks.unreadForPeople(SuperTabConversation)`; `swarmProjectNews` keeps its type.
 
-- [ ] Failing tests: a project whose open task has agent posts past the mark is not bold; a project chat read on
+- [x] Failing tests: a project whose open task has agent posts past the mark is not bold; a project chat read on
   Desktop (a poll carrying the server's moved mark) clears the row; a project chat read on the phone clears it and sends
   the mark Desktop reads; an agent-only post in the project chat does not bold it, a person's does; tags in the project
   chat still bold it with its count; tags in a task leave the row quiet but `hasWaitingTag` set.
-- [ ] Run them; watch them fail.
-- [ ] `unreadForPeople` and the new `swarmProjectNews`; update the old tests that wrote down the old rule.
-- [ ] Run swarm_unread_test.dart, the new test and the Home tests that read project news.
+- [x] Run them; watch them fail.
+- [x] `unreadForPeople` and the new `swarmProjectNews`; update the old tests that wrote down the old rule.
+- [x] Run swarm_unread_test.dart, the new test and the Home tests that read project news.
+
+
+## Completed validation and review notes
+
+- The visible change follows the approved rule: after reading, `#openharness •` (bold) becomes
+  `#openharness` (normal weight); an unread person message in `#design •` remains bold.
+- Home widget tests exercise Desktop marks arriving alongside whole changed groups, and tapping the phone's
+  project chat then returning to Home. Both run in light and dark using a fake account, in-memory read marks
+  and an in-memory backend. Read-boundary, first-load, older server-mark, thread-only and mute cases have
+  focused reader tests. Desktop's existing remote-mark/sidebar tests pass with the same rule.
+- Task tags no longer bold the project. They still keep it in the filters and out of Other projects; the folding
+  condition now uses the same news predicate as the filters. The existing tests of the previous bolding policy
+  were updated with explicit person-message counters where an unread project is intended.
+- Screenshot evidence is in `assets/phone-project-unread/`: before and after the production fix for each
+  device's read flow in both themes. These are offscreen Flutter renders at 390 × 844 points, not simulator
+  captures: this Team Mac has no simulator runtimes. This uses the project's Team-account fallback;
+  a simulator run would additionally cover the native renderer/navigation environment.
+- No storage, server, wire-format or migration change. iOS and Android share the changed Dart code.
+  Rollback is reverting the client change; Desktop and the backend need no rollout changes.

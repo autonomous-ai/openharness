@@ -5,7 +5,6 @@ import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_unread.dart';
 
-import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// A project's row on Home reads as the desktop's sidebar row

@@ -129,7 +129,8 @@ Map<String, SwarmProjectNews> swarmProjectNews(
       unread.add(projectId);
     }
     // Most task updates are agents' progress, with no tags or decisions.
-    if (!waiting.containsKey(group.id) && !asked.containsKey(group.id)) continue;
+    if (!waiting.containsKey(group.id) && !asked.containsKey(group.id))
+      continue;
     final count = _countIn(
       reader,
       group,
