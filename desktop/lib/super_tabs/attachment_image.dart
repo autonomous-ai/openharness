@@ -36,6 +36,14 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   Uri? _url;
   bool _asking = false, _retried = false, _failed = false;
 
+  /// [_url] is the thumbnail the server made, not the original: the chat
+  /// draws that, and the original when it is missing or will not load.
+  bool _thumb = false;
+
+  /// The thumbnail that failed, whose later errors (a picture reports one
+  /// more than once) say nothing about the original drawn in its place.
+  Uri? _thumbFailed;
+
   /// How long after each failed ask for a link the next one is made.
   static const _askAgainAfter = [
     Duration(seconds: 2),
@@ -62,13 +70,16 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     }
     _ref = widget.file;
     _retried = _failed = false;
+    _thumbFailed = null;
     _askAgain?.cancel();
     _waited = 0;
     _start();
   }
 
   void _start() {
-    _url = _ref.current;
+    final thumb = _ref.currentThumb;
+    _thumb = thumb != null;
+    _url = thumb ?? _ref.current;
     // Asked after this frame: the view's fresh-link source is read then.
     if (_url == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _ask(stale: false));
@@ -103,9 +114,12 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
       _askAgain = Timer(wait, () => _ask(stale: stale));
       return;
     }
+    // A fresh answer brings the thumbnail's new link too.
+    final thumb = url == null ? null : _ref.currentThumb;
     setState(() {
       _asking = false;
-      _url = url;
+      _thumb = thumb != null;
+      _url = thumb ?? url;
       _failed = url == null;
     });
   }
@@ -118,7 +132,19 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
 
   /// The picture did not load. A short-lived link may have ended under it:
   /// asked for once more. An older server's permanent link is not.
-  void _broke() {
+  void _broke(Uri failed) {
+    if (failed == _thumbFailed) return;
+    if (_thumb) {
+      // The thumbnail is missing or will not load: the original is drawn.
+      _thumb = false;
+      _thumbFailed = failed;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _url = _ref.current);
+        if (_url == null) _ask(stale: false);
+      });
+      return;
+    }
     final signed = _url?.host == kSuperTabFilesHost;
     if (_retried || !signed || _failed) {
       if (!_failed) {
@@ -166,13 +192,16 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
               borderRadius: radius,
               child: ExcludeSemantics(
                 child: Image(
+                  // One state per address: a failed thumbnail's error must not
+                  // greet the original that takes its place.
+                  key: ValueKey(url.toString()),
                   image: attachmentPicture(url),
                   fit: BoxFit.contain,
                   frameBuilder: (_, child, frame, synchronous) =>
                       frame == null && !synchronous ? _loading() : child,
                   errorBuilder: (_, _, _) {
                     if (_failed) return _broken(file);
-                    _broke();
+                    _broke(url);
                     return _loading();
                   },
                 ),
