@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Replies and tags reach the phone while the app is closed (PushChannel in AppDelegate.swift). Xcode makes
+	     it `production` when it exports for TestFlight and the App Store. -->
+	<key>aps-environment</key>
+	<string>development</string>
 	<!-- Joining a new device's open setup hotspot, Harness-XXXX (SetupWifiChannel in AppDelegate.swift). -->
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>

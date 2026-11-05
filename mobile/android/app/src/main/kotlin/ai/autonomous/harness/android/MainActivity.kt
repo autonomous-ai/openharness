@@ -153,6 +153,9 @@ class MainActivity : FlutterActivity() {
       }
     }
     receiveLink(intent)
+    // A thread reply or tag pushed while the app was closed (PushService.kt, task #2905).
+    PushChannel.attach(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+    PushChannel.tapped(intent)
   }
 
   private var links: MethodChannel? = null
@@ -162,6 +165,7 @@ class MainActivity : FlutterActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     receiveLink(intent)
+    PushChannel.tapped(intent)
   }
 
   private fun receiveLink(intent: Intent?) {

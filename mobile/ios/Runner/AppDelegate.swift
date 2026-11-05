@@ -30,6 +30,107 @@ import UserNotifications
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
     LinkChannel.register(with: engineBridge.pluginRegistry)
     SetupWifiChannel.register(with: engineBridge.pluginRegistry)
+    PushChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/push` — this iPhone's APNs token, and the pushes the server sends a thread reply or a tag as
+/// while the app is closed (Dart: `lib/notify/push_registration.dart`, task #2905).
+///
+/// Dart asks `token` (`{platform: ios, token}` in hex, or nil when iOS gives none), `delivered` (the `key`
+/// of each push of ours in the notification centre) and `launchLink` (the `link` of the push whose tap
+/// launched the app, held until asked). It is told `token` when iOS hands out a new one and `opened`
+/// (`{link}`) when a push is tapped. A push of ours carries `link`; it is not drawn while the app is in
+/// front, where the app's own notices decide. Anything else is left to flutter_local_notifications.
+///
+/// A plugin application delegate, so the app delegate passes it the token and the notification centre's
+/// callbacks as it does flutter_local_notifications.
+final class PushChannel: NSObject, FlutterPlugin {
+  /// Held here: the registrar keeps application delegates weakly.
+  private static var shared: PushChannel?
+
+  private let channel: FlutterMethodChannel
+  private var token: String?
+  private var waiting: [FlutterResult] = []
+  private var launchLink: String?
+  /// Dart asked for the launch link: a later tap is told at once.
+  private var listening = false
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let registrar = registry.registrar(forPlugin: "HarnessPush") else { return }
+    register(with: registrar)
+  }
+
+  static func register(with registrar: FlutterPluginRegistrar) {
+    let push = PushChannel(messenger: registrar.messenger())
+    registrar.addApplicationDelegate(push)
+    shared = push
+  }
+
+  private init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "harness/push", binaryMessenger: messenger)
+    super.init()
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self else { result(nil); return }
+      switch call.method {
+      case "token":
+        if let token = self.token { result(["platform": "ios", "token": token]); return }
+        self.waiting.append(result)
+        // No prompt: the token comes without the person's leave; whether a push is drawn is their
+        // notification setting, asked for by the app as before.
+        if self.waiting.count == 1 { UIApplication.shared.registerForRemoteNotifications() }
+      case "delivered":
+        UNUserNotificationCenter.current().getDeliveredNotifications { list in
+          let keys = list.compactMap { $0.request.content.userInfo["key"] as? String }
+          DispatchQueue.main.async { result(keys) }
+        }
+      case "launchLink":
+        self.listening = true
+        result(self.launchLink)
+        self.launchLink = nil
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+    let changed = token != nil && token != hex
+    token = hex
+    let answer: [String: String] = ["platform": "ios", "token": hex]
+    waiting.forEach { $0(answer) }
+    waiting.removeAll()
+    if changed { channel.invokeMethod("token", arguments: answer) }
+  }
+
+  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    NSLog("[push] no APNs token: %@", error.localizedDescription)
+    waiting.forEach { $0(nil) }
+    waiting.removeAll()
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    guard notification.request.content.userInfo["link"] is String else { return }
+    completionHandler([])
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    guard let link = response.notification.request.content.userInfo["link"] as? String else { return }
+    if listening {
+      channel.invokeMethod("opened", arguments: ["link": link])
+    } else {
+      launchLink = link
+    }
+    completionHandler()
   }
 }
 
