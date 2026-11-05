@@ -487,9 +487,12 @@ export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice'
 export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
   `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
 
-/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). */
-export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>): string =>
-  `${pool.name} runs teammates' work in its Harness Team account. Its owner can change that in Manage > Machines.`
+/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). The owner's choice is kept
+ *  on each Swarm's own entry for the Mac, so it says which Swarm's to change (task #2993: Gray turned it on in another
+ *  Swarm). Team-written code moves whatever the owner chose, so that note names the code, not a setting that would not help. */
+export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>, teamWritten = false): string => teamWritten
+  ? `A Harness Team agent wrote this task's code, so it runs in the Harness Team account on ${pool.name}.`
+  : `${pool.name} runs teammates' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm's Manage > Machines.`
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
