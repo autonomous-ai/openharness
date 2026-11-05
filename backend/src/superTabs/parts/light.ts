@@ -49,6 +49,7 @@ export const GROUP_FIELDS = {
     'title',
   ],
   unread: [
+    'answered',
     'assignment.askedOf',
     'assignment.changesRequestedAt',
     'assignment.configuration',

@@ -29,6 +29,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.onOpen,
     this.priority,
     this.titleLines = 2,
+    this.captionLines = 1,
     this.tile = false,
     this.selected = false,
     this.trailing,
@@ -40,6 +41,9 @@ class SuperTabTaskCard extends StatelessWidget {
   final VoidCallback onOpen;
   final SuperTabTaskPriority? priority;
   final int titleLines;
+
+  /// How many lines the caption takes; null takes as many as it needs.
+  final int? captionLines;
   final bool tile, selected;
   final Widget? trailing;
 
@@ -108,8 +112,12 @@ class SuperTabTaskCard extends StatelessWidget {
                             Flexible(
                               child: Text(
                                 caption,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                maxLines: captionLines,
+                                // An ellipsis without a line limit still cuts
+                                // the text to one line.
+                                overflow: captionLines == null
+                                    ? TextOverflow.clip
+                                    : TextOverflow.ellipsis,
                                 style: muted,
                               ),
                             ),

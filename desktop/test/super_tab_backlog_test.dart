@@ -308,6 +308,7 @@ void main() {
       'Waiting on someone',
       'In review',
       'Ready to merge',
+      'Releasing',
       'Shipped',
     ]);
   });
@@ -648,9 +649,11 @@ void main() {
         );
       }
       // The groups' order, top to bottom.
+      // Releasing is listed only when a merged task waits on a release.
       final tops = [
         for (final g in SuperTabBacklogGroup.values)
-          tester.getTopLeft(header(g)).dy,
+          if (g != SuperTabBacklogGroup.releasing)
+            tester.getTopLeft(header(g)).dy,
       ];
       expect(tops, [...tops]..sort());
       expect(listed(tester), [
@@ -675,6 +678,41 @@ void main() {
       expect(rowText(tester, 'asking'), contains('Waiting on pilot'));
       expect(rowText(tester, 'queued'), contains('No agent yet'));
       expect(rowText(tester, 'shipped'), contains('PR 2713 · merged'));
+    });
+
+    testWidgets('a merged task still releasing is under Releasing, between '
+        'Ready to merge and Shipped (task #3452)', (tester) async {
+      final server = swarm();
+      (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'shipped')['releasing'] = [
+        'desktop',
+        'cli',
+      ];
+      await show(tester, server);
+      expect(
+        find.descendant(
+          of: header(SuperTabBacklogGroup.releasing),
+          matching: find.text('RELEASING'),
+        ),
+        findsOneWidget,
+      );
+      expect(header(SuperTabBacklogGroup.shipped), findsNothing);
+      expect(listed(tester), [
+        'queued',
+        'working',
+        'asking',
+        'review',
+        'done',
+        'shipped',
+      ]);
+      expect(
+        tester.getTopLeft(header(SuperTabBacklogGroup.releasing)).dy,
+        greaterThan(
+          tester.getTopLeft(header(SuperTabBacklogGroup.readyToMerge)).dy,
+        ),
+      );
+      expect(summary(tester), (working: 1, review: 1, shipped: 0));
     });
 
     testWidgets('who asked and who it waits on read by the name they set '
