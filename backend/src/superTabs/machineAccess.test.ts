@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { type ContributedMachine, type MachinePrivacy } from './machines.js'
-import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // Task #3047, phase 1 of docs/design/2026-11-05-machine-access.md: what each machine can reach. Each risk the design's
 // section 7 names for phase 1 has a test here. Team accounts are required everywhere, the strictest setting.
@@ -233,5 +233,65 @@ describe('the access list and machine.access', () => {
     f.run({ type: 'machine.contribute', machineId: 'gray-mac', name: 'Gray\'s Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4,
       teamAccountOnly: true }, gray, f.joined)
     expect(f.machine('gray-mac').access).toBeUndefined()
+  })
+})
+
+describe('who reads what (design section 4)', () => {
+  /** Gray's Mac with an own-account entry and a Team-account entry, both with a note and a check. */
+  function listed() {
+    const f = swarm()
+    f.add('ArgoCD', { note: 'connection info in ~/.argocd/config', check: 'argocd' })
+    f.add('Lamp', { account: 'team', note: 'lamp MCP server, port 7000', check: 'lamp-mcp' })
+    const read = (actor: Actor) => visibleState(f.state, actor, NOW).machines!.find(m => m.machineId === 'gray-mac')!.access!
+    const named = (actor: Actor, name: string) => read(actor).find(e => e.name === name)!
+    return { f, read, named }
+  }
+
+  it('gives the machine\'s owner everything: the note and the check', () => {
+    const { named } = listed()
+    expect(named(gray, 'ArgoCD')).toMatchObject({ note: 'connection info in ~/.argocd/config', check: 'argocd' })
+    expect(named(gray, 'Lamp')).toMatchObject({ note: 'lamp MCP server, port 7000', check: 'lamp-mcp' })
+  })
+
+  it('gives every other member the names, account and state, never a note or a check', () => {
+    const { read } = listed()
+    for (const reader of [owner, mate]) {
+      const entries = read(reader)
+      expect(entries.map(e => [e.name, e.account, e.state])).toEqual([['ArgoCD', 'own', 'ok'], ['Lamp', 'team', 'ok']])
+      for (const e of entries) {
+        expect(e.note, JSON.stringify(reader)).toBeUndefined()
+        expect(e.check, JSON.stringify(reader)).toBeUndefined()
+      }
+    }
+  })
+
+  it('gives an agent on that machine, in that entry\'s account, the note and never the check', () => {
+    const { f, named } = listed()
+    const onMac = f.agent('mac-worker', 'gray-mac')
+    const onTeam = f.agent('team-worker', 'gray-team')
+    expect(named(onMac, 'ArgoCD')).toMatchObject({ note: 'connection info in ~/.argocd/config' })
+    expect(named(onMac, 'ArgoCD').check).toBeUndefined()
+    expect(named(onMac, 'Lamp').note).toBeUndefined()
+    expect(named(onTeam, 'Lamp')).toMatchObject({ note: 'lamp MCP server, port 7000' })
+    expect(named(onTeam, 'Lamp').check).toBeUndefined()
+    expect(named(onTeam, 'ArgoCD').note).toBeUndefined()
+  })
+
+  it('gives an agent of the owner on another machine, and the Lead that recorded it, no note', () => {
+    const { f, named } = listed()
+    // Gray's own agent, but on the owner's Mac: owner rights are the owner's own session only.
+    const elsewhere = f.agent('gray-elsewhere', 'owner-mac')
+    for (const reader of [elsewhere, f.leadActor]) {
+      for (const name of ['ArgoCD', 'Lamp']) {
+        expect(named(reader, name).note, `${JSON.stringify(reader)} ${name}`).toBeUndefined()
+        expect(named(reader, name).check, `${JSON.stringify(reader)} ${name}`).toBeUndefined()
+      }
+    }
+  })
+
+  it('leaves the stored list whole', () => {
+    const { f, read } = listed()
+    read(mate)
+    expect(f.entry('ArgoCD')).toMatchObject({ note: 'connection info in ~/.argocd/config', check: 'argocd' })
   })
 })
