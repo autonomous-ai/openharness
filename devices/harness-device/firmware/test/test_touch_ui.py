@@ -2035,6 +2035,15 @@ static void swipe_up(void) { swipe_v(330, 150); }
 static void swipe_down(void) { swipe_v(150, 330); }
 // The PM | Buddy pair (spec 2026-11-05): a tap on a half, as the person switches sides now.
 static void pair_buddy(void) { fake_ms += 1000; tap(fake_ms, 278, 410); }
+// A thumb's press, not an ideal tap: it lands, drifts `dx`,`dy` px and lifts after `hold` ms (Diego's dial, 2026-11-05: such a
+// press on the pair started voice).
+static void thumb(int x, int y, int dx, int dy, uint32_t hold) {
+    fake_ms += 1000;
+    habitat_touch(true, x, y, fake_ms);
+    habitat_touch(true, x + dx / 2, y + dy / 2, fake_ms + hold / 2);
+    habitat_touch(false, x + dx, y + dy, fake_ms + hold);
+    scene_take();
+}
 static void pair_pm(void) { fake_ms += 1000; tap(fake_ms, 188, 410); }
 static void swipe_next(void) {
     fake_ms += 1000; habitat_touch(true, 320, 220, fake_ms); habitat_touch(false, 150, 220, fake_ms + 120); scene_take();
@@ -2634,8 +2643,8 @@ static void swarm_pick_checks(const char *dir) {
     fake_ms += 1000; tap(fake_ms, 233, 30);
     assert(s.view == SWARM_PICK && scene_says("Swarm") && scene_says("Personal") && scene_says("Team") && pick_pill() && pick_half() == 1);
     portrait(dir, "pick-team");
-    // Personal: the Personal card's first Lead on the face, the desktop told as for a tab pick.
-    fake_ms += 1000; tap(fake_ms, 183, 233);
+    // Personal by a thumb's press (drifting, held): the Personal card's first Lead on the face, the desktop told as for a tab pick.
+    thumb(183, 233, 14, 10, 500);
     assert(s.view == HOME && !strcmp(sw.tab, "sp") && !strcmp(sw.lead, "P0") && wire_has(0, "select sp P0"));
     fake_ms += 1000; tap(fake_ms, 233, 30);
     assert(s.view == SWARM_PICK && pick_half() == 0);
@@ -2699,11 +2708,11 @@ static void swarm_pair_checks(const char *dir) {
     // The bell opens the inbox.
     tap(fake_ms += 1000, 233, 360); assert(s.view == INBOX);
     dispatch((action_t){.kind = A_HOME}); scene_take();
-    // Hits: the halves, 90 x 44 at y 388.
+    // Hits: the halves as a thumb's targets, 130 px wide each from y 382 (under the bell) to the edge, meeting at x 233.
     { bool pm = false, bu = false;
       for (int i = 0; i < s.hit_count; i++) {
-          if (s.hits[i].action == A_SIDE_PM) pm = s.hits[i].rect.x == 143 && s.hits[i].rect.y == 388 && s.hits[i].rect.w == 90 && s.hits[i].rect.h == 44;
-          if (s.hits[i].action == A_SIDE_BUDDY) bu = s.hits[i].rect.x == 233 && s.hits[i].rect.y == 388 && s.hits[i].rect.w == 90 && s.hits[i].rect.h == 44;
+          if (s.hits[i].action == A_SIDE_PM) pm = s.hits[i].rect.x == 103 && s.hits[i].rect.y == 382 && s.hits[i].rect.w == 130 && s.hits[i].rect.h == HT_HEIGHT - 382;
+          if (s.hits[i].action == A_SIDE_BUDDY) bu = s.hits[i].rect.x == 233 && s.hits[i].rect.y == 382 && s.hits[i].rect.w == 130 && s.hits[i].rect.h == HT_HEIGHT - 382;
       }
       assert(pm && bu); }
     // The empty Buddy side keeps the pair, so the person can come back.
@@ -2790,6 +2799,15 @@ static void swarm_pair_checks(const char *dir) {
     assert(scene_says("PM \xc2\xb7 2 replies") && bell_at(346));
     for (int i = 0; i < scene.count; i++) { const ht_run_t *r = &scene.runs[i]; if (r->text[0] && r->y < 388 && ht_run_bounds(r).y + ht_run_bounds(r).h > 340 && r->y > 100 && r->font != &ht_bell_footer && r->box.h != 32 && r->x < 150) { fprintf(stderr, "card run y=%d \"%s\"\n", r->y, r->text); assert(false); } }
     { bool dots = false; for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, "\xe2\x80\xa6")) dots = true; assert(dots); }
+    // A thumb's press on a half switches the side and never starts voice: drifting 16 px, held half a second, or landing
+    // just off the drawn pill (below it, or beside it).
+    pair_face("done", -1, true, "lead", "Lead");
+    thumb(270, 404, 14, 8, 500); assert(swarm_side_buddy("s1") && s.view == HOME && !s.voice_open);
+    thumb(190, 404, -12, 10, 450); assert(!swarm_side_buddy("s1") && s.view == HOME && !s.voice_open);
+    thumb(300, 446, 0, 0, 120); assert(swarm_side_buddy("s1") && !s.voice_open);   // under the pill
+    thumb(130, 410, 0, 0, 120); assert(!swarm_side_buddy("s1") && !s.voice_open);   // beside it
+    // Dragged far off the pill it is no press: nothing switches.
+    thumb(278, 410, 0, -150, 300); assert(!swarm_side_buddy("s1") && !s.voice_open);
     puts("Swarm PM | Buddy pair: drawn at y 388, taps switch sides, vertical swipes inert, the bell opens the inbox at y 346 (400 without Buddies), no PM line, the working line at y 318 PASS");
 }
 int main(int argc, char **argv) {

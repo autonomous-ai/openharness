@@ -1188,8 +1188,11 @@ static bool home_footer(action_kind_t action)
     // A_VOICE is the Focus face's [ say ]. It belongs here rather than on the A_PET path because a
     // bracket control is pressed and released like every other one, while A_PET reads a TAP as a boop
     // and only starts speech on a 650 ms hold — which is the creature's gesture, not a button's.
+    // The PM | Buddy and Personal | Team halves too (Diego's dial, 2026-11-05: a thumb's press on the pair drifted out of a
+    // tap and fell to the face, which started voice).
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST;
+           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST ||
+           action == A_SIDE_PM || action == A_SIDE_BUDDY || action == A_PICK_PERSONAL || action == A_PICK_TEAM;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -1474,8 +1477,9 @@ static void swarm_pair(ht_scene_t *f, bool buddy)
 {
     enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2 };
     pill2(f, X, Y, W, H, "PM", "Buddy", buddy);
-    s.hits[s.hit_count++] = (hit_t){{X, Y, HALF, H}, A_SIDE_PM, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y, HALF, H}, A_SIDE_BUDDY, 0, true};
+    // A thumb's targets, wider than the pill: 40 px each side, from just under the bell (its pill ends at y 378) to the edge.
+    s.hits[s.hit_count++] = (hit_t){{X - 40, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_PM, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_BUDDY, 0, true};
 }
 // The Personal | Team picker: "Swarm" on the top arc and one 200 x 44 pill at y 211, the half of the Swarm on the face filled.
 static void render_swarm_pick(ht_scene_t *f)
@@ -1484,8 +1488,9 @@ static void render_swarm_pick(ht_scene_t *f)
     const ht_supertab_t *t = swarm_here();
     ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
     pill2(f, X, Y, W, H, "Personal", "Team", !(t && t->personal));
-    s.hits[s.hit_count++] = (hit_t){{X, Y, HALF, H}, A_PICK_PERSONAL, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y, HALF, H}, A_PICK_TEAM, 0, true};
+    // A thumb's targets: each half 30 px wider and 40 px taller each way than it is drawn.
+    s.hits[s.hit_count++] = (hit_t){{X - 30, Y - 40, HALF + 30, H + 80}, A_PICK_PERSONAL, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y - 40, HALF + 30, H + 80}, A_PICK_TEAM, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -3154,6 +3159,7 @@ static void dispatch(action_t a)
         break;
     case A_SIDE_PM:
     case A_SIDE_BUDDY:
+        ESP_LOGI("habitat", "pair: %s", a.kind == A_SIDE_BUDDY ? "Buddy" : "PM");
         swarm_side_set(a.kind == A_SIDE_BUDDY);
         break;
     case A_NOTICE: {
@@ -3863,7 +3869,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 } else if (result==HT_TOUCH_TAP || result==HT_TOUCH_HOLD) dispatch((action_t){.kind=A_TABS});
             }
             change();
-        } else if (surface && home_footer(pressed_action.kind)) {
+        } else if ((surface || s.view == SWARM_PICK) && home_footer(pressed_action.kind)) {
             /*
              * A BUTTON IS PRESSED AND RELEASED, not tapped within a tolerance.
              *
