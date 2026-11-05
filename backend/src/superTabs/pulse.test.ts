@@ -156,7 +156,7 @@ describe('the pulse', () => {
   /** A task the PM opens, unassigned (Next up). */
   const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
     const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: DONE_WHEN, priority: 'P2', requesterId: 'owner' } as Command, f.as(f.lead)).result.conversationId as string
-    if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore } as Command, f.as(f.lead))
+    if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore, hold: { kind: 'requester' } } as Command, f.as(f.lead))
     return id
   }
   const status = (f: ReturnType<typeof stepsFixture>, task: string, by: string, value: string, result: string | null) =>

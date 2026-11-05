@@ -1,5 +1,6 @@
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
@@ -26,6 +27,7 @@ import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRule
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
+import { checkReason, heldReason, missingReason } from './heldReason.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
@@ -280,8 +282,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
-  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional() }).strict()
-    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.'),
+  // A not-before date holds the task, so it carries its reason (heldReason.ts); a date without one is refused when it is applied.
+  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional(),
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.')
+    .refine(c => c.hold === undefined || typeof c.notBefore === 'string', 'A hold reason goes with a not-before date.'),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -405,7 +410,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
     ask: decisionChoices.extend({ personId: id }).strict().optional(),
     // Its session's token totals by model, read by its host as it finishes (Done, Stopped): the attempt's end (costs/attempts.ts).
-    tokens: tokensByModelSchema.optional() }).strict(),
+    tokens: tokensByModelSchema.optional(),
+    // Why it waits, for blocked and needs_human (heldReason.ts); a status without one is refused when it is applied.
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.hold === undefined || c.status === 'blocked' || c.status === 'needs_human', 'A hold reason goes with blocked or needs_human.'),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
   z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
@@ -1118,6 +1126,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** A cancel, with its status as a status row has it: the scorecard's task timelines see the task close (scorecard/figures.ts). */
+  const CANCEL_ROW = { ...SYSTEM_ROW, status: 'cancelled' }
   /** [agentId] as a member of [group] who may be told there: joined when it is not one yet and may join; else null. */
   const reachable = (group: Conversation, agentId: string | null): string | null => {
     if (!agentId || group.agentIds.includes(agentId)) return agentId
@@ -2436,8 +2446,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
         for (const [groupId, rank] of placeAfter(siblings, task.id, command.after)) conversation(state, groupId).queueRank = rank
       }
-      if (command.notBefore === null) delete task.notBefore
-      else if (command.notBefore !== undefined) task.notBefore = command.notBefore
+      if (command.notBefore === null) { delete task.notBefore; delete task.hold }
+      else if (command.notBefore !== undefined) {
+        if (!command.hold) missingReason()
+        checkReason(state, task, command.hold, context.now)
+        task.notBefore = command.notBefore
+        task.hold = command.hold
+      }
       break
     }
     case 'work.priority': {
@@ -2947,6 +2962,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // Only its first failure counts against its engine: the server may have timed it out before its host said so (liveness.ts).
         const counted = !start.error
         start.error = command.error
+        // A crew member's move that did not start leaves it where it was, for the keeper's next pass (crewKeep.ts).
+        if (start.request.crewMoveOf) crewMoveFailed(state, start, context.now)
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A thread session's says so in its thread (buddySessions.ts), and frees its place.
         if (start.request.buddySession) {
@@ -3046,6 +3063,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       start.harnessId = command.harnessId
       noteStartSucceeded(state, start)
       result.agentId = agentId
+      // A crew member's move: its new session becomes the same member, and the old one is retired (crewKeep.ts).
+      if (start.request.crewMoveOf) takeOverCrewMember(state, start, agentId, context.now, target => removeAgent(target))
       // A thread session joins its chat's record, and hears the person's messages sent while it started, by delivery as any
       // other: its host's person check, run: judging and read grant apply to them too (spec: Security).
       if (start.request.buddySession) {
@@ -3740,7 +3759,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const worker = agent(state, command.agentId)
       // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
       // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
-      if (sessionClosed(state, worker, context.now)) {
+      // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts).
+      if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+      const woke = wakeCrewMember(worker, context.now)
+      if (!woke && sessionClosed(state, worker, context.now)) {
         fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
       }
       projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
@@ -3818,6 +3840,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'Assign a new attempt to continue this work.')
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
+      const holding = command.status === 'blocked' || command.status === 'needs_human'
+      // Staged (review of #3215): a client from before reasons sends none, so blocked and needs_human take it for now and show
+      // "no reason"; a reason that is sent is still checked. The refusal follows once the CLI sends one.
+      if (holding && command.hold) checkReason(state, group, command.hold, context.now)
       let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
@@ -3845,6 +3871,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       pickUp(assignment)
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
+      // Why it waits lasts as long as the wait: the next status clears it.
+      if (holding) assignment.hold = command.hold
+      else delete assignment.hold
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId)
       // Finished work shows the worker recovered from a task it lost before.
@@ -3915,7 +3944,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const reviewEnded = !!group.reviewOf && !!assignment && ['stopped', 'done'].includes(assignment.status)
         && (command.assignmentId === 'current' || command.assignmentId === assignment.id)
       if ((unassigned || reviewEnded) && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
-        message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
+        message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, CANCEL_ROW)
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
         endStepsOf(group, `${group.title} was archived.`, true)
@@ -3943,7 +3972,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
-        gone ? [] : [assignment.agentId], null, gone ? SYSTEM_ROW : forRecipients(SYSTEM_ROW))
+        gone ? [] : [assignment.agentId], null, gone ? CANCEL_ROW : forRecipients(CANCEL_ROW))
       break
     }
     case 'work.resume': {
