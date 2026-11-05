@@ -411,7 +411,7 @@ class SuperTabController extends ChangeNotifier {
       openedThread = root == null ? null : (conversationId: to, root: root);
       threadTarget = null;
       _threadUnshown = root != null;
-      _reopenThread = root != null;
+      _reopenThread = false;
     }
   }
 
@@ -4019,7 +4019,10 @@ class SuperTabController extends ChangeNotifier {
         _before.removeWhere((id, _) => !allowed.contains(id));
         _readAt.removeWhere((id, _) => removed.contains(id));
         if (!allowed.contains(selectedId)) {
-          selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
+          _moveView(
+            to: next.projects.firstOrNull?.leadConversationId ?? 'lead',
+          );
+          if (openedThread != null) unawaited(loadThread());
         }
         selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
