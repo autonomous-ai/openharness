@@ -813,7 +813,20 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
         const computerId = deps.computerId()
         const tokens = await redeemTeamHandoff(code, label, computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
         // The owner's setup run handed it over: a sign-in by hand, so the device key log may start over for its account (#3262).
-        deps.writeSession(teamSession(tokens, computerId, deps.autonomousEnv, deps.now(), { signInEpoch: handedTeamSignInEpoch(deps.now()) }))
+        const handed = teamSession(tokens, computerId, deps.autonomousEnv, deps.now(), { signInEpoch: handedTeamSignInEpoch(deps.now()) })
+        deps.writeSession(handed)
+        // Pin the account while this is still the handed sign-in. The first device-log read may happen much later.
+        try {
+          const me = await deps.get<{ user?: { id?: unknown } }>('/api/auth/me', {
+            authorization: `Bearer ${handed.accessToken}`, 'x-autonomous-env': handed.autonomousEnv,
+          })
+          const acct = me?.user?.id
+          if (typeof acct !== 'string' || !acct) throw new Error('no account')
+          await deps.updateSession((latest) => latest.signInEpoch === handed.signInEpoch
+            ? { ...latest, signInAcct: acct } : null)
+        } catch {
+          log('could not record the signed-in account; trust recovery requires a connection within ten minutes')
+        }
         if (previous) await revokeHarnessRefresh(deps.post, previous.refreshToken)
         log(previous ? 'signed in for team work again; the previous sign-in was ended' : 'signed in for team work')
         report({ signIn: { state: 'signed-in', at: deps.now() } })
