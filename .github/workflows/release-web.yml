@@ -63,6 +63,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # A tag pushed by hand skips the release scripts, so the window is checked here too
+      # (scripts/release-window.py). An urgent release carries `Release-Urgent: <reason>` in its tag message.
+      - name: Release window
+        if: ${{ github.event_name == 'push' }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
+          python3 scripts/release-window.py --kind web --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
+
       # Tag-only trigger, so GITHUB_REF_NAME is already the bare tag (e.g. v1.3.1_web) and that is
       # the image tag ArgoCD deploys by. The X.Y.Z inside it is also the bundle's version.
       - name: Work out the version and image tag

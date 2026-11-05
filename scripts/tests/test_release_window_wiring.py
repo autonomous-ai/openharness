@@ -60,8 +60,8 @@ class WorkflowTests(unittest.TestCase):
     def test_workflows_guard_only_tag_pushes(self):
         for kind, path in WORKFLOW_OF.items():
             text = (ROOT / path).read_text()
-            step = text[text.rindex("\n", 0, text.index(f"release-window.py --kind {kind}")) - 700:
-                        text.index(f"release-window.py --kind {kind}")]
+            end = text.index(f"release-window.py --kind {kind}")
+            step = text[max(0, end - 700):end]
             self.assertRegex(step, r"github\.event_name == 'push'|github\.ref_type == 'tag'", path)
 
     def test_release_notes_do_not_publish_the_urgent_line(self):

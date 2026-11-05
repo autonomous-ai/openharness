@@ -48,11 +48,16 @@ ALLOW_NO_MANIFEST=0
 ALLOW_OLDER=0
 NEW_VER=""
 NOTES_FILE=""
+URGENT_SET=0
+URGENT=""
 
 want_notes_file=0
+want_urgent=0
 for arg in "$@"; do
   if [ "$want_notes_file" -eq 1 ]; then NOTES_FILE="$arg"; want_notes_file=0; continue; fi
+  if [ "$want_urgent" -eq 1 ]; then URGENT="$arg"; want_urgent=0; continue; fi
   case "$arg" in
+    --urgent) URGENT_SET=1; want_urgent=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --wait) WAIT=1 ;;
     --prepare) PREPARE=1 ;;
@@ -77,6 +82,12 @@ if [ "$WAIT" -eq 1 ] || { [ "$PREPARE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; }; then
   command -v gh >/dev/null 2>&1 || { echo 'ERROR --wait and --prepare require gh' >&2; exit 1; }
 fi
 [ "$want_notes_file" -eq 0 ] || { echo "ERROR --notes-file needs a path" >&2; exit 1; }
+
+# --- the release window: refused with RELEASE_WINDOW outside 09:00-18:00 Asia/Ho_Chi_Minh, naming the next allowed
+# time (scripts/release-window.py). A P0 passes --urgent "<reason>"; the reason goes on the tag.
+# A --prepare candidate publishes nothing, so it is not a release and runs at any hour.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+[ "$PREPARE" -eq 1 ] || release_window_guard desktop
 
 # Same rules as next_desktop_version()/bump_minor_version() in scripts/upload-desktop.sh:55-86, which
 # is where this convention is defined. Note the rollover: .99 goes to the next MINOR at .1, not .0.
@@ -304,6 +315,7 @@ if [ "$PREPARE" -eq 1 ]; then
 fi
 
 # --- tag and push ---
+[ -z "$URGENT_TAG_LINE" ] || printf '\n%s\n' "$URGENT_TAG_LINE" >> "$NOTES"
 git tag -a "$TAG" --cleanup=verbatim -F "$NOTES"
 git push origin "$TAG"
 

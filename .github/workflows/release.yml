@@ -85,6 +85,21 @@ jobs:
       metadata_path: ${{ steps.resolve.outputs.metadata_path }}
       staging_prefix: ${{ steps.resolve.outputs.staging_prefix }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # A tag pushed by hand skips the release scripts, so the window is checked here too
+      # (scripts/release-window.py). An urgent release carries `Release-Urgent: <reason>` in its tag message.
+      - name: Release window
+        if: ${{ github.event_name == 'push' }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
+          python3 scripts/release-window.py --kind cli --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
+
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a ref
         # name, so interpolating one into the shell would let a tag name execute as code.
@@ -477,7 +492,7 @@ jobs:
           # 2026-09-21). So fall back to the same commit list the script would have generated —
           # everything since the previous _cli tag — and warn, rather than leave the release half done.
           if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
-            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
+            git tag -l --format='%(contents)' "$REF_NAME" | { grep -v '^Release-Urgent: ' || true; } > RELEASE_NOTES.md
           else
             : > RELEASE_NOTES.md
           fi

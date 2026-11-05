@@ -12,6 +12,7 @@
 #   bash cli/scripts/release-cli.sh --notes-file f.md  # hand-written release notes instead of the
 #                                                      # generated commit list
 #   bash cli/scripts/release-cli.sh --allow-older      # a rollback: older code under a higher version
+#   bash cli/scripts/release-cli.sh --urgent "P0: why" # a P0 outside the 09:00-18:00 VN release window
 #
 # THE NEXT VERSION COMES FROM TWO SOURCES, AND BOTH MATTER — same reasoning as
 # autonomous-harness-desktop/scripts/release-desktop.sh. Git tags alone are not enough:
@@ -45,22 +46,32 @@ ALLOW_NO_MANIFEST=0
 ALLOW_OLDER=0
 NEW_VER=""
 NOTES_FILE=""
+URGENT_SET=0
+URGENT=""
 
 want_notes_file=0
+want_urgent=0
 for arg in "$@"; do
   if [ "$want_notes_file" -eq 1 ]; then NOTES_FILE="$arg"; want_notes_file=0; continue; fi
+  if [ "$want_urgent" -eq 1 ]; then URGENT="$arg"; want_urgent=0; continue; fi
   case "$arg" in
+    --urgent) URGENT_SET=1; want_urgent=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --allow-no-manifest) ALLOW_NO_MANIFEST=1 ;;
     --allow-older) ALLOW_OLDER=1 ;;
     --notes-file) want_notes_file=1 ;;
     --notes-file=*) NOTES_FILE="${arg#*=}" ;;
-    -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ERROR unknown flag: $arg" >&2; exit 1 ;;
     *) NEW_VER="$arg" ;;
   esac
 done
 [ "$want_notes_file" -eq 0 ] || { echo "ERROR --notes-file needs a path" >&2; exit 1; }
+
+# --- the release window: refused with RELEASE_WINDOW outside 09:00-18:00 Asia/Ho_Chi_Minh, naming the next allowed
+# time (scripts/release-window.py). A P0 passes --urgent "<reason>"; the reason goes on the tag.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+release_window_guard cli
 
 # Same rule as next_adapter_version() in cli/scripts/upload-cli.sh:28-42, which is where this
 # convention is defined. Note the rollover: .99 goes to the next MINOR at .1, not .0.
@@ -249,6 +260,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # --- tag and push ---
+[ -z "$URGENT_TAG_LINE" ] || printf '\n%s\n' "$URGENT_TAG_LINE" >> "$NOTES"
 git tag -a "$TAG" --cleanup=verbatim -F "$NOTES"
 git push origin "$TAG"
 

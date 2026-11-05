@@ -7,6 +7,10 @@
 #   ./scripts/release-be.sh 1.4.1        # exact version -> v1.4.1_backend (patch 1 to 99)
 #   ./scripts/release-be.sh --dry-run    # print what it WOULD do, touch nothing
 #   ./scripts/release-be.sh --allow-older  # a rollback: older code under a higher version
+#   ./scripts/release-be.sh --urgent "P0: why"  # a P0 outside 09:00-18:00 VN or within 2 h of the last release
+#
+# Refused with RELEASE_WINDOW (scripts/release-window.py) outside 09:00-18:00 Asia/Ho_Chi_Minh and within 2 hours of the
+# last backend release; the refusal names the next allowed time. --urgent records its reason on the tag.
 #
 # Pushing the tag is the whole point: ../.github/workflows/production-be-build.yaml triggers on
 # `vX.Y.Z_backend` tags and builds Dockerfile.k8s -> autonomous-code-be.
@@ -29,13 +33,18 @@ cd "$REPO_ROOT"
 DRY_RUN=0
 ALLOW_OLDER=0
 BUMP="patch"
+URGENT_SET=0
+URGENT=""
+want_urgent=0
 for arg in "$@"; do
+  if [ "$want_urgent" -eq 1 ]; then URGENT="$arg"; want_urgent=0; continue; fi
   case "$arg" in
+    --urgent) URGENT_SET=1; want_urgent=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --allow-older) ALLOW_OLDER=1 ;;
     patch|minor|major) BUMP="$arg" ;;
     [0-9]*.[0-9]*.[0-9]*) BUMP="exact"; EXACT="${arg#v}" ;;
-    *) echo "usage: $0 [patch|minor|major|X.Y.Z] [--dry-run] [--allow-older]" >&2; exit 1 ;;
+    *) echo "usage: $0 [patch|minor|major|X.Y.Z] [--dry-run] [--allow-older] [--urgent \"<reason>\"]" >&2; exit 1 ;;
   esac
 done
 
@@ -51,6 +60,10 @@ fi
 
 # --- preflight: the tag names a commit, so that commit must be the right one and must be on origin.
 git fetch --tags --quiet origin
+
+# --- the release window and pace: refused here, before anything is tagged (fresh tags are fetched above).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+release_window_guard backend
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 HEAD_SHA="$(git rev-parse HEAD)"
@@ -128,7 +141,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-git tag -a "$TAG" -m "$SERVICE release $TAG"
+git tag -a "$TAG" -m "$SERVICE release $TAG" ${URGENT_TAG_LINE:+-m "$URGENT_TAG_LINE"}
 git push origin "$TAG"
 
 echo ""

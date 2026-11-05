@@ -13,6 +13,7 @@
 # Usage (from the repo root, `make release-web ARGS=...` runs the same thing):
 #   bash desktop/scripts/release-web.sh              # bump the patch of the last v*_web tag and ship
 #   bash desktop/scripts/release-web.sh --dry-run    # print the plan, tag/push nothing
+#   bash desktop/scripts/release-web.sh --urgent "P0: why"   # a P0 outside the 09:00-18:00 VN release window
 #   bash desktop/scripts/release-web.sh --minor      # bump the MINOR version
 #   bash desktop/scripts/release-web.sh --website-only # preserve the deployed Flutter bundle
 #   bash desktop/scripts/release-web.sh 1.3.0        # an explicit version
@@ -44,13 +45,18 @@ DO_MINOR=0
 WEBSITE_ONLY=0
 ALLOW_OLDER=0
 NEW_VER=""
+URGENT_SET=0
+URGENT=""
+want_urgent=0
 for arg in "$@"; do
+  if [ "$want_urgent" -eq 1 ]; then URGENT="$arg"; want_urgent=0; continue; fi
   case "$arg" in
+    --urgent) URGENT_SET=1; want_urgent=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --minor) DO_MINOR=1 ;;
     --website-only) WEBSITE_ONLY=1 ;;
     --allow-older) ALLOW_OLDER=1 ;;
-    -h|--help) sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ERROR unknown flag: $arg" >&2; exit 1 ;;
     *) NEW_VER="${arg#v}" ;;
   esac
@@ -106,6 +112,10 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   fi
 else
   TAG_EXISTS=0
+  # A new tag is a release, so the window applies (RELEASE_WINDOW, scripts/release-window.py). Resuming an existing
+  # tag publishes nothing new and is not refused. A P0 passes --urgent "<reason>"; the reason goes on the tag.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+  release_window_guard web
   [ -z "$(git status --porcelain)" ] || { git status --short >&2; die "working tree is dirty — the tag must capture the tested source exactly"; }
   SHA="$(git rev-parse HEAD)"
   git merge-base --is-ancestor "$SHA" "origin/$BRANCH" 2>/dev/null \
@@ -147,9 +157,9 @@ fi
 # --- 1. the tag ---
 if [ "$TAG_EXISTS" -eq 0 ]; then
   if [ "$WEBSITE_ONLY" -eq 1 ]; then
-    git tag -a "$TAG" -m "Harness website $VER" -m 'Website-Only: true' "$SHA"
+    git tag -a "$TAG" -m "Harness website $VER" -m 'Website-Only: true' ${URGENT_TAG_LINE:+-m "$URGENT_TAG_LINE"} "$SHA"
   else
-    git tag -a "$TAG" -m "Harness web $VER" "$SHA"
+    git tag -a "$TAG" -m "Harness web $VER" ${URGENT_TAG_LINE:+-m "$URGENT_TAG_LINE"} "$SHA"
   fi
   git push origin "$TAG"
   say "pushed $TAG"

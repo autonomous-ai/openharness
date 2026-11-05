@@ -25,6 +25,11 @@ desktop-test:
 cli-test:
 	cd cli && npx tsc --noEmit && npx vitest run
 
+## The four release targets below are refused with RELEASE_WINDOW outside 09:00-18:00 Asia/Ho_Chi_Minh, and a
+## backend release within 2 hours of the last, naming the next allowed time (scripts/release-window.py, numbers in
+## scripts/release-window.json). A P0 adds ARGS='--urgent "<reason>"'; the reason goes on the tag and the script prints the
+## line to post in the project chat. The tag workflows check the same rule, so a hand-pushed tag is refused too.
+
 ## release-cli: tag this commit vX.Y.Z_cli and push the tag — CI bundles the CLI, publishes it to
 ## GCS, and cuts the GitHub Release. The version is bumped from max(last git tag, live
 ## metadata.json's `cli` key). The `_cli` suffix is a tag-trigger marker only (see cli/RELEASE.md);
