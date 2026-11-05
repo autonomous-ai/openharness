@@ -13,6 +13,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
+import { settleHiddenScreen } from './startScreen.js'
 import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
@@ -733,7 +734,16 @@ export class ContributedMachines {
               if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
                 this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })
               } else this.agentless.delete(String(start.id))
-              const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
+              // Launched, its engine yet to record its session: a screen it stopped on that nobody sees is answered, or fails
+              // the start now rather than at the backend's 3 minutes (startScreen.ts, task #3009). Its agent goes as any failed
+              // start's does, through [abandoned], which [remember] above keeps it for.
+              if (result.error === 'START_PENDING' && result.state !== 'pending' && identifier(result.harnessId)) {
+                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request),
+                  async error => { await scoped({ action: 'command', operationId: `hidden-screen-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error } }) },
+                  line => this.log(line))
+                if (settled === 'failed') { this.refusedSince.delete(start.id); continue }
+              }
+              const held =result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
               if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
               else {
                 const since = this.heldSince.get(start.id) ?? began
