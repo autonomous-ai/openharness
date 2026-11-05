@@ -169,7 +169,10 @@ class SuperTabImageCache {
       unawaited(_shelf.touch(kept.name).catchError((Object _) {}));
       return bytes;
     } catch (error) {
-      appLog.warn('super-tabs', 'image cache read failed: ${error.runtimeType}');
+      appLog.warn(
+        'super-tabs',
+        'image cache read failed: ${error.runtimeType}',
+      );
       return null;
     }
   }

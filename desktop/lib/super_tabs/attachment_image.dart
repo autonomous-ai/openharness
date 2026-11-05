@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'attachment_upload.dart';
 import 'attachment_viewer.dart';
 import 'file_links.dart';
+import 'image_cache.dart';
 import 'message_more_menu.dart';
 import 'model.dart';
 
@@ -40,6 +42,19 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   void initState() {
     super.initState();
     _start();
+    _awaitShape();
+  }
+
+  /// A shape an earlier launch kept is known once the cache is listed: the
+  /// placeholder takes it then, if the picture has not arrived first.
+  void _awaitShape() {
+    final cache = superTabImageCache;
+    if (cache.shapeOf(_ref.file.id) != null) return;
+    unawaited(
+      cache.ready.then((_) {
+        if (mounted && cache.shapeOf(_ref.file.id) != null) setState(() {});
+      }),
+    );
   }
 
   @override
@@ -54,6 +69,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     _ref = widget.file;
     _retried = _failed = false;
     _start();
+    _awaitShape();
   }
 
   void _start() {
@@ -111,7 +127,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     final url = _url;
     // No link at all: nothing to open either. A link that failed to draw
     // stays a click away, as the full-screen viewer may still read it.
-    if (url == null) return _failed ? _broken(file) : _loading();
+    if (url == null) return _failed ? _broken(file) : _loading(file);
     final radius = BorderRadius.circular(DesktopChrome.controlRadius);
     return Semantics(
       button: true,
@@ -134,14 +150,18 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
               borderRadius: radius,
               child: ExcludeSemantics(
                 child: Image(
-                  image: attachmentPicture(url, fileId: file.id),
+                  image: attachmentPicture(
+                    url,
+                    fileId: file.id,
+                    side: SuperTabInlineImage.maxSide,
+                  ),
                   fit: BoxFit.contain,
                   frameBuilder: (_, child, frame, synchronous) =>
-                      frame == null && !synchronous ? _loading() : child,
+                      frame == null && !synchronous ? _loading(file) : child,
                   errorBuilder: (_, _, _) {
                     if (_failed) return _broken(file);
                     _broke();
-                    return _loading();
+                    return _loading(file);
                   },
                 ),
               ),
@@ -152,12 +172,22 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     );
   }
 
-  /// Still, not pulsing: a picture's shape is unknown until it arrives.
-  static Widget _loading() => SizedBox(
-    width: SuperTabInlineImage.maxSide * 2 / 3,
-    height: SuperTabInlineImage.maxSide / 2,
-    child: ColoredBox(color: DesktopChrome.field),
-  );
+  /// Still, not pulsing, at the size the picture will take when its shape is
+  /// known (an earlier load kept it), so the chat does not jump when it
+  /// arrives; else a fixed one.
+  static Widget _loading(SuperTabAttachment file) {
+    final size =
+        superTabInlineSize(superTabImageCache.shapeOf(file.id)) ??
+        const Size(
+          SuperTabInlineImage.maxSide * 2 / 3,
+          SuperTabInlineImage.maxSide / 2,
+        );
+    return SizedBox.fromSize(
+      key: ValueKey('super-attachment-placeholder:${file.id}'),
+      size: size,
+      child: ColoredBox(color: DesktopChrome.field),
+    );
+  }
 
   static Widget _broken(SuperTabAttachment file) => Container(
     color: DesktopChrome.field,
@@ -180,6 +210,19 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
       ],
     ),
   );
+}
+
+/// Where a picture of [shape] sits in a message: its own size, made smaller
+/// with its shape kept until it fits [SuperTabInlineImage.maxSide] each way,
+/// as `BoxFit.contain` draws it there. Null for an unknown or empty shape.
+Size? superTabInlineSize(Size? shape) {
+  if (shape == null || shape.isEmpty) return null;
+  const side = SuperTabInlineImage.maxSide;
+  final scale = math.min(
+    1.0,
+    math.min(side / shape.width, side / shape.height),
+  );
+  return Size(shape.width * scale, shape.height * scale);
 }
 
 /// The pictures of one chat or thread, oldest first, for the viewer to page

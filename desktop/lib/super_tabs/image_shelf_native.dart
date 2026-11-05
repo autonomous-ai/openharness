@@ -29,7 +29,8 @@ class DirectoryImageShelf implements SuperTabImageShelf {
 
   static const _part = '.part';
 
-  String _path(String name) => '${directory.path}${Platform.pathSeparator}$name';
+  String _path(String name) =>
+      '${directory.path}${Platform.pathSeparator}$name';
 
   @override
   Future<List<SuperTabShelfEntry>> list() async {
