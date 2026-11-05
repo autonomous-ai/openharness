@@ -26,6 +26,7 @@ import 'super_tab_attention_test.dart'
         rowText,
         unreadThread;
 import 'support/buddy_fixture.dart';
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 
 Future<SuperTabController> open(ConversationServer server) async {
@@ -62,7 +63,7 @@ Future<void> pumpSidebar(
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
-            onNotifications: () {},
+            onPage: (_) {},
           ),
         ),
       ),
@@ -550,7 +551,7 @@ void main() {
 
   group('sidebar', () {
     for (final brightness in Brightness.values) {
-      testWidgets('Activity takes Notifications\' place and counts the tag; a '
+      testWidgets('Mentions counts the tag; a '
           'muted chat is greyed with its mark and no number ($brightness)', (
         tester,
       ) async {
@@ -562,10 +563,10 @@ void main() {
         await c.setNotify('lead', SuperTabNotify.muted);
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
-        expect(inRow('super-activity', find.text('Activity')), findsOneWidget);
-        // Activity counts the unread tag as its Mentions tab does (#2887);
-        // the muted chat's own row carries no number.
-        expect(inRow('super-activity', find.text('1')), findsOneWidget);
+        expect(inRow('super-mentions', find.text('Mentions')), findsOneWidget);
+        // Mentions counts the unread tag (#2887); the muted chat's own row
+        // carries no number.
+        expect(inRow('super-mentions', find.text('1')), findsOneWidget);
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -838,7 +839,8 @@ void main() {
       server.failMentions = true;
       final c = await openHere(server);
       await pumpSidebar(tester, c);
-      expect(inRow('super-activity', find.text('6')), findsOneWidget);
+      expect(inRow('super-decisions', find.text('2')), findsOneWidget);
+      expect(inRow('super-mentions', find.text('4')), findsOneWidget);
       await close(tester, c);
     });
 

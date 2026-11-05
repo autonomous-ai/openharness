@@ -190,7 +190,7 @@ void main() {
         await tester.pumpAndSettle();
         if (scene.startsWith('threads')) {
           // New replies are in Activity, not a separate Threads control.
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
           await tester.pumpAndSettle();
         }

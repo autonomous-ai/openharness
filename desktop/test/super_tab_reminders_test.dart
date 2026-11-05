@@ -84,7 +84,7 @@ void main() {
   }
 
   Future<void> openActivity(WidgetTester tester) async {
-    await tester.tap(find.text('Activity').first);
+    await tester.tap(find.byKey(const ValueKey('super-decisions')));
     await tester.pumpAndSettle();
   }
 

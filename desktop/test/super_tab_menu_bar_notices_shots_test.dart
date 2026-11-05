@@ -7,7 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/status_menu.dart';
-import 'package:harness/super_tabs/activity_view.dart';
+import 'package:harness/super_tabs/decisions_page.dart';
+import 'package:harness/super_tabs/mentions_page.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture;
 import 'super_tab_menu_bar_notices_test.dart' show openWithEverything;
@@ -37,36 +38,33 @@ void main() {
       };
       final activity = (await tester.runAsync(() => openWithEverything(f)))!;
       final rows = statusMenuSwarmEntries(f.app);
-      await tester.pumpWidget(
-        MaterialApp(
-          debugShowCheckedModeBanner: false,
-          theme: grid.buildAppTheme(brightness: brightness),
-          home: Scaffold(
-            body: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 720,
-                  child: SuperTabActivityView(
-                    activity: activity,
-                    onOpenMention: (_) {},
-                    onOpenThread: (_, _) {},
-                    onOpenConversation: (_) {},
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                SizedBox(width: 380, child: _MenuRows(rows)),
-              ],
+      Future<void> page(Widget page) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 720, child: page),
+                  const VerticalDivider(width: 1),
+                  SizedBox(width: 380, child: _MenuRows(rows)),
+                ],
+              ),
             ),
           ),
-        ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await page(
+        SuperTabDecisionsPage(activity: activity, onOpenConversation: (_) {}),
       );
-      await tester.pumpAndSettle();
-      await captureWindow(tester, shots, 'needs-you-${brightness.name}');
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      await captureWindow(tester, shots, 'decisions-${brightness.name}');
+      await page(
+        SuperTabMentionsPage(activity: activity, onOpenMention: (_) {}),
       );
-      await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'mentions-${brightness.name}');
       await tester.pumpWidget(const SizedBox());
       f.dispose();
