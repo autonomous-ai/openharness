@@ -30,7 +30,12 @@ Future<SuperTabController> _show(
   addTearDown(controller.dispose);
   await controller.refresh();
   final storage = MemoryKeyValueStore();
-  if (list) await storage.setString('super-tasks-layout', 'list');
+  if (list) {
+    await storage.write(
+      SuperTabTasksView.storageKey(controller.accountId),
+      '{"layout":"list"}',
+    );
+  }
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
