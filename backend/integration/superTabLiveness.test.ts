@@ -1605,10 +1605,13 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.messageId)).toEqual([row.messageId, next.result.messageId])
   })
 
-  /** Another open delivery beside `row`, written alone, as a write that changes no Swarm part would: the stamp stays. */
-  const beside = (row: SuperTabDelivery, changes: Partial<SuperTabDelivery> = {}) => db.superTabDelivery.create({ data: {
-    ...row, id: randomUUID(), messageId: randomUUID(), status: 'queued', claimId: null, holdReason: null, holdSince: null,
+  /** Another open delivery beside `row`, written alone, as a write that changes no Swarm part would: the stamp stays. A listed
+   *  row also says whether it waits for its agent's turn end (turnEnd.ts), which is not stored. */
+  const beside = (row: SuperTabDelivery & { waitsForTurnEnd?: boolean }, changes: Partial<SuperTabDelivery> = {}) => db.superTabDelivery.create({ data: {
+    ...withoutListFields(row), id: randomUUID(), messageId: randomUUID(), status: 'queued', claimId: null, holdReason: null, holdSince: null,
     createdAt: new Date(row.createdAt.getTime() + 1), updatedAt: undefined, ...changes } })
+
+  const withoutListFields = ({ waitsForTurnEnd: _waits, ...stored }: SuperTabDelivery & { waitsForTurnEnd?: boolean }): SuperTabDelivery => stored
 
   it('reads in full for a delivery the last full poll never saw, even with the stamp unchanged', async () => {
     const f = await swarm()

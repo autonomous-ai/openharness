@@ -16,6 +16,11 @@
   not reach the core's idle check. Instead the host asks `core.agents.activity` and holds a waiting row through its existing
   refused-write path (same claim, local retry each tick, list re-read every 30 s, reclaim every 2 min). Nothing in
   `cli/src/core` changes.
+- **Order:** a held agent post can be overtaken by a later row to the same agent that goes at once (a system row, a person's
+  message). That is the ruling's intent: what someone must see now is not queued behind routine posts.
+- **Rollback:** the new stored fields, `SuperTabDelivery.waitsUntil` and `Conversation.answered`, are optional and need no
+  migration. Rolling the code back leaves them unread: an older backend ignores both, and an older host never sees
+  `waitsForTurnEnd`. Rows written with them stay valid.
 - **Task 2** in part: the PM's digest now starts with its owed asks (`inbox.ts owedLines`). The crew-needs section and
   releasing the inbox at the PM's turn end are a follow-up task built on Relay's #3404 once its code lands (River, 11-05).
 
