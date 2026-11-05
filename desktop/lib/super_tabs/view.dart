@@ -2406,10 +2406,14 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_page == null) return;
     _page = null;
     c.select(id);
-    // A tag in a thread opens the thread; one in a thread reply shown only
-    // there is not in the chat to scroll to.
-    if (message.thread case final root?) {
-      c.openThread(root, at: message.inMainStream ? null : message.id);
+    // A tag in a thread reply opens the thread; one shown only there is not in
+    // the chat to scroll to. A top-level message is its own thread's root, but
+    // it has no thread to open: it is in the chat.
+    if (message.threadReply) {
+      c.openThread(
+        message.thread!,
+        at: message.inMainStream ? null : message.id,
+      );
       if (!message.inMainStream) return;
     }
     setState(() {

@@ -11,7 +11,7 @@ import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -29,6 +29,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
+import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_MOVED, MACHINE_REMOVED, publicReason } from './startFailure.js'
@@ -1628,7 +1629,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     pushedRefusal(group, worker)
     requireTeamWrittenAccount(state, group, worker)
     if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
-    if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+    // A handed task does not occupy its Engineer (#3399 handed.ts): it may take this.
+    if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
   }
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
@@ -3903,6 +3905,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       assignment.result = command.result
       // A new status is a new hand-off, or the end of one: a review's earlier findings are answered (liveness.ts waitingForReview).
       delete assignment.reviewFoundAt
+      // And a task that came back to its Engineer is picked up, or handed over again (handed.ts).
+      pickUp(assignment)
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
@@ -4022,7 +4026,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!resumeAt) fail('NO_RESUME', 'This task was not lost to a usage limit with a reset time.')
       if (context.now < Date.parse(resumeAt)) fail('LIMIT_NOT_RESET', 'Its usage limit has not reset yet.')
       if (worker.harnessId !== assignment.execution.harnessId) fail('SESSION_CHANGED', 'This agent runs in another session now, so the task does not resume.')
-      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+      if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       assignment.status = 'working'
       delete assignment.lost
       delete group.lostAttempt
@@ -4042,7 +4046,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const check = group.checks.find(c => c.id === command.checkId) ?? fail('NOT_FOUND', 'This acceptance check is unavailable.', 404)
       if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the review.', 403)
       // Checks are information (project instructions, phase 4): who passes one is the project's workflow, so anyone in the task
-      // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
+      // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it, except that a failed one
+      // from anyone else brings a handed task back to its Engineer (below, #3399). A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
       // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
@@ -4076,6 +4081,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
+      // A No from anyone but its Engineer brings a handed task back to it, in the same attempt (handed.ts, #3399): it is told why.
+      // Not a grid attempt whose review failed: its next attempt steps up to a stronger model (decision 8), so it is not pinned.
+      const reopen = (task: Conversation) => {
+        const taskRun = task.ledger?.runs?.find(r => r.assignmentId === task.assignment?.id)
+        if (taskRun?.grid && taskRun.firstReview === false) return
+        if (!reopenHanded(task, `${name}'s verdict on “${check.description}”: ${(command.evidence.split('\n')[0] ?? '').trim()}`, context.now)) return
+        message(task.id, `${task.assignment!.reopened!.why} ${BACK_WITH_YOU}`, [task.assignment!.agentId], null, SYSTEM_ROW)
+        recordTaskState(state, task, context.now)
+      }
+      if (!command.passed && !byAssignee) reopen(group)
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
       if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
@@ -4084,6 +4099,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
+        if (build) reopen(build)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break
