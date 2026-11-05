@@ -1,0 +1,233 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+
+// Task #3047, phase 1 of docs/design/2026-11-05-machine-access.md: what each machine can reach. Each risk the design's
+// section 7 names for phase 1 has a test here. Team accounts are required everywhere, the strictest setting.
+beforeEach(() => { process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1' })
+afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
+
+const NOW = 50_000_000_000
+const DAY = 24 * 60 * 60_000
+const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
+const gray: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'gray', email: 'gray@example.com' }
+const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
+const config: AgentConfiguration = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
+const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+  deviceType: null, chip: null, os: null, gpuPercent: null }
+const PASSED: MachinePrivacy = { mode: 'account', passed: true, checkedAt: NOW - 60_000 }
+type Reading = NonNullable<ContributedMachine['observation']>
+const reading = (sessionKind: 'team' | 'computer', privacy?: MachinePrivacy): Reading => ({ generation: 'g1', receivedAt: NOW, sessionKind, resources,
+  tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], ...(privacy ? { privacy: { ...privacy, seenAt: NOW } } : {}) })
+const refusal = (body: () => unknown): SuperTabError | null => {
+  try { body(); return null } catch (error) { if (error instanceof SuperTabError) return error; throw error }
+}
+/** What the store loads for a command's askedIn (store.ts): who wrote the message, whether it is a system row, and when. */
+const said = (id: string, createdAt = NOW - 1000) => ({ askedIn: { author: { kind: 'person', id } as never, source: false, createdAt } })
+
+/** The owner's Swarm with two teammates. Gray's Mac was added as Gray joined (teamAccountOnly), with its Harness Team
+ *  account, whose privacy check passed. The owner's Mac has no Team account. Projects: the owner's 'lead', and Gray's own. */
+function swarm() {
+  let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+  let sequence = 0
+  const run = (command: Command, actor: Actor = gray, context: Partial<CommandContext> = {}) => {
+    const teamMachines = (state.machines ?? []).filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines, ...context })
+    state = effects.state
+    return effects
+  }
+  for (const person of [gray, mate]) {
+    const invited = run({ type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' }, owner)
+    run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, person)
+  }
+  const generation = (userId: string) => state.people.find(p => p.id === userId)!.generation
+  const joined = { contribution: { machineOwnerId: 'gray', contributorId: 'gray', hostGrant: null } }
+  run({ type: 'machine.contribute', machineId: 'gray-mac', name: 'Gray\'s Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4,
+    teamAccountOnly: true }, gray, joined)
+  state.machines!.find(m => m.machineId === 'gray-mac')!.observation = reading('computer')
+  state.machines!.push({ machineId: 'gray-team', name: 'Gray\'s Mac', contributorId: 'gray', membershipGeneration: generation('gray'), generation: 'g1',
+    cwd: '/team-swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4, paused: false, hostMachineId: 'gray-mac', observation: reading('team', PASSED) })
+  state.machines!.push({ machineId: 'owner-mac', name: 'Owner Mac', contributorId: 'owner', membershipGeneration: generation('owner'), generation: 'g1',
+    cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4, paused: false, observation: reading('computer') })
+  const grays = String(run({ type: 'project.create', name: 'Gray\'s', visibility: 'public', brief: '' }, gray).result.projectId)
+  // The project's Lead (the PM), on the owner's Mac.
+  const leadId = String(run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: 'lead', name: 'Lead', configuration: config, lead: true },
+    owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId)
+  const leadActor: Actor = { kind: 'agent', agentId: leadId, machineOwnerId: 'owner' }
+  const machine = (machineId: string) => state.machines!.find(m => m.machineId === machineId)!
+  const access = (body: Record<string, unknown>, actor: Actor = gray, context: Partial<CommandContext> = {}, machineId = 'gray-mac') =>
+    run({ type: 'machine.access', machineId, ...body } as Command, actor, context)
+  const add = (name: string, extra: Record<string, unknown> = {}, actor: Actor = gray, context: Partial<CommandContext> = {}) =>
+    String(access({ action: 'add', name, ...extra }, actor, context).result.entryId)
+  const entry = (name: string) => machine('gray-mac').access?.find(e => e.name === name)
+  /** An agent of the Swarm on [machineId], by Gray's grant there. */
+  const agent = (id: string, machineId = 'gray-mac', extra: Record<string, unknown> = {}): Actor => {
+    state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId: 'lead', machineOwnerId: 'gray', contributorId: 'gray',
+      membershipGeneration: generation('gray'), hostGrant: null, name: id, configuration: config, ...extra })
+    return { kind: 'agent', agentId: id, machineOwnerId: 'gray' }
+  }
+  const group = (projectId = 'lead', actor: Actor = owner, requires?: Record<string, unknown>) => String(run({ type: 'conversation.create', projectId, title: 'Work',
+    ...(requires ? { task: { goal: 'Test on a lamp.', changes: 'Firmware.', constraints: 'None.', owns: ['fw'], requires } } : { brief: 'Build it.' }),
+    checks: [] } as Command, actor).result.conversationId)
+  const start = (conversationId: string, actor: Actor = owner, projectId = 'lead') =>
+    run({ type: 'agent.start', request: { conversationId, machineId: 'gray-mac', engine: 'codex', name: 'Builder', cwd: `/swarm/${projectId}`, worktree: true,
+      requirements } }, actor, joined)
+  return { run, machine, access, add, entry, agent, group, start, joined, grays, leadActor, generation, get state() { return state }, set state(s) { state = s } }
+}
+
+describe('the access list and machine.access', () => {
+  it('takes an entry from the machine\'s owner, ok at once, with who added it and when', () => {
+    const f = swarm()
+    const id = f.add('Fusion 360')
+    expect(id).toMatch(/^[0-9a-f]{16}$/)
+    expect(f.entry('Fusion 360')).toEqual({ id, name: 'Fusion 360', account: 'own', state: 'ok', addedBy: 'gray', addedAt: new Date(NOW).toISOString() })
+    f.add('Lamp', { account: 'team', production: true, note: 'connection info in ~/.lamp/config', check: 'lamp-mcp' })
+    expect(f.entry('Lamp')).toMatchObject({ account: 'team', production: true, note: 'connection info in ~/.lamp/config', check: 'lamp-mcp' })
+  })
+
+  it('holds at most 32 entries, and one name once per account, whatever its case', () => {
+    const f = swarm()
+    for (let i = 0; i < 32; i++) f.add(`Thing ${i}`)
+    expect(refusal(() => f.add('One more'))?.code).toBe('ACCESS_FULL')
+    const g = swarm()
+    g.add('Lamp')
+    expect(refusal(() => g.add('  lamp '))?.code).toBe('ACCESS_EXISTS')
+    // The same name in the other account is another entry.
+    g.add('Lamp', { account: 'team' })
+    expect(g.machine('gray-mac').access).toHaveLength(2)
+  })
+
+  it('keeps a Team account\'s entries on its Mac, and none on a Mac without a Team account', () => {
+    const f = swarm()
+    expect(refusal(() => f.access({ action: 'add', name: 'Lamp' }, gray, {}, 'gray-team'))?.code).toBe('NOT_FOUND')
+    expect(refusal(() => f.access({ action: 'add', name: 'Lamp', account: 'team' }, owner, {}, 'owner-mac'))?.code).toBe('NO_TEAM_ACCOUNT')
+    expect(f.machine('gray-team').access).toBeUndefined()
+  })
+
+  it('refuses a name or note that looks like a secret, and takes where the secret lives', () => {
+    const f = swarm()
+    for (const secret of ['ghp_Xk9mQ2vL7pR4tY8wZ3nB6cF1hJ5dS0aE2gK', 'sk-ant-api03-Xk9mQ2vL7pR4tY8wZ3nB6cF1', 'admin:hunter2@db.internal',
+      '-----BEGIN OPENSSH PRIVATE KEY-----', 'AKIAIOSFODNN7EXAMPLE', 'key Xk9mQ2vL7pR4tY8wZ3nB6c here', 'xoxb-1234-5678-abcdef']) {
+      expect(refusal(() => f.add(secret))?.code, secret).toBe('ACCESS_SECRET')
+      expect(refusal(() => f.add('Prod DB', { note: secret }))?.code, secret).toBe('ACCESS_SECRET')
+    }
+    expect(f.machine('gray-mac').access ?? []).toEqual([])
+    f.add('Email (dee@)', { note: 'connection info in ~/.argocd/config' })
+    f.add('Prod DB read-only', { note: 'env file /Users/gray/Library/Application Support/harness/prod-read.env' })
+    expect(f.machine('gray-mac').access).toHaveLength(2)
+  })
+
+  it('is changed by nobody else: not the Swarm\'s owner, a teammate, an agent on its own word, or a Buddy', () => {
+    const f = swarm()
+    const worker = f.agent('gray-worker')
+    const buddy = f.agent('gray-buddy', 'gray-mac', { buddyOf: 'gray', buddyScope: 'swarm' })
+    for (const actor of [owner, mate, worker, f.leadActor, buddy]) {
+      expect(['OWNER_REQUIRED', 'BUDDY_FORBIDDEN'], JSON.stringify(actor)).toContain(refusal(() => f.add('Lamp', {}, actor))?.code)
+    }
+    expect(f.machine('gray-mac').access).toBeUndefined()
+  })
+
+  it('takes the Lead passing on the owner\'s own message from the last day, in a chat it leads, as ok', () => {
+    const f = swarm()
+    const askedIn = { conversationId: 'lead', messageId: 'm-gray' }
+    f.add('ArgoCD', { note: 'connection info in ~/.argocd/config', askedIn }, f.leadActor, said('gray'))
+    expect(f.entry('ArgoCD')).toMatchObject({ state: 'ok', addedBy: 'gray', askedIn })
+  })
+
+  it('keeps what anyone else said, an old message or one from a chat it does not lead, unconfirmed', () => {
+    const askedIn = { conversationId: 'lead', messageId: 'm-1' }
+    for (const [context, saidBy] of [[said('owner'), 'owner'], [said('gray', NOW - 2 * DAY), 'gray']] as const) {
+      const f = swarm()
+      f.add('Email', { askedIn }, f.leadActor, context)
+      expect(f.entry('Email')).toMatchObject({ state: 'unconfirmed', saidBy, askedIn, addedBy: saidBy })
+    }
+    // A chat it does not lead: another agent, not its Lead, passes on Gray's own message.
+    const f = swarm()
+    const other = f.agent('other-lead', 'owner-mac')
+    f.add('Email', { askedIn }, other, said('gray'))
+    expect(f.entry('Email')).toMatchObject({ state: 'unconfirmed', saidBy: 'gray' })
+    // With no message behind it, or a system row, an agent records nothing.
+    expect(refusal(() => f.add('Slack', {}, f.leadActor))?.code).toBe('OWNER_REQUIRED')
+    expect(refusal(() => f.add('Slack', { askedIn }, f.leadActor, { askedIn: { author: { kind: 'person', id: 'gray' } as never, source: true, createdAt: NOW } }))?.code)
+      .toBe('OWNER_REQUIRED')
+  })
+
+  it('lets only the owner\'s own session share an entry with teammates; the Lead may only stop sharing', () => {
+    const f = swarm()
+    const askedIn = { conversationId: 'lead', messageId: 'm-gray' }
+    expect(refusal(() => f.add('Fusion 360', { teammates: true, askedIn }, f.leadActor, said('gray')))?.code).toBe('OWNER_SESSION_REQUIRED')
+    const id = f.add('Fusion 360')
+    expect(refusal(() => f.access({ action: 'change', entryId: id, teammates: true, askedIn }, f.leadActor, said('gray')))?.code).toBe('OWNER_SESSION_REQUIRED')
+    expect(f.entry('Fusion 360')!.teammates).toBeUndefined()
+    f.access({ action: 'change', entryId: id, teammates: true })
+    expect(f.entry('Fusion 360')!.teammates).toBe(true)
+    f.access({ action: 'change', entryId: id, teammates: false, askedIn }, f.leadActor, said('gray'))
+    expect(f.entry('Fusion 360')!.teammates).toBeUndefined()
+    // Never on a Team account's entry: it always runs teammates' work.
+    const team = f.add('Lamp', { account: 'team' })
+    expect(refusal(() => f.access({ action: 'change', entryId: team, teammates: true }))?.code).toBe('TEAM_ACCOUNT_ENTRY')
+  })
+
+  it('never lets an agent mark a production entry as not production', () => {
+    const f = swarm()
+    const askedIn = { conversationId: 'lead', messageId: 'm-gray' }
+    const id = f.add('Prod DB read-only', { production: true })
+    expect(refusal(() => f.access({ action: 'change', entryId: id, production: false, askedIn }, f.leadActor, said('gray')))?.code).toBe('OWNER_SESSION_REQUIRED')
+    expect(f.entry('Prod DB read-only')!.production).toBe(true)
+    f.access({ action: 'change', entryId: id, production: false })
+    expect(f.entry('Prod DB read-only')!.production).toBeUndefined()
+  })
+
+  it('is confirmed by the owner, in Machines or by the Lead passing on their word', () => {
+    const askedIn = { conversationId: 'lead', messageId: 'm-1' }
+    for (const confirm of ['owner', 'lead'] as const) {
+      const f = swarm()
+      const id = f.add('Email', { askedIn }, f.leadActor, said('owner'))
+      // Anyone else's word does not confirm it.
+      expect(refusal(() => f.access({ action: 'confirm', entryId: id, askedIn }, f.leadActor, said('mate')))?.code).toBe('OWNER_REQUIRED')
+      if (confirm === 'owner') f.access({ action: 'confirm', entryId: id })
+      else f.access({ action: 'confirm', entryId: id, askedIn }, f.leadActor, said('gray'))
+      expect(f.entry('Email')).toMatchObject({ state: 'ok', addedBy: 'gray' })
+      expect(f.entry('Email')!.saidBy).toBeUndefined()
+    }
+  })
+
+  it('is removed by the owner; the Lead removes an unconfirmed entry, but an ok one only on the owner\'s word', () => {
+    const f = swarm()
+    const askedIn = { conversationId: 'lead', messageId: 'm-1' }
+    const ok = f.add('Fusion 360')
+    const waiting = f.add('Email', { askedIn }, f.leadActor, said('owner'))
+    f.access({ action: 'remove', entryId: waiting }, f.leadActor)
+    expect(f.entry('Email')).toBeUndefined()
+    expect(refusal(() => f.access({ action: 'remove', entryId: ok }, f.leadActor))?.code).toBe('OWNER_REQUIRED')
+    f.access({ action: 'remove', entryId: ok, askedIn }, f.leadActor, said('gray'))
+    expect(f.machine('gray-mac').access).toBeUndefined()
+    expect(refusal(() => f.access({ action: 'remove', entryId: ok }))?.code).toBe('NOT_FOUND')
+  })
+
+  it('drops an unconfirmed entry 7 days after it was added', () => {
+    const f = swarm()
+    f.add('Email', { askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('owner'))
+    f.add('Fusion 360')
+    f.machine('gray-mac').access!.forEach(e => { e.addedAt = new Date(NOW - 7 * DAY).toISOString() })
+    f.add('Lamp')
+    expect(f.machine('gray-mac').access!.map(e => e.name)).toEqual(['Fusion 360', 'Lamp'])
+  })
+
+  it('survives Desktop saving the contribution again, and goes with the machine', () => {
+    const f = swarm()
+    f.add('Fusion 360')
+    f.run({ type: 'machine.contribute', machineId: 'gray-mac', name: 'Gray\'s Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 2,
+      teamAccountOnly: true }, gray, f.joined)
+    expect(f.machine('gray-mac').access).toHaveLength(1)
+    f.machine('gray-mac').observation = { ...reading('computer'), receivedAt: 0 }
+    f.machine('gray-team').observation = { ...reading('team', PASSED), receivedAt: 0 }
+    f.run({ type: 'machine.remove', machineId: 'gray-mac' }, gray)
+    for (const cleanup of f.state.machineCleanups ?? []) cleanup.requestedAt = new Date(NOW - 60 * 60_000).toISOString()
+    f.run({ type: 'machine.contribute', machineId: 'gray-mac', name: 'Gray\'s Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 4,
+      teamAccountOnly: true }, gray, f.joined)
+    expect(f.machine('gray-mac').access).toBeUndefined()
+  })
+})
