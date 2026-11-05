@@ -4,6 +4,7 @@
  * joined only by `Machine.computerId`, the id minted once in the computer's own `~/.harness/computer-id`.
  */
 import type { Prisma } from '@prisma/client'
+import { readBy } from './parts/indexed.js'
 
 type Reader = Pick<Prisma.TransactionClient, 'machine'>
 
@@ -52,6 +53,28 @@ export function onComputerSignedIn(next: Listener | null): void {
  *  the next connect tries again. Nothing to do when no Swarm routes run here. */
 export async function computerSignedIn(signIn: ComputerSignIn): Promise<void> {
   await listener?.(signIn)
+}
+
+/**
+ * Whether another account's Harness Team machine on [computerId] (a Team account's own computer id) still has its folders to
+ * delete in a Swarm: a computer moved to [userId] left that Team machine's cleanup (commands.ts machine.moved), and only its
+ * own sign-in can run it (security review 2 of #3100). Signed in for [userId] first, it never would, and the old Swarms'
+ * checkouts would stay where [userId]'s teammates' work runs. Two indexed reads: the computer's Team rows, then the Swarms'
+ * cleanup index.
+ */
+export async function teamCleanupPending(db: Reader & Pick<Prisma.TransactionClient, 'superTab'>, { computerId, userId }: { computerId: string; userId: string }):
+  Promise<boolean> {
+  const teams = await db.machine.aggregateRaw({ pipeline: [
+    { $match: { computerId, userId: { $ne: userId }, authMode: 'remote', sessionKind: 'team', deletedAt: null } },
+    { $limit: 16 }, { $project: { _id: 0, machineId: 1, autonomousEnv: 1 } }],
+  options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ machineId: string; autonomousEnv: string }>
+  for (const autonomousEnv of new Set(teams.map(t => t.autonomousEnv))) {
+    const ids = teams.filter(t => t.autonomousEnv === autonomousEnv).map(t => t.machineId)
+    const swarms = await readBy(db as Prisma.TransactionClient, 'SuperTab', 'cleanup', [
+      { $match: { autonomousEnv, cleanupMachineIds: { $in: ids } } }, { $limit: 1 }, { $project: { _id: 1 } }])
+    if (swarms.length) return true
+  }
+  return false
 }
 
 /** What the one-time cleanup found: each computer with live rows of two or more accounts, the one seen last, and the others. */
