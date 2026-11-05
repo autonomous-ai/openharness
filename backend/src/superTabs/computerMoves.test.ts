@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import { swarmBuddyChatId } from './buddies.js'
-import type { ContributedMachine } from './machines.js'
+import { joiningTeamMacs, machineTeamWork, type ContributedMachine } from './machines.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const kelvin: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'kelvin', email: 'kelvin@example.com' }
@@ -142,5 +142,39 @@ describe("another account's sign-in on a computer", () => {
     const again = f.run(MOVED, kelvin, moveTo())
     expect(f.state.machines).toEqual(after.machines)
     expect(again.messages).toEqual([])
+  })
+})
+
+// Scholes, 11-05: kelvin added his Mac, Set up showed for a couple of seconds and went away. His Harness Team account was on
+// that Mac already, and joined the Swarm moments after the Mac did; until then the Mac read "not set up".
+describe('a Mac whose own Harness Team account has not joined the Swarm yet', () => {
+  const mac = (f: ReturnType<typeof setup>) => {
+    f.state.machines = f.state.machines!.filter(m => m.machineId === 'kelvin-mac')
+    const pool = f.state.machines[0]!
+    pool.observation = reading(NOW - 1000)
+    return pool
+  }
+  const row = (userId: string, hostMachineId: string, machineId = 'kelvin-team') => ({ machineId, userId, hostMachineId })
+
+  it('is joining while its owner has a Team account on it that the Swarm does not list', () => {
+    const f = setup()
+    const pool = mac(f)
+    expect(joiningTeamMacs(f.state, [row('kelvin', 'kelvin-mac')])).toEqual(['kelvin-mac'])
+    expect(machineTeamWork(f.state, pool, NOW, [], [], ['kelvin-mac'])?.code).toBe('TEAM_ACCOUNT_JOINING')
+    expect(machineTeamWork(f.state, pool, NOW, [], [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+  })
+
+  it("is not joining with another account's Team account on it, one listed already, or no room for it", () => {
+    const f = setup()
+    mac(f)
+    // The Team account of the computer's previous account names that account's machine, never this one.
+    expect(joiningTeamMacs(f.state, [row('tt', 'kelvin-mac')])).toEqual([])
+    expect(joiningTeamMacs(f.state, [row('kelvin', 'another-mac')])).toEqual([])
+    const listed = setup()
+    expect(joiningTeamMacs(listed.state, [row('kelvin', 'kelvin-mac')])).toEqual([])
+    const cleaning = setup()
+    mac(cleaning)
+    cleaning.state.machineCleanups = [{ machineId: 'kelvin-team', removalId: 'r', machineOwnerId: 'kelvin' }]
+    expect(joiningTeamMacs(cleaning.state, [row('kelvin', 'kelvin-mac')])).toEqual([])
   })
 })

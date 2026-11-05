@@ -168,6 +168,40 @@ void main() {
     },
   );
 
+  // Scholes, 11-05: right after Add machine the row read "not set up" with Set up for a few seconds, until the Mac's own
+  // Harness Team account joined the Swarm.
+  testWidgets('a Mac whose Harness Team account is joining says so, with no Set up', (
+    tester,
+  ) async {
+    final daemon = _TeamDaemon();
+    final app = createApp(connectionForTest: (_) => daemon, connected: true)
+      ..teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = true;
+    final c = await _mount(
+      tester,
+      _swarm(
+        _pool(
+          teamWork: {
+            'allowed': false,
+            'code': 'TEAM_ACCOUNT_JOINING',
+            'reason': 'Joining.',
+          },
+        ),
+      ),
+      app: app,
+    );
+    expect(
+      _text(tester, 'super-machine-problem-m'),
+      "Teammates' agents paused: Harness Team is joining",
+    );
+    expect(
+      find.byKey(const ValueKey('super-machine-team-setup-m')),
+      findsNothing,
+    );
+    await _unmount(tester, c);
+    app.dispose();
+  });
+
   test("the row's button reads Repair for an account already here, Set up otherwise", () {
     expect(superTabTeamSetupAction((state: 'exists', detail: null)), 'Repair');
     expect(superTabTeamSetupAction((state: 'none', detail: null)), 'Set up');

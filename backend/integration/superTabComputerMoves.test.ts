@@ -134,3 +134,29 @@ describe('the one-time cleanup of computers listed under two accounts', () => {
     expect(await machinesIn(tab)).toEqual([`tt-new:${tt}`])
   })
 })
+
+describe("a Mac whose owner's Team account is about to join", () => {
+  const run = (tab: string, command: Command, as: AuthUser = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
+  it('reads joining, not "not set up", until its Team account is listed, from an indexed read of the owners\' Team machines', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Joining')).id
+    const invitation = await run(tab, { type: 'invite.create', email: kelvinUser.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, kelvinUser)
+    await db.machine.create({ data: { machineId: 'kelvin-joining', userId: kelvin, computerId: 'f'.repeat(32), sessionKind: 'computer',
+      apiKey: 'fixture-kelvin-joining', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machine.create({ data: { machineId: 'kelvin-joining-team', userId: kelvin, computerId: 'a'.repeat(31) + 'f', sessionKind: 'team',
+      hostMachineId: 'kelvin-joining', apiKey: 'fixture-kelvin-joining-team', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
+    await run(tab, { type: 'machine.contribute', machineId: 'kelvin-joining', name: 'MacBooks-MacBook-Pro-7', cwd: '/work', scope: 'swarm',
+      engines: ['claude'], maxAgents: 2, teamAccountOnly: true }, kelvinUser)
+    await store.observeMachine(kelvinUser, tab, 'kelvin-joining', { generation: (await store.read(kelvinUser, tab)).state.machines![0]!.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9,
+        deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const teamWork = async () => ((await store.read(kelvinUser, tab)).state.machines!.find(m => m.machineId === 'kelvin-joining') as { teamWork?: { code?: string } })
+      .teamWork?.code
+    expect(await teamWork()).toBe('TEAM_ACCOUNT_JOINING')
+    const { state } = await store.readLoad(kelvinUser, tab)
+    const entries = await profiled(db, () => store.joiningTeams(db, state))
+    const rows = reads(entries, 'machines', ['hostMachineId'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ userId: 1/)
+  })
+})
