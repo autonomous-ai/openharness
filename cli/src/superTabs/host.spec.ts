@@ -5900,7 +5900,7 @@ describe('a delivery that waits for the agent\'s turn to end', () => {
   }
   const claims = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([, , body]) => (body as { type?: string })?.type === 'claim')
   const working = (t: ReturnType<typeof setup>, state: () => string) =>
-    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state()])))
+    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state() as 'working' | 'idle' | 'unknown'])))
 
   it('is held while the agent works, then typed once when it is idle, with one claim', async () => {
     const t = setup(), host = t.open()

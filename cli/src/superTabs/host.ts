@@ -1058,6 +1058,10 @@ export class SuperTabHost {
     }
   }
 
+  /** Whether the core says this agent is working now; unknown or a failed read is not working, so nothing is held for it. */
+  private async working(harnessId: string): Promise<boolean> {
+    return (await this.core.agents.activity([harnessId]).catch(() => ({} as Record<string, string>)))[harnessId] === 'working'
+  }
   private async leases(): Promise<boolean> {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
@@ -1942,6 +1946,15 @@ export class SuperTabHost {
     // The receipt check may have retired this held entry while the claim was in flight.
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return false
     if (!reuse) this.claims.set(deliveryId, { delivery, result, claimedAt: this.now(), refused: kept?.refused ?? false })
+    // Its list's latest row: a held one is written again from its claim, and the server may have let it go since (#3403).
+    const claim = this.claims.get(deliveryId)!
+    claim.delivery = delivery
+    // Another agent's post to this crew member waits for its turn to end (backend turnEnd.ts): held as a refused write is, with
+    // this claim, and written once the agent is idle; the server lets it go on its status change or after 15 minutes.
+    if (delivery.waitsForTurnEnd === true && await this.working(entry.harnessId)) {
+      claim.refused = true
+      return false
+    }
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
