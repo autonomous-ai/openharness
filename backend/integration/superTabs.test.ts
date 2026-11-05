@@ -2072,6 +2072,30 @@ describe('Super Tabs on a real Mongo replica set', () => {
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
   })
 
+  // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
+  it('closes the reacting agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const helper = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false })).result.agentId as string
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: group, text: 'Please look at the failing build.', replyTo: null,
+      recipientIds: [lead, helper] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
+    const other = (await store.deliveries(host, tab, helper)).find(d => d.messageId === messageId)!
+    await store.delivery(host, tab, lead, held.id, { type: 'claim', claimId: randomUUID() })
+    const react = (emoji: string, on = true) => ({ type: 'message.react', conversationId: group, messageId, emoji, on }) as Command
+    // A person's reaction, and an agent taking its reaction back, settle nothing.
+    await run(tab, react('eyes'), peer)
+    await run(tab, react('eyes', false), host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'claimed' })
+    await run(tab, react('check'), host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(messageId)
+    expect(await store.deliveryReceipt(host, tab, helper, other.id)).toEqual({ id: other.id, status: 'queued' })
+  })
+
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

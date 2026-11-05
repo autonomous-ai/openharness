@@ -95,4 +95,18 @@ describe('reactions', () => {
     const rows = ['rocket', 'check', 'eyes'].map(emoji => ({ messageId: 'm1', emoji, actorKind: 'agent', actorId: builder }))
     expect(reactionCounts(f.state, rows).get('m1')!.map(r => r.emoji)).toEqual(['eyes', 'check', 'rocket'])
   })
+
+  // Task #3391: a reaction settles the reacting agent's delivery of the message, as an answer does (the store closes the rows).
+  it('tells the store which delivery an agent\'s reaction settles, and settles nothing for anyone else', () => {
+    const f = fixture()
+    const builder = f.agent('lead', 'Builder')
+    f.lead().agentIds.push(builder)
+    for (const emoji of ['eyes', 'check', 'thumbs_up']) {
+      expect(f.run(react(true, emoji), asAgent(builder), target(false)).settles, emoji).toEqual({ messageId: 'm1', agentId: builder })
+    }
+    // A repeat of the reaction still settles: its delivery may have come back since.
+    expect(f.run(react(true, 'eyes'), asAgent(builder), target(true)).settles).toEqual({ messageId: 'm1', agentId: builder })
+    expect(f.run(react(false, 'eyes'), asAgent(builder), target(true)).settles).toBeUndefined()
+    expect(f.run(react(true), owner, target(false)).settles).toBeUndefined()
+  })
 })
