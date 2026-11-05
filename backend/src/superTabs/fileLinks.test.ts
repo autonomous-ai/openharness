@@ -98,6 +98,52 @@ describe('chat file links', () => {
     expect(count).toBe(MAX_CACHED_LINKS + 1)
   })
 
+  describe('a picture\'s thumbnail', () => {
+    const picture = (key: string, thumbKey: string | null, id = 'pic'): Attachment => ({ ...file(key, id), mime: 'image/jpeg', width: 2000, height: 1500,
+      ...thumbKey ? { thumb: { url: `${base}/${thumbKey}`, width: 720, height: 540, size: 40_000 } } : {} })
+
+    it('is linked in the same read as its original, with the same expiry', async () => {
+      const bucket = new MemoryAttachmentStore(() => now)
+      const [read] = await new FileLinks(bucket, base, 'super-tabs').forRows('tab1', [row(picture('super-tabs/tab1/abc/p.jpg', 'super-tabs/tab1/abc/p.jpg.thumb.webp'))], now)
+      const [linked] = read!.attachments
+      expect(linked).toMatchObject({ width: 2000, height: 1500, link: expect.any(String), expiresAt: fileLinkExpiry(now),
+        thumb: { url: `${base}/super-tabs/tab1/abc/p.jpg.thumb.webp`, width: 720, height: 540, size: 40_000, link: expect.stringContaining('p.jpg.thumb.webp'), expiresAt: fileLinkExpiry(now) } })
+      expect(Object.keys(linked!.thumb!).sort()).toEqual(['expiresAt', 'height', 'link', 'size', 'url', 'width'])
+    })
+
+    it('is never linked for a file that is not linked itself', async () => {
+      const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(
+        picture('super-tabs/tab2/abc/other.jpg', 'super-tabs/tab1/abc/other.jpg.thumb.webp', 'other'))], now)
+      expect(read!.attachments[0]).toMatchObject({ unlinked: true })
+      expect(read!.attachments[0]!.link).toBeUndefined()
+      expect(read!.attachments[0]!.thumb?.link).toBeUndefined()
+    })
+
+    it('is dropped, never linked, when its address is outside the Swarm\'s own folder', async () => {
+      const keys = ['super-tabs/tab2/abc/p.jpg.thumb.webp', 'avatars/tab1/abc/avatar', 'super-tabs/tab1x/abc/p.webp', 'super-tabs/tab1/../tab2/abc/p.webp', 'super-tabs/tab1/abc/p.webp?x=1']
+      const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(
+        ...keys.map((key, i) => picture(`super-tabs/tab1/abc/p${i}.jpg`, key, `p${i}`)),
+        { ...picture('super-tabs/tab1/abc/q.jpg', null, 'q'), thumb: { url: 'https://evil.example.test/super-tabs/tab1/abc/q.webp', width: 1, height: 1, size: 1 } })], now)
+      for (const linked of read!.attachments) {
+        expect(linked.link).toBeTruthy()
+        expect(linked.thumb).toBeUndefined()
+      }
+    })
+
+    it('is dropped when what is stored is not a thumbnail', async () => {
+      const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(
+        { ...picture('super-tabs/tab1/abc/a.jpg', null, 'a'), thumb: { url: 5, width: 'x' } as never },
+        { ...picture('super-tabs/tab1/abc/b.jpg', null, 'b'), width: 0 })], now)
+      expect(read!.attachments[0]).not.toHaveProperty('thumb')
+      expect(read!.attachments[1]).not.toHaveProperty('width')
+    })
+
+    it('leaves a file without one as before', async () => {
+      const [read] = await new FileLinks(new MemoryAttachmentStore(() => now), base, 'super-tabs').forRows('tab1', [row(file('super-tabs/tab1/abc/old.png'))], now)
+      expect(Object.keys(read!.attachments[0]!).sort()).toEqual(['expiresAt', 'id', 'link', 'mime', 'name', 'size', 'url'])
+    })
+  })
+
   it('leaves rows without files as they are', async () => {
     const rows = [{ id: 'a' }, { id: 'b', attachments: null }, { id: 'c', attachments: [] }]
     expect(await new FileLinks({ signedUrl: async () => { throw new Error('never') } }, base, 'super-tabs').forRows('tab1', rows, now)).toBe(rows)
