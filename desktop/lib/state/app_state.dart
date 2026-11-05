@@ -2659,6 +2659,42 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Why this Mac's Harness Team account, signed in, has not joined a Swarm
+  /// yet (cli superTabs/service.ts `teamJoinStatus`, #3215): [failure], the
+  /// last refusal or error of this Mac's join, and [hostRunning], whether this
+  /// Mac's Swarm work runs at all. Null when it cannot say (a daemon too old).
+  Future<({String? failure, bool hostRunning})?> teamJoinStatus() async {
+    final here = _teamAccountHere();
+    if (here == null) return null;
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamJoinStatus',
+      });
+      final failure = answer['failure'];
+      final running = answer['hostRunning'];
+      if (running is! bool) return null;
+      return (
+        failure: failure is String ? failure : null,
+        hostRunning: running,
+      );
+    } catch (error) {
+      appLog.debug('super-tabs', 'team join status not read: $error');
+      return null;
+    }
+  }
+
+  /// Retry on this Mac's row: its Swarm work starts if it never ran, and the
+  /// Team account's join is tried at once (cli superTabs/service.ts).
+  Future<void> retryTeamJoin() async {
+    final here = _teamAccountHere();
+    if (here == null) return;
+    try {
+      await superTabMachineRequest(here, {'action': 'teamJoinRetry'});
+    } catch (error) {
+      appLog.debug('super-tabs', 'team join retry not sent: $error');
+    }
+  }
+
   /// Why this Mac has no Harness Team account, as its own daemon remembers
   /// it (cli/src/team/autoSetup.ts `status`): `{state: declined}` after a
   /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null

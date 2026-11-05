@@ -868,6 +868,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// ([AppNotifier.teamSetupStatus]), for its own row's line; null until read
   /// or when it cannot say.
   ({String state, String? detail})? _teamSetup;
+
+  /// This Mac's daemon's word on why its Team account, signed in, has not
+  /// joined (#3215); null unless this Mac's own row reads joining.
+  ({String? failure, bool hostRunning})? _teamJoin;
   bool _teamSetupReading = false;
   SuperTabController get c => widget.controller;
   // Team agents only: a Buddy is listed nowhere, and its machine may be its
@@ -993,21 +997,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _readTeamSetup() async {
     final app = widget.app;
     if (app == null || _teamSetupReading || !app.canSetUpTeamAccount) return;
-    final own = c.snapshot?.machines.any(
-      (m) =>
-          m['contributorId'] == c.accountId &&
-          app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
-          (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED',
-    );
-    if (own != true) {
-      _teamSetup = null;
-      return;
-    }
+    bool own(String code) =>
+        c.snapshot?.machines.any(
+          (m) =>
+              m['contributorId'] == c.accountId &&
+              app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
+              (m['teamWork'] as Map?)?['code'] == code,
+        ) ==
+        true;
+    final setup = own('TEAM_ACCOUNT_REQUIRED'),
+        joining = own('TEAM_ACCOUNT_JOINING');
+    if (!setup) _teamSetup = null;
+    if (!joining) _teamJoin = null;
+    if (!setup && !joining) return;
     _teamSetupReading = true;
     try {
-      final read = await app.teamSetupStatus();
+      final read = setup ? await app.teamSetupStatus() : null;
+      final join = joining ? await app.teamJoinStatus() : null;
       if (!mounted) return;
-      _teamSetup = read;
+      if (setup) _teamSetup = read;
+      if (joining) _teamJoin = join;
       _changed();
     } finally {
       _teamSetupReading = false;
@@ -1545,10 +1554,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app != null &&
         app.canSetUpTeamAccount &&
         app.stateOf(id)?.isLocalMachine == true;
+    // A Team account signed in but not joined (#3215): this Mac's own person reads why, and Retry.
+    final join = _teamJoin;
+    final joinLine =
+        line != null &&
+            team == null &&
+            (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_JOINING' &&
+            contributor == c.accountId &&
+            app != null &&
+            app.canSetUpTeamAccount &&
+            app.stateOf(id)?.isLocalMachine == true &&
+            join != null
+        ? superTabTeamJoinLine(join)
+        : null;
     // Its own person reads why: they cancelled, or setup failed and why.
     final problem = setUpTeam
         ? superTabTeamSetupLine(_teamSetup) ?? line
-        : line;
+        : joinLine ?? line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
@@ -1556,8 +1578,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       name: name,
       problem: problem,
       history: superTabMachineHistory(shared, snapshot.people),
-      setUpTeam: setUpTeam,
-      setUpTeamLabel: superTabTeamSetupAction(_teamSetup),
+      setUpTeam: setUpTeam || joinLine != null,
+      retryJoin: joinLine != null,
+      setUpTeamLabel: joinLine != null
+          ? 'Retry'
+          : superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -2207,7 +2232,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     onMore: BrowserMenuGuard.inBrowser
                         ? (at) => _menu(view, at)
                         : null,
-                    onSetUpTeam: view.setUpTeam
+                    onSetUpTeam: view.retryJoin
+                        ? () async {
+                            await widget.app!.retryTeamJoin();
+                            await _readTeamSetup();
+                          }
+                        : view.setUpTeam
                         ? () async {
                             await showTeamAccountSetup(
                               context,
@@ -2834,6 +2864,7 @@ class _MachineView {
     this.problem,
     this.history,
     this.setUpTeam = false,
+    this.retryJoin = false,
     this.setUpTeamLabel = 'Set up',
     this.apiModels = const [],
     this.localModels = const [],
@@ -2847,6 +2878,9 @@ class _MachineView {
 
   /// Its [problem] is this Mac's, its own person looking: no Harness Team account yet, which they can set up here.
   final bool setUpTeam;
+
+  /// The row's button retries this Mac's join of its Team account (#3215), not its setup.
+  final bool retryJoin;
 
   /// Its button's word: Repair for an account that is there with a part missing (#2765), else Set up.
   final String setUpTeamLabel;
@@ -2950,6 +2984,20 @@ String? superTabTeamSetupLine(({String state, String? detail})? setup) {
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";
+}
+
+/// This Mac's own row while its Team account, signed in, has not joined (#3215): the last refusal or error of its join, or
+/// that this Mac's Swarm work is not running; null while the join simply runs.
+String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
+  final failure = join.failure?.trim().replaceFirst(RegExp(r'[.]+$'), '');
+  final why = failure != null && failure.isNotEmpty
+      ? failure
+      : join.hostRunning
+      ? null
+      : 'this Mac is not adding it';
+  return why == null
+      ? null
+      : "Teammates' agents paused: Harness Team could not join: $why";
 }
 
 /// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), or it
