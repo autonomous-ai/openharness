@@ -101,6 +101,7 @@ import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
+import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
@@ -8441,6 +8442,8 @@ class AppNotifier extends ChangeNotifier {
   void _clearAccountWorkspace({bool notices = true}) {
     if (notices) _clearDeviceNoticeState();
     experimentalFeatures.bind(null);
+    // The chat's pictures are the account's (task #3178).
+    unawaited(superTabForgetPictures());
     agentMessages.reset();
     sharedTabs.reset();
     _sharedPlaced = null;
