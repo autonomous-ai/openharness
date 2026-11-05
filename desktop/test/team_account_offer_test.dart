@@ -204,6 +204,14 @@ void main() {
     },
   );
 
+  test('restarts Team through manual setup without replacing its sign-in', () async {
+    daemon.answer = {'ok': true, 'state': 'started'};
+    expect(await app.setUpTeamAccount(restart: true), 'started');
+    expect(daemon.asked, [
+      {'action': 'teamSetup', 'reason': 'manual', 'restart': true},
+    ]);
+  });
+
   test('sets it up when the person asks, and remembers "Not now"', () async {
     daemon.answer = {'ok': true, 'state': 'started'};
     expect(await app.setUpTeamAccount(), 'started');
