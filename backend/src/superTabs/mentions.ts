@@ -291,6 +291,13 @@ const tagRows = (tabId: string, personId: string, now: number, open: boolean | n
   orderBy: { createdAt: 'desc' as const }, take: 500,
 })
 
+/** The fields a changes poll needs both to hold tagged conversations and derive its mention badge from the same read. */
+export type WaitingTagRow = { id: string; conversationId: string; createdAt: Date; resolvedAt: Date | null; holdUntil: Date | null }
+export async function waitingTagRows(tx: Tx, tabId: string, personId: string, now: number): Promise<WaitingTagRow[]> {
+  return await tx.superTabMention.findMany({ ...tagRows(tabId, personId, now, true),
+    select: { id: true, conversationId: true, createdAt: true, resolvedAt: true, holdUntil: true } })
+}
+
 /** The conversations of a person's waiting tags, newest tag first, once each: those [waitingMentions] may read beyond what a
  *  read holds, so a change poll can hold them per conversation (read/service.ts). */
 export async function waitingTagConversations(tx: Tx, tabId: string, personId: string, now: number): Promise<string[]> {
@@ -302,9 +309,10 @@ export async function waitingTagConversations(tx: Tx, tabId: string, personId: s
  *  counts this same list. Ordinary loads leave quiet (dormant) conversations out of the state, so the ones a tag is in are
  *  read here: the count and the list check the same conversations whichever state they get.
  *  ponytail: capped at 500 per state; page it if a person ever gets more in 30 days. */
-async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean | null) {
+async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean | null,
+  waitingRows?: WaitingTagRow[]) {
   person(state, actor.userId)
-  const rows = await tx.superTabMention.findMany(tagRows(tabId, actor.userId, now, open))
+  const rows = open && waitingRows ? waitingRows : await tx.superTabMention.findMany(tagRows(tabId, actor.userId, now, open))
   const groups = new Map(state.conversations.map(c => [c.id, c]))
   const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
@@ -328,8 +336,8 @@ export async function mentionsWaiting(tx: Tx, tabId: string, state: SuperTabStat
  *  when either moves (a tag made, answered or expired, though the count may stay), not on every change of the Swarm. Only
  *  the person's own tags they can still read go into it, and only their ids. */
 export async function waitingMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>,
-  now: number): Promise<{ count: number; digest: string }> {
-  const ids = (await readable(tx, tabId, state, actor, now, true)).map(({ row }) => row.id).sort()
+  now: number, waitingRows?: WaitingTagRow[]): Promise<{ count: number; digest: string }> {
+  const ids = (await readable(tx, tabId, state, actor, now, true, waitingRows)).map(({ row }) => row.id).sort()
   return { count: ids.length, digest: mentionsDigest(ids) }
 }
 

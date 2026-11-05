@@ -8,7 +8,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
-import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
+import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagRows, type WaitingTagRow } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { lowerReadMark, readMarkRows, readThreadMarks, writeThreadFollow, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
@@ -188,8 +188,8 @@ export class SwarmReads {
       if ('reload' in from) { await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base); return from }
       // Without asAgentId the reader is a person (store.ts actor), whose marks moved since the cursor go out with this reply.
       const person = asAgentId ? null : user.sub
-      const [changed, tagged, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
-        person ? waitingTagConversations(tx, tabId, person, t0) : [],
+      const [changed, taggedRows, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
+        person ? waitingTagRows(tx, tabId, person, t0) : [],
         person ? readMarkRows(tx, tabId, person, from.since) : [],
         person ? readThreadMarks(tx, tabId, person, from.since) : new Map<string, Map<string, number>>(),
         person ? readChatSettings(tx, tabId, person, from.since) : new Map<string, NotifyLevel>()])
@@ -200,10 +200,10 @@ export class SwarmReads {
       // read against its conversation, quiet or not, and its readers alone learn of it. So is a conversation whose read mark
       // moved, so the mark goes only to a reader who can still read it.
       const held = new Set(base.groups.map(g => g.key))
-      const named = [...new Set([...tagged, ...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
+      const named = [...new Set([...taggedRows.map(row => row.conversationId), ...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
-        async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
+        async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra), taggedRows)
       const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
       // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
@@ -574,13 +574,13 @@ export class SwarmReads {
   }
 
   private async load(tx: PrismaClient, cached: CacheView, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions,
-    loader: Loader = (view, id, named) => readParts(tx, view, id, named)): Promise<Read> {
+    loader: Loader = (view, id, named) => readParts(tx, view, id, named), waitingRows?: WaitingTagRow[]): Promise<Read> {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [[teamMachines, otherWorkspaceMachines, machineVersions, joiningTeams], counts, newest] = await Promise.all([
       this.machineLookups(state),
-      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor),
+      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows), decisionsWaiting(tx, tabId, state, actor),
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
