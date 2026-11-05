@@ -78,10 +78,13 @@ class SwarmJoinedMachine {
     required this.machineName,
     this.problem,
     this.teamProblem,
+    this.ownAccount = false,
+    this.accountProblem,
   });
 
   final String tabId, swarmName, machineId, machineName;
-  final String? problem, teamProblem;
+  final String? problem, teamProblem, accountProblem;
+  final bool ownAccount;
   bool get added => problem == null;
 
   /// The same machine, added, whose Team account offer failed.
@@ -137,6 +140,7 @@ class SwarmJoinMachine {
     required String machineId,
     required String machineName,
     required bool Function() current,
+    bool ownAccount = false,
   }) async {
     final snapshot = c.snapshot;
     if (snapshot == null || !current()) return null;
@@ -233,6 +237,23 @@ class SwarmJoinMachine {
     } catch (_) {
       // Its daemon finds the Swarm on its next read anyway.
     }
-    return note();
+    if (!current()) return null;
+    if (!ownAccount) return note();
+    final consent = await c.command({
+      'type': 'machine.ownAccountWork',
+      'machineId': machineId,
+      'allowed': true,
+    });
+    if (!current()) return null;
+    return SwarmJoinedMachine(
+      tabId: c.tabId,
+      swarmName: snapshot.name,
+      machineId: machineId,
+      machineName: machineName,
+      ownAccount: consent != null,
+      accountProblem: consent == null
+          ? 'Could not confirm the account setting. Check Machines to confirm or try again.'
+          : null,
+    );
   }
 }

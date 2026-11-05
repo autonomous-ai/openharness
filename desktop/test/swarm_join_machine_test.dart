@@ -120,33 +120,47 @@ void main() {
     final c = server.controller(account: 'mate');
     await c.refresh();
     final note = await daemon.adder().add(
-      c, machineId: 'mate-mac', machineName: 'MacBook Air',
-      current: () => true, ownAccount: true,
+      c,
+      machineId: 'mate-mac',
+      machineName: 'MacBook Air',
+      current: () => true,
+      ownAccount: true,
     );
     expect(contributions().single['teamAccountOnly'], isTrue);
-    expect(server.posts.map((p) => (p['command'] as Map)['type']),
-      ['machine.contribute', 'machine.ownAccountWork']);
+    expect(server.posts.map((p) => (p['command'] as Map)['type']), [
+      'machine.contribute',
+      'machine.ownAccountWork',
+    ]);
     expect(server.posts.last['command'], {
-      'type': 'machine.ownAccountWork', 'machineId': 'mate-mac', 'allowed': true,
+      'type': 'machine.ownAccountWork',
+      'machineId': 'mate-mac',
+      'allowed': true,
     });
     expect(note?.ownAccount, isTrue);
     expect(note?.accountProblem, isNull);
     c.dispose();
   });
 
-  test('a refused own-account choice is visible and never reported as enabled', () async {
-    server.unknownCommand = (command) => command['type'] == 'machine.ownAccountWork';
-    final c = server.controller(account: 'mate');
-    await c.refresh();
-    final note = await daemon.adder().add(
-      c, machineId: 'mate-mac', machineName: 'MacBook Air',
-      current: () => true, ownAccount: true,
-    );
-    expect(note?.added, isTrue);
-    expect(note?.ownAccount, isFalse);
-    expect(note?.accountProblem, isNotEmpty);
-    c.dispose();
-  });
+  test(
+    'a refused own-account choice is visible and never reported as enabled',
+    () async {
+      server.unknownCommand = (command) =>
+          command['type'] == 'machine.ownAccountWork';
+      final c = server.controller(account: 'mate');
+      await c.refresh();
+      final note = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+        ownAccount: true,
+      );
+      expect(note?.added, isTrue);
+      expect(note?.ownAccount, isFalse);
+      expect(note?.accountProblem, isNotEmpty);
+      c.dispose();
+    },
+  );
 
   test('account change after contribution never sends consent', () async {
     final c = server.controller(account: 'mate');
@@ -155,13 +169,21 @@ void main() {
     final adder = SwarmJoinMachine(
       machineRequest: daemon.request,
       readResources: (_) async => daemon.resources,
-      wake: (_) async { active = false; },
+      wake: (_) async {
+        active = false;
+      },
     );
-    final note = await adder.add(c, machineId: 'mate-mac',
-      machineName: 'MacBook Air', current: () => active, ownAccount: true);
+    final note = await adder.add(
+      c,
+      machineId: 'mate-mac',
+      machineName: 'MacBook Air',
+      current: () => active,
+      ownAccount: true,
+    );
     expect(note, isNull);
-    expect(server.posts.map((p) => (p['command'] as Map)['type']),
-      ['machine.contribute']);
+    expect(server.posts.map((p) => (p['command'] as Map)['type']), [
+      'machine.contribute',
+    ]);
     c.dispose();
   });
 
@@ -589,21 +611,35 @@ void noteTests() {
   );
 
   testWidgets('own-account join note discloses actual access', (tester) async {
-    final c = await mount(tester, const SwarmJoinedMachine(
-      tabId: 'tab', swarmName: 'Pilot', machineId: 'mate-mac',
-      machineName: 'MacBook Air', ownAccount: true,
-    ));
+    final c = await mount(
+      tester,
+      const SwarmJoinedMachine(
+        tabId: 'tab',
+        swarmName: 'Pilot',
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        ownAccount: true,
+      ),
+    );
     expect(find.textContaining('run as you'), findsOneWidget);
     expect(find.textContaining('only in Harness Team'), findsNothing);
     expect(find.byKey(const Key('swarm-joined-machine-pause')), findsOneWidget);
     c.dispose();
   });
 
-  testWidgets('unconfirmed consent tells the person to check Machines', (tester) async {
-    final c = await mount(tester, const SwarmJoinedMachine(
-      tabId: 'tab', swarmName: 'Pilot', machineId: 'mate-mac',
-      machineName: 'MacBook Air', accountProblem: 'Check Machines to confirm the account setting.',
-    ));
+  testWidgets('unconfirmed consent tells the person to check Machines', (
+    tester,
+  ) async {
+    final c = await mount(
+      tester,
+      const SwarmJoinedMachine(
+        tabId: 'tab',
+        swarmName: 'Pilot',
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        accountProblem: 'Check Machines to confirm the account setting.',
+      ),
+    );
     expect(find.textContaining('Check Machines'), findsOneWidget);
     expect(find.textContaining('only in Harness Team'), findsNothing);
     c.dispose();
