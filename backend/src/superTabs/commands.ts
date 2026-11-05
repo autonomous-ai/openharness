@@ -58,6 +58,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
@@ -3382,6 +3383,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      // An agent's post that says nothing beyond an acknowledgement is refused: a reaction acknowledges (task #3391). Never a
+      // person's, a note to itself, a post with a file or a tag, or a Buddy's talk with its person.
+      if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length && !isBuddyChat(group) && isAcknowledgement(command.text)) {
+        fail('ACK_ONLY', ACK_ONLY_HINT, 400)
+      }
       // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
       const voice = attachments.find(a => a.voice)
       if (voice && (attachments.length > 1 || command.text || command.mentions?.length)) {
