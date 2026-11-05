@@ -45,12 +45,16 @@ afterAll(async () => {
 function fakeReader() {
   const pulls = new Map<string, PullRequestWatch>()
   const asked: string[] = []
+  /** Each pull request's patch id, by head: what its files read at that head (pullRequestPatch.ts). */
+  const patches = new Map<string, string>()
+  const patchReads: string[] = []
   const reader: PullRequestReader = {
     watch: async url => { asked.push(url); return pulls.get(url) ?? null },
+    patch: async (url, head) => { patchReads.push(`${url}@${head}`); return patches.get(head) ?? null },
     botLogin: async () => 'harness[bot]',
     done: async () => {},
   }
-  return { pulls, asked, reader }
+  return { pulls, asked, patches, patchReads, reader }
 }
 /** Each Swarm's own pull request: a pass reads every Swarm in this database, and the others' are not this fake's. */
 let pullNumbers = 100
@@ -77,12 +81,12 @@ async function swarm() {
   const worker = await add(task, 'test-host', 'Worker')
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
   await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'working', result: `Draft ${PR}` }, host, worker)
-  const { pulls, asked, reader } = fakeReader()
+  const { pulls, asked, patches, patchReads, reader } = fakeReader()
   const pass = async () => { now += MINUTE; return watchPullRequests(db, store, reader, now) }
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
     .filter(m => m.recipientIds.length > 0 && m.text.includes(PR))
-  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, reader, pass, told, clock: { get now() { return now }, advance(ms: number) { now += ms } } }
+  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, patches, patchReads, reader, pass, told, clock: { get now() { return now }, advance(ms: number) { now += ms } } }
 }
 
 describe('pull request events', () => {
@@ -173,5 +177,66 @@ describe('pull request events', () => {
       expect(line.unreadable).toBeGreaterThanOrEqual(1)
       expect(line.pulls).toBeGreaterThanOrEqual(line.unreadable)
     } finally { warn.mockRestore() }
+  })
+
+  // Dee, #3394: a verdict counts only at the head it read, or a head whose patch is the same.
+  describe('a verdict at a head', () => {
+    const reviewed = async () => {
+      const f = await swarm()
+      const HEAD2 = 'bbbbbbb2222222', HEAD3 = 'ccccccc3333333'
+      f.patches.set(HEAD, 'p1').set(HEAD2, 'p1').set(HEAD3, 'p2')
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      // A Reviewer passes the task's check; a Tester passes its own step's.
+      const reviewer = await f.add(f.task, 'test-host', 'Reviewer'), tester = await f.add(f.task, 'test-host', 'Tester')
+      const step = String((await f.execute({ type: 'conversation.create', title: 'Test', reviewOf: f.task, step: 'Test', brief: 'Test it',
+        checks: [{ description: 'Signs in', independent: true }] } as Command, host, f.worker)).result.conversationId)
+      await f.execute({ type: 'conversation.agent', conversationId: step, agentId: tester, present: true, lead: false })
+      const stepWork = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: tester }, host, f.worker)).result.assignmentId)
+      const group = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).data as unknown as
+        { checks: Array<{ id: string; passedBy: string | null; verdicts?: Array<{ head?: string; patch?: string; stale?: string }> }> }
+      const taskCheck = (await group(f.task)).checks[0]!.id, stepCheck = (await group(step)).checks[0]!.id
+      await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right' } as Command, host, reviewer)
+      await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in' } as Command, host, tester)
+      const read = async () => [(await group(f.task)).checks[0]!, (await group(step)).checks[0]!]
+      return { f, HEAD2, HEAD3, read }
+    }
+
+    it('counts at its head, and its patch is read once a head', async () => {
+      const { f, read } = await reviewed()
+      for (const check of await read()) {
+        expect(check.passedBy).not.toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, patch: 'p1' })
+      }
+      await f.pass()
+      expect(f.patchReads).toEqual([`${f.PR}@${HEAD}`])
+    })
+
+    it('a same-patch rebase or main merge keeps it', async () => {
+      const { f, HEAD2, read } = await reviewed()
+      f.pulls.set(f.PR, f.pull({ head: HEAD2 }))
+      await f.pass()
+      for (const check of await read()) {
+        expect(check.passedBy).not.toBeNull()
+        expect(check.verdicts!.at(-1)!.stale).toBeUndefined()
+      }
+    })
+
+    it('a new commit makes it stale on the task and its step', async () => {
+      const { f, HEAD3, read } = await reviewed()
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      await f.pass()
+      for (const check of await read()) {
+        expect(check.passedBy).toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
+      }
+    })
+
+    it('a head whose patch cannot be read counts only verdicts at that very head', async () => {
+      const { f, read } = await reviewed()
+      f.pulls.set(f.PR, f.pull({ head: 'ddddddd4444444' }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+    })
   })
 })
