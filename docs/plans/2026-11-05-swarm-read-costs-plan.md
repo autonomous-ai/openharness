@@ -33,13 +33,13 @@
 
 **Files:**
 - Modify: `backend/src/superTabs/mentions.ts`
-- Test: `backend/integration/superTabTagsClear.test.ts`
+- Test: `backend/integration/superTabRead.test.ts`
 
 **Interfaces:**
 - Consume: `waitingMentions(tx, tabId, state, actor, now)` and existing group-by-key index helper.
 - Produce: an aggregate projection containing the conversation `key` plus `data.kind`, `data.projectId`, `data.audience`, `data.archived`, and `data.assignment.status`, sufficient for `canReadGroup`, `isLeads`, and held-tag listing.
 
-- [ ] **Step 1: Write failing coverage** proving mention counts/digests remain unchanged for public, private, closed-PM, Lead, and held-work conversations, while large unrelated conversation fields are excluded from fetched BSON.
+- [ ] **Step 1: Write failing coverage** proving waiting-tag counts remain unchanged when 21 quiet groups contain large unrelated conversation fields, and that the fetched BSON excludes those fields.
 - [ ] **Step 2: Run the targeted test** and record its expected failure against full conversation payloads.
 - [ ] **Step 3: Project only the fields required by the mention check** in the missing-conversations aggregate.
 - [ ] **Step 4: Run the targeted test** and capture before/after `explain("executionStats")`, examined documents, and returned BSON bytes on the same test fixture.
@@ -50,13 +50,13 @@
 **Files:**
 - Modify: `backend/src/superTabs/mentions.ts`
 - Modify: `backend/src/superTabs/read/service.ts`
-- Test: `backend/integration/superTabTagsClear.test.ts`
+- Test: `backend/integration/superTabRead.test.ts`
 
 **Interfaces:**
 - Consume: `changes()`' waiting-tag lookup and `waitingMentions()`' count/digest calculation.
 - Produce: projected waiting-tag rows (id, conversation id, creation time, resolution time, and hold time) reusable by `waitingMentions`; the existing `waitingTagConversations()` result remains a list of distinct conversation ids.
 
-- [ ] **Step 1: Write failing coverage** profiling a changes poll with waiting tags and asserting exactly one read of `SuperTabMention`, unchanged derived count/digest, and inclusion of quiet tagged groups.
+- [ ] **Step 1: Write failing coverage** profiling a changes poll with a waiting tag and asserting exactly one read of `SuperTabMention` with unchanged derived count and digest.
 - [ ] **Step 2: Run the targeted test** and record its expected failure with two tag reads.
 - [ ] **Step 3: Pass the one projected tag-row set from `changes()` into `load()` and `waitingMentions()`**, avoiding a second tag query while retaining the separate indexed conversation lookup.
 - [ ] **Step 4: Run the targeted test** and report before/after `SuperTabMention` reads and request bytes.
