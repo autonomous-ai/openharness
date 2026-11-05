@@ -79,6 +79,6 @@ describe('branch copies', () => {
     git(work, 'fetch', '--prune')
     expect((await pruneBranches(work)).sort()).toEqual(['gone', 'merged'])
     const left = git(work, 'branch', '--format=%(refname:short)').split('\n').sort()
-    expect(left).toEqual(['current', 'super-tab/start-1', 'unpushed'].sort())
+    expect(left).toEqual(['current', 'main', 'super-tab/start-1', 'unpushed'].sort())
   })
 })
