@@ -282,6 +282,7 @@ Future<SuperTabController> _show(
           needsHuman: (_) => 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (_) {},
+          onOpenMessage: (_, _) {},
           now: () => now ?? _now,
         ),
       ),
@@ -683,12 +684,27 @@ void main() {
     expect(SuperTabConversation.fromJson(_task('t', 'T', 1)).handOutLane, null);
   });
 
-  test('a member heads its column with its lane as the lane table names it', () {
-    String heading(Map<String, Object?> crew) =>
-        superTabMemberHeading(SuperTabAgent.fromJson(_agent('finch', 'Finch', crew: crew)));
-    // The crew mark keeps its lane in lower case (backend crew.ts, #3397).
-    expect(heading({'role': 'Engineer', 'lane': 'desktop', 'at': 5, 'by': 'owner'}), 'Finch · Desktop');
-    expect(heading({'role': 'Engineer', 'lane': 'cli', 'at': 5, 'by': 'owner'}), 'Finch · CLI');
-    expect(heading({'role': 'Engineer', 'at': 5, 'by': 'owner'}), 'Finch');
-  });
+  test(
+    'a member heads its column with its lane as the lane table names it',
+    () {
+      String heading(Map<String, Object?> crew) => superTabMemberHeading(
+        SuperTabAgent.fromJson(_agent('finch', 'Finch', crew: crew)),
+      );
+      // The crew mark keeps its lane in lower case (backend crew.ts, #3397).
+      expect(
+        heading({
+          'role': 'Engineer',
+          'lane': 'desktop',
+          'at': 5,
+          'by': 'owner',
+        }),
+        'Finch · Desktop',
+      );
+      expect(
+        heading({'role': 'Engineer', 'lane': 'cli', 'at': 5, 'by': 'owner'}),
+        'Finch · CLI',
+      );
+      expect(heading({'role': 'Engineer', 'at': 5, 'by': 'owner'}), 'Finch');
+    },
+  );
 }
