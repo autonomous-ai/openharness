@@ -133,7 +133,9 @@ void main() {
     'another person': {'kind': 'person', 'id': 'huy', 'name': 'Huy'},
     'an agent': {'kind': 'agent', 'id': 'owner', 'name': 'Buddy'},
   }.entries) {
-    testWidgets('${entry.key} cannot delete an owner Buddy proposal', (tester) async {
+    testWidgets('${entry.key} cannot delete an owner Buddy proposal', (
+      tester,
+    ) async {
       final server = ConversationServer()..append('Please fix the menu');
       server.messages.single
         ..['author'] = entry.value
@@ -150,7 +152,9 @@ void main() {
     {'kind': 'buddy-proposal'},
     {'kind': 'task-line', 'personId': 'owner'},
   ]) {
-    testWidgets('a source that does not authorize owner deletion: $source', (tester) async {
+    testWidgets('a source that does not authorize owner deletion: $source', (
+      tester,
+    ) async {
       final server = ConversationServer()..append('Please fix the menu');
       server.messages.single['source'] = source;
       await show(tester, server);
