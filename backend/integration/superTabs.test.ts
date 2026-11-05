@@ -1209,6 +1209,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     for (const engine of ['codex', 'claude']) {
       await expect(run(tab, { type: 'agent.start', request: { ...request, engine } })).rejects.toMatchObject({ code: 'MACHINE_UNAVAILABLE' })
     }
+    await expect(run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' })).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' }, host)
+    expect((await pool()).machineSuspended).toBeUndefined()
+    expect((await pool()).suspendedEngines).toBeUndefined()
+    expect((await run(tab, { type: 'agent.start', request })).result.startId).toBeTruthy()
   })
 
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {

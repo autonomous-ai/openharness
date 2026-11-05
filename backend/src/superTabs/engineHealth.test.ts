@@ -270,11 +270,19 @@ describe('a machine that does not pick up starts', () => {
     expect(engineUnusable(pool, 'claude', now + 30 * 60_000)).toBeNull()
   })
 
-  it('does not let an engine resume clear a machine cooldown', () => {
+  it('lets the owner resume a machine and reset its backoff without clearing another engine suspension', () => {
     const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({ engine: 'claude' }), NOW); noteStartFailed(state, start({ engine: 'claude' }), NOW)
     noteStartFailed(state, timeout('codex'), NOW); noteStartFailed(state, timeout('claude'), NOW)
+    expect(resumeEngine(pool, 'codex')).toBe(true)
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    expect(engineUnusable(pool, 'claude', NOW)).toContain('Claude Code is suspended')
+    expect(noteStartFailed(state, timeout('codex'), NOW)).toBeNull()
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
+    expect(engineUnusable(pool, 'codex', NOW + 30 * 60_000)).toBeNull()
+    noteStartFailed(state, timeout('codex'), NOW + 30 * 60_000)
     resumeEngine(pool, 'codex')
-    expect(engineUnusable(pool, 'codex', NOW)).not.toBeNull()
+    expect(noteStartFailed(state, timeout('codex'), NOW + 30 * 60_000)).toBeNull()
   })
 
   it('counts a grid pickup timeout against the machine too', () => {

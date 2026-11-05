@@ -5263,6 +5263,22 @@ describe('an engine that cannot run on a contributed machine', () => {
     }
   })
 
+  it.each(['owner', 'lead'])('admits starts after the %s resumes a machine cooldown with the owner\'s authority', (who) => {
+    const { f, lead, begin } = setup()
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.invite()
+    expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
+    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
+    expect(() => begin()).toThrow('This machine is suspended')
+    if (who === 'owner') f.run(resume, owner)
+    else f.run({ ...resume, askedIn: { conversationId: 'lead', messageId: 'm-owner' } } as Command, leadActor,
+      { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
+    expect(begin().result.startId).toBeTruthy()
+  })
+
   it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
     const { f, lead, fail } = setup()
     fail('s1'); fail('s2')
