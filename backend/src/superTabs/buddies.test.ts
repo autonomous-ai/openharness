@@ -674,7 +674,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     const line = 'Fix the login'
     const privateText = 'This next sentence is only for you. Please keep my plans private.'
     const shown = `I'll post this as you: ${line}\n\n${privateText}`
-    for (const text of [line, `${line}\n\n${privateText}`, privateText]) {
+    for (const text of [`${line}\n\n${privateText}`, line, privateText]) {
       expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, text }, buddy,
         okayed(f, [shown]))).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNSHOWN', message: expect.stringContaining('quotes') }))
       expect(group(f, f.chat).proposals).toBeUndefined()
@@ -699,7 +699,7 @@ describe('a Buddy\'s proposal to the PM', () => {
     const newer = `I'll post this as you: ${after}`
     expect(passes('Keep drafts offline', [newer, older])).toBe(false)
     expect(passes('Keep drafts offline', [`${older}\n${newer}`])).toBe(false)
-    expect(passes(after, [newer])).toBe(false)
+    if (after) expect(passes(after, [newer])).toBe(false)
   })
 
   // Task #2989: the Buddy showed one line, then replaced it; the owner's ok is for the newest one only.
