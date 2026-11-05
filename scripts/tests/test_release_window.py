@@ -248,6 +248,60 @@ class GitAndCliTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("P0: sign-out loop", out)
 
+    def run_tag_at(self, name, when_made, now, message="release", kind="cli"):
+        self.tag(name, when_made, message=message)
+        return self.run_cli("--kind", kind, "--now", now.isoformat(), "--from-tag", name, "--exclude-tag", name)
+
+    def test_a_tag_at_0320_vn_without_a_reason_is_refused(self):
+        # 2026-11-06 03:20 VN: the hour a CLI and a Desktop release went out from a tag push.
+        code, _, err = self.run_tag_at("v1.0.1_cli", at(6, 3, 20), at(6, 3, 21))
+        self.assertEqual(code, 2)
+        self.assertIn("RELEASE_WINDOW", err)
+
+    def test_a_tag_at_0320_vn_with_an_emergency_reason_runs_and_posts_the_reason(self):
+        summary = Path(self.tmp.name) / "summary.md"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+        self.addCleanup(os.environ.pop, "GITHUB_STEP_SUMMARY", None)
+        for kind in ["cli", "desktop", "backend", "web"]:
+            with self.subTest(kind=kind):
+                code, out, err = self.run_tag_at(f"v1.0.1_{kind}", at(6, 3, 20), at(6, 3, 21), kind=kind,
+                                                 message="release\n\nEmergency: sign-in loop on every start")
+                self.assertEqual(code, 0, err)
+                self.assertIn("sign-in loop on every start", out)
+                self.assertIn(f"Urgent {kind} release", summary.read_text())
+                self.assertIn("sign-in loop on every start", summary.read_text())
+
+    def test_an_emergency_line_with_no_reason_does_not_open_the_window(self):
+        for line in ["Emergency:", "Emergency:   ", "Emergency: "]:
+            with self.subTest(line=line):
+                code, _, err = self.run_tag_at("v1.0.1_cli", at(6, 3, 20), at(6, 3, 21), message=f"release\n\n{line}")
+                self.assertEqual(code, 2, err)
+                git(self.repo, "tag", "-d", "v1.0.1_cli")
+
+    def test_the_emergency_word_must_start_a_line_of_the_tag_message(self):
+        code, _, _ = self.run_tag_at("v1.0.1_cli", at(6, 3, 20), at(6, 3, 21),
+                                     message="release\n\nthis is not an Emergency: really")
+        self.assertEqual(code, 2)
+
+    def test_a_lightweight_tag_cannot_claim_an_emergency_through_its_commit_message(self):
+        # `git tag -l --format=%(contents)` returns the commit message for a lightweight tag, which any push can set.
+        for line in ["Emergency: not a real one", "Release-Urgent: not a real one"]:
+            with self.subTest(line=line):
+                git(self.repo, "commit", "-q", "--allow-empty", "-m", f"fix\n\n{line}")
+                git(self.repo, "tag", "v1.0.1_cli")
+                code, _, err = self.run_cli("--kind", "cli", "--now", at(6, 3, 21).isoformat(),
+                                            "--from-tag", "v1.0.1_cli", "--exclude-tag", "v1.0.1_cli")
+                self.assertEqual(code, 2, err)
+                git(self.repo, "tag", "-d", "v1.0.1_cli")
+
+    def test_the_window_edges_for_a_tag_push(self):
+        for hour, minute, expected in [(8, 59, 2), (9, 0, 0), (17, 59, 0), (18, 0, 2)]:
+            with self.subTest(at=f"{hour:02d}:{minute:02d}"):
+                # Tagged and started at the same minute, so the grace does not hide the edge.
+                code, _, err = self.run_tag_at("v1.0.1_cli", at(6, hour, minute), at(6, hour, minute))
+                self.assertEqual(code, expected, err)
+                git(self.repo, "tag", "-d", "v1.0.1_cli")
+
     def test_tag_without_urgent_line_is_refused_at_night(self):
         self.tag("v1.0.3_backend", at(5, 23, 0))
         code, _, err = self.run_cli("--kind", "backend", "--now", at(5, 23, 1).isoformat(),
