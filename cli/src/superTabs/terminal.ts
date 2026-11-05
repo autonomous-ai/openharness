@@ -99,9 +99,10 @@ export function modelFailing(text: string): boolean {
  *  authentication_error …} · Please run /login", "Invalid API key · Please run /login" and "OAuth token has expired", and
  *  Codex's "■ unexpected status 401 Unauthorized". A CLI release restarts the owner's daemon and its relay: a Team agent
  *  launched in that gap, or holding a token the relay no longer takes, showed one and sat there (task #3301, Quince,
- *  2026-11-05). Only a line that starts with the notice, where the engine draws its own ([ownNotice]), and near the
- *  prompt: an agent writing or printing these words is not signed out. */
-const SIGNED_OUT_LINE = /^[^A-Za-z]*(?:api error:\s*401\b|not logged in\b|invalid api key\b|oauth token has (?:expired|been revoked)|unexpected status 401\b)/i
+ *  2026-11-05). Only a line that starts with the notice, bare or under the engines' own marks (Claude Code's "⎿", Codex's
+ *  "■"), where the engine draws its own ([ownNotice]), and near the prompt: an agent writing or printing these words, its
+ *  reply under "⏺" or "•" included, is not signed out (security review 2 of #3172). */
+const SIGNED_OUT_LINE = /^\s*(?:⎿\s+|■\s+)?(?:api error:\s*401\b|not logged in\b|invalid api key\b|oauth token has (?:expired|been revoked)|unexpected status 401\b)/i
 
 /** Whether the screen shows its engine signed out of its model: no answer will come until it is launched signed in. */
 export function signedOut(text: string): boolean {
