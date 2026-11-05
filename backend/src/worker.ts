@@ -13,7 +13,7 @@ import {
   pruneLegacyDeviceBindings,
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
-import { prisma } from './lib/prisma.js'
+import { prisma, prismaSecondary } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
@@ -27,6 +27,9 @@ import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { appReleaseReader, startReleaseWatch, unknownReleases } from './superTabs/releaseWatch.js'
+import { startMergeTrain } from './superTabs/mergeTrain/run.js'
+import { teamAccountRequired } from './superTabs/machines.js'
+import { PrismaApprovals } from './github/approvals.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
@@ -43,6 +46,7 @@ import { startSwarmPurge } from './superTabs/purge.js'
 import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
 import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
+import { startScorecards } from './superTabs/scorecard/job.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -79,6 +83,7 @@ async function start(): Promise<void> {
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
   let stopReleaseWatch = (): void => {}
+  let stopMergeTrain = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
   let stopCompaction = (): void => {}
@@ -89,6 +94,7 @@ async function start(): Promise<void> {
   let stopSwarmPurge = (): void => {}
   let stopAttachmentSweep = (): void => {}
   let stopReflection = (): void => {}
+  let stopScorecards = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -100,6 +106,7 @@ async function start(): Promise<void> {
     stopArchive()
     stopPullRequestWatch()
     stopReleaseWatch()
+    stopMergeTrain()
     stopDeliveries()
     stopRepush()
     stopCompaction()
@@ -109,6 +116,7 @@ async function start(): Promise<void> {
     stopSwarmPurge()
     stopAttachmentSweep()
     stopReflection()
+    stopScorecards()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
     stopQueryStats()
@@ -161,6 +169,13 @@ async function start(): Promise<void> {
   // step opens for the project's Integrator (superTabs/releaseWatch.ts, task #3405). Without the app nothing can be verified:
   // each pass says so for every project still waiting.
   stopReleaseWatch = startReleaseWatch(prisma, swarms, () => githubApp ? appReleaseReader(githubApp) : unknownReleases)
+  // Every minute, each project whose merge train is switched on (its rules; off until then) merges what passed at its head, in
+  // batches through the app (superTabs/mergeTrain/, task #3402). Only where an agent's token could be had for the repository.
+  if (githubApp) {
+    const approvals = new PrismaApprovals(prisma)
+    stopMergeTrain = startMergeTrain({ store: swarms, app: githubApp,
+      approved: async (project, repository) => !teamAccountRequired() || approvals.approved(project.autonomousEnv, project.tabId, project.projectId, repository) })
+  }
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
@@ -174,6 +189,8 @@ async function start(): Promise<void> {
   // At 23:00 in each project's time zone, what its routed work cost and how it went, with routing changes asked of its owner
   // (lib/routingReflection.ts).
   stopReflection = startRoutingReflection(prisma, swarms)
+  // Each project's scorecard for its local day, once the day has ended, from the Swarm's own records (superTabs/scorecard/job.ts).
+  stopScorecards = startScorecards(prisma, prismaSecondary)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

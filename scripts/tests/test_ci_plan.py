@@ -114,6 +114,14 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
         self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
 
+    def test_the_desktop_runner_and_its_durations_select_the_desktop_suite(self):
+        # Task #3458: the runner splits the Desktop shards by the durations file; a change to either runs those shards,
+        # so a bad split cannot merge on process checks alone.
+        for path in ("scripts/test-desktop.py", "scripts/desktop-test-durations.json"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"desktop"})
+        self.assertEqual(planner.select(["scripts/desktop-test-durations.py"])[0], set())
+
     def test_a_style_allowlist_selects_the_suite_whose_job_checks_it(self):
         # mobile-checks and desktop-tests run scripts/check-ui-style.py --only against their area's list.
         self.assertEqual(planner.select(["scripts/ui-style-allowlist/mobile.json"])[0], {"mobile"})
