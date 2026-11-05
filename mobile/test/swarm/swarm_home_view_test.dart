@@ -84,7 +84,7 @@ void main() {
     test('Sections folds the quiet ones, as Home always has', () {
       final lists = swarmHomeLists(projects, pins: pins, now: now);
       expect(ids(lists.pinned), ['pinned-read']);
-      expect(ids(lists.recent), ['new-read', 'tagged', 'older-unread']);
+      expect(ids(lists.recent), ['new-read', 'older-unread', 'tagged']);
       expect(ids(lists.quiet), ['old-read']);
     });
 
@@ -117,7 +117,7 @@ void main() {
         unreadsFirst: true,
       );
       expect(ids(lists.pinned), ['pinned-tagged', 'pinned-read']);
-      expect(ids(lists.recent), ['tagged', 'older-unread', 'new-read']);
+      expect(ids(lists.recent), ['older-unread', 'tagged', 'new-read']);
     });
 
     test('All leaves them; Unread keeps anything new, pinned too; Mentions '
@@ -136,7 +136,7 @@ void main() {
       );
       final unread = swarmHomeFiltered(lists, SwarmHomeFilter.unread);
       expect(ids(unread.pinned), ['pinned-unread']);
-      expect(ids(unread.recent), ['tagged', 'older-unread']);
+      expect(ids(unread.recent), ['older-unread', 'tagged']);
       expect(unread.quiet, isEmpty);
       final mentions = swarmHomeFiltered(lists, SwarmHomeFilter.mentions);
       expect(mentions.pinned, isEmpty);
@@ -565,7 +565,9 @@ void main() {
 
     testWidgets('Move to the top brings the unread project over a newer read '
         'one, and the row says so', (tester) async {
-      await pump(tester, backend());
+      final host = await pump(tester, backend());
+      host.session!.home.setSort(SwarmHomeSort.newest);
+      await tester.pumpAndSettle();
       double top(String id) => tester.getTopLeft(project_(id)).dy;
       expect(top(web), lessThan(top(project)));
 
@@ -575,7 +577,7 @@ void main() {
 
       expect(
         text(tester, 'swarm-view-sort-current'),
-        'Sections. Unreads on top.',
+        'Newest to oldest. Unreads on top.',
       );
       expect(top(project), lessThan(top(web)));
     });

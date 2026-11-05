@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
-import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -2368,3 +2368,133 @@ describe('needs.access', () => {
     for (const r of requirements) expect(r).not.toContain('access')
   })
 })
+
+// Ken, 2026-11-05 (task #3294): each route answer was ~45k characters (the whole instructions, every candidate as an object,
+// long left-out reasons), 467 a day in one project's PM context. The answer printed is a few thousand.
+describe('the route answer an agent reads (task #3294)', () => {
+  const names = ['Ken\'s MacBook Pro', 'Mac Studio', 'Tony\'s Mac mini', 'Diego\'s review machine', 'Huy\'s MacBook Air', 'Scholes\'s iMac',
+    'Dee\'s Mac mini', 'Amon\'s MacBook Pro', 'Build box', 'Kelvin\'s Mac Studio']
+  const machineIds = names.map((_, i) => `${String(i).padStart(2, '0')}f3923b927e36499865b0bd2b6223a4`)
+  const gone = ['Old Linux box', 'Windows laptop', 'Lab Raspberry Pi', 'Office NUC', 'Spare Mac mini'].map((name, i) => ({ machineId: `gone${i}9865b0bd2b6223a457f3923b927`, name }))
+  const fleetPolicy = { ...policy, models: [...policy.models.filter(m => m.model !== 'sonnet'), { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 3, enabled: true }] }
+  const week = (provider: string, used: number) => ({ provider, outcome: 'answered', httpStatus: 200, account: `${provider}-acct`, body: {
+    five_hour: { utilization: 20, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    seven_day: { utilization: used, resets_at: new Date(Date.now() + 5 * 86_400_000).toISOString() } } })
+  // Every machine runs an idle Claude and an idle Codex member, and offers a new agent of each: 40 candidates.
+  const crew = machineIds.flatMap((machineId, i) => [
+    { id: `${machineId.slice(0, 20)}cl${i}`, name: `Aspen${i}`, machineId, harnessId: `hc${i}`, configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
+    { id: `${machineId.slice(0, 20)}cx${i}`, name: `Birch${i}`, machineId, harnessId: `hx${i}`, configuration: { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' } }])
+  const fleet = () => {
+    const state = tab().state
+    state.agents = [agents[1]!, ...crew]
+    state.conversations[0]!.agentIds = ['lead', ...crew.map(a => a.id)]
+    return { revision: 3, state }
+  }
+  const routing = ['## Routing', '', '### Models', '', ...Array.from({ length: 12 }, (_, i) => `- Rule ${i}: ${'route by quota and machine. '.repeat(12).trim()}`)].join('\n')
+  const document = ['# Project instructions', '', '## Roles', '', 'x'.repeat(20_000), '', routing, '', '## Rules for every agent', '', 'y'.repeat(6_000)].join('\n')
+  const fleetScoped = (revision = 74) => scoped({ policy: fleetPolicy as typeof policy,
+    context: { ok: true, value: { agentId: 'lead', tab: fleet(), policy: { policy: fleetPolicy, warnings: [] },
+      machines: [...machineIds.map((machineId, i) => ({ machineId, name: names[i] })), ...gone] } },
+    instructions: { ok: true, value: { projectId: 'p1', revision, text: document, notes: [{ id: 'n1', text: 'Release Amon\'s hotfix first.', askedBy: 'Ken' }] } } })
+  const fleetOpener = () => opener(id => {
+    const i = machineIds.indexOf(id)
+    if (i < 0) return { ...daemon(id), request: vi.fn(async () => { throw new Error('offline') }) }
+    return daemon(id, { agents: [`hc${i}`, `hx${i}`], usage: { providers: [week('claude', 38), week('codex', 55)] },
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })
+  })
+  const fit: PluginMaker = { name: 'Machine fit', make: async () => ({ name: 'Machine fit',
+    adjust: c => c.kind === 'new' ? { strength: 0, reason: 'its 3 agents use 61% of the CPU; a build here waits on the others, and its disk has 40 GB free, enough for this task.' } : null }) }
+  const fleetRoute = () => routeTask(input, fleetScoped(), where as never, fleetOpener(), () => 'op', undefined, [fit])
+
+  it('is under 8,000 characters for 40 candidates, and every row still says what a start or an assignment needs', async () => {
+    const answer = await fleetRoute()
+    expect((answer.candidates as unknown[]).length).toBe(40)
+    const printed = routeAnswer(answer, { instructionsRead: 74 })
+    expect(JSON.stringify(printed).length).toBeLessThan(8_000)
+    // The first route of a revision adds only its Routing section.
+    expect(JSON.stringify(routeAnswer(answer)).length).toBeLessThan(8_000 + routing.length)
+    // Each machine once, with what a start there takes; every candidate a line under it, with what a start or an assignment takes.
+    const machines = Object.entries(printed.candidates as Record<string, string[]>)
+    expect(machines).toHaveLength(10)
+    const lines = machines.flatMap(([machine, rows]) => rows.map(line => ({ machine, line })))
+    expect(lines).toHaveLength(40)
+    for (const [i, row] of (answer.candidates as Array<{ id: string; kind: string; agentId?: string; machineId: string; engine: string; model: string; effort: string; cwd?: string }>).entries()) {
+      const { machine, line } = lines[i]!
+      expect(line).toMatch(new RegExp(`^${row.id} ${row.kind === 'new' ? 'new' : `\\S+ \\(agent ${row.agentId}, idle\\)`} · ${row.engine} ${row.model} ${row.effort} · `))
+      expect(machine).toMatch(new RegExp(`· machineId ${row.machineId} · 2 agents$`))
+    }
+    // The why of an unranked route is the next's first sentence; the record keeps it whole.
+    expect(printed).not.toHaveProperty('why')
+    expect(printed.next).toMatch(/^Not ranked: listed by machine name\. Choose one by the project's Routing instructions \(Order and quota\)/)
+    expect(routeAnswer({ ok: true, via: 'only', why: 'Only candidate that can run this task.' })).toMatchObject({ why: 'Only candidate that can run this task.' })
+    // The folder a start takes is said once when every machine shares it (a live route: 23 machines, one folder of 85 characters).
+    expect(printed.cwd).toBe('/absolute/repo/on/that/machine')
+    expect(lines[0]!.line).toMatch(/· fits 62% · resets 5d$/)
+    // A note is its first clause, long enough to keep the name or the cause it carries (review of #3169).
+    expect(noteClause(PM_ACCOUNT_NOTE(['lamp (Faye)', 'computer (Sage)']))).toBe('This account runs the PM of lamp (Faye) and computer (Sage)')
+    expect(noteClause('Its last start failed while preparing the project folder. The start has the details; this does not suspend the engine.'))
+      .toBe('Its last start failed while preparing the project folder')
+    expect(noteClause('x'.repeat(100))).toBe(`${'x'.repeat(71)}…`)
+    // A note is its first clause; the record for Details keeps it whole.
+    expect(lines[1]!.line).toMatch(/· Machine fit: its 3 agents use 61% of the CPU$/)
+  })
+  it('gives the instructions as their Routing section and revision, the whole text on request, and none of it again for a revision read', async () => {
+    const answer = await fleetRoute()
+    const plain = routeAnswer(answer).instructions as Record<string, unknown>
+    expect(plain).toEqual({ revision: 74, routing, notes: ['Release Amon\'s hotfix first.'], more: expect.stringContaining('--full-instructions') })
+    expect(JSON.stringify(routeAnswer(answer))).not.toContain('x'.repeat(100))
+    expect(routeAnswer(answer, { fullInstructions: true }).instructions).toMatchObject({ revision: 74, text: document, notes: ['Release Amon\'s hotfix first.'] })
+    // A revision already read is not sent again; an older one is.
+    const read = routeAnswer(answer, { instructionsRead: 74 }).instructions as Record<string, unknown>
+    // Its notes still come: adding one does not change the revision (review of #3169).
+    expect(read).toEqual({ revision: 74, unchanged: expect.stringContaining('revision 74'), notes: ['Release Amon\'s hotfix first.'] })
+    expect(routeAnswer(answer, { instructionsRead: 73 }).instructions).toMatchObject({ revision: 74, routing })
+    // The whole text wins over a revision read.
+    expect(routeAnswer(answer, { fullInstructions: true, instructionsRead: 74 }).instructions).toMatchObject({ text: document })
+    // Instructions with no Routing section are sent whole, never as nothing; unreadable ones say so.
+    const bare = { ...answer, instructions: { revision: 2, text: '# Rules\n\nWork by this.', notes: [] } }
+    expect(routeAnswer(bare).instructions).toMatchObject({ revision: 2, text: '# Rules\n\nWork by this.' })
+    expect(routeAnswer({ ...answer, instructions: undefined, instructionsUnreadable: true })).toMatchObject({ instructionsUnreadable: true })
+  })
+  it('says a machine\'s own folder only where it differs from the one most share, and no room, which the record keeps', () => {
+    const row = (id: string, machineName: string, cwd: string) => ({ id, kind: 'new', machineId: `id-${machineName}`, machineName, cwd, agents: 1, machine: '6 slots free · 14 GB memory free', line: `${id} new` })
+    const printed = routeAnswer({ ok: true, candidates: [row('c0', 'a', '/Users/t/repo'), row('c1', 'b', '/home/t/repo'), row('c2', 'c', '/Users/t/repo')] })
+    expect(printed).toEqual({ ok: true, cwd: '/Users/t/repo', candidates: { 'a · machineId id-a · 1 agents': ['c0 new'],
+      'b · machineId id-b · 1 agents · cwd /home/t/repo': ['c1 new'], 'c · machineId id-c · 1 agents': ['c2 new'] } })
+    expect(JSON.stringify(printed)).not.toContain('slots')
+    // Members only: no folder to say.
+    expect(routeAnswer({ ok: true, candidates: [{ id: 'c0', kind: 'member', machineId: 'm', machineName: 'a', line: 'c0 M' }] })).not.toHaveProperty('cwd')
+  })
+  it('says each machine left out in one line, and what is left out of no machine when nothing can run', () => {
+    const long = 'z'.repeat(400)
+    const printed = routeAnswer({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model', reason: long }, { title: 't', reason: 'x', machine: 'mac' }],
+      leftOut: [{ machine: 'mac', reasons: ['Machine is offline or unreachable.', 'b', 'c'] }, { machine: 'pi', reasons: [long] },
+        { machine: 'nuc', reasons: ['Machine is offline or unreachable.'] }], warnings: [long] })
+    expect(printed).toEqual({ error: 'NO_CANDIDATE', excluded: [`Named model: ${'z'.repeat(119)}…`],
+      // Machines left out for the same first reason share its line (a live route: five machines offline).
+      leftOut: ['mac (+2 more reasons), nuc: Machine is offline or unreachable.', `pi: ${'z'.repeat(119)}…`], warnings: [`${'z'.repeat(239)}…`] })
+  })
+  it('tells two machines of one name apart by id', async () => {
+    const twin = fleetScoped(), base = twin.getMockImplementation()!
+    twin.mockImplementation(async payload => {
+      const answer = await base(payload)
+      if (payload.action !== 'routeContext') return answer
+      const value = answer.value as { machines: Array<{ machineId: string; name: string }> }
+      return { ...answer, value: { ...value, machines: value.machines.map(m => m.machineId === machineIds[1] ? { ...m, name: names[0]! } : m) } }
+    })
+    const answer = await routeTask(input, twin, where as never, fleetOpener(), () => 'op', undefined, [fit])
+    const machines = Object.keys(routeAnswer(answer).candidates as Record<string, string[]>)
+    expect(machines.filter(m => m.startsWith(names[0]!))).toEqual(expect.arrayContaining([
+      `Ken's MacBook Pro · machineId ${machineIds[0]} · 2 agents`, `Ken's MacBook Pro · machineId ${machineIds[1]} · 2 agents`]))
+  })
+  it('finds the Routing section up to the next heading of its level or higher, its own subsections kept', () => {
+    expect(routingSection('# P\n\n## Roles\nr\n\n## Routing\n\n### Models\nm\n\n## Rules\nx')).toBe('## Routing\n\n### Models\nm')
+    expect(routingSection('## Routing\nonly')).toBe('## Routing\nonly')
+    expect(routingSection('# Routing\nTop\n# Next')).toBe('# Routing\nTop')
+    expect(routingSection('## Roles\nRouting is mentioned, not a heading.\n### Routing notes\nn')).toBeNull()
+    // A shell comment in a fenced block is not a heading (review of #3169), nor a Routing heading inside one.
+    expect(routingSection('## Routing\n```sh\n# start it\nharness start\n```\nafter\n## Rules\nx')).toBe('## Routing\n```sh\n# start it\nharness start\n```\nafter')
+    expect(routingSection('```\n## Routing\n```\n## Roles\nr')).toBeNull()
+  })
+})
+

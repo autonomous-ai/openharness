@@ -658,6 +658,41 @@ describe('internal verbs', () => {
     expect(broken.out.join('\n')).toContain('could not check the engines: no home')
   })
 
+  it('__start replaces a historical sign-in success when no Team session remains', async () => {
+    const f = inTeam()
+    f.status.set(STATUS, { version: 1, signIn: { state: 'signed-in', at: 1 } })
+    await teamCommand(['__start'], f.deps)
+    expect(f.status.get(STATUS)?.signIn).toMatchObject({ state: 'signed-out', at: 1_000_000 })
+  })
+
+  it('__start pins the handed sign-in to its redeemed account', async () => {
+    const f = inTeam()
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()?.signInAcct).toBe('user-placeholder-1')
+    expect(f.deps.get).toHaveBeenCalledWith('/api/auth/me', {
+      authorization: 'Bearer hna_team', 'x-autonomous-env': 'prod',
+    })
+  })
+
+  it('__start does not pin a replacement sign-in when the account lookup returns late', async () => {
+    const f = inTeam()
+    f.deps.get = vi.fn(async () => {
+      f.setSession({ ...computer, signInEpoch: 'replacement@1000001' })
+      return { user: { id: 'previous-owner' } }
+    }) as never
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()?.signInEpoch).toBe('replacement@1000001')
+    expect(f.session()?.signInAcct).toBeUndefined()
+  })
+
+  it('__start keeps a redeemed sign-in and reports an account lookup failure', async () => {
+    const f = inTeam({ get: vi.fn(async () => { throw new Error('offline') }) as never })
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()).toMatchObject({ kind: 'team', refreshToken: 'hnr_team' })
+    expect(f.out.join('\n')).toContain('could not record the signed-in account')
+    expect(f.status.get(STATUS)?.signIn?.state).toBe('signed-in')
+  })
+
   // Task #3262 (Amon, 11-05): Repair handed his Harness Team account to him, but the sign-in it made was adopted, so its device
   // key log stayed kelvin's and froze, and it refused his daemon. A sign-in from the handoff file is the owner's own setup run,
   // behind the macOS password: made by hand, at this run, so the log may start over for the account it was handed to.

@@ -970,24 +970,48 @@ void main() {
       },
     );
 
-    testWidgets('projects newest first, the time off the row', (tester) async {
-      final now = DateTime.utc(2026, 10, 29, 10);
-      int ago(int minutes) =>
-          now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
-      final fake = backend();
-      timed(fake, {for (final id in mobileChats) id: ago(9), webLead: ago(2)});
-      await pump(tester, fake, now: () => now);
-
-      expect(
-        y(tester, 'swarm-project-$tab-$web'),
-        lessThan(y(tester, 'swarm-project-$tab-$project')),
-      );
-      expect(inside('swarm-project-$tab-$web', find.text('2m')), findsNothing);
-      expect(
-        inside('swarm-project-$tab-$project', find.text('9m')),
-        findsNothing,
-      );
-    });
+    testWidgets(
+      'projects stay alphabetical after new activity, the time off the row',
+      (tester) async {
+        final now = DateTime.utc(2026, 10, 29, 10);
+        int ago(int minutes) =>
+            now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
+        final fake = backend();
+        timed(fake, {
+          for (final id in mobileChats) id: ago(9),
+          webLead: ago(2),
+        });
+        final host = await pump(tester, fake, now: () => now);
+        void alphabetical() => expect(
+          y(tester, 'swarm-project-$tab-$project'),
+          lessThan(y(tester, 'swarm-project-$tab-$web')),
+        );
+        alphabetical();
+        moveOn(fake, {
+          webLead: {
+            ...groupData(webLead, title: 'Web', lastMessageSequence: 99),
+            'projectId': web,
+            'lastPersonSequence': 99,
+            'changedAt': now.millisecondsSinceEpoch,
+          },
+        });
+        await host.session!.inbox.refresh();
+        await tester.pumpAndSettle();
+        alphabetical();
+        expect(
+          inside('swarm-project-$tab-$web', key('swarm-project-unread')),
+          findsOneWidget,
+        );
+        expect(
+          inside('swarm-project-$tab-$web', find.text('2m')),
+          findsNothing,
+        );
+        expect(
+          inside('swarm-project-$tab-$project', find.text('9m')),
+          findsNothing,
+        );
+      },
+    );
 
     testWidgets('a project quiet for a day folds under Other projects, which '
         'a tap opens and closes', (tester) async {
@@ -1043,8 +1067,10 @@ void main() {
     testWidgets('a long press pins a project at the top, with no Pinned '
         'heading (anh Dee, 2026-11-04); Unpin puts it back', (tester) async {
       final host = await pump(tester, backend());
+      host.session!.home.setSort(SwarmHomeSort.newest);
+      await tester.pumpAndSettle();
       double top(String id) => y(tester, 'swarm-project-$tab-$id');
-      expect(top(web), lessThan(top(project)), reason: 'newer first');
+      expect(top(web), lessThan(top(project)), reason: 'explicit newest first');
 
       await tester.longPress(key('swarm-project-$tab-$project'));
       await tester.pumpAndSettle();
@@ -1549,8 +1575,8 @@ void main() {
       );
       final order = [
         'swarm-heading-$tab',
-        webRow,
         mobileRow,
+        webRow,
         'swarm-heading-$second',
         backendRow,
       ];
