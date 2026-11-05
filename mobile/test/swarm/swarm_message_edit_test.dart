@@ -259,6 +259,45 @@ void main() {
       }
     });
 
+    // Its text is its words, which are never shown or handed over: it plays
+    // only (anh Dee, 2026-11-04; #3335 review). Delete stays.
+    testWidgets('on your own voice message offers Delete message, never Edit', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend([
+          message(
+            'm1',
+            1,
+            text: 'Ship the parser today.',
+            attachments: [
+              {
+                'id': 'v1',
+                'name': 'Voice message.wav',
+                'mime': 'audio/wav',
+                'size': 64044,
+                'url': 'https://cdn.example.test/v1/Voice_message.wav',
+                'voice': {
+                  'durationMs': 2000,
+                  'waveform': List.filled(48, 9),
+                  'transcribed': true,
+                },
+              },
+            ],
+          ),
+        ]),
+      );
+
+      await tester.longPress(key('swarm-voice-bars'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-copy-link'), findsOneWidget);
+      expect(delete, findsOneWidget);
+      expect(edit, findsNothing);
+      expect(find.text('Ship the parser today.'), findsNothing);
+    });
+
     testWidgets('never for a person who may not write here', (tester) async {
       await pump(
         tester,

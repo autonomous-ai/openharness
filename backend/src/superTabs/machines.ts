@@ -1,7 +1,7 @@
 import { accessRefusal, sharedOwnAccess, taskAccess } from './machineAccess.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { engineUnusable } from './engineHealth.js'
+import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
@@ -75,8 +75,16 @@ export interface ContributedMachine {
   access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
-  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
-  engineSuspensions?: Record<string, { at: number; fine: boolean }>
+  /** Bounded repeat level (0–6) and cause of the current failure streak. Kept across expiry, removed by success/resume
+   *  or with the machine. A launch failure anywhere in the streak prevents sign-in-only recovery. */
+  engineBackoff?: Record<string, { level: number; cause: 'engine' | 'sign-in' }>
+  /** `fine` keeps the old reader's contract. Records before 11-05 lack duration/cause and retain their six-hour policy. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean; durationMs?: number; cause?: 'engine' | 'sign-in' }>
+  /** Pickup timeouts across all engines. One bounded counter/level/cooldown per machine, removed by any successful start
+   *  or with its contribution. Expiry removes the cooldown only, preserving backoff (0–6) until recovery is proven. */
+  machineFailures?: number
+  machineBackoff?: number
+  machineSuspension?: { at: number; durationMs: number }
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
@@ -910,6 +918,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
+  const machineReason = !start ? machineSuspensionReason(pool, now) : null
+  if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)

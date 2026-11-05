@@ -99,27 +99,34 @@ void main() {
     expect(sent(), isNull);
   });
 
-  test('over the daily voice limit it sends and says so', () async {
-    server.voiceAnswers = [
-      {
-        'voice': {
-          'durationMs': 1000,
-          'waveform': List.filled(48, 3),
-          'transcribed': false,
-          'failure': 'limit',
-        },
+  // A voice message plays only and never has words (anh Dee, 11-04), so
+  // one sent without them says nothing about words (River, 11-05).
+  for (final failure in [null, 'limit']) {
+    test(
+      'sent without words (${failure ?? 'not heard'}), it says nothing',
+      () async {
+        server.voiceAnswers = [
+          {
+            'voice': {
+              'durationMs': 1000,
+              'waveform': List.filled(48, 3),
+              'transcribed': false,
+              'failure': ?failure,
+            },
+          },
+        ];
+        final posted = await c.sendVoice(
+          conversationId: 'lead',
+          root: null,
+          wav: _wav,
+          lang: 'en',
+        );
+        expect(posted.sent, isTrue);
+        expect(posted.notice, isNull);
+        expect(sent(), isNotNull);
       },
-    ];
-    final posted = await c.sendVoice(
-      conversationId: 'lead',
-      root: null,
-      wav: _wav,
-      lang: 'en',
     );
-    expect(posted.sent, isTrue);
-    expect(posted.notice, superTabVoiceOverLimit);
-    expect(sent(), isNotNull);
-  });
+  }
 
   test('a refused upload keeps the take and says why', () async {
     server.failUpload = 'Voice message.wav';

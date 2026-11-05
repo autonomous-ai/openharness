@@ -1864,7 +1864,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       readerId: c.reader.accountId,
       react: c.canPost,
       link: _linkTo(c, id),
-      onEdit: mine
+      onEdit: mine && !_isVoice(message)
           ? () => unawaited(_edit(shown, (m, text) => t.editMessage(m, text)))
           : null,
       onDelete: c.mayDelete(message)
@@ -1874,6 +1874,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
   }
+
+  /// Whether [message] is a voice message: its text is its words, never
+  /// opened to edit, as they are never shown (anh Dee, 2026-11-04). Delete
+  /// stays.
+  static bool _isVoice(SuperTabMessage message) =>
+      message.attachments.any((file) => file.voice != null);
 
   /// Edit message on the message [shown] finds: its text in a sheet, and the
   /// new text through [edit]. A refusal says why at the foot; the old text
@@ -1933,7 +1939,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       readerId: c.reader.accountId,
       react: c.canPost,
       link: link ? _linkTo(c, id) : null,
-      onEdit: mine ? () => unawaited(_edit(shown, c.editMessage)) : null,
+      onEdit: mine && !_isVoice(message)
+          ? () => unawaited(_edit(shown, c.editMessage))
+          : null,
       onDelete: link && c.mayDelete(message)
           ? () => unawaited(_delete(shown, c.deleteMessage))
           : null,
@@ -3515,7 +3523,6 @@ class _Pending extends StatelessWidget {
                 'url': '',
               }),
               voice: voice,
-              words: '',
             )
           else
             for (final file in files)

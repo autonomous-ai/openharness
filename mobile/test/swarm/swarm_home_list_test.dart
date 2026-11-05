@@ -291,12 +291,17 @@ void main() {
             news: (bold: true, tags: 0, hasWaitingTag: false),
           ),
           project('d', minutes: 60 * 32),
+          project(
+            'task-tag',
+            minutes: 60 * 33,
+            news: (bold: false, tags: 0, hasWaitingTag: true),
+          ),
         ],
         pins: const {},
         now: now,
       );
 
-      expect(ids(lists.recent), ['a', 'b', 'c']);
+      expect(ids(lists.recent), ['a', 'b', 'c', 'task-tag']);
       expect(ids(lists.quiet), ['d']);
     });
 

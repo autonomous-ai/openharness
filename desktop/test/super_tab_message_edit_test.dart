@@ -474,4 +474,90 @@ void main() {
     expect(root.deleted, isTrue);
     expect(root.text, 'This message was deleted.');
   });
+
+  // A voice message plays only, and its words are never handed over (anh
+  // Dee, 2026-11-04): no Copy message, no ⌘C and no Edit message on one.
+  // Delete stays (#3335 review).
+  group('a voice message of your own', () {
+    const words = 'Ship the login fix today.';
+    ConversationServer voice() => ConversationServer()
+      ..append(
+        words,
+        attachments: [
+          {
+            'id': 'v1',
+            'name': 'Voice message.wav',
+            'mime': 'audio/wav',
+            'size': 64044,
+            'url': 'https://cdn.harness.autonomous.ai/v1/Voice%20message.wav',
+            'voice': {
+              'durationMs': 2000,
+              'waveform': List.filled(48, 9),
+              'transcribed': true,
+            },
+          },
+        ],
+      );
+
+    late List<String> copied;
+    setUp(() {
+      copied = [];
+      final messenger =
+          TestWidgetsFlutterBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied.add((call.arguments as Map)['text'] as String);
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+    });
+
+    testWidgets('offers no Copy message', (tester) async {
+      await show(tester, voice());
+      await hover(tester, 'message-1');
+      expect(
+        find.descendant(
+          of: row('message-1'),
+          matching: find.byTooltip('Copy message'),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('⌘C on it copies nothing', (tester) async {
+      await show(tester, voice());
+      final focus = tester
+          .widgetList<Focus>(
+            find.descendant(of: row('message-1'), matching: find.byType(Focus)),
+          )
+          .map((widget) => widget.focusNode)
+          .whereType<FocusNode>()
+          .first;
+      focus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      expect(copied, isNot(contains(words)));
+      expect(find.text('Message copied'), findsNothing);
+    });
+
+    testWidgets('its More menu offers Delete message, never Edit', (
+      tester,
+    ) async {
+      await show(tester, voice());
+      await openMore(tester, 'message-1');
+      expect(find.text('Delete message'), findsOneWidget);
+      expect(find.text('Edit message'), findsNothing);
+      expect(field('message-1'), findsNothing);
+      expect(find.text(words), findsNothing);
+    });
+  });
 }
