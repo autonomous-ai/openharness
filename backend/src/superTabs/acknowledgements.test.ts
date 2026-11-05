@@ -4,11 +4,13 @@ import { isAcknowledgement } from './acknowledgements.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 describe('isAcknowledgement (task #3391)', () => {
-  it.each(['on it', 'On it!', 'Got it.', 'got it, thanks', 'Thanks!', 'thank you', 'Will do', 'ok, on it', 'Noted. Will do.', 'Understood 👍', 'ack', 'copy that'])(
+  it.each(['on it', 'On it!', 'Got it.', 'got it, thanks', 'Thanks!', 'thank you', 'Will do', 'Noted. Will do.', 'Understood 👍', 'ack', 'copy that'])(
     'reads %j as an acknowledgement', text => expect(isAcknowledgement(text)).toBe(true))
 
   it.each(['Yes at 1a2b3c', 'Yes', 'ok', 'Done', 'on it?', 'got it #12', 'thanks, merged', 'on it: https://github.com/a/b/pull/3',
-    'see github.com/a/b', 'Will do after the build', 'will do in 5 minutes', 'on it @Ken', 'Thanks for the review, fixed in abc123', '', '   ', '👍'])(
+    'see github.com/a/b', 'Will do after the build', 'will do in 5 minutes', 'on it @Ken', 'Thanks for the review, fixed in abc123', '', '   ', '👍',
+    // A courtesy after an answer does not make the answer an acknowledgement (review of #3391: Hugo).
+    'Yes, thanks.', 'Okay, thanks.', 'Yes', 'Yep, got it', 'Sure, will do', 'ok, on it', 'Great, thanks'])(
     'lets %j through', text => expect(isAcknowledgement(text)).toBe(false))
 })
 
@@ -31,7 +33,7 @@ describe('an agent post that only acknowledges', () => {
 
   it('lets real short answers through, and never refuses a person', () => {
     const f = stepsFixture()
-    for (const text of ['Yes at 1a2b3c', 'https://github.com/a/b/pull/3', 'Merged.', 'on it?']) expect(() => send(f, f.dev, text)).not.toThrow()
+    for (const text of ['Yes at 1a2b3c', 'https://github.com/a/b/pull/3', 'Merged.', 'on it?', 'Yes, thanks.', 'Okay, thanks.']) expect(() => send(f, f.dev, text)).not.toThrow()
     expect(() => send(f, null, 'on it')).not.toThrow()
     expect(() => send(f, null, 'thanks')).not.toThrow()
   })
