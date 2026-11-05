@@ -55,6 +55,7 @@ const conversation: Required<Conversation> = {
   ledger: {},
   liveness: { state: 'quiet', why: 'silent', since: 1 },
   lostAttempt: { id: 'w', agentId: 'a' },
+  mergeSeen: {},
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,

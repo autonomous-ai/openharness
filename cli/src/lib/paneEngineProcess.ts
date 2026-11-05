@@ -4,13 +4,14 @@
  */
 import type { AgentEngine } from '../engines/types.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
-import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess } from './processTable.js'
+import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
-/** What the lookups below need of a backend: the pane's own root process. */
-type PaneRootSource = Pick<TerminalBackend, 'rootProcess'>
+/** What the lookups below need of a backend: the pane's own root process, and the table its panes are in when that is
+ *  not the machine's own (a guest's host). */
+type PaneRootSource = Pick<TerminalBackend, 'rootProcess'> & Pick<Partial<TerminalBackend>, 'processTable'>
 
 /**
  * Resolve the stable CLI process below one tmux pane, ahead of short-lived helper descendants — and say
@@ -26,6 +27,8 @@ export async function lookupPaneEngineProcess(
   backend: PaneRootSource,
   runtime: TerminalRuntimeRef,
   engine: AgentEngine,
+  /** The table to read; the backend's own when it has one (a guest's host), else the machine's. */
+  readRows: () => Promise<ProcessRow[] | null> = backend.processTable?.() ?? processRows,
 ): Promise<PaneProcessLookup> {
   const label = terminalRuntimeLabel(runtime)
   const rootPid = await backend.rootProcess(runtime)
@@ -34,7 +37,7 @@ export async function lookupPaneEngineProcess(
   // pane was killed counted as active for good. A failed call is still no evidence either way.
   if (rootPid === 'missing') return { ok: false, unknown: false, reason: `${label} has no pane` }
   if (!rootPid) return { ok: false, unknown: true, reason: `${label} could not be resolved` }
-  const rows = await processRows()
+  const rows = await readRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, [rootPid]))
   const process = selectEngineProcess(enrichedRows, rootPid, engine)

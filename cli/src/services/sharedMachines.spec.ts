@@ -7,7 +7,7 @@ import { emptyPorts, type Asker, type BackendNotice } from '../core/api.js'
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
 import type { PortFailure, SharedMachine, SharedMachinesPort, SharePolicy } from '../lib/sharedMachinesPort.js'
 import type { GuestLaunches } from './guestLaunches.js'
-import { guestLaunchInput, normalizeEmails, normalizeFolders, ownerFolderProblem, readPolicy, SHARE_EMAILS_MAX, SHARED_FOLDERS_MAX,
+import { guestLaunchInput, machineGuests, normalizeEmails, normalizeFolders, ownerFolderProblem, readPolicy, sameSharedPath, withinSharedPath, SHARE_EMAILS_MAX, SHARED_FOLDERS_MAX,
   SHARED_MACHINES_REQUESTS, startSharedMachines, stillShared, trustedKeys } from './sharedMachines.js'
 
 // The real guests reach the machine (the helper, sudo, the owner's sign-ins, a loopback relay): never in a test. The
@@ -412,6 +412,16 @@ describe('shared machines', () => {
         expect(readPolicy(file).folders).toEqual([])
       })
 
+      it('treats one Windows folder spelled two ways as one folder, and POSIX paths as exact', () => {
+        expect(sameSharedPath('c:\\ProgramData\\HarnessGuests', 'C:\\ProgramData\\HarnessGuests', 'win32')).toBe(true)
+        expect(sameSharedPath('C:\\Users\\DELL', 'C:\\Users\\Dell', 'win32')).toBe(true)
+        expect(sameSharedPath('/Users/dee', '/users/dee', 'darwin')).toBe(false)
+        expect(sameSharedPath('/Users/dee', '/Users/dee', 'darwin')).toBe(true)
+        expect(withinSharedPath('C:\\ProgramData\\HarnessGuests\\requests', 'c:\\programdata\\harnessguests', 'win32')).toBe(true)
+        expect(withinSharedPath('/Users/Shared/HarnessGuests/hg_x', '/Users/Shared/HarnessGuests', 'darwin')).toBe(true)
+        expect(withinSharedPath('/Users/Shared/HarnessGuestsX', '/Users/Shared/HarnessGuests', 'darwin')).toBe(false)
+      })
+
       it('says in words why a folder cannot be shared, before the helper would', () => {
         const home = mkdtempSync(join(tmpdir(), 'owner-home-'))
         try {
@@ -432,6 +442,12 @@ describe('shared machines', () => {
           expect(ownerFolderProblem(join(home, 'missing'))).toMatch(/^No such folder/)
         } finally { rmSync(home, { recursive: true, force: true }) }
       })
+    })
+
+    it('builds the real guests from the setup task on Windows, and the helper elsewhere', () => {
+      // Only their construction: the accounts' own contracts are tested beside them (the setup client, the helper).
+      expect(typeof machineGuests(() => {}, file, 'win32').launch).toBe('function')
+      expect(typeof machineGuests(() => {}, file, 'darwin').launch).toBe('function')
     })
 
     it('reads a launch the core asked for, and nothing else as one', () => {

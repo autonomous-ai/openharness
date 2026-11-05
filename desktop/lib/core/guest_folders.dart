@@ -5,6 +5,10 @@ library;
 
 import 'package:flutter/foundation.dart';
 
+/// Whether [path] is absolute on the machine being shared: POSIX `/…`, or a Windows drive `C:\\…`.
+bool isAbsoluteGuestPath(String path) =>
+    path.startsWith('/') || RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path);
+
 @immutable
 class GuestFolder {
   const GuestFolder({required this.path, required this.write});
@@ -29,7 +33,7 @@ class GuestFolders {
       for (final folder in json['folders'] as List? ?? const [])
         if (folder is Map &&
             folder['path'] is String &&
-            (folder['path'] as String).startsWith('/'))
+            isAbsoluteGuestPath(folder['path'] as String))
           GuestFolder(
             path: folder['path'] as String,
             write: folder['write'] == true,

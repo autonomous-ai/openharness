@@ -155,7 +155,7 @@ describe('installing the helper', () => {
 
   it('refuses a platform with no sudo, and an owner name it cannot write into the drop-in', async () => {
     const runner = vi.fn<GuestRunner>(async () => ok)
-    expect(await installGuestHelper({ owner: 'ann', runner, platform: 'win32' })).toMatchObject({ ok: false, code: 'UNSUPPORTED' })
+    expect(await installGuestHelper({ owner: 'ann', runner, platform: 'freebsd' })).toMatchObject({ ok: false, code: 'UNSUPPORTED' })
     expect(await installGuestHelper({ owner: 'root', runner, platform: 'darwin' })).toMatchObject({ ok: false, code: 'FAILED' })
     expect(runner).not.toHaveBeenCalled()
   })

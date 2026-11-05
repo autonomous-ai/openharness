@@ -71,6 +71,7 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
+import { owedAsk } from './timeChecks.js'
 import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -224,7 +225,9 @@ function namedFor(command: Command): Named {
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
     command.type === 'conversation.create' ? command.reviewOf : undefined,
-    'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
+    'askedIn' in command ? command.askedIn?.conversationId : undefined,
+    // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
+    ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
   // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
@@ -4364,8 +4367,6 @@ export class SuperTabStore {
         asked = await waitingInProject(tx, tabId, led.id)
         for (const id of [...finished.map(g => g.key), ...asked.map(d => d.conversationId)]) groupIds.add(id)
       }
-      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
-      for (const id of taskLineChats(loaded.state)) groupIds.add(id)
       // One load for both: a second would drop the first's groups.
       if (groupIds.size) loaded = await this.ensure(tx, loaded, { groupIds: [...groupIds] })
       const state = cloneData(loaded.state)
@@ -4375,12 +4376,8 @@ export class SuperTabStore {
       }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
-      // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
-      const written = ledProject(state, agentId) ? sweepForLead(state, this.now()) : []
-      // The coordinator's poll tells it of its project's idle agents (tidy.ts): it is where what waits for each agent is known.
-      // It reads no asleep group: only loaded groups' active work keeps an agent from being idle (project instructions, phase 4).
-      if (led) written.push(...idleNotices(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
-        where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))))
+      // The time checks and idle notices run in the backend worker (runTimeChecks), so they go on while this poll does not.
+      const written: MessageDraft[] = []
       // Before the update request, which may carry them. Same rules as a listed delivery; a refused row ends as a refused one does.
       const { notices, refused } = await this.releasableNotices(tx, state, target, release)
       const update = projectUpdateRequest(state, target, this.now())
@@ -5070,6 +5067,52 @@ export class SuperTabStore {
   }
 
   /**
+   * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts): lost and stalled work and failed starts
+   * (liveness.ts sweepForLead), then each project's idle agents (tidy.ts idleNotices), written as each project's PM to its PM.
+   * They ran on the PM's own poll before, so a PM that hung stopped them too (task #3385: five people's asks waited 3 to 10
+   * hours). Whatever they find is recorded in this same write, so a second run, or one racing it, finds nothing new. The
+   * messages written.
+   */
+  async runTimeChecks(tabId: string): Promise<number> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt || row.format !== 2) return 0
+      let loaded = await loadRow(tx, requireParts(row), {})
+      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
+      const chats = taskLineChats(loaded.state)
+      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: chats })
+      const state = cloneData(loaded.state), now = this.now()
+      const written = sweepForLead(state, now)
+      // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
+      // from being idle (project instructions, phase 4).
+      const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)
+      if (projects.length) {
+        const busy = new Set((await tx.superTabDelivery.findMany({ where: { tabId, status: { in: [...OPEN_DELIVERY] } },
+          select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
+        for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
+      }
+      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing. A
+      // project that lost its PM owes nothing until it has one again (review of #3213, Minor 4).
+      for (const project of projectsOf(state)) {
+        const pm = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+        const owed = pm ? await owedAsk(tx, tabId, pm, now) : null
+        if (owed?.messageId === project.owed?.messageId && owed?.since === project.owed?.since) continue
+        if (owed) project.owed = owed
+        else delete project.owed
+      }
+      // It frees the agents whose task the checks just lost, as the PM's poll did.
+      await this.endRuns(tx, tabId, loaded.state, state)
+      await recordAttempts(tx, tabId, loaded.state, state, now)
+      await recordEvidence(tx, tabId, loaded.state, state, now)
+      const sequences = numberMessages(state, written, now)
+      // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
+      await this.save(tx, loaded, state, clock.next(), judgedMachines(loaded.state, state, written))
+      await this.writeMessages(tx, tabId, state, written, sequences, true)
+      return written.length
+    })
+  }
+
+  /**
    * The merge train's candidates (mergeTrain/run.ts): unarchived tasks (not steps), done ones included, active in the last
    * [TRAIN_QUIET_MS] that link a pull request, at most [limit], the most recently active first; grouped by project, each with
    * its steps and its own repository's pull requests. Read only: one indexed read, then each Swarm's state once.
@@ -5179,6 +5222,12 @@ export class SuperTabStore {
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
+      // What GitHub said merged in its project's repository, as this read saw it: what a person's rule moved into this task
+      // waits for (ruleGuard.ts rulePlaces, #3392). A link elsewhere, or a step's, is not this task's merge.
+      const repositoryUrl = groupProject(state, group).repository?.repositoryUrl
+      const merged = finished && githubRepository(repositoryUrl) ? Object.keys(checked)
+        .filter(url => checked[url] === 'merged' && projectPullRequestUrl(url, repositoryUrl) !== null) : []
+      if (merged.length) group.mergeSeen = { ...group.mergeSeen, ...Object.fromEntries(merged.map(url => [url, now])) }
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true

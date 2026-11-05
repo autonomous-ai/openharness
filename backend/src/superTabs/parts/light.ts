@@ -80,6 +80,7 @@ export const GROUP_FIELDS = {
     'ledger',
     'liveness',
     'lostAttempt',
+    'mergeSeen',
     'messageSeq',
     'notBefore',
     'number',

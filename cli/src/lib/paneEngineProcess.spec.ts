@@ -11,6 +11,15 @@ function backendWithRoot(root: number | 'missing' | null): TerminalBackend {
 }
 
 describe('lookupPaneEngineProcess', () => {
+  it('reads the table a backend holds (a guest host) rather than the machine\'s own', async () => {
+    const rows = [
+      { pid: 10, parentPid: 1, args: 'engine', startMarker: 'm10', executable: 'engine' },
+      { pid: 20, parentPid: 10, args: 'claude', startMarker: 'w:2', executable: 'claude' },
+    ]
+    const backend = { rootProcess: async () => 10, processTable: () => async () => rows as never }
+    expect(await lookupPaneEngineProcess(backend, runtime, 'claude')).toMatchObject({ ok: true })
+  })
+
   it('says gone when the backend has no such pane', async () => {
     const found = await lookupPaneEngineProcess(backendWithRoot('missing'), runtime, 'claude')
     expect(found).toEqual({ ok: false, unknown: false, reason: 'tmux:%1 has no pane' })

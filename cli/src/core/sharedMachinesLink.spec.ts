@@ -19,6 +19,18 @@ describe('a guest\'s launch, asked of shared machines\' process', () => {
     expect(await createSharedMachinesLink(async () => ({ ok: false, error: 'GUEST_INVALID' })).guestLaunch(input)).toEqual({ ok: false, error: 'GUEST_INVALID' })
   })
 
+  it('passes on the guest\'s own host when the launch names one, and nothing else', async () => {
+    const answer = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
+      guestHostUser: 'hg_0123456789ab' }
+    expect(await createSharedMachinesLink(async () => answer).guestLaunch(input))
+      .toEqual({ ok: true, workspace: answer.workspace, argv: ['claude'], env: {}, guestHostUser: 'hg_0123456789ab' })
+    // A name that is not a guest's is not a host this core may start a pane on.
+    for (const guestHostUser of ['DELL', 'hg_x', '', 7, null]) {
+      expect(await createSharedMachinesLink(async () => ({ ...answer, guestHostUser })).guestLaunch(input), String(guestHostUser))
+        .toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    }
+  })
+
   it('runs nothing it cannot trust the shape of: a process down, failing, or answering oddly', async () => {
     for (const answer of [
       { error: 'SERVICE_UNAVAILABLE' },
