@@ -127,6 +127,42 @@ String personalProjectOperation(String key) => _isTab(key)
 
 bool _isTab(String key) => key.startsWith('tab:');
 
+/// A Personal project's own desk tab (task #3099, migration plan Phase 1):
+/// `project-` and a hash of the project's id, the same on every computer, so
+/// each finds the project a tab belongs to by hashing the projects Personal
+/// lists. A project with more than 9 panes gets a second tab, `-2`, then `-3`.
+/// It fits the desk's id rule (backend `lib/desk.ts`).
+String personalProjectTabId(String projectId, [int number = 1]) {
+  // Views read it while they build: each project's hash is worked out once.
+  if (_projectTabIds.length > 512) _projectTabIds.clear();
+  final base = _projectTabIds[projectId] ??=
+      'project-${_hash('project:$projectId')}';
+  return number <= 1 ? base : '$base-$number';
+}
+
+final _projectTabIds = <String, String>{};
+
+final _projectTabId = RegExp(
+  r'^(project-[0-9a-f]{24})(?:-([2-9]|[1-9][0-9]+))?$',
+);
+
+/// [tabId] as a project tab: its first tab's id and its number (1 for the
+/// first), or null for any other tab.
+({String base, int number})? personalProjectTabParts(String tabId) {
+  final match = _projectTabId.firstMatch(tabId);
+  if (match == null) return null;
+  final number = match.group(2);
+  return (
+    base: match.group(1)!,
+    number: number == null ? 1 : int.parse(number),
+  );
+}
+
+/// Whether [key] is the project key of a project tab's no-repo panes: their
+/// project is the tab's own, never one made for the tab.
+bool _isProjectTab(String key) =>
+    _isTab(key) && personalProjectTabParts(key.substring(4)) != null;
+
 /// One of the person's panes, the tab it is first in, and its project's key:
 /// its repo, or [personalTabKey] of its tab for none.
 typedef PersonalPane = ({Swarm tab, TerminalPane pane, String repo});
@@ -236,11 +272,26 @@ class PersonalProjects extends ChangeNotifier {
     final project = snapshot.projectFor(conversationId);
     if (project == null) return const [];
     final repos = _reposOf(c.accountId, c.tabId, project.id);
-    if (repos.isEmpty) return const [];
+    final ownTab = personalProjectTabId(project.id);
     return [
       for (final entry in personalPanes(app))
-        if (repos.contains(entry.repo)) entry.pane,
+        if (repos.contains(entry.repo) ||
+            (_isProjectTab(entry.repo) &&
+                personalProjectTabParts(entry.repo.substring(4))?.base ==
+                    ownTab))
+          entry.pane,
     ];
+  }
+
+  /// The project of Personal whose own tab [tabId] is ([personalProjectTabId]),
+  /// or null: another kind of tab, or a project Personal does not list.
+  SuperTabProject? projectOfTab(SuperTabController c, String tabId) {
+    if (!eligible(c)) return null;
+    final base = personalProjectTabParts(tabId)?.base;
+    if (base == null) return null;
+    return c.snapshot!.projects
+        .where((p) => personalProjectTabId(p.id) == base)
+        .firstOrNull;
   }
 
   /// The tab all of [panes] come from, when they are exactly its panes: its
@@ -340,11 +391,14 @@ class PersonalProjects extends ChangeNotifier {
         // Each project's name: the repo's own, or its tab's name, given once its
         // project is made (a later rename of the tab keeps the project, and its
         // name).
+        // A project tab's no-repo panes are its project's (panesFor): no
+        // project is made for that tab, on any computer.
         final wanted = <String, String>{
           for (final p in personalPanes(app))
-            p.repo: _isTab(p.repo)
-                ? tabProjectName(p.tab.name)
-                : repoName(p.repo),
+            if (!_isProjectTab(p.repo))
+              p.repo: _isTab(p.repo)
+                  ? tabProjectName(p.tab.name)
+                  : repoName(p.repo),
         };
         var made = false;
         for (final MapEntry(key: repo, value: name) in wanted.entries) {
