@@ -2567,6 +2567,10 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  /// The agents of [group] waiting on the reader: one with a question in its
+  /// terminal, or one the task's work waits on for an answer from them
+  /// ([_asksReader]). A task blocked on CI, a review or another person is not
+  /// here; its status line already says why (Leo, #3017).
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
       c.snapshot?.agents
           .where(
@@ -2574,11 +2578,101 @@ class _SuperTabViewState extends State<SuperTabView>
                 group.agentIds.contains(agent.id) &&
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
-                    (superTabWorkWaits(group.assignment?['status']) &&
-                        group.assignment?['agentId'] == agent.id)),
+                    _asksReader(group, agent)),
           )
           .toList() ??
       const [];
+
+  /// The open decisions of the reader that [group]'s work asked.
+  List<SuperTabDecision> _decisionsOf(SuperTabConversation group) => [
+    for (final d in SuperTabDecisions.of(c).open)
+      if (d.conversationId == group.id) d,
+  ];
+
+  /// Whether [group]'s work, done by [agent], waits on the reader's answer: a
+  /// decision asked of them, or `needs_human` asked of them by name, else of
+  /// whom the server says it waits on, else (a backend that names nobody)
+  /// of whoever reads. `blocked` is never a question.
+  bool _asksReader(SuperTabConversation group, SuperTabAgent agent) {
+    final work = group.assignment;
+    if (work == null || work['agentId'] != agent.id) return false;
+    if (_decisionsOf(group).isNotEmpty) return true;
+    if (work['status'] != 'needs_human') return false;
+    final liveness = group.liveness;
+    final waited = liveness != null && liveness['why'] == 'person';
+    final Object? person =
+        work['askedOf'] ?? (waited ? liveness['personId'] : null);
+    return person == null || person == c.accountId;
+  }
+
+  /// The bar's click: the question where it is, so it visibly does something
+  /// (Leo, #3017). A decision opens where decisions are answered; a question
+  /// in the chat comes into view, lit; a prompt in the terminal opens it, or
+  /// says it is already open.
+  void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
+    final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
+    if (_decisionsOf(group).isNotEmpty) {
+      _openPage(SwarmPage.decisions);
+      return;
+    }
+    final message = asks != null ? null : _askedIn(group, agent);
+    if (message != null) {
+      _showMessage(group.id, message);
+      return;
+    }
+    if (_terminalsVisible) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            "${_agentName(agent)}'s question is in its terminal, open beside this chat.",
+          ),
+        ),
+      );
+      return;
+    }
+    _openAgent(agent);
+  }
+
+  /// The message where [agent] asked [group]'s question: the one that says
+  /// what the assignment's result says, else the agent's latest in the chat
+  /// (a line of the task itself is never it).
+  SuperTabMessage? _askedIn(SuperTabConversation group, SuperTabAgent agent) {
+    final said = [
+      for (final m in _ownShown(group.id))
+        if (m.author['kind'] == 'agent' &&
+            m.author['id'] == agent.id &&
+            !m.isTaskLine)
+          m,
+    ];
+    final ask = (group.assignment?['result'] as String?)?.trim();
+    if (ask != null && ask.isNotEmpty) {
+      for (final m in said.reversed) {
+        if (m.text.contains(ask)) return m;
+      }
+    }
+    return said.lastOrNull;
+  }
+
+  /// Brings [message] of chat [id] into view, lit, from the chat's own view.
+  void _showMessage(String id, SuperTabMessage message) {
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _target = message.id;
+      // Stop following the end: the question is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(message.id);
+      },
+    );
+  }
 
   /// What the card over [message]'s name or avatar shows, worked out as it
   /// opens (Huy, 11-04): a person's status and zone; an agent's engine and
@@ -3119,27 +3213,49 @@ class _SuperTabViewState extends State<SuperTabView>
     final project = c.snapshot!.projectById(group.projectId)!;
     final selected = task || (_showTasks && !_terminalsVisible);
     final count = _tasksNeedingYou(project);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return _withCountBadge(
+      fingerTarget(
+        enabled: _phone,
+        AppIconButton(
+          key: const ValueKey('super-tasks'),
+          icon: AppIcons.squareKanban,
+          size: AppIcons.inlineSize,
+          tooltip: 'Tasks',
+          selected: selected,
+          color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
+          onPressed: () => _openTasks(group),
+        ),
+      ),
+      count,
+      key: const ValueKey('super-tasks-badge'),
+      tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+      onTap: () => _openTasks(group),
+    );
+  }
+
+  /// A header icon's count, the one badge style (Dee, #3017): the red number
+  /// on the icon's top-right corner, like a notification badge, none at 0.
+  Widget _withCountBadge(
+    Widget icon,
+    int count, {
+    required Key key,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    if (count <= 0) return icon;
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        fingerTarget(
-          enabled: _phone,
-          AppIconButton(
-            key: const ValueKey('super-tasks'),
-            icon: AppIcons.squareKanban,
-            size: AppIcons.inlineSize,
-            tooltip: 'Tasks',
-            selected: selected,
-            color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
-            onPressed: () => _openTasks(group),
+        icon,
+        Positioned(
+          top: -2,
+          right: -2,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: SuperTabCountBadge(count, key: key, tooltip: tooltip),
           ),
         ),
-        if (count > 0)
-          SuperTabCountBadge(
-            count,
-            key: const ValueKey('super-tasks-badge'),
-            tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
-          ),
       ],
     );
   }
@@ -4818,29 +4934,36 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null)
-          for (final agent in _needsHuman(group))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-              child: ListTile(
-                key: ValueKey('super-needs-human-${agent.id}'),
-                dense: true,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                leading: Icon(
-                  AppIcons.messageCircleQuestionMark,
-                  color: grid.AppPalette.warn,
-                  size: 18,
-                ),
-                title: Text(
-                  '${_agentName(agent)} needs you',
-                  style: DesktopChrome.control(medium: true),
-                ),
-                trailing: const Icon(AppIcons.arrowRight, size: 16),
-                onTap: () => _openAgent(agent),
-              ),
+          ListenableBuilder(
+            listenable: SuperTabDecisions.of(c),
+            builder: (context, _) => Column(
+              children: [
+                for (final agent in _needsHuman(group))
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                    child: ListTile(
+                      key: ValueKey('super-needs-human-${agent.id}'),
+                      dense: true,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                      leading: Icon(
+                        AppIcons.messageCircleQuestionMark,
+                        color: grid.AppPalette.warn,
+                        size: 18,
+                      ),
+                      title: Text(
+                        '${_agentName(agent)} needs you',
+                        style: DesktopChrome.control(medium: true),
+                      ),
+                      trailing: const Icon(AppIcons.arrowRight, size: 16),
+                      onTap: () => _openQuestion(group, agent),
+                    ),
+                  ),
+              ],
             ),
+          ),
         ListenableBuilder(
           listenable: completing,
           builder: (context, _) {
@@ -5506,7 +5629,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: grid.AppPalette.swarmWelcome,
+                              color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
                               child: _sidebar(),
                             ),
