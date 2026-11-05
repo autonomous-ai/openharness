@@ -13,7 +13,7 @@ import {
   pruneLegacyDeviceBindings,
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
-import { prisma } from './lib/prisma.js'
+import { prisma, prismaSecondary } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
@@ -42,6 +42,7 @@ import { startSwarmPurge } from './superTabs/purge.js'
 import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
 import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
+import { startScorecards } from './superTabs/scorecard/job.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -87,6 +88,7 @@ async function start(): Promise<void> {
   let stopSwarmPurge = (): void => {}
   let stopAttachmentSweep = (): void => {}
   let stopReflection = (): void => {}
+  let stopScorecards = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -106,6 +108,7 @@ async function start(): Promise<void> {
     stopSwarmPurge()
     stopAttachmentSweep()
     stopReflection()
+    stopScorecards()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
     stopQueryStats()
@@ -167,6 +170,8 @@ async function start(): Promise<void> {
   // At 23:00 in each project's time zone, what its routed work cost and how it went, with routing changes asked of its owner
   // (lib/routingReflection.ts).
   stopReflection = startRoutingReflection(prisma, swarms)
+  // Each project's scorecard for its local day, once the day has ended, from the Swarm's own records (superTabs/scorecard/job.ts).
+  stopScorecards = startScorecards(prisma, prismaSecondary)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

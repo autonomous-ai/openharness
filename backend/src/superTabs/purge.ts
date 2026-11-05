@@ -22,7 +22,7 @@ export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabMention', 'superTab
   'superTabRun', 'superTabAttempt', 'superTabRouteDecision', 'superTabModelEvidence', 'superTabModelRecent', 'superTabStopReceipt',
   'superTabRoleText', 'superTabInstructions', 'superTabInstructionsRevision', 'superTabPmNote', 'superTabConfiguration', 'superTabTerminalRequest',
   'gitHubRepositoryApproval', 'gitHubApprovalRefusal', 'swarmHead', 'swarmMember', 'swarmGroup', 'swarmAgent', 'swarmMachine', 'swarmStart',
-  'swarmProgress'] as const
+  'swarmProgress', 'superTabScorecard'] as const
 
 /** Removes one stored object; one already gone counts as removed. */
 export interface FileRemover { delete(objectKey: string): Promise<void> }

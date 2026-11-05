@@ -32,6 +32,7 @@ import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
+import { readScorecards, type ScorecardDay } from '../scorecard/rows.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -517,6 +518,19 @@ export class SwarmReads {
       const machines = (visibleState(state, actor, now).machines ?? [])
         .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
       return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
+    })
+  }
+
+  /** The stored scorecard days (scorecard/rows.ts) of one project, or of every project the reader reads (`allProjects`),
+   *  newest first. Only projects the reader may read; a Team session reads none, as for the leaderboard. */
+  async scorecard(user: AuthUser, tabId: string, projectId: string, allProjects = false): Promise<{ days: ScorecardDay[] }> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    return this.read(user, tabId, async (tx, cached) => {
+      const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
+      const actor = await this.store.actor(tx, user, state)
+      readProject(state, actor, projectId)
+      const projects = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : [projectId]
+      return { days: await readScorecards(tx, tabId, projects) }
     })
   }
 

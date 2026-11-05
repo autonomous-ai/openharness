@@ -1594,6 +1594,23 @@ model SuperTabRouteDecision {
   @@index([tabId, assignmentId])
 }
 
+/// One project's scorecard for one local day (superTabs/scorecard): counts and minutes only, never text, names or ids. One row
+/// per project and day, about 1 KB; the nightly job deletes a project's rows older than 120 days when it writes (rows.ts
+/// SCORECARD_DAYS_KEPT), and a Swarm's go with its purge (purge.ts).
+model SuperTabScorecard {
+  id         String   @id @map("_id")
+  tabId      String
+  projectId  String
+  /// The local date, YYYY-MM-DD, in timeZone.
+  on         String
+  timeZone   String
+  figures    Json
+  computedAt DateTime
+
+  /// A project's days, and the prune of its old ones.
+  @@index([tabId, projectId, on])
+}
+
 /// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
 /// only, never a person, an agent or task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Kept 180 days.
 model SuperTabModelEvidence {
