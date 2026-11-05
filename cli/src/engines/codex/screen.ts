@@ -48,6 +48,26 @@ export function updateDismissKeys(capture: string): string[] | null {
   return menu && footer ? ['Escape'] : null
 }
 
+/**
+ * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it. Only for a
+ * Team-written Swarm start (superTabs/machines.ts), whose engine home names its checkout untrusted (superTabs/start.ts): in
+ * a home that names nothing, codex-cli 0.165 asks "Trust this folder?" instead, nobody answers it, and every such start
+ * timed out at 3 minutes (task #3009). "Open restricted" keeps the folder's config, hooks and exec policies off and saves no
+ * trust, which is what that home is for. It is Enter on the highlighted first row, so the screen must say so word for word:
+ * its sentence that untrusted folders stay disabled, exactly these two rows with the first highlighted, its footer, and no
+ * trust question anywhere ("Trust and continue" is also a first row, and it trusts the branch).
+ */
+export function openRestrictedKeys(capture: string): string[] | null {
+  if (takeover(capture, '') !== 'trust') return null
+  const lines = stripAnsi(capture).replace(/ /g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
+  const text = lines.join(' ')
+  if (/Trust this folder\?|Do you trust the contents/.test(text) || !text.includes(RESTRICTED_SENTENCE)) return null
+  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line))
+  const menu = rows.length === 2 && /^[›>]\s*1\. Open restricted$/.test(rows[0]) && rows[1] === '2. Quit'
+  return menu && lines[lines.length - 1] === 'enter continue · esc quit' ? ['Enter'] : null
+}
+const RESTRICTED_SENTENCE = 'Config, hooks, and exec policies from untrusted folders stay disabled.'
+
 function takeover(capture: string, currentUi: string): PaneTakeover | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const bottom = lines.filter(line => line.trim()).slice(-3)
@@ -70,8 +90,9 @@ const CODEX_PAGER_HEADER = /^\/ T R A N S C R I P T(?: \/)*\s*$/
  *  chat_composer/history_search.rs) and through its transcript (`Find: …`, transcript_view/search.rs). */
 const CODEX_SEARCH_FOOTER = /^\s*(?:reverse-i-search:|Find: )/
 
-/** Codex's trust question, as 0.160 words it (onboarding/trust_directory.rs) and as 0.147 did. */
-const CODEX_TRUST_QUESTION = /Trust this folder\? Codex can read, edit, and run files here|Do you trust the contents of this directory\?/
+/** Codex's trust question, as 0.160 words it (onboarding/trust_directory.rs) and as 0.147 did, and 0.165's screen for a folder
+ *  its config names untrusted ("Open restricted"), which waited for a person as unseen as the question did (task #3009). */
+const CODEX_TRUST_QUESTION = /Trust this folder\? Codex can read, edit, and run files here|Do you trust the contents of this directory\?|Config, hooks, and exec policies from untrusted folders/
 const CODEX_TRUST_ROW = /^\s*[›>]?\s*1\. (?:Trust and continue|Yes, continue|Open restricted|Open existing task)\s*$/
 
 /** Codex's update prompt (update_prompt.rs): its first row runs the update. */
