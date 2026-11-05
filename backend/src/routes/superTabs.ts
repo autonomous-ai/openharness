@@ -1,3 +1,4 @@
+import { appPullRequestMerges } from '../superTabs/ruleMoves.js'
 import { declaredHttpClient } from '../superTabs/refusalLog.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
@@ -273,6 +274,8 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
+      // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
+      ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
       ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
       // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
