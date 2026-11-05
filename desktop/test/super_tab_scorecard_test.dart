@@ -240,6 +240,44 @@ void main() {
     reader.dispose();
   });
 
+  // Task #3462: a crew time's median · slowest is the widest cell; it stays on one line in its row.
+  testWidgets('keeps a crew move time on one line', (tester) async {
+    await loadPreviewFonts();
+    final reader = SuperTabScorecardReader(
+      tabId: 'tab',
+      request: (method, path, {body}) async => {
+        'days': [
+          _day('2026-11-05', {
+            'asksShipped': 9,
+            'crewMove': {
+              'count': 2,
+              'medianSeconds': 186,
+              'slowestSeconds': 599,
+            },
+          }),
+        ],
+      },
+    );
+    await tester.binding.setSurfaceSize(const Size(1100, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabScorecardView(
+            projects: _projects,
+            projectId: 'p0',
+            reader: reader,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final move = tester.getSize(find.text('3m06 · 9m59'));
+    final count = tester.getSize(find.text('9'));
+    expect(move.height, count.height);
+    reader.dispose();
+  });
+
   group('screenshots', () {
     setUpAll(() async {
       if (shots != null) await loadPreviewFonts();
@@ -249,7 +287,7 @@ void main() {
         final picture = GlobalKey();
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        await tester.binding.setSurfaceSize(const Size(1100, 560));
+        await tester.binding.setSurfaceSize(const Size(1100, 640));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final reader = SuperTabScorecardReader(
           tabId: 'tab',
@@ -273,6 +311,19 @@ void main() {
                   'routeDecisions': f[9],
                   'typedIntoPm': f[10],
                   'ackPosts': f[11],
+                  // Crew times start with #3462: older days show "–".
+                  if (on == '2026-11-05') ...{
+                    'crewWake': {
+                      'count': 4,
+                      'medianSeconds': 14,
+                      'slowestSeconds': 41,
+                    },
+                    'crewMove': {
+                      'count': 1,
+                      'medianSeconds': 186,
+                      'slowestSeconds': 186,
+                    },
+                  },
                 }),
             ],
           },
