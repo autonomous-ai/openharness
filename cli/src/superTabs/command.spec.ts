@@ -1032,3 +1032,16 @@ it('prints mine and task as text', async () => {
   expect(await superTabCommand([...prefix, 'mine'], deps as never)).toBe(0)
   expect(print).toHaveBeenCalledWith('#12 Fix login (conversation g12) — working')
 })
+
+// Task #3403: the PM answers each ask once, in its place. `answer` names the message; the server places it in that message's
+// thread or right below it, and refuses a second answer with where the first is.
+it('sends answer as the answer to a message, placed by the server', () => {
+  expect(parseSuperTabArgs([...prefix, 'answer', 'lead', 'ask-1', 'Out at 09:00.', 'op-1'], where).payload).toMatchObject({ action: 'command', operationId: 'op-1',
+    command: { type: 'message.send', conversationId: 'lead', text: 'Out at 09:00.', replyTo: null, answers: 'ask-1', answer: true, recipientIds: [] } })
+  expect(parseSuperTabArgs([...prefix, 'answer', 'lead', 'ask-1', '-', 'op-2', '--to', 'dev'], where, () => 'From stdin\n', () => false).payload.command)
+    .toMatchObject({ text: 'From stdin', recipientIds: ['dev'] })
+  for (const argv of [['answer', 'lead', 'ask-1', 'Text'], ['answer', 'lead', '../x', 'Text', 'op'], ['answer', 'lead', 'ask-1', '  ', 'op'],
+    ['answer', 'lead', 'ask-1', 'Text', 'op', '--reply-to', 'm1']]) {
+    expect(() => parseSuperTabArgs([...prefix, ...argv], where)).toThrow('harness super-tab')
+  }
+})
