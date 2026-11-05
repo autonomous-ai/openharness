@@ -92,18 +92,26 @@ export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: 
   { area: 'Access', reads: 2, paths: ['**/*access*', '**/*access*/**', '**/*permission*', '**/*permission*/**', '**/*audience*', '**/*audience*/**', '**/*membership*', '**/*membership*/**', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
   { area: 'Buddy guard', reads: 2, paths: ['**/*buddy*guard*', '**/*ruleguard*', '**/*rule_guard*', '**/*devicesguard*', '**/*devices_guard*', '**/*leadguard*', '**/*lead_guard*', 'backend/src/superTabs/*guard*'] },
   { area: 'Device links', reads: 2, paths: ['**/*device*', 'cli/src/device/**', 'cli/src/devices/**', 'cli/src/lib/*device*/**', '**/add_device/**', '**/*wifi_robot*', 'devices/**/*cable*', 'devices/**/*pair*', 'devices/**/*link*', 'devices/**/*key*', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
-  { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*'] },
+  { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*', '**/account_keys*'] },
 ])
 /** The fewest reads a change to a security area gets, whatever a saved record says. */
 export const SECURITY_FLOOR_READS = 2
-/** What runs no code: images, video, 3D models, Markdown, docs, samples and build output. It never carries a security area's
- *  two reads, from the floor or from the record's own security rows (River, SecAlder and ReviewLinnea, review of #3250). */
-const NOT_CODE = /\.(png|jpe?g|gif|webp|svg|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i
+/** What runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs, samples and build output.
+ *  The built-in security patterns never catch it (River, SecAlder and ReviewLinnea, review of #3250); a path a person writes
+ *  into a security row of their record still does, as written. */
+const NOT_CODE = /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i
 /** Names a security term catches by accident, per area: accessibility is not access control. */
 const NOT_AREA: Readonly<Record<string, RegExp>> = { access: /accessib/i }
-/** Whether [file] is in the security area [row] as the floor reads it: code, not a known false name. */
-const inSecurityArea = (row: { area: string; paths: readonly string[] }, file: string) =>
-  !NOT_CODE.test(file) && !NOT_AREA[row.area.toLowerCase()]?.test(file) && row.paths.some(glob => globMatch(glob, file))
+/** The built-in patterns of each security area, by its name in lower case. */
+const BUILT_IN = new Map(SECURITY_ROWS.map(row => [row.area.toLowerCase(), new Set(row.paths)]))
+/** Whether [glob] of a security area's row catches [file]: a built-in pattern catches code only, not a known false name; a
+ *  pattern a person added to the row in their record catches exactly what it says (SecAlder, re-review of #3250). */
+function securityGlob(area: string, glob: string, file: string): boolean {
+  if (!globMatch(glob, file)) return false
+  if (!BUILT_IN.get(area.toLowerCase())?.has(glob)) return true
+  return !NOT_CODE.test(file) && !NOT_AREA[area.toLowerCase()]?.test(file)
+}
+const inSecurityArea = (row: { area: string; paths: readonly string[] }, file: string) => row.paths.some(glob => securityGlob(row.area, glob, file))
 
 /** Today's numbers (task #3393; project instructions, 2026-11-05): what a project reads until its first save. */
 export const SEED_RULES: ProjectRules = deepFreeze({
