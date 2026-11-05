@@ -663,6 +663,26 @@ describe('watching a pull request', () => {
     expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toBeNull()
   })
 
+  // Review of #3218 (Ledger, round 2), Important 3: a removed file's contents link names the pull request's base, where the
+  // file still is, as GitHub answered for #3147 (head d7b66b01, base d908300e, its two pmFooting files removed).
+  it('takes a removed file at the pull request\'s base, and no other', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    const head = 'd7b66b0167e16c82bd73fbc61645e691742fa10e', base = 'd908300eaf1e6f81a2ec6c8076acca81857954ae'
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: head }, base: { ref: 'main', sha: base }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    const removed = (ref: string) => ({ filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf',
+      patch: '@@ -1,2 +0,0 @@\n-export const a = 1\n-export const b = 2',
+      contents_url: `https://api.github.com/repos/acme/app/contents/backend%2Fsrc%2FsuperTabs%2FpmFooting.ts?ref=${ref}` })
+    const kept = { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b', contents_url: `https://api.github.com/repos/acme/app/contents/a.ts?ref=${head}` }
+    github.files.set('acme/app#12', [kept, removed(base)])
+    expect(await app.pullRequestFiles(repo, 12, token, head)).toHaveLength(2)
+    github.files.set('acme/app#12', [kept, removed(head)])
+    expect(await app.pullRequestFiles(repo, 12, token, head)).toBeNull()
+    github.files.set('acme/app#12', [kept, removed('fffffff0000000fffffff0000000fffffff00000')])
+    expect(await app.pullRequestFiles(repo, 12, token, head)).toBeNull()
+  })
+
   it('answers no files when GitHub cannot list them, or lists as many as it ever lists (it may have left some out)', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)

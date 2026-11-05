@@ -3,7 +3,7 @@
  * request's own patch is the same (a plain rebase, or a main merge that leaves the PR's diff unchanged).
  */
 import { describe, expect, it } from 'vitest'
-import { HEADS_KEPT, deriveCheck, keepHead, recordCheckVerdict, refreshChecks, verdictCounts, type PullRequestHeads } from './checkVerdicts.js'
+import { HEADS_KEPT, deriveCheck, keepHead, recordCheckVerdict, refreshChecks, verdictCounts, watchedLinks, type PullRequestHeads } from './checkVerdicts.js'
 import type { Check, CheckVerdict } from './model.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -141,3 +141,20 @@ describe('the heads a task keeps', () => {
     expect(heads[url(HEADS_KEPT + 5)]).toBeDefined()
   })
 })
+
+// Review of #3218 (Ledger, round 2), Important 2: the watch read every link and the task kept 50 heads, so past 50 open pull
+// requests each pass dropped a head it read again next pass, with no patch: a cascade of unread patches.
+describe('the links a task is watched for', () => {
+  const url = (n: number) => `https://github.com/acme/app/pull/${n}`
+  it('are its newest HEADS_KEPT links, and its kept heads are theirs', () => {
+    const links = Array.from({ length: HEADS_KEPT + 3 }, (_, i) => url(i + 1))
+    expect(watchedLinks(links)).toEqual(links.slice(3))
+    let heads: PullRequestHeads = {}
+    for (const link of watchedLinks(links)) heads = keepHead(heads, link, { head: 'a'.repeat(40), patch: 'p', at: 1 }, links)
+    expect(Object.keys(heads).sort()).toEqual(watchedLinks(links).sort())
+    // A pass reading the same links again keeps every one.
+    for (const link of watchedLinks(links)) heads = keepHead(heads, link, heads[link]!, links)
+    expect(Object.keys(heads)).toHaveLength(HEADS_KEPT)
+  })
+})
+

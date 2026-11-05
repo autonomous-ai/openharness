@@ -257,6 +257,44 @@ describe('pull request events', () => {
       expect(await f.told()).toHaveLength(before)
     })
 
+    // Review of #3218 (Ledger, round 2), Important 1: a task from before steps were listed, its review step dormant, and a done
+    // task quiet for over a week with its pull request still open.
+    it('a new commit makes it stale on a dormant step its task does not list, and on a done task quiet for a week', async () => {
+      const { f, HEAD3, step, read } = await reviewed()
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Ready to merge ${f.PR}` }, host, f.worker)
+      const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })
+      const { stepIds: _listed, ...legacy } = row.data as Record<string, unknown>
+      await db.swarmGroup.update({ where: { id: row.id }, data: { data: legacy as object, lastActivityAt: new Date(f.clock.now - 9 * 24 * 60 * MINUTE) } })
+      await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: step }, data: { dormant: true } })
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      await f.pass()
+      for (const check of await read()) {
+        expect(check.passedBy).toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
+      }
+      // The task lists its steps from now on.
+      const listed = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { stepIds?: string[] }
+      expect(listed.stepIds).toContain(step)
+    })
+
+    // Review of #3218 (Ledger, round 2), Important 2: past HEADS_KEPT open pull requests, unchanged heads keep their patches.
+    it('keeps every patch across passes for a task linking more pull requests than it keeps heads of', async () => {
+      const f = await swarm()
+      const links = Array.from({ length: 52 }, (_, i) => `https://github.com/acme/app/pull/${9000 + f.number * 100 + i}`)
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: links.join(' ') }, host, f.worker)
+      for (const [i, url] of links.entries()) {
+        const head = (i + 1).toString(16).padStart(40, '0')
+        f.pulls.set(url, { ...f.pull({ head }), url, number: 9000 + i })
+        f.patches.set(head, `p${i}`)
+      }
+      for (let pass = 0; pass < 3; pass++) await f.pass()
+      const heads = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { patch: string | null }> }).pullRequestHeads
+      expect(Object.keys(heads)).toHaveLength(50)
+      expect(Object.values(heads).filter(h => h.patch === null)).toEqual([])
+      // Each kept head's patch was read once, in the first pass.
+      expect(f.patchReads.filter(r => links.some(url => r.startsWith(`${url}@`)))).toHaveLength(50)
+    })
+
     // Review of #3218 (Ledger), Important 5: a patch GitHub could not give is told in the pass's line, and read again later.
     it('a patch it could not read is counted in the pass line, and read again after a while', async () => {
       const { f, read } = await reviewed()
