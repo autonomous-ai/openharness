@@ -61,7 +61,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
-import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -74,6 +74,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { reopenOnEvents } from './handed.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -84,7 +85,7 @@ import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
-  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
   projectPullRequestUrl, pullRequestLinks,
 } from './model.js'
@@ -93,7 +94,7 @@ import { stuck } from './deliverySettle.js'
 import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
-import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
+import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
@@ -1994,10 +1995,15 @@ export class SuperTabStore {
         const running = await tx.superTabRun.findUnique({ where: { id: assigned.agentId } })
         // A record of this Swarm's for work that has ended here is stale (endRuns): it goes, by its own assignment, and the agent
         // is free. A record of another Swarm's, or a stopping agent's, still means busy.
-        if (running && (running.tabId !== tabId || !(await this.staleRuns(tx, tabId, original)).includes(running.assignmentId))) {
+        // A task the agent handed over here (model.ts handed, task #3399) gives its record to the new work: only the record
+        // moves, since that task is still open and a Reviewer's findings queued for the agent there must still arrive.
+        const handedHere = !!running && running.tabId === tabId
+          && original.conversations.some(c => handed(c) && c.assignment!.id === running.assignmentId && c.assignment!.agentId === assigned.agentId)
+        if (running && !handedHere && (running.tabId !== tabId || !(await this.staleRuns(tx, tabId, original)).includes(running.assignmentId))) {
           fail('AGENT_BUSY', 'This agent already owns active work in a Super Tab.')
         }
-        if (running) await this.releaseRuns(tx, tabId, [running.assignmentId])
+        if (handedHere) await tx.superTabRun.deleteMany({ where: { id: assigned.agentId, tabId, assignmentId: running!.assignmentId } })
+        else if (running) await this.releaseRuns(tx, tabId, [running.assignmentId])
         await tx.superTabRun.create({ data: { id: assigned.agentId, tabId, assignmentId: assigned.id,
           machineId: assigned.execution.machineId, harnessId: assigned.execution.harnessId } })
       }
@@ -2203,8 +2209,7 @@ export class SuperTabStore {
       author(state, actor, true)
       const target = agent(state, asAgentId)
       if (target.machineId !== machineId) fail('FORBIDDEN', 'Only the machine running this agent can ask for its GitHub token.', 403)
-      const group = state.conversations.find(c => !isLeads(c) && c.assignment?.agentId === target.id && HOLDING.has(c.assignment.status)
-        && c.assignment.execution.machineId === target.machineId && c.assignment.execution.machineOwnerId === target.machineOwnerId)
+      const group = tokenTask(state, target)
         ?? fail('NO_ASSIGNMENT', 'This agent has no task in progress. A GitHub token is only for an agent working on a task.')
       const project = groupProject(state, group)
       const owner = await ownerAccount(tx.user, project)
@@ -2970,6 +2975,25 @@ export class SuperTabStore {
       if (!changed || !activeWork(changed) || changed.assignment!.id !== group.assignment!.id) ended.add(group.assignment!.id)
     }
     await this.releaseRuns(tx, tabId, [...ended])
+    // An agent whose work in hand ended, or whose handed task came back to it, may still have a task open here: a task it
+    // handed over (model.ts handed, #3399) gave its record to the next one. The record goes back to it, so no other Swarm
+    // assigns the session while a No or red CI may bring that task back (security review of #3221).
+    const agentOf = new Map([...before.conversations, ...after.conversations].flatMap(c => c.assignment ? [[c.assignment.id, c.assignment.agentId] as const] : []))
+    const reopened = after.conversations.filter(c => c.assignment?.status === 'working' && earlier.get(c.id)?.assignment?.id === c.assignment.id
+      && earlier.get(c.id)?.assignment?.status === 'review').map(c => c.assignment!.agentId)
+    await this.restoreRuns(tx, tabId, after, [...new Set([...[...ended].flatMap(id => agentOf.get(id) ?? []), ...reopened])])
+  }
+
+  /** Each of [agentIds] with no run record and a task still open in this Swarm gets one for that task, the one in its hands
+   *  first (endRuns). A record already there, this Swarm's or another's, is left as it is. */
+  private async restoreRuns(tx: Transaction, tabId: string, state: SuperTabState, agentIds: string[]) {
+    for (const agentId of agentIds) {
+      const open = state.conversations.filter(c => activeWork(c) && c.assignment!.agentId === agentId && c.assignment!.status !== 'reconciling')
+      const task = open.find(occupiesAgent) ?? open[0]
+      if (!task || await tx.superTabRun.findUnique({ where: { id: agentId } })) continue
+      const work = task.assignment!
+      await tx.superTabRun.create({ data: { id: agentId, tabId, assignmentId: work.id, machineId: work.execution.machineId, harnessId: work.execution.harnessId } })
+    }
   }
 
   /** For these ended assignments of this Swarm, by their exact ids: their run records go, and their deliveries still queued,
@@ -4661,9 +4685,16 @@ export class SuperTabStore {
       if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url)
         || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
       const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
-      const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
+      const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
       if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
+      // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
+      const events = reopenOnEvents(group, seenEvents, now)
+      if (events !== seenEvents) {
+        recordTaskState(state, group, now)
+        // Back in its hands: the session's cross-Swarm fence covers it again if nothing does (endRuns).
+        await this.restoreRuns(tx, tabId, state, [group.assignment!.agentId])
+      }
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
       const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
