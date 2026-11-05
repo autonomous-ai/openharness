@@ -1,7 +1,8 @@
 /**
  * Which route candidates spend the account a project's PM runs on, any project's in the Swarm (Ken, 11-05). A PM routed work
  * onto a machine and account another project's PM ran on, and could drain it until that PM stopped mid-week. The note is a
- * fact on the candidate; the project's Routing says what it means (below 20% of its weekly quota, no new work there).
+ * fact on the candidate, with the share of its week the account keeps for its PMs (keepFor, task #3222); the project's
+ * Routing says what it means (below that share left, no new work there).
  *
  * The route reads the Swarm as one project's agent, which sees no other project, so the backend sends every project's PM
  * account in the read (`pmAccounts`, backend superTabs/model.ts), naming a project the reader may not read only as
