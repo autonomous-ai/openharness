@@ -1,7 +1,8 @@
 import type { MessageDraft, SuperTabState } from '../superTabs/model.js'
 import { actorName } from '../superTabs/activity.js'
 import { taggerName } from '../superTabs/mentions.js'
-import { groupProject } from '../superTabs/projects.js'
+import { projectsOf } from '../superTabs/projects.js'
+import { isSwarmBuddyChat } from '../superTabs/buddies.js'
 import type { PhoneNotice } from './sender.js'
 
 /** A reply's Activity row as writeReplyActivity wrote it: who it tells, and whose reply. */
@@ -26,9 +27,12 @@ function linkOf(tabId: string, conversationId: string, messageId: string, thread
  */
 export function phoneNotices(tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] }, messages: MessageDraft[]): PhoneNotice[] {
   const byId = new Map(messages.map(m => [m.id, m]))
+  // Where it is, as the phone names it; none for a person's Swarm Buddy chat, which belongs to no project. Never throws: this
+  // runs inside the write (projects.ts groupProject refuses a Buddy chat, security review 2).
   const project = (conversationId: string) => {
     const group = state.conversations.find(c => c.id === conversationId)
-    return group ? groupProject(state, group).name : ''
+    if (!group || isSwarmBuddyChat(group)) return ''
+    return projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.name ?? ''
   }
   const replies = written.replies.map(row => ({
     personId: row.personId, key: `reply:${tabId}:${row.id}`,
