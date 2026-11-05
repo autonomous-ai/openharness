@@ -39,9 +39,9 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   const current = currentHead(verdict, heads)
   if (current === undefined) return true
   if (!current || !verdict.head) return false
-  // Its head counts only against the base it was read against (security review of #3218, round 4); a patch id names its base.
-  const sameBase = verdict.base === undefined || current.base === undefined || verdict.base === current.base
-  return (sameHead(current.head, verdict.head) && sameBase) || (!!verdict.patch && current.patch === verdict.patch)
+  // Its head counts only on the base it names (security review of #3218, round 4; review round 7): naming none, on none once a
+  // base is watched. A patch id names its base.
+  return (sameHead(current.head, verdict.head) && verdict.base === current.base) || (!!verdict.patch && current.patch === verdict.patch)
 }
 
 /** The links of a task its PR watch reads: its newest HEADS_KEPT (review of #3218: one task links 369 pull requests in
@@ -58,15 +58,10 @@ export function keepHead(heads: PullRequestHeads | undefined, url: string, entry
   return Object.fromEntries(kept)
 }
 
-/** [verdict] learns, from [known] when that is the head it read, the patch id and base branch it was read at: each once,
- *  so a later base (a retarget) never replaces the one its head was first seen at. */
+/** [verdict] learns the patch id of the head it read from [known], when that is its head on the base it names: the id names
+ *  the base, so another base's is another diff. */
 function learnPatch(verdict: CheckVerdict, known: PullRequestHead | undefined): void {
-  if (!verdict.head || !known || !sameHead(known.head, verdict.head)) return
-  // The base its head was first seen at (security review of #3218, round 5): a retarget while the review ran is not what it read.
-  const first = known.firstBase ?? known.base
-  if (verdict.base === undefined && first !== undefined) verdict.base = first
-  // Only a patch read against its own base: the id names the base, so another base's is another diff.
-  if (verdict.base !== undefined && known.base !== undefined && verdict.base !== known.base) return
+  if (!verdict.head || !known || !sameHead(known.head, verdict.head) || verdict.base !== known.base) return
   if (!verdict.patch && known.patch) verdict.patch = known.patch
 }
 

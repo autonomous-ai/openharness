@@ -253,8 +253,9 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
   head?: string
   /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
   patch?: string
-  /** The branch the pull request merged into when its head was first seen: the diff a reviewer reads is against it, so the
-   *  same head against another branch is another diff (security review of #3218, round 4). Learned like the patch. */
+  /** The branch it read the pull request's diff against, as the checker named it (a person's, the one watched): the same head
+   *  against another branch is another diff (security review of #3218, round 4), and no base the server infers is known to
+   *  be the one read (review round 7). It counts only on this base. */
   base?: string
   /** The pull request's head it stopped counting at, while it does not count: empty while its own pull request's head is not
    *  read yet. */
@@ -264,10 +265,7 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
 export interface PullRequestHead { head: string; patch: string | null; at: number
   /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
    *  (security review of #3218, round 3). Absent on a head recorded before. */
-  base?: string
-  /** The branch this head was first seen merging into, while it was retargeted since and the head stayed the same: what a
-   *  verdict naming no base learns (security review of #3218, round 5). Absent while it was not retargeted. */
-  firstBase?: string }
+  base?: string }
 export interface Assignment {
   id: string
   agentId: string
