@@ -58,7 +58,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
-import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
@@ -1842,6 +1842,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const onTemplate = !current || project.instructionsHash === instructionsHash(INSTRUCTIONS_TEMPLATE)
       const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
+      // A line the save adds that the document already has is refused with the existing line quoted (#3283).
+      refuseRepeats(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0)
@@ -2235,7 +2237,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      // The line is one more item: one the document already has is refused like a save's, quoting it (#3283, review of #3202).
+      const appended = appendRouting(stored, command.text)
+      refuseRepeats(stored, appended)
+      saveInstructions(project, current, appended, routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':
