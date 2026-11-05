@@ -153,6 +153,12 @@ const _swarmPayload = 'swarm:';
 /// The Android channel, iOS thread and iOS category of Swarm notices.
 const _swarmChannel = 'swarm-needs-you';
 
+/// The Swarm channel as Settings ▸ Notifications names it on Android: one source for the channel
+/// made at start ([LocalSystemNotices]) and the notices posted on it.
+const _swarmChannelName = 'Swarm needs you';
+const _swarmChannelDescription =
+    'A Swarm asks you to decide, tags you, or has work waiting on you.';
+
 /// `harness/app_badge` — the app icon's count (Swift: `AppBadgeChannel` in `ios/Runner/AppDelegate.swift`).
 const _appBadge = MethodChannel('harness/app_badge');
 
@@ -230,11 +236,39 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
       ),
       onDidReceiveNotificationResponse: (response) => _open(response.payload),
     );
+    await _makeSwarmChannel();
     // A notice tapped while the app was not running at all launches it; the
     // tap reaches no callback then, only this.
     final launch = await _plugin.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp ?? false) {
       _open(launch?.notificationResponse?.payload);
+    }
+  }
+
+  /// Android: the Swarm channel, made before a push can reach this phone. The server's push
+  /// (`backend/src/push/fcm.ts`) is a notification Android draws itself on this channel while the
+  /// app is away. A channel the app has not made yet sends it to FCM's own "Misc" channel instead:
+  /// no heads-up, and out of reach of this channel's switch in Settings. The phone registers for
+  /// pushes only after asking whether notices are allowed ([enabled]), which starts this first.
+  ///
+  /// Made at every start: Android keeps the person's own settings for a channel that exists. One
+  /// that cannot be made is logged, and every other notice still works.
+  Future<void> _makeSwarmChannel() async {
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _swarmChannel,
+              _swarmChannelName,
+              description: _swarmChannelDescription,
+              importance: Importance.high,
+            ),
+          );
+    } catch (error) {
+      appLog.warn('notify', 'swarm channel not made', error: error);
     }
   }
 
@@ -375,9 +409,8 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _swarmChannel,
-            'Swarm needs you',
-            channelDescription:
-                'A Swarm asks you to decide, tags you, or has work waiting on you.',
+            _swarmChannelName,
+            channelDescription: _swarmChannelDescription,
             importance: Importance.high,
             priority: Priority.high,
             subText: message.subtitle,

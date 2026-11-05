@@ -172,6 +172,9 @@ Test vectors, pinned in `mobile/test/notify/local_system_notices_test.dart`:
   - iOS 15+: the `aps-environment` entitlement, with an App Store export signed as `production`.
   - Android 7+ (API 24): `firebase-messaging` with its values in `res/values/firebase.xml`, with no
     google-services plugin.
+  - Android 8+: the app makes the `swarm-needs-you` channel each time its notices start, before it
+    registers for pushes. A channel not made yet puts the server's push on FCM's own "Misc" channel
+    instead, with no heads-up and out of reach of the Swarm switch in Settings.
 
 ## Not in this change
 

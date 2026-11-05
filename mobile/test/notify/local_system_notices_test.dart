@@ -160,6 +160,36 @@ void main() {
       await notices.cancelSwarm('decision:d1');
       expect(plugin.shown, isEmpty);
     });
+
+    // The server's push (backend push/fcm.ts) is a notification Android draws itself on this channel
+    // while the app is away. Not made yet, Android puts it on FCM's own "Misc" channel instead: no
+    // heads-up, and out of reach of the Swarm switch in Settings.
+    test('its channel is made at start, before any push can land on it, as its notices use it', () async {
+      // The phone asks whether notices are allowed before it registers for pushes.
+      await notices.requestPermission();
+      final channel = plugin.android.channels.single;
+      expect(channel.id, 'swarm-needs-you');
+      expect(channel.importance, Importance.high);
+
+      await notices.showSwarm(swarm);
+      await notices.showSwarm(swarm);
+      // Made once per start, not once per notice.
+      expect(plugin.android.channels, hasLength(1));
+      final posted = plugin.shown.first.details!.android!;
+      expect(posted.channelId, channel.id);
+      expect(posted.channelName, channel.name);
+      expect(posted.channelDescription, channel.description);
+      expect(posted.importance, channel.importance);
+    });
+
+    test('a channel that cannot be made leaves every notice working', () async {
+      plugin.android.failChannel = true;
+      expect(await notices.requestPermission(), isTrue);
+      await notices.showSwarm(swarm);
+      expect(plugin.shown, hasLength(1));
+      // The start counts as done: it is not tried again for each notice.
+      expect(plugin.initialized, 1);
+    });
   });
 
   test('nothing starts until a notice is first needed', () {
@@ -567,11 +597,21 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
 
 class _FakeAndroid implements AndroidFlutterLocalNotificationsPlugin {
   int asked = 0;
+  final channels = <AndroidNotificationChannel>[];
+  bool failChannel = false;
 
   @override
   Future<bool?> requestNotificationsPermission() async {
     asked++;
     return true;
+  }
+
+  @override
+  Future<void> createNotificationChannel(
+    AndroidNotificationChannel notificationChannel,
+  ) async {
+    if (failChannel) throw PlatformException(code: 'channel');
+    channels.add(notificationChannel);
   }
 
   @override
