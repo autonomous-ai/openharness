@@ -494,6 +494,8 @@ class SuperTabParts {
     if (_derived['activityDigest'] case final String digest) {
       state['activityDigest'] = digest;
     }
+    // Each crew project's lanes and their hand-out order (task #3400).
+    if (_derived['lanes'] case final Map lanes) state['lanes'] = lanes;
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.

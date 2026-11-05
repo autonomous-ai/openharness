@@ -14,12 +14,14 @@ import 'attention.dart';
 import 'backlog.dart';
 import 'controller.dart';
 import 'machine_status.dart';
+import 'member_groups.dart';
 import 'model.dart';
 import 'task_card.dart';
 import 'task_groups.dart';
 
 /// A project's Tasks view (Dee, task #2569): every ask from proposal to
-/// shipped, as a Board (the default) or a List, with Mine and Search. It reads
+/// shipped, as a Board (the default), a List or by crew member (Members,
+/// task #3400), with Mine and Search. It reads
 /// only what the controller holds, and the shipped tasks it reads for the
 /// window, so cards move as the work does.
 class SuperTabTasksView extends StatefulWidget {
@@ -49,7 +51,7 @@ class SuperTabTasksView extends StatefulWidget {
   /// shows selected (task #2948).
   final String? selectedId;
 
-  /// Where Board or List, and Mine, are kept for this reader on this Mac.
+  /// Where Board, List or Members, and Mine, are kept for this reader on this Mac.
   final LocalKeyValueStore? storage;
   final DateTime Function() now;
 
@@ -64,8 +66,12 @@ class SuperTabTasksView extends StatefulWidget {
   State<SuperTabTasksView> createState() => _SuperTabTasksViewState();
 }
 
+/// How the Tasks view lays its cards out, kept by its name.
+enum _Layout { board, list, members }
+
 class _SuperTabTasksViewState extends State<SuperTabTasksView> {
-  bool _list = false, _mine = false;
+  var _layout = _Layout.board;
+  bool _mine = false;
   String _query = '';
 
   /// List's sections folded: Shipped starts so; not kept.
@@ -109,7 +115,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       final saved = jsonDecode(raw);
       if (saved is! Map) return;
       setState(() {
-        _list = saved['layout'] == 'list';
+        _layout =
+            _Layout.values
+                .where((l) => l.name == saved['layout'])
+                .firstOrNull ??
+            _Layout.board;
         _mine = saved['mine'] == true;
       });
     } on FormatException {
@@ -118,15 +128,15 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     }
   }
 
-  void _choose({bool? list, bool? mine}) {
+  void _choose({_Layout? layout, bool? mine}) {
     setState(() {
-      _list = list ?? _list;
+      _layout = layout ?? _layout;
       _mine = mine ?? _mine;
     });
     unawaited(
       widget.storage?.write(
         _key,
-        jsonEncode({'layout': _list ? 'list' : 'board', 'mine': _mine}),
+        jsonEncode({'layout': _layout.name, 'mine': _mine}),
       ),
     );
   }
@@ -188,14 +198,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       children: [
         _bar(context),
         Expanded(
-          child: empty
+          // Members draws the crew, free or not, though no task is open.
+          child: _layout == _Layout.members
+              ? _membersView(project, shown, now)
+              : empty
               ? Center(
                   child: Text(
                     'No tasks yet',
                     style: DesktopChrome.control(color: DesktopChrome.muted),
                   ),
                 )
-              : _list
+              : _layout == _Layout.list
               ? _listView(shown, now)
               : _boardView(shown, now),
         ),
@@ -203,7 +216,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// The view's own bar: Board or List, Mine and Search, nothing else.
+  /// The view's own bar: Board, List or Members, Mine and Search, nothing
+  /// else.
   Widget _bar(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(
       grid.AppDesktop.groupGap,
@@ -230,15 +244,23 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         DesktopPill(
           key: const ValueKey('super-tasks-layout-board'),
           label: 'Board',
-          selected: !_list,
-          onPressed: () => _choose(list: false),
+          selected: _layout == _Layout.board,
+          onPressed: () => _choose(layout: _Layout.board),
         ),
         const SizedBox(width: grid.AppDesktop.listRowGap),
         DesktopPill(
           key: const ValueKey('super-tasks-layout-list'),
           label: 'List',
-          selected: _list,
-          onPressed: () => _choose(list: true),
+          selected: _layout == _Layout.list,
+          onPressed: () => _choose(layout: _Layout.list),
+        ),
+        const SizedBox(width: grid.AppDesktop.listRowGap),
+        DesktopPill(
+          key: const ValueKey('super-tasks-layout-members'),
+          label: 'Members',
+          selected: _layout == _Layout.members,
+          tooltip: 'Tasks by crew member',
+          onPressed: () => _choose(layout: _Layout.members),
         ),
         const SizedBox(width: grid.AppDesktop.groupGap),
         DesktopPill(
@@ -377,16 +399,23 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     return HarnessActivity.working;
   }
 
-  Widget _card(SuperTabTaskEntry entry, DateTime now, {required bool list}) {
+  /// [entry]'s card; [lane] leads its caption (Members' Unassigned).
+  Widget _card(
+    SuperTabTaskEntry entry,
+    DateTime now, {
+    required bool list,
+    String? lane,
+  }) {
     final task = entry.task;
     final id = task?.id ?? entry.proposal!.messageId;
+    final caption = _caption(entry, now);
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
       // A legacy marker is the badge now: the title drops it.
       title: task == null
           ? entry.proposal!.title
           : superTabTitlePriority(task.title).title,
-      caption: _caption(entry, now),
+      caption: [?lane, if (caption.isNotEmpty) caption].join(' · '),
       priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
@@ -428,14 +457,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     ),
   );
 
-  /// One column of the Board: card material with its hairline rim at the
-  /// card radius, and no shadow, which is for floating content only.
-  Widget _panel(
-    SuperTabTaskColumn column,
-    List<SuperTabTaskEntry> entries,
-    DateTime now,
-  ) => DecoratedBox(
-    key: ValueKey('super-tasks-column-${column.name}'),
+  /// One column of the Board or of Members: card material with its hairline
+  /// rim at the card radius, and no shadow, which is for floating content
+  /// only; [heading] over [body], which fills the rest.
+  Widget _framed(Key key, Widget heading, Widget body) => DecoratedBox(
+    key: key,
     decoration: BoxDecoration(
       color: grid.AppCard.base,
       borderRadius: BorderRadius.circular(grid.AppCard.radius),
@@ -446,38 +472,185 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _heading(column, entries.length),
+          heading,
           const SizedBox(height: grid.AppDesktop.listRowGap),
-          Expanded(
-            child: entries.isEmpty
-                // Said, not left blank: a column with nothing in it reads
-                // as one still loading (task #2948).
-                ? Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: grid.AppDesktop.groupGap,
-                    ),
-                    child: Text(
-                      'No tasks',
-                      textAlign: TextAlign.center,
-                      style: DesktopChrome.metadata(),
-                    ),
-                  )
-                : column == SuperTabTaskColumn.nextUp
-                ? _nextUp(entries, now)
-                : LaidOutListView.builder(
-                    itemCount: entries.length,
-                    itemBuilder: (context, i) => Padding(
-                      padding: const EdgeInsets.only(
-                        bottom: grid.AppDesktop.controlGap,
-                      ),
-                      child: _card(entries[i], now, list: false),
-                    ),
-                  ),
-          ),
+          Expanded(child: body),
         ],
       ),
     ),
   );
+
+  /// Said, not left blank: a column with nothing in it reads as one still
+  /// loading (task #2948).
+  static Widget _noTasks() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.groupGap),
+    child: Text(
+      'No tasks',
+      textAlign: TextAlign.center,
+      style: DesktopChrome.metadata(),
+    ),
+  );
+
+  /// One column of the Board.
+  Widget _panel(
+    SuperTabTaskColumn column,
+    List<SuperTabTaskEntry> entries,
+    DateTime now,
+  ) => _framed(
+    ValueKey('super-tasks-column-${column.name}'),
+    _heading(column, entries.length),
+    entries.isEmpty
+        ? _noTasks()
+        : column == SuperTabTaskColumn.nextUp
+        ? _nextUp(entries, now)
+        : LaidOutListView.builder(
+            itemCount: entries.length,
+            itemBuilder: (context, i) => Padding(
+              padding: const EdgeInsets.only(
+                bottom: grid.AppDesktop.controlGap,
+              ),
+              child: _card(entries[i], now, list: false),
+            ),
+          ),
+  );
+
+  /// Members (task #3400): one muted line of the lanes' capacity, then a
+  /// column per crew member, its name and lane over Working or Free, with
+  /// the tasks in its hands and then those it handed over; and last,
+  /// Unassigned, in the order the server hands work out, each card led by
+  /// its lane. Columns as the Board's: side by side, scrolling sideways.
+  Widget _membersView(
+    SuperTabProject project,
+    Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
+    DateTime now,
+  ) {
+    final snapshot = widget.controller.snapshot;
+    final lanes = snapshot?.lanes[project.id] ?? const [];
+    final groups = superTabMemberGroups(
+      agents: snapshot?.agents ?? const [],
+      projectId: project.id,
+      entries: shown.values.expand((entries) => entries),
+      lanes: lanes,
+    );
+    final capacity = superTabCapacityLine(lanes, now);
+    Widget column(Key key, Widget heading, List<Widget> rows) => SizedBox(
+      width: SuperTabTasksView.columnWidth,
+      child: _framed(
+        key,
+        heading,
+        LaidOutListView.builder(
+          itemCount: rows.length,
+          itemBuilder: (context, i) => rows[i],
+        ),
+      ),
+    );
+    Widget card(SuperTabTaskEntry entry, {String? lane}) => Padding(
+      padding: const EdgeInsets.only(bottom: grid.AppDesktop.controlGap),
+      child: _card(entry, now, list: false, lane: lane),
+    );
+    const inset = EdgeInsets.symmetric(
+      horizontal: grid.AppDesktop.controlGap,
+      vertical: grid.AppDesktop.menuInset,
+    );
+    final unassigned = groups.unassigned;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (capacity != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.groupGap,
+              0,
+              grid.AppDesktop.groupGap,
+              grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              capacity,
+              key: const ValueKey('super-tasks-capacity'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+        Expanded(
+          child: SingleChildScrollView(
+            key: const ValueKey('super-tasks-members'),
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.only(
+              left: grid.AppDesktop.groupGap,
+              right: grid.AppDesktop.groupGap,
+              bottom: grid.AppDesktop.groupGap,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final member in groups.members) ...[
+                  column(
+                    ValueKey('super-tasks-member-${member.agent.id}'),
+                    Padding(
+                      padding: inset,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            superTabMemberHeading(member.agent),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.control(medium: true),
+                          ),
+                          Text(
+                            member.working ? 'Working' : 'Free',
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    [
+                      for (final entry in member.inHand) card(entry),
+                      if (member.handed.isNotEmpty)
+                        Padding(
+                          padding: inset,
+                          child: Text(
+                            'handed:',
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
+                      for (final entry in member.handed) card(entry),
+                    ],
+                  ),
+                  const SizedBox(width: _columnGap),
+                ],
+                column(
+                  const ValueKey('super-tasks-unassigned'),
+                  Padding(
+                    padding: inset,
+                    child: Row(
+                      children: [
+                        Text(
+                          'Unassigned',
+                          style: DesktopChrome.control(medium: true),
+                        ),
+                        const SizedBox(width: grid.AppDesktop.controlGap),
+                        Text(
+                          '${unassigned.length}',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  [
+                    if (unassigned.isEmpty) _noTasks(),
+                    for (final (:entry, :lane) in unassigned)
+                      card(entry, lane: lane),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _listView(
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,

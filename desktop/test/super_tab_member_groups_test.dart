@@ -91,10 +91,10 @@ ConversationServer _server({bool lanes = true}) {
       _task('d-hand', 'Lane line', 31, status: 'review', agent: 'finch'),
       _task('b-block', 'Dispatch pass', 32, status: 'blocked', agent: 'heron'),
       _task('p-work', 'Not crew work', 33, status: 'working', agent: 'plover'),
-      _task('u1', 'Desktop second', 21),
-      _task('u2', 'Desktop first', 22),
-      _task('u3', 'Backend first', 23, priority: 'P1'),
-      _task('u4', 'Backend second', 24, status: 'lost', agent: 'heron'),
+      _task('u1', 'Tray icon', 21),
+      _task('u2', 'Sidebar order', 22),
+      _task('u3', 'Lane read', 23, priority: 'P1'),
+      _task('u4', 'Pass log', 24, status: 'lost', agent: 'heron'),
       _task('u5', 'Nobody ordered it', 25),
     ]);
   if (lanes) {
