@@ -86,7 +86,11 @@ void main() {
       // None that day, or a day stored before the figure existed.
       expect(
         cell('Crew wake time', {
-          'crewWake': {'count': 0, 'medianSeconds': null, 'slowestSeconds': null},
+          'crewWake': {
+            'count': 0,
+            'medianSeconds': null,
+            'slowestSeconds': null,
+          },
         }),
         '–',
       );
