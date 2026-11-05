@@ -2804,3 +2804,83 @@ describe('the profiles a machine reports', () => {
     expect(has().slice(-2)).toEqual([true, false])
   })
 })
+
+// Task #3009: an engine that stops on a screen before it has a session waits for a person nobody tells. Team-written Codex
+// starts stopped on Codex's trust question and every one timed out at 3 minutes (10 of 10, 2026-10-29..11-05); the start's
+// own check read it as needing a person, and the host did nothing with that.
+describe('a launched start whose engine stops on a screen', () => {
+  const screens = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
+  const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
+  const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
+    detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+    const f = fixture()
+    f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
+    f.start.mockResolvedValue(result as never)
+    const screen = vi.fn(async (_agentId: string, _scrollback: number) => ({ ok: true as const, text, hold }))
+    const inputIfScreen = vi.fn(async (_agentId: string, _keys: string[], _screen: string) => ({ ok: true as const }))
+    ;(f.core as { superTabs?: unknown }).superTabs = { screen, inputIfScreen }
+    const failures = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).endsWith('/starts/tab/start'))
+      .map(c => (c[3] as { command: { type: string; error?: string } }).command).filter(command => command.type === 'agent.startFailed')
+    return { f, screen, inputIfScreen, failures }
+  }
+
+  it('opens a Team-written Codex start\'s untrusted checkout restricted, with Enter on that exact screen alone', async () => {
+    const { f, screen, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open')
+    await f.machine.tick()
+    expect(screen).toHaveBeenCalledWith('launched', 0)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], RESTRICTED)
+    expect(failures()).toEqual([])
+  })
+
+  it('fails it at once on the trust question, with the question\'s words, and types nothing', async () => {
+    const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
+    await f.machine.tick()
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    const [failure] = failures()
+    expect(failure?.error).toContain('Trust this folder?')
+    expect(failure?.error).toContain('1. Trust and continue')
+  })
+
+  it('also when its own check already read the screen as needing a person', async () => {
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    await f.machine.tick()
+    expect(failures()[0]?.error).toContain('Trust this folder?')
+  })
+
+  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+    const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
+    await f.machine.tick()
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()[0]?.error).toContain('Open restricted')
+  })
+
+  it('fails a Claude Code start held at its sign-in at once, with the link cut to its site', async () => {
+    const text = '  Select login method:\n\n  ❯ 1. Claude account with subscription\n    2. Anthropic Console account\n\n  https://claude.ai/oauth/authorize?code=true&client_id=abc&state=secret-state\n'
+    const { f, failures } = launched(text, 'sign_in_open', { engine: 'claude' })
+    await f.machine.tick()
+    const [failure] = failures()
+    expect(failure?.error).toContain('Select login method:')
+    expect(failure?.error).toContain('https://claude.ai')
+    expect(failure?.error).not.toContain('secret-state')
+    expect(failure!.error!.length).toBeLessThanOrEqual(600)
+  })
+
+  it.each([
+    ['nothing on screen that waits for a person', '› Ask Codex to do anything\n  gpt-6-astra high · ~/project', null],
+    ['a popup, which is no question', '› /mo\n  /model  choose what model to use', 'popup_open'],
+  ])('leaves it waiting on %s', async (_name, text, hold) => {
+    const { f, inputIfScreen, failures } = launched(text, hold)
+    await f.machine.tick()
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+
+  it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+      { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
+    await f.machine.tick()
+    expect(screen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+})
