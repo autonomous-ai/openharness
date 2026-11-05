@@ -249,7 +249,7 @@ describe('the nightly routing reflection', () => {
   it('keeps active nights without a proposal silent in every Swarm, preserving costs and old reports', async () => {
     for (const fixture of [await swarm(), await swarm()]) {
       await fixture.ship()
-      const old = await fixture.execute({ type: 'message.send', conversationId: 'lead', text: 'Routing reflection: an old report.', replyTo: null })
+      const old = await fixture.execute({ type: 'message.send', conversationId: 'lead', text: 'Routing reflection: an old report.', replyTo: null, recipientIds: [] })
       const oldId = reflectionMessageId(fixture.tab, 'lead', '2026-10-29')
       await db.superTabMessage.update({ where: { id: String(old.result.messageId) }, data: {
         id: oldId, source: { kind: 'routing-reflection', projectId: 'lead', on: '2026-10-29' },
