@@ -180,6 +180,22 @@ describe('Swarm permission mode', () => {
     } finally { teamDaemon.value = false }
   })
 
+  // Security review 1 of #3063: JSON leaves DEL as it is, which TOML refuses, and Codex will not start on a config it cannot read.
+  it('escapes DEL in the checkout it names untrusted, as folder trust does', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', cwd: '/Users/harnessteam/swarms/tab/odd\x7fname' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const home = String(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!.codexHome)
+      try {
+        const config = readFileSync(join(home, 'config.toml'), 'utf8')
+        expect(config).toContain('[projects."/Users/harnessteam/swarms/tab/odd\\u007fname"]')
+        expect(config).not.toContain('\x7f')
+      } finally { rmSync(dirname(home), { recursive: true, force: true }) }
+    } finally { teamDaemon.value = false }
+  })
+
   it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
     const f = fixture()
     Object.assign(f.start.request, { engine, projectSettings: 'off' })
