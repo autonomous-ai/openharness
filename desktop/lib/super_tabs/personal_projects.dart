@@ -251,6 +251,10 @@ class PersonalProjects extends ChangeNotifier {
   /// the arrangement the person gave its panes here. Kept on this computer
   /// only, beside the project map, and never sent (task #3099).
   final _layouts = <String, Map<String, Map<String, Map<String, dynamic>>>>{};
+
+  /// The order Personal first saw its projects in the tabs, per account and
+  /// Swarm (migration plan, Phase 1 item 5): its PROJECTS list can start so.
+  final _order = <String, Map<String, List<String>>>{};
   final _loads = <String, Future<void>>{};
   final _syncing = <String>{};
   final _again = <String>{};
@@ -415,6 +419,32 @@ class PersonalProjects extends ChangeNotifier {
     return true;
   }
 
+  /// The order Personal first saw its projects in the tabs: each project
+  /// where its first pane was then, new ones after (migration plan, Phase 1
+  /// item 5). Kept on this computer.
+  List<String> projectOrder(SuperTabController c) =>
+      List.unmodifiable(_order[c.accountId]?[c.tabId] ?? const <String>[]);
+
+  /// Adds the projects of the panes now in the tabs that the order lacks, in
+  /// tab order, and drops those gone from Personal; whether it changed.
+  bool _noteOrder(SuperTabController c) {
+    final order = (_order[c.accountId] ??= {})[c.tabId] ??= [];
+    final projects = _projects(c.accountId, c.tabId);
+    final listed = {for (final p in c.snapshot!.projects) p.id};
+    final before = order.length;
+    order.removeWhere((id) => !listed.contains(id));
+    var changed = order.length != before;
+    for (final entry in personalPanes(app)) {
+      final id = _isProjectTab(entry.repo)
+          ? projectOfTab(c, entry.repo.substring(4))?.id
+          : projects[entry.repo];
+      if (id == null || !listed.contains(id) || order.contains(id)) continue;
+      order.add(id);
+      changed = true;
+    }
+    return changed;
+  }
+
   /// A project gone from Personal takes its saved layout with it.
   void _dropGoneLayouts(SuperTabController c) {
     final saved = _layouts[c.accountId]?[c.tabId];
@@ -519,7 +549,8 @@ class PersonalProjects extends ChangeNotifier {
   void _forget(String account, String swarm) {
     final had =
         (_known[account]?.remove(swarm) != null) |
-        (_layouts[account]?.remove(swarm) != null);
+        (_layouts[account]?.remove(swarm) != null) |
+        (_order[account]?.remove(swarm) != null);
     _renamed[account]?.remove(swarm);
     // Called while a view builds: saved after, and no one is told now.
     if (had) unawaited(_save(account));
@@ -548,6 +579,13 @@ class PersonalProjects extends ChangeNotifier {
             renamed.whereType<String>(),
           );
         }
+        final order = entry['order'];
+        if (order is List) {
+          final kept = (_order[account] ??= {})[swarm] ??= [];
+          for (final id in order.whereType<String>()) {
+            if (!kept.contains(id)) kept.add(id);
+          }
+        }
         final layouts = entry['layouts'];
         if (layouts is Map) {
           final kept = (_layouts[account] ??= {})[swarm] ??= {};
@@ -568,12 +606,18 @@ class PersonalProjects extends ChangeNotifier {
     final known = _known[account] ?? const {};
     final layouts = _layouts[account] ?? const {};
     final value = jsonEncode({
-      for (final swarm in {...known.keys, ...layouts.keys})
+      for (final swarm in {
+        ...known.keys,
+        ...layouts.keys,
+        ...?_order[account]?.keys,
+      })
         swarm: {
           'projects': known[swarm] ?? const <String, String?>{},
           'renamed': [...?_renamed[account]?[swarm]],
           if (layouts[swarm] case final saved? when saved.isNotEmpty)
             'layouts': saved,
+          if (_order[account]?[swarm] case final order? when order.isNotEmpty)
+            'order': order,
         },
     });
     try {
@@ -642,6 +686,7 @@ class PersonalProjects extends ChangeNotifier {
         if (await _nameTabs(c, wanted) && eligible(c)) await _reread(c);
         if (!eligible(c)) return;
         if (await _tellApart(c) && eligible(c)) await _reread(c);
+        if (eligible(c) && _noteOrder(c)) await _save(account);
       } while (_again.contains(scope));
     } finally {
       _syncing.remove(scope);
