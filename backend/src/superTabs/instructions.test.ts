@@ -521,6 +521,42 @@ describe('an instructions save keeps the rules people gave', () => {
   })
 })
 
+// Task #3283 (Leo, 11-05, from lamp): Faye saved a rule the instructions already had, as if new, which hid that it had skipped it.
+describe('an instructions save refuses a rule that is already there', () => {
+  const save = (baseRevision: number, text: string): Command => ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Added a rule' })
+  const rule = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const base = doc(rule, 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+  const stored = { instructions: { revision: 1, text: base, at: 500 } }
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { repeated: unknown[] } } }
+    throw new Error('the save went through')
+  }
+
+  it('refuses a repeat of a rule, quoting the existing line and saying how to change it', () => {
+    const f = fixture()
+    const again = 'every phone-app task runs on Tony\'s Mac first, its Engineer and its Tester both! (Faye, 11-05)'
+    const refused = refusal(() => f.run(save(1, `${base}\n- ${again}`), owner, stored))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED', status: 409, details: { repeated: [{ added: again, existing: rule }] } })
+    expect(refused.message).toContain(`"${rule}"`)
+    expect(refused.message).toMatch(/change that line/i)
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses the same rule word for word', () => {
+    const f = fixture()
+    expect(refusal(() => f.run(save(1, `${base}\n- ${rule}`), owner, stored))).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED' })
+  })
+
+  it('saves a rule changed in substance, and a line reworded in place', () => {
+    const f = fixture()
+    const changed = f.run(save(1, `${base}\n- Every phone app task runs on Tony\'s Mac first, its Engineer but not its Tester (owner, 5 Nov).`), owner, stored)
+    expect(changed.result).toMatchObject({ revision: 2 })
+    const f2 = fixture()
+    expect(f2.run(save(1, base.replace('Every phone app task runs', 'Each phone app task runs')), owner, stored).result).toMatchObject({ revision: 2 })
+  })
+})
+
 describe('PM notes', () => {
   const note = (text: string, extra: Partial<Extract<Command, { type: 'note.add' }>> = {}): Command =>
     ({ type: 'note.add', projectId: 'lead', text, askedBy: 'owner', ...extra })
