@@ -776,6 +776,9 @@ export class CableSession {
    *  (`supertab.side`), each Lead carries `buddies` and the reader's Buddy, and the Buddy's word is a quiet notice. A
    *  swarmChat dial without it gets today's frames byte for byte. */
   private swarmBuddy = false
+  /** `swarmNeedsYou: 'v1'` beside swarmChat (spec 2026-11-05-dial-lead-pm-buddy-pair): the bell and inbox hold only what needs the
+   *  reader, so the Buddy's quiet notices are never sent to it. */
+  private swarmNeedsYou = false
   /** `swarmThread: 'v1'` beside swarmChat (spec 2026-11-03-dial-thread-face): the dial draws the thread its face is in
    *  (`thread`, `threadTitle`, `threadReplies` on a Lead, `thread` on a recap) and leaves it with `supertab.thread.leave`. */
   private swarmThread = false
@@ -795,14 +798,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard', this.swarmChat && 'swarmChat', this.swarmBuddy && 'swarmBuddy', this.swarmThread && 'swarmThread', this.swarmReview && 'swarmReview']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard', this.swarmChat && 'swarmChat', this.swarmBuddy && 'swarmBuddy', this.swarmNeedsYou && 'swarmNeedsYou', this.swarmThread && 'swarmThread', this.swarmReview && 'swarmReview']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
-    this.swarmCard = this.swarmChat = this.swarmBuddy = this.swarmThread = this.swarmReview = false
+    this.swarmCard = this.swarmChat = this.swarmBuddy = this.swarmNeedsYou = this.swarmThread = this.swarmReview = false
     this.dropCards()
     this.seqOn = false
     this.seq = 0
@@ -1374,6 +1377,7 @@ export class CableSession {
         this.swarmChat = this.swarmCard && str('swarmChat') === 'v1'
         this.swarmBuddy = this.swarmChat && str('swarmBuddy') === 'v1'
         this.swarmThread = this.swarmChat && str('swarmThread') === 'v1'
+        this.swarmNeedsYou = this.swarmChat && str('swarmNeedsYou') === 'v1'
         this.swarmReview = this.swarmChat && str('swarmReview') === 'v1'
         this.wantCards(this.swarmCard)
         this.seqOn = str('board') === 'pro'
@@ -2998,7 +3002,7 @@ export class CableSession {
         if (this.leadThreads.has(key) && this.leadThreads.get(key) !== root && this.lastRecapGet?.key === key) this.lastRecapGet = null
         this.leadThreads.set(key, root)
       }
-      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
+      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(card.personal ? { personal: true } : {}), ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l, this.swarmThread) : this.swarmChat ? chatLead(l, l.chat, this.swarmThread) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
       // Every dial's guard drops a frame over 512 tokens whole, a round dial's too (task #2525).
@@ -3030,7 +3034,7 @@ export class CableSession {
       for (const lead of card.leads.slice(0, SWARM_LEADS_MAX)) {
         // The Buddy's quiet notice is held apart (spec 2026-10-29 Alerts), and only a swarmBuddy dial hears it.
         const notices: Array<[string, LeadNotice | undefined]> = [[`${card.id}:${lead.id}`, lead.notice]]
-        if (this.swarmBuddy) notices.push([`${card.id}:${lead.id}:buddy`, lead.buddyNotice])
+        if (this.swarmBuddy && !this.swarmNeedsYou) notices.push([`${card.id}:${lead.id}:buddy`, lead.buddyNotice])
         for (const [key, notice] of notices) {
           live.add(key)
           await this.pushNotice(key, card.id, lead.id, notice, replay, open?.superTabId === card.id ? open : undefined)

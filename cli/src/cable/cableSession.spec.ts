@@ -5318,6 +5318,35 @@ describe('swarm cards', () => {
       }
     })
 
+    it('supertab frame says personal', async () => {
+      const state = { cards: [card('st1', [withBuddy()], { personal: true }), card('st2', [withBuddy()])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+        const frames = ofType(port, 'supertab')
+        expect(frames.find((f) => f.id === 'st1')?.personal).toBe(true)
+        expect(frames.find((f) => f.id === 'st2')).not.toHaveProperty('personal')
+      } finally { await session.stop() }
+    })
+
+    it('a swarmNeedsYou dial gets no Buddy quiet notice', async () => {
+      for (const hello of [{ ...BUDDY, swarmNeedsYou: 'v1' }, BUDDY]) {
+        const state = { cards: [card('st1', [withBuddy()])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', [withBuddy({ notice: pmNotice('n1'), buddyNotice: buddyNotice('b1') })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice').length).toBeGreaterThan(0))
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice').map((n) => n.id)).toEqual(hello === BUDDY ? ['n1', 'b1'] : ['n1'])
+        } finally { await session.stop() }
+      }
+    })
+
     // Review of #2500: with one Swarm Buddy, its one word badges every card; seeing the Buddy side clears them all.
     it('showing the Buddy side reads the Swarm Buddy\'s notice on every card that shares it, and no other chat\'s', async () => {
       const own = { ...buddyNotice('o1'), chatId: 'own-chat' }

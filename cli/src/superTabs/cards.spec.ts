@@ -247,7 +247,7 @@ describe('lastAgentMessage in a chat or a thread', () => {
 })
 
 /** A fake backend: tabs by id with the time each last changed, a message store per conversation, and call counting. */
-function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number; mentions?: (path: string) => unknown[] } = {}) {
+function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number; mentions?: (path: string) => unknown[]; decisions?: (path: string) => unknown[]; personal?: string[] } = {}) {
   const calls: string[] = []
   // Message reads in flight now and at most, for a backend whose reads take `delayMs`.
   let reading = 0, mostReading = 0
@@ -266,7 +266,7 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
       let page = pages[after ?? '']?.next !== undefined ? rest.slice(0, 1) : rest
       let next = pages[after ?? ''] ? pages[after ?? ''].next : null
       if (pageSize) { page = rest.slice(0, pageSize); next = page.length < rest.length ? page[page.length - 1] : null }
-      return { status: 200, body: { success: true, data: { tabs: page.map(id => ({ id, name: String(tabs[id].state.name), ownerId: 'me', lastChangedAt: tabs[id].lastChangedAt, paused: false })), next } } }
+      return { status: 200, body: { success: true, data: { tabs: page.map(id => ({ id, name: String(tabs[id].state.name), ownerId: 'me', lastChangedAt: tabs[id].lastChangedAt, paused: false, ...(extra.personal?.includes(id) ? { personal: true } : {}) })), next } } }
     }
     const tab = /^\/api\/super-tabs\/([^/]+)\/(parts|changes)$/.exec(route)
     if (tab) {
@@ -281,6 +281,7 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
       if (extra.delayMs) await new Promise(resolve => setTimeout(resolve, extra.delayMs))
       // The reader's tags, as the backend lists them (mentions.ts listMentions).
       if (/^\/api\/super-tabs\/[^/]+\/mentions$/.test(route)) return { status: 200, body: { success: true, data: { mentions: extra.mentions?.(path) ?? [] } } }
+      if (/^\/api\/super-tabs\/[^/]+\/decisions$/.test(route)) return { status: 200, body: { success: true, data: { more: false, decisions: extra.decisions?.(path) ?? [] } } }
       return { status: 200, body: { success: true, data: { ...(extra.messages?.(path) ?? { messages: [], next: null }) as object } } }
     } finally { reading-- }
   })
@@ -832,6 +833,49 @@ function tagSwarm(initial: Tag[] = []) {
   const webLead = (cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === 'a1')
   return { ...t, tagged, said: said2, mentionReads, webLead, offline: (v: boolean) => { offline = v } }
 }
+
+/** An open decision asked of the reader, as `/decisions?state=open` lists it (backend decisions.ts listDecisions). */
+const decision = (id: string, over: Record<string, unknown> = {}) => ({ id, batchId: `b-${id}`, projectId: 'web', projectName: 'web', conversationId: 'lead-web',
+  conversationTitle: 'Lead', askerAgentId: 'a1', askerName: 'Dee', question: 'Ship it?', options: ['yes', 'no'], recommended: 0,
+  createdAt: '2026-10-22T00:00:00.000Z', answeredAt: null, choice: null, note: null, ...over })
+type Decision = ReturnType<typeof decision>
+/** The digest the backend gives a list of open decision ids (any stable function of them will do for a fake). */
+const decisionsDigestOf = (ids: string[]) => `d-${[...ids].sort().join(',')}`
+function decisionSwarm(initial: Decision[] = []) {
+  let open = initial
+  const state = () => ({ ...chats({ conversations: [conv('lead-web', 'a1', { projectId: 'web' }), conv('lead-mobile', 'a2', { projectId: 'mobile' }), pm(), group()] }),
+    decisionsDigest: decisionsDigestOf(open.map(d => d.id)) })
+  const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { decisions: path => { expect(path).toBe('/api/super-tabs/t1/decisions?state=open'); return open } })
+  const asked = async (...rows: Decision[]) => { open = rows; t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(); await t.cards.tick() }
+  return { ...t, asked, webLead: () => t.seen.at(-1)?.[0].leads.find(l => l.id === 'a1') }
+}
+
+describe('SwarmCards personal and decisions', () => {
+  it('a card carries personal from its list row', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: { ...swarm(), name: 'other' } } }, { personal: ['t1'] })
+    await t.cards.tick()
+    const cards = t.seen.at(-1)!
+    expect(cards.find(c => c.id === 't1')?.personal).toBe(true)
+    expect(cards.find(c => c.id === 't2')).not.toHaveProperty('personal')
+  })
+
+  it('an open decision asked of the reader becomes its project Lead\'s notice', async () => {
+    const t = decisionSwarm([decision('dec1')])
+    await t.cards.tick()
+    expect(t.webLead()).not.toHaveProperty('notice')
+    await t.asked(decision('dec1'), decision('dec2', { createdAt: '2026-10-22T00:05:00.000Z' }))
+    expect(t.webLead()?.notice).toEqual({ chat: 'lead', chatId: 'lead-web', id: 'dec2', text: 'Dee asks you: Ship it?', at: saidAt + 300 })
+  })
+
+  it('closed decision drops its notice', async () => {
+    const t = decisionSwarm()
+    await t.cards.tick()
+    await t.asked(decision('dec2'))
+    expect(t.webLead()?.notice).toMatchObject({ id: 'dec2' })
+    await t.asked()
+    expect(t.webLead()).not.toHaveProperty('notice')
+  })
+})
 
 describe('SwarmCards tag notices', () => {
   it('takes the tags waiting at the first read as the baseline, and reads nothing when none wait', async () => {
