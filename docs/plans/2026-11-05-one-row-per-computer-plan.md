@@ -60,8 +60,8 @@ CLI TypeScript (node:test specs).
 - **Scale (10x):** rows per computer stay a handful. First warning: the per-Swarm failure log line
   (`[swarm] a computer move did not reach a Swarm`), and connect time, which does not wait for the move.
 - **Compatibility:** `previousOwner` is a new optional field; older clients ignore it. Older Desktops still show one
-  row once the move happens. `--sign-in-again` exists in released CLIs; Desktop sends the new `signInAgain` flag only to
-  a daemon that reports it understands it (the flag is ignored by older daemons, which answer `exists` as today).
+  row once the move happens. `--sign-in-again` exists in released CLIs; an older daemon ignores Desktop's new
+  `signInAgain` flag and answers `exists` as today, so its dialog says "already set up" until the CLI updates.
 - **Migration + rollback:** the index is created by `db push` in the release; rolling back leaves an unused index
   (harmless) or drops it. The cleanup prints every entry it moves as JSON; rollback is the owner's Add machine, or
   restoring those entries from that output.
@@ -127,10 +127,12 @@ test.
   and answers `started`; without it, `exists` as today.
 - [ ] Code.
 
-### 7. Old account's sessions on the computer
-**Files:** `cli/src/superTabs/host.ts` if needed.
-- [ ] Check whether Swarm sessions of the previous account survive another account's sign-in (the daemon restarts). If
-  they do, failing spec then code: the host stops the Swarm sessions of a machine id that is not its own.
+### 7. Old account's sessions on the computer — open, not in this pull request
+- [x] Checked: another account's `harness login --force` stops the daemon, and the new daemon's Swarm host polls and
+  serves only its own machine id (`host-<machineId>.json`), so no work reaches the old account's sessions and the Swarm
+  has removed their agents (task 2). Not verified: whether their processes stay up idle until the computer restarts.
+  Stopping another machine id's sessions from the new host reaches into the daemon's session ownership; proposed to the
+  PM as a follow-up rather than built here.
 
 ## Evidence for the pull request
 
