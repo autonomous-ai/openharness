@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js'
 import { errorCode, trimPrefix, type Attachment, type AttachmentStore } from './attachments.js'
+import { imageFacts, thumbKeyOf } from './thumbnails.js'
 import { voiceFacts } from './voiceMessages.js'
 
 /**
@@ -50,13 +51,33 @@ export class FileLinks {
     const expiresAt = fileLinkExpiry(now)
     if (expiresAt !== this.window || this.signed.size >= MAX_CACHED_LINKS) { this.signed.clear(); this.window = expiresAt }
     const keys = new Set<string>()
-    for (const row of rows) for (const file of files(row)) { const key = this.keyOf(tabId, file.url); if (key) keys.add(key) }
+    // A thumbnail is linked in the very read that links its original, for the same reader, and only inside the Swarm's folder.
+    // ...and only this file's own: every conversation of a Swarm shares one folder, so a thumbnail address naming any other file in
+    // it would hand a reader of this message a link to a file of a chat they may not read. The rule is enforced here, not left to
+    // what is stored.
+    const thumbKey = (file: Attachment, facts: ReturnType<typeof imageFacts>) => {
+      const key = this.keyOf(tabId, file.url), thumb = facts?.thumb ? this.keyOf(tabId, facts.thumb.url) : null
+      return key && thumb && thumb === thumbKeyOf(key) ? thumb : null
+    }
+    const picture = (file: Attachment) => {
+      const facts = this.keyOf(tabId, file.url) ? imageFacts(file) : null
+      return facts && facts.thumb && !thumbKey(file, facts) ? { width: facts.width, height: facts.height } : facts
+    }
+    for (const row of rows) for (const file of files(row)) {
+      const key = this.keyOf(tabId, file.url)
+      if (key) keys.add(key)
+      const thumb = thumbKey(file, picture(file))
+      if (thumb) keys.add(thumb)
+    }
     const links = await this.signAll([...keys], expiresAt)
     return rows.map(row => !Array.isArray(row.attachments) ? row : { ...row, attachments: files(row).map(file => {
       const key = this.keyOf(tabId, file.url), url = key ? links.get(key) : undefined
       const voice = voiceFacts(file.voice)
+      const facts = picture(file), own = facts ? thumbKey(file, facts) : null, thumbUrl = own ? links.get(own) : undefined
+      const image = !facts ? {} : { width: facts.width, height: facts.height,
+        ...facts.thumb && own ? { thumb: { ...facts.thumb, ...thumbUrl ? { link: thumbUrl, expiresAt } : { unlinked: true as const } } } : {} }
       return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: typeof file.url === 'string' ? file.url : '',
-        ...url ? { link: url, expiresAt } : { unlinked: true as const }, ...voice ? { voice } : {} } satisfies Attachment
+        ...url ? { link: url, expiresAt } : { unlinked: true as const }, ...voice ? { voice } : {}, ...image } satisfies Attachment
     }) })
   }
 
