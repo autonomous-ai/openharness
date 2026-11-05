@@ -151,7 +151,10 @@ describe('the seed asks two reads wherever the merge train did', () => {
       'website/src/lib/community/session.ts', 'os/packaging/labwc/session-lock-presentation.patch', 'cli/src/lib/turnTlsGuard.ts',
       'cli/src/services/devicesGuard.ts', 'desktop/lib/super_tabs/lead_guard.dart', 'backend/src/superTabs/anyGuard.ts',
       'desktop/lib/devices/wifi_robots.dart', 'mobile/lib/phone/add_device/saved_wifi.dart', 'cli/src/devices/client.ts',
-      'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c']) {
+      'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c',
+      // Aster's security review of #3250: the vLLM server's API-key check, the companions' secret-redaction guard, and the
+      // team handoff with its machine-key proof.
+      'store/agents/vllm/guard.py', 'companions/src/shared/guard.ts', 'cli/src/team/handoff.ts']) {
       expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
     }
   })

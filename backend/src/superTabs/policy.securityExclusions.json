@@ -118,7 +118,6 @@
     "companions/src/shared/guard.boundary.spec.ts",
     "companions/src/shared/guard.fuzz.spec.ts",
     "companions/src/shared/guard.spec.ts",
-    "companions/src/shared/guard.ts",
     "desktop/lib/widgets/browser_menu_guard.dart",
     "desktop/macos/Runner/SurfaceCacheGuard.swift",
     "desktop/test/browser_menu_guard_test.dart",
@@ -126,8 +125,7 @@
     "mobile/test/phone_edge/new_branch_guard_test.dart",
     "mobile/test/test_home_guard_test.dart",
     "store/agents/home-assistant/test/guard_probe.py",
-    "store/agents/phaser/viewer/guard.js",
-    "store/agents/vllm/guard.py"
+    "store/agents/phaser/viewer/guard.js"
    ]
   },
   {
