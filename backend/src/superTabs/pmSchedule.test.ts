@@ -129,6 +129,15 @@ describe('the built-in PM schedule', () => {
     expect(text).toContain('Never repeat `resume` in a loop in the foreground')
   })
 
+  // Ken, 11-05: River ran 1,389 Swarm commands in a day in its own session, and long reads fill its context until it is
+  // compacted and the instructions fall out of it.
+  it('tells the coordinator to hand long reading to a background subagent, which never writes code or decides', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('to a subagent that runs in the background')
+    expect(text).toContain('take back only its summary')
+    expect(text).toContain('A subagent never writes code and never decides')
+  })
+
   it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
     expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
     expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
