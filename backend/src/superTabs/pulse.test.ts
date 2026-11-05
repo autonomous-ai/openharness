@@ -6,6 +6,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Command, CommandContext } from './commands.js'
 import type { Author } from './model.js'
+import { sweepForLead } from './liveness.js'
+import { projectsOf } from './projects.js'
+import { projectPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
@@ -107,5 +110,119 @@ describe('what the PM owes', () => {
     const { f, post, owed } = setup()
     const asks = Array.from({ length: 55 }, (_, i) => { f.tick(MINUTE); return post(null, 'lead', `Ask ${i}.`) })
     expect(owed()).toEqual(asks.slice(5))
+  })
+})
+
+describe('the pulse', () => {
+  const pulseOf = (f: ReturnType<typeof stepsFixture>) => projectPulse(f.state, projectsOf(f.state)[0]!, f.now)
+  /** A task the PM opens, unassigned (Next up). */
+  const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
+    const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: [] } as Command, f.as(f.lead)).result.conversationId as string
+    if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore } as Command, f.as(f.lead))
+    return id
+  }
+  const status = (f: ReturnType<typeof stepsFixture>, task: string, by: string, value: string, result: string | null) =>
+    f.run({ type: 'work.status', conversationId: task, assignmentId: f.group(task).assignment!.id, status: value, result } as Command, f.as(by))
+
+  it('counts the asks the PM owes, the oldest one\'s age and who asked', () => {
+    const { f, post } = setup()
+    const first = post(null, 'lead', 'First.')
+    f.tick(4 * MINUTE)
+    post(null, 'lead', 'Second.')
+    const pulse = pulseOf(f)
+    expect(pulse.pmId).toBe(f.lead)
+    expect(pulse.asks).toMatchObject({ count: 2, oldestAt: f.now - 4 * MINUTE, personId: 'owner' })
+    expect(pulse.asks.list[0]).toEqual({ conversationId: 'lead', messageId: first, personId: 'owner', at: f.now - 4 * MINUTE })
+  })
+
+  it('counts Working of the crew: agents of the project with a task they work on, never the PM', () => {
+    const { f } = setup()
+    const idle = f.add('idle', f.task)
+    expect(pulseOf(f).working).toEqual({ count: 1, crew: 2, agentIds: [f.dev] })
+    status(f, f.task, f.dev, 'review', 'PR #12')
+    expect(pulseOf(f).working).toEqual({ count: 0, crew: 2, agentIds: [] })
+    expect(idle).toBeTruthy()
+  })
+
+  it('counts Next up: open tasks nobody is assigned, never a step or a task set for a later day', () => {
+    const { f } = setup()
+    const a = open(f, 'Board strip'), b = open(f, 'Phone strip')
+    f.step('Review')
+    open(f, 'Later', { notBefore: '2099-01-01' })
+    expect(pulseOf(f).nextUp).toEqual({ count: 2, conversationIds: [a, b] })
+  })
+
+  it('counts Lost with when the oldest lost its agent', () => {
+    const { f } = setup()
+    const lostAt = f.now
+    f.group(f.task).assignment!.status = 'lost'
+    f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: lostAt }
+    f.tick(3 * MINUTE)
+    expect(pulseOf(f).lost).toEqual({ count: 1, since: lostAt, conversationIds: [f.task] })
+  })
+
+  it('counts Held: blocked or needs a person with its reason, an empty one as no reason, and a task set for a later day', () => {
+    const { f } = setup()
+    status(f, f.task, f.dev, 'blocked', 'Waiting for the Apple signing key.')
+    const other = open(f, 'Second')
+    const builder = f.add('builder', other)
+    f.run({ type: 'work.assign', conversationId: other, agentId: builder }, f.as(f.lead))
+    status(f, other, builder, 'needs_human', null)
+    const later = open(f, 'Later', { notBefore: '2099-01-01' })
+    const held = pulseOf(f).held
+    expect(held.count).toBe(3)
+    expect(held.withoutReason).toBe(1)
+    expect(held.list).toEqual([{ conversationId: f.task, reason: 'Waiting for the Apple signing key.' },
+      { conversationId: other, reason: null }, { conversationId: later, reason: 'not before 2099-01-01' }])
+  })
+
+  it('gives no hold to a task set for a day already here', () => {
+    const { f } = setup()
+    const today = open(f, 'Today', { notBefore: new Date(f.now).toISOString().slice(0, 10) })
+    expect(pulseOf(f).held.count).toBe(0)
+    expect(pulseOf(f).nextUp.conversationIds).toContain(today)
+  })
+
+  it('says when each red rule turns red, by the limits it sends', () => {
+    const { f, post } = setup()
+    expect(pulseOf(f).limits).toEqual({ askMinutes: 15, idleMinutes: 10, lostMinutes: 10 })
+    expect(pulseOf(f).redAt).toEqual({ asks: null, idle: null, lost: null, held: null })
+    post(null, 'lead', 'An ask.')
+    const askedAt = f.now
+    expect(pulseOf(f).redAt.asks).toBe(askedAt + 15 * MINUTE)
+    status(f, f.task, f.dev, 'blocked', null)
+    expect(pulseOf(f).redAt.held).toBe(0)
+  })
+
+  it('a lost task turns red 10 minutes after it lost its agent', () => {
+    const { f } = setup()
+    f.group(f.task).assignment!.status = 'lost'
+    f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
+    expect(pulseOf(f).redAt.lost).toBe(f.now + 10 * MINUTE)
+  })
+
+  it('marks when Working fell to 0 while work waits, and turns red 10 minutes later; work again clears it', () => {
+    const { f } = setup()
+    open(f, 'Waiting task')
+    expect(pulseOf(f).idleSince).toBeNull()
+    f.tick(MINUTE)
+    status(f, f.task, f.dev, 'done', 'Merged.')
+    const idleAt = f.now
+    f.tick(MINUTE)
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'Anyone?', replyTo: null, recipientIds: [] } as Command)
+    expect(pulseOf(f).idleSince).toBe(idleAt)
+    expect(pulseOf(f).redAt.idle).toBe(idleAt + 10 * MINUTE)
+    const task = pulseOf(f).nextUp.conversationIds[0]!
+    f.run({ type: 'work.assign', conversationId: task, agentId: f.dev }, f.as(f.lead))
+    expect(pulseOf(f).idleSince).toBeNull()
+    expect(pulseOf(f).redAt.idle).toBeNull()
+  })
+
+  it('marks idle on the PM\'s sweep too, where a lost task is found', () => {
+    const { f } = setup()
+    f.group(f.task).assignment!.status = 'lost'
+    f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
+    sweepForLead(f.state, f.now)
+    expect(pulseOf(f).idleSince).toBe(f.now)
   })
 })
