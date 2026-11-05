@@ -17,6 +17,8 @@ export interface ScorecardMessage {
   replyTo: string | null
   thread: string | null
   createdAt: number
+  /** People the post tagged. */
+  mentions?: string[]
 }
 
 /** A group of the project other than its chat: a task or a step (`reviewOf`). */
@@ -155,10 +157,11 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
     lostLeftAlone: lostLeft.length,
     lostLeftMinutes: minutes(lostLeft.reduce((sum, ms) => sum + ms, 0)),
     fixesAfterMerge: input.tasks.filter(t => t.fixedAfterMergeAt !== undefined && inDay(t.fixedAfterMergeAt)).length,
+    // A reply to the PM's own post (not a row the Swarm writes in its name) that the post did not ask of that person.
     corrections: dayRows.filter(m => {
       if (m.author.kind !== 'person' || m.source || !m.replyTo) return false
       const target = byId.get(m.replyTo)
-      return !!target && target.author.kind === 'agent' && pm.has(target.author.id)
+      return !!target && target.author.kind === 'agent' && pm.has(target.author.id) && !target.source && !target.mentions?.includes(m.author.id)
     }).length,
     starts: input.starts.filter(s => inDay(s.requestedAt)).length,
     startsFailed: input.starts.filter(s => s.failed && inDay(s.requestedAt)).length,
@@ -197,6 +200,18 @@ function timelines(input: ScorecardInput, messages: ScorecardMessage[]): Map<str
     if (phase) lines.get(m.conversationId)?.push({ at: m.createdAt, phase })
   }
   for (const line of lines.values()) line.sort((a, b) => a.at - b.at)
+  // A step ends with its task: a cancel or archive leaves an unassigned step as it was, and an assigned one's row says no status.
+  for (const t of input.tasks) {
+    // Its task's last word, when that closed it: a task done and then reopened has not ended its steps.
+    const last = t.reviewOf ? lines.get(t.reviewOf)?.at(-1) : undefined
+    const closed = last?.phase === 'closed' ? last : undefined
+    if (closed) {
+      const line = lines.get(t.id)!
+      line.push({ at: closed.at, phase: 'closed' })
+      line.sort((a, b) => a.at - b.at)
+      lines.set(t.id, line.filter(e => e.at <= closed.at))
+    }
+  }
   return lines
 }
 

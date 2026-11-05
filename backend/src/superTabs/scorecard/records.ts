@@ -45,7 +45,7 @@ const asMessage = (row: SuperTabMessage): ScorecardMessage => {
   const author = row.author as { kind?: string; id?: string } | null
   return { id: row.id, conversationId: row.conversationId, author: { kind: author?.kind === 'person' ? 'person' : 'agent', id: String(author?.id ?? '') },
     source: (row.source ?? null) as Record<string, unknown> | null, text: row.text, replyTo: row.replyTo ?? null, thread: row.thread ?? null,
-    createdAt: row.createdAt.getTime() }
+    createdAt: row.createdAt.getTime(), mentions: row.mentions ?? [] }
 }
 
 /** A row that says a task's phase (figures.ts): a status, a loss or a resume. */
