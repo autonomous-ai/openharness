@@ -29,7 +29,7 @@ teammate's project, offering the Team entry even with the choice on.
   and whose task is not Team-written, the Team entry is folded and the Mac's own entry offered. Team-written work keeps
   the Team entry. The Team entry's own name from the read is shown, so route rows say `· Team account`.
 - Desktop: rows already read the pool's `name`; the Machines list folds a Team account into its Mac's row and shows the
-  Mac. Desktop needs a test only where it shows a Team entry's name by itself.
+  Mac. `superTabMachineName` keeps the label while it drops the Mac's `.local`.
 
 **Tech Stack:** TypeScript (backend, vitest), TypeScript (CLI, vitest), Dart/Flutter (Desktop).
 
@@ -69,9 +69,12 @@ teammate's project, offering the Team entry even with the choice on.
 
 ### Task 3: a Team entry shows a distinct name (backend read, route)
 
-**Files:** `backend/src/superTabs/model.ts`, `backend/src/superTabs/machines.ts`, a backend read test,
-`cli/src/superTabs/routeCommand.spec.ts`
+**Files:** `backend/src/superTabs/model.ts`, `backend/src/superTabs/ownAccountWork.test.ts`,
+`desktop/lib/super_tabs/identity.dart`, `desktop/test/super_tab_machines_test.dart`
 
-- [ ] Failing tests: `visibleState` shows `gray-team` as `Gray's Mac · Team account` and `gray-mac` as `Gray's Mac`;
-      the stored name is unchanged; the route's row title for a Team entry ends with `· Team account`.
+- [ ] Failing tests: `visibleState` shows `gray-team` as `Gray's Mac · Team account` and `gray-mac` as `Gray's Mac`
+      for every reader; the stored name is unchanged. The route and the CLI's status take machine names from that read,
+      so they need no change of their own.
+- [ ] Desktop: `superTabMachineName('Gray.local · Team account')` is `Gray · Team account` (it drops `.local` only at
+      the end of a name today).
 - [ ] Implement.
