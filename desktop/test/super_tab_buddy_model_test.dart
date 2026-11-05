@@ -569,5 +569,71 @@ void main() {
       line(earlier, held, by: 'old-wren');
       await none(earlier);
     });
+
+    // Review of #3171 (Guide): the messages held can be an older page, read
+    // back to the reader's mark, with the result that settled the switch
+    // among the newer ones not read yet.
+    testWidgets('it is not offered while the chat holds an older page than '
+        'its newest message', (tester) async {
+      final server = swarm();
+      line(server, held);
+      // Newer messages are in the chat that this window has not read.
+      final chat = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'swarm-buddy-peer');
+      chat['lastMessageSequence'] = (chat['lastMessageSequence'] as int) + 5;
+      chat['lastMainSequence'] = chat['lastMessageSequence'];
+      final c = await show(tester, server);
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
+    // Review of #3171: a Buddy is removed before it starts again, so nothing
+    // that would refuse the start may be known when it is removed.
+    testWidgets('while new work is paused, Start again removes nothing', (
+      tester,
+    ) async {
+      final server = swarm();
+      server.state['paused'] = true;
+      line(server, held);
+      final c = await show(tester, server);
+      expect(find.text(offer), findsOneWidget);
+      expect(tester.widget<TextButton>(startAgain).onPressed, isNull);
+      expect(commands(server, 'buddy.remove'), isEmpty);
+      await close(tester, c);
+    });
+
+    // Review of #3171: a start refused once its Buddy is removed leaves the
+    // Start bar on the machine and engine it ran on, one click from them.
+    testWidgets('a start refused after the removal keeps its machine and '
+        'engine in the Start bar', (tester) async {
+      final server = swarm();
+      final wren = (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      );
+      wren['configuration'] = {'engine': 'codex', 'model': 'default'};
+      line(server, held);
+      server.unknownCommand = (command) => command['type'] == 'buddy.create';
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.remove'), hasLength(1));
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      final engine = find.byKey(const ValueKey('super-buddy-start-engine'));
+      expect(
+        find.descendant(of: engine, matching: find.text('Codex')),
+        findsOneWidget,
+      );
+
+      server.unknownCommand = null;
+      await tester.tap(find.widgetWithText(FilledButton, 'Start'));
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.create').last, {
+        'type': 'buddy.create',
+        'machineId': 'ken-mac',
+        'engine': 'codex',
+      });
+      await close(tester, c);
+    });
   });
 }
