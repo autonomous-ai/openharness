@@ -18,7 +18,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
-import { waitingTagConversations } from '../src/superTabs/mentions.js'
+import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -27,6 +27,7 @@ import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
+import { profiledReads } from './profiledReads.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -122,6 +123,61 @@ async function writeGroup(tabId: string, key: string, at: number, change: (group
 }
 
 describe('first load (design 4.3)', () => {
+  it('counts waiting tags from quiet groups without fetching unrelated group payloads', async () => {
+    const quiet: string[] = []
+    const s = await scene(state => {
+      for (let i = 0; i < 21; i++) {
+        const id = state.group(`Quiet ${i}`)
+        state.edit(current => {
+          const group = current.conversations.find(each => each.id === id)!
+          group.dormant = true
+          group.brief = 'unused task detail '.repeat(220)
+        })
+        quiet.push(id)
+      }
+      return quiet
+    })
+    await db.superTabMention.createMany({ data: quiet.map((conversationId, i) => ({
+      id: `${s.tabId}-quiet-tag-${i}`, tabId: s.tabId, personId: peer.sub, projectId: 'lead', conversationId,
+      messageId: `${s.tabId}-quiet-message-${i}`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null,
+    })) })
+
+    const { state } = await new SuperTabStore(db, () => NOW).read(peer, s.tabId)
+    const stateWithoutQuietGroups = { ...state, conversations: state.conversations.filter(group => !quiet.includes(group.id)) }
+    const match = { tabId: s.tabId, deleted: false, key: { $in: quiet } }
+    const fullPipeline = [{ $match: match }, { $project: { _id: 0, key: 1, data: 1 } }]
+    await db.$runCommandRaw({ profile: 2 })
+    try {
+      await db.swarmGroup.aggregateRaw({ pipeline: fullPipeline, options: { batchSize: 200, hint: { tabId: 1, key: 1 } } })
+      const count = await waitingMentions(db as never, s.tabId, stateWithoutQuietGroups, { kind: 'person', userId: peer.sub, email: peer.email }, NOW)
+      expect(count.count).toBe(quiet.length)
+    } finally { await db.$runCommandRaw({ profile: 0 }) }
+
+    const profile = await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SwarmGroup$' } },
+      projection: { _id: 0, command: 1, responseLength: 1, nreturned: 1, docsExamined: 1, planSummary: 1 }, batchSize: 10_000 }) as unknown as
+      { cursor: { firstBatch: Array<{ command?: { pipeline?: Array<Record<string, any>>; hint?: Record<string, number> }; responseLength?: number;
+        nreturned?: number; docsExamined?: number; planSummary?: string }> } }
+    const rows = profile.cursor.firstBatch.filter(row => row.command?.pipeline?.some(stage =>
+      (stage.$match as { key?: { $in?: string[] } } | undefined)?.key?.$in?.includes(quiet[0]!)))
+    expect(rows).toHaveLength(2)
+    const baseline = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: unknown } | undefined)?.data === 1))!
+    const projected = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: { kind?: number } } | undefined)?.data?.kind === 1))!
+    expect(baseline.nreturned).toBe(quiet.length)
+    expect(projected.nreturned).toBe(quiet.length)
+    expect(baseline.planSummary).toMatch(/IXSCAN/)
+    expect(projected.planSummary).toMatch(/IXSCAN/)
+    expect(baseline.docsExamined).toBeLessThanOrEqual(baseline.nreturned!)
+    expect(projected.docsExamined).toBeLessThanOrEqual(projected.nreturned!)
+    expect(projected.responseLength, `full=${baseline.responseLength} bytes; projected=${projected.responseLength} bytes for ${projected.nreturned} groups`)
+      .toBeLessThan(baseline.responseLength! / 10)
+    for (const pipeline of [fullPipeline, projected.command!.pipeline!]) {
+      const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline, cursor: {}, hint: { tabId: 1, key: 1 } },
+        verbosity: 'executionStats' }) as unknown as { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
+      expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
+      expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
+    }
+  })
+
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
     const s = await scene()
     clock = NOW
@@ -1070,6 +1126,35 @@ describe('decisions asked of one person (v2)', () => {
     expect(expired.mentionsWaiting).toBe(0)
     expect(expired.mentionsDigest).not.toBe(replaced.mentionsDigest)
     expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
+  })
+
+  it('keeps quiet conversation titles in waiting and earlier tag lists', async () => {
+    const s = await scene()
+    const tag = await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Please look.', replyTo: null,
+      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)
+    expect(tag.status).toBe(200)
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
+
+    const waiting = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(waiting.map(row => row.conversationTitle)).toContain('Web')
+
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
+    const earlier = (await get(`/api/super-tabs/${s.tabId}/mentions?state=earlier`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(earlier.map(row => row.conversationTitle)).toContain('Web')
+  })
+
+  it('reads waiting tags once in a changes poll while keeping its count and digest', async () => {
+    const s = await scene()
+    clock = NOW
+    await db.superTabMention.create({ data: { id: `${s.tabId}-quiet-tag`, tabId: s.tabId, personId: peer.sub, projectId: 'lead',
+      conversationId: s.done, messageId: `${s.tabId}-quiet-message`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null } })
+    const before = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
+    expect(before.body.data.derived).toMatchObject({ mentionsWaiting: 1 })
+
+    const measured = await profiledReads(db, /\.SuperTabMention$/, () => get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.body.data.cursor}`, peer))
+    expect(measured.value.status).toBe(200)
+    expect(measured.value.body.data.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.body.data.derived.mentionsDigest })
+    expect(measured.reads).toBe(1)
   })
 
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
