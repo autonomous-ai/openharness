@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand } from './commands.js'
 import { crewKeep, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { config, fixture, GB, machine, NOW, person } from './crewKeep.test-support.js'
+import * as crewRules from './crewRules.js'
+import type { MachineRule } from './crewRules.js'
 import { FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, SLEEP_IDLE_MS, DISK_FLOOR_BYTES } from './crewRules.js'
 import type { Agent, SuperTabState } from './model.js'
 
 const everywhere: CrewDeps = { admits: () => true }
+/** The rules live in the project rules record, never in source (River, 11-05). */
+const MACHINE_RULES_FROM_SOURCE = (crewRules as Record<string, unknown>).MACHINE_RULES
 const kinds = (state: SuperTabState, deps = everywhere) => crewKeep(state, NOW, deps)
 
 describe('crewKeep: sleep', () => {
@@ -160,28 +164,39 @@ describe('crewKeep: an asleep member stays where it sleeps (review of #3229)', (
   })
 })
 
-describe('crewKeep: machine rules apply to moves (review of #3229, River)', () => {
+describe('crewKeep: machine rules apply to moves, read from the project rules record (review of #3229, River)', () => {
   const at = (iso: string) => Date.parse(iso)
-  it('never moves a Codex member to Diego\'s Mac; a Claude one may go there', () => {
-    const codex = fixture([machine('mac', { signedIn: false }), machine('001bcba1e7e9deb6f8756c053a951ce2'), machine('other', { resetIn: 6 * 86_400_000 })])
+  // Generic rules as the record would hold them: never a person's real machines or hours in source (River, 11-05).
+  const rules: MachineRule[] = [
+    { machineIds: ['no-codex'], why: 'no Codex there', noEngines: ['codex'] },
+    { machineIds: ['travels'], why: 'away', away: { days: [1, 2, 3, 4, 5], windows: [['07:30', '09:30'], ['18:00', '21:00']], timeZone: 'Asia/Ho_Chi_Minh' } },
+  ]
+  const withRules: CrewDeps = { admits: () => true, machineRules: rules }
+  it('never moves a member to a machine whose rule refuses its engine; another engine may go there', () => {
+    const codex = fixture([machine('mac', { signedIn: false }), machine('no-codex'), machine('other', { resetIn: 6 * 86_400_000 })])
     codex.ada.configuration = { ...codex.ada.configuration, engine: 'codex' }
     for (const pool of codex.state.machines!) {
       pool.engines = ['claude', 'codex']
       ;(pool.observation as { readiness: { engines: unknown[] } }).readiness.engines = [{ engine: 'codex', installed: true, signedIn: pool.machineId !== 'mac' }]
       ;(pool.observation as { quotas: Array<{ engine: string }> }).quotas[0]!.engine = 'codex'
     }
-    expect(crewKeep(codex.state, NOW, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
-    const claude = fixture([machine('mac', { signedIn: false }), machine('001bcba1e7e9deb6f8756c053a951ce2'), machine('other', { resetIn: 6 * 86_400_000 })])
-    expect(crewKeep(claude.state, NOW, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: '001bcba1e7e9deb6f8756c053a951ce2' })])
+    expect(crewKeep(codex.state, NOW, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    const claude = fixture([machine('mac', { signedIn: false }), machine('no-codex'), machine('other', { resetIn: 6 * 86_400_000 })])
+    expect(crewKeep(claude.state, NOW, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'no-codex' })])
   })
-  it('never moves to Ken\'s MacBook Pro while it is away (weekdays 07:30-09:30 and 18:00-21:00 Vietnam time)', () => {
-    const pools = () => [machine('mac', { signedIn: false }), machine('592a20a2275f0b3114c955fabbf19d30'), machine('other', { resetIn: 6 * 86_400_000 })]
+  it('never moves to a machine while its rule says it is away, in its own time zone', () => {
+    const pools = () => [machine('mac', { signedIn: false }), machine('travels'), machine('other', { resetIn: 6 * 86_400_000 })]
     // Monday 2026-11-09 08:00 in Vietnam (UTC+7) is 01:00 UTC; 10:00 there is 03:00 UTC.
     const away = at('2026-11-09T01:00:00Z'), back = at('2026-11-09T03:00:00Z')
     const onAway = fixture(pools()); onAway.state.machines!.forEach(p => { p.observation!.receivedAt = away - 5000 })
-    expect(crewKeep(onAway.state, away, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    expect(crewKeep(onAway.state, away, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
     const onBack = fixture(pools()); onBack.state.machines!.forEach(p => { p.observation!.receivedAt = back - 5000 })
-    expect(crewKeep(onBack.state, back, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: '592a20a2275f0b3114c955fabbf19d30' })])
+    expect(crewKeep(onBack.state, back, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'travels' })])
+  })
+  it('with no rules record, no machine rule applies', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('travels'), machine('other', { resetIn: 6 * 86_400_000 })])
+    expect(crewKeep(f.state, at('2026-11-09T01:00:00Z') + 0 * NOW, { admits: () => true })).toBeDefined()
+    expect(MACHINE_RULES_FROM_SOURCE).toBeUndefined()
   })
   it('an awake member with no work stays when its machine goes offline: it moves once it holds work', () => {
     const f = fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')], SLEEP_IDLE_MS - 60_000)

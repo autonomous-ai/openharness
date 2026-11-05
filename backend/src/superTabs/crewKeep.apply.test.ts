@@ -150,3 +150,19 @@ describe('the head of the list when the move is placed (review of #3229, River)'
     expect(rank(task.id)).toBeLessThan(rank(other.id))
   })
 })
+
+describe('a take-over marks nothing Team-written (security review of #3229, Curlew3)', () => {
+  it('a Team member moved to another Team machine joins its old conversations without marking them', () => {
+    const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
+    const f = fixture([team(machine('mac', { signedIn: false })), team(machine('mini'))])
+    f.state = run(f.state, { type: 'conversation.create', title: 'Talk', brief: 'A chat it was in', checks: [] } as Command, 'talk', NOW - 3_600_000)
+    const talk = f.state.conversations.find(c => c.title === 'Talk')!
+    talk.agentIds.push(f.ada.id)
+    applyCrewKeep(f.state, NOW, everywhere)
+    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
+    f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-team', NOW + 5000, host)
+    const after = f.state.conversations.find(c => c.id === talk.id)!
+    expect(after.agentIds).toContain(f.state.agents.find(a => a.harnessId === 'ada-2')!.id)
+    expect(after.teamWritten).toBeFalsy()
+  })
+})
