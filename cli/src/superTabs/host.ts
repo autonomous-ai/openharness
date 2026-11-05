@@ -31,7 +31,8 @@ import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { coordinatorInOwnTask, placeLine, setOff, threadLine, workLine } from './deliveryContext.js'
+import { coordinatorInOwnTask, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
+import { isCoordinator } from './agentContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -2209,6 +2210,8 @@ export class SuperTabHost {
     const group = String(message.conversationId)
     const lines: string[] = []
     const wait = this.contextWaitMs
+    // Task #3114 (Ken, 11-05): the coordinator's delivery in a task or step says what the task waits on.
+    let inTask = false
     if (!buddy) try {
       // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
       // leaves its lines out, and the read goes on for the next delivery.
@@ -2219,6 +2222,15 @@ export class SuperTabHost {
       if (author.kind === 'agent' && identifier(author.id) && !asksQuestion(message.text)
         && coordinatorInOwnTask(state, group, author.id, entry.agentId)) this.plainReplies.add(entry.deliveryId)
       lines.push(placeLine(state, group))
+      // "Release urgent" in #3022 reached the PM with its place alone, while its pull request had passed review with CI green,
+      // and the PM answered about something else: its state, and what was said just before, come with it.
+      const taskState = isCoordinator(state, entry.agentId) ? taskStateLine(state, group) : null
+      if (taskState) {
+        inTask = true
+        lines.push(taskState)
+        const recent = await this.recentOf(entry, message, group, wait)
+        if (recent) lines.push(recent)
+      }
       const work = workLine(state, entry.agentId)
       if (work) lines.push(work)
     } catch (error) {
@@ -2230,12 +2242,29 @@ export class SuperTabHost {
     const root = message.thread
     if (identifier(root) && root !== message.id) {
       const thread = await within(this.threadOf(entry, group, root), wait)
-      if (thread && (thread.replies === null || thread.replies > 1)) {
+      // Its only reply so far is this one, whose root is quoted already; the coordinator in a task gets the line still (#3114).
+      if (thread && (thread.replies === null || thread.replies > (inTask ? 0 : 1))) {
         lines.push(threadLine(thread.root, thread.replies, thread.authors,
           `${agentCommandOf(entry, prefix, buddy)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`, quotedOther.has(root)))
       }
     }
     return lines.length ? `${lines.join('\n')}\n\n` : ''
+  }
+
+  /** The latest messages before [message] in its conversation, or its thread's replies before it, quoted as data (#3114): one
+   *  page read as the agent, bounded like the rest of the context. Null when there is none or the read fails. */
+  private async recentOf(entry: Entry, message: Json, group: string, wait: number): Promise<string | null> {
+    const root = message.thread
+    const thread = identifier(root) && root !== message.id ? `&thread=${root}` : ''
+    try {
+      const page = await within(backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/conversations/${group}/messages?asAgentId=${entry.agentId}${thread}`), wait)
+      if (!page) throw new Error(`no answer in ${wait} ms`)
+      const rows = (Array.isArray(object(page).messages) ? object(page).messages as unknown[] : []).map(object).filter(m => m.conversationId === undefined || m.conversationId === group)
+      return recentLines(rows, message)
+    } catch (error) {
+      this.log(`latest messages for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
   }
 
   /** A thread's root and its summary, from the page `repliedTo()` read when the reply answers the root (Desktop and the
