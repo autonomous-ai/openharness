@@ -42,6 +42,16 @@ describe('sendPhoneNotices (task #2905)', () => {
     expect(JSON.stringify([m.warn.mock.calls, m.info.mock.calls])).not.toContain('secret-token')
   })
 
+  it('keeps a token whose sandbox push was skipped for want of a sandbox key, and logs it without the token', async () => {
+    m.devicesOf.mockResolvedValue([phone('dev', 'a')])
+    const ios = answering({ dev: { outcome: 'unconfigured', reason: 'no APNs sandbox key' } })
+    await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
+    expect(m.forget).not.toHaveBeenCalled()
+    expect(m.count).toHaveBeenCalledWith('ios', 'unconfigured')
+    expect(m.warn).toHaveBeenCalledWith('phone push skipped', { platform: 'ios', reason: 'no APNs sandbox key' })
+    expect(JSON.stringify(m.warn.mock.calls)).not.toContain('secret-token')
+  })
+
   it('counts and logs a push it cannot send for want of the platform\'s keys', async () => {
     m.devicesOf.mockResolvedValue([phone('a2', 'a', 'android')])
     await sendPhoneNotices(db, { ios: null, android: null }, [notice('a')])

@@ -21,7 +21,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -78,7 +78,7 @@ import { freeze, readHostStamp, stampOwed, swarmReadCache, swarmTransaction, typ
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, recordHolds, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
+import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -1547,9 +1547,12 @@ export class SuperTabStore {
           // Workspace owners, admins and members may invite to a Swarm (invite.create). Someone the Workspace removed comes
           // back only on the word of an owner or admin, as a Workspace invitation needs, read now rather than when it was
           // sent: otherwise a member's invitation would undo the removal and its auto-join decline (task #2939).
+          // Nor does any invitation sent before the removal, an admin's included: the removal is final against it (task #3173).
           if (await removedFromWorkspace(tx, original.workspaceId, user.sub)) {
             const sender = invite.invitedBy ? await activeMember(tx, original.workspaceId, invite.invitedBy) : null
-            if (!sender || !workspaceCan(sender.role as WorkspaceRole, 'workspace.invite')) {
+            const removedAt = await latestRemovalAt(tx, original.workspaceId, user.sub)
+            if (!sender || !workspaceCan(sender.role as WorkspaceRole, 'workspace.invite')
+              || (removedAt !== null && invite.expiresAt - SWARM_INVITATION_MS < removedAt)) {
               fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask one of its owners or admins to invite you.`, 403)
             }
           }

@@ -18,7 +18,7 @@ function fixture() {
   const prepare = vi.fn(async () => start.request.cwd)
   const empty = vi.fn(async (folderRoot: string, projectId: string) => join(folderRoot, projectId))
   return { core, root, repository, row, start, prepare, empty,
-    run: () => prepareSwarmProject(core, row, start, prepare, undefined, empty) }
+    run: () => prepareSwarmProject(core, row, start, prepare, undefined, undefined, empty) }
 }
 
 describe('per-project checkouts on a contributed swarm machine', () => {
@@ -157,8 +157,9 @@ function hosted(answer: unknown = { github: true, token: TOKEN, repository: 'exa
   })
   const fetch = vi.fn(async (_cwd: string, _env: NodeJS.ProcessEnv) => true)
   const revoke = vi.fn(async (_token: string) => {})
-  return { ...f, row, start, backend, fetch, revoke,
-    ready: (team = false) => prepareSwarmStart(f.core, row, start, { backend, team, prepare: f.prepare, fetch, revoke }) }
+  const sleep = vi.fn(async (_ms: number) => {})
+  return { ...f, row, start, backend, fetch, revoke, sleep,
+    ready: (team = false) => prepareSwarmStart(f.core, row, start, { backend, team, prepare: f.prepare, fetch, revoke, sleep }) }
 }
 
 describe('preparing another person\'s start with the Harness GitHub App', () => {
@@ -294,6 +295,31 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     // A folder already in the clone's place is named, with what to do (#3211), and not tried again either.
     await expect(f.ready()).rejects.toMatchObject({ code: 'PROJECT_EXISTS', message: expect.stringContaining('Move it aside') })
     expect(f.prepare).toHaveBeenCalledTimes(2)
+  })
+
+  // 11-05: six first starts on four machines failed on one failed or stalled clone, which GitHub or the network often serves seconds later.
+  it('tries a failed or stalled first clone with the token once more, after a backoff, and never a refusal or another error', async () => {
+    for (const failure of [new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository.'), new ProjectFolderError('CLONE_TIMEOUT', 'Cloning stopped.')]) {
+      const f = hosted()
+      f.prepare.mockRejectedValueOnce(failure)
+      expect(await f.ready()).toEqual({ requester: 'olive@example.com' })
+      expect(f.prepare).toHaveBeenCalledTimes(2)
+      expect(f.prepare.mock.calls[1]).toEqual(f.prepare.mock.calls[0])
+      expect(f.sleep).toHaveBeenCalledOnce()
+      expect(f.sleep.mock.calls[0]![0]).toBeGreaterThan(0)
+    }
+    const twice = hosted()
+    twice.prepare.mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'first')).mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'second: git said'))
+    await expect(twice.ready()).rejects.toThrow("could not clone the project repository with the Harness GitHub App's token: second: git said")
+    expect(twice.prepare).toHaveBeenCalledTimes(2)
+    for (const other of [new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.'), new ProjectFolderError('GIT_UNAVAILABLE', 'no git'),
+      new ProjectFolderError('PROJECT_EXISTS', 'taken'), new Error('disk full')]) {
+      const f = hosted()
+      f.prepare.mockRejectedValueOnce(other)
+      await expect(f.ready()).rejects.toThrow()
+      expect(f.prepare).toHaveBeenCalledTimes(1)
+      expect(f.sleep).not.toHaveBeenCalled()
+    }
   })
 
   // Local Team account run, 2026-10-28: the read-only token for the clone was never revoked and stayed good for its hour.

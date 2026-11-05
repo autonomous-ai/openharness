@@ -19,6 +19,9 @@ export interface StartGitHub { token: string; repository: string; requester: str
 const NO_APP_ON_TEAM = 'This Harness server has no GitHub App, and a Harness Team account has no git login of its own, so it cannot fetch '
   + 'the project. Ask the server\'s administrator to set up the Harness GitHub App (docs/swarm-github-app.md).'
 
+/** How long a clone that failed or stalled waits before its one more try. */
+const CLONE_RETRY_MS = 5_000
+
 /** A start this machine could not prepare yet, as the Harness server gave no answer (a timeout, a 5xx, no connection), which
  *  decides nothing: its host tries again on its next pass, and fails the start only once it has kept failing for as long as
  *  a refused start (superTabs/machines.ts). Diego's Mac, 2026-10-30: one backend timeout on the token call failed a start. */
@@ -74,7 +77,7 @@ async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise
  */
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchStartBase; revoke?: (token: string) => Promise<void>
-    empty?: typeof prepareEmptyProjectFolder }):
+    empty?: typeof prepareEmptyProjectFolder; sleep?: (ms: number) => Promise<void> }):
   Promise<{ requester: string } | null> {
   const request = object(start.request)
   // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
@@ -84,13 +87,13 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   // for it. Its work starts in a folder of its own, made without any login (prepareSwarmProject).
   const project = startProject(row, request)
   if (project && typeof object(project.repository).repositoryUrl !== 'string') {
-    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, undefined, deps.empty)
+    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, undefined, deps.sleep, deps.empty)
     return null
   }
   const github = await startGitHub(core, row, start, deps)
   const gitEnv = github ? swarmGitPrepareEnv(github.token) : undefined
   try {
-    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv, deps.empty)
+    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv, deps.sleep, deps.empty)
     if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
       // The branch the start names, when it names one: a project clone has only the default branch (lib/projectFolder.ts).
       await (deps.fetch ?? fetchStartBase)(resolve(request.cwd), gitEnv, ...(typeof request.branchRef === 'string' ? [request.branchRef] : []))
@@ -146,7 +149,7 @@ export async function prepareEmptyProjectFolder(root: string, projectId: string,
  * Prepare the queued project's repository there before reserving or launching: a clone, or for a project with no
  * repository its own empty folder ([empty]). */
 export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json, prepare = prepareProjectFolder, gitEnv?: NodeJS.ProcessEnv,
-  empty = prepareEmptyProjectFolder): Promise<void> {
+  sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms)), empty = prepareEmptyProjectFolder): Promise<void> {
   const pool = object(row.machine)
   if (pool.scope !== 'swarm' || start.dispatched) return
   const request = object(start.request)
@@ -173,8 +176,18 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
     // With the app's token: over https alone, whatever address was shared, and no other way in if it is refused.
     const ssh = 'git@github.com:'
     const https = source.repositoryUrl.startsWith(ssh) ? `https://github.com/${source.repositoryUrl.slice(ssh.length)}` : source.repositoryUrl
-    try { cwd = await prepare({ ...source, repositoryUrl: https, name: project.id }, { root: expectedRoot, gitEnv }) }
-    catch (error) {
+    const name = project.id
+    const clone = () => prepare({ ...source, repositoryUrl: https, name }, { root: expectedRoot, gitEnv })
+    try {
+      // One more try after a short wait, for a failed or stalled clone only: GitHub or the network often serves it seconds
+      // later (six first starts failed on 11-05). A refusal would fail again, and prepare removes its staging between tries.
+      try { cwd = await clone() }
+      catch (first) {
+        if (!(first instanceof ProjectFolderError) || first instanceof RepositoryAccessError || !['CLONE_FAILED', 'CLONE_TIMEOUT'].includes(first.code)) throw first
+        await sleep(CLONE_RETRY_MS)
+        cwd = await clone()
+      }
+    } catch (error) {
       if (error instanceof ProjectFolderError && error.code === 'PROJECT_EXISTS') throw folderLeftBehind(expected)
       if (!(error instanceof ProjectFolderError) || !['CLONE_FAILED', 'CLONE_TIMEOUT'].includes(error.code)) throw error
       throw new ProjectFolderError(error.code, `This machine could not clone the project repository with the Harness GitHub App's token: ${error.message}`)

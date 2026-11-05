@@ -135,8 +135,21 @@ describe('project folder preparation', () => {
     for (const diagnostic of ['fatal: unable to access: Could not resolve host: github.com', '']) {
       const error = cloneFailure(diagnostic)
       expect(error, diagnostic).not.toBeInstanceOf(RepositoryAccessError)
-      expect(error).toMatchObject({ code: 'CLONE_FAILED', message: 'Could not clone the repository. Check the URL and connection, then retry.' })
+      expect(error).toMatchObject({ code: 'CLONE_FAILED' })
     }
+    expect(cloneFailure('').message).toBe('Could not clone the repository. Check the URL and connection, then retry.')
+  })
+
+  // Six first starts failed on 11-05 with "Could not clone the repository" and nothing else to go on.
+  it('names git\'s own reason in a failed clone, without a credential', () => {
+    expect(cloneFailure('Cloning into \'x\'...\nfatal: unable to access \'https://github.com/o/r/\': Could not resolve host: github.com\n').message)
+      .toBe('Could not clone the repository (git said: unable to access \'https://github.com/o/r/\': Could not resolve host: github.com). Check the URL and connection, then retry.')
+    const leaked = cloneFailure('fatal: unable to access \'https://x-access-token:ghs_abcdefghijklmnop1234@github.com/o/r/\': The requested URL returned error: 500').message
+    expect(leaked).toContain('returned error: 500')
+    expect(leaked).not.toMatch(/ghs_|x-access-token/)
+    expect(cloneFailure(`error: ${'a'.repeat(900)}`).message.length).toBeLessThan(400)
+    // A progress line is no reason: the last error line is.
+    expect(cloneFailure('error: RPC failed; HTTP 502\nfatal: early EOF\nReceiving objects: 40%\n').message).toContain('git said: early EOF')
   })
 
   it('names an untrusted host key, which is no refusal: GitHub was never asked', () => {
@@ -424,7 +437,8 @@ describe('the project clone of a large repository', () => {
     const failure = await cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 1500 })
       .then(() => null, (error: unknown) => error)
     expect(failure).toBeInstanceOf(ProjectFolderError)
-    expect(failure).toMatchObject({ code: 'CLONE_TIMEOUT', message: 'Cloning stopped making progress. Check the connection and retry.' })
+    expect(failure).toMatchObject({ code: 'CLONE_TIMEOUT', message: expect.stringContaining('Cloning stopped making progress') })
+    expect((failure as Error).message).toContain('git\'s last words: Receiving objects:   1%')
     expect(Date.now() - started).toBeLessThan(10_000)
     expect(running(Number(await readFile(join(root, 'pid'), 'utf8')))).toBe(false)
   }, 20_000)

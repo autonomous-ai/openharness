@@ -1,7 +1,7 @@
 // cli/src/superTabs/route.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BUILDERS, CHOOSE_BY_INSTRUCTIONS, CODEX_DEFAULT_NOT_OFFERED, NONE_COVERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
-  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
+  tierOf, type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -141,16 +141,16 @@ describe('choose', () => {
     ], policy, a(), NOW)
     if ('error' in r) throw new Error('unexpected')
     expect(r).toMatchObject({ floor: 1, belowFloor: false, excluded: [] })
-    // A member in another repository would build in that repository's worktree: shown last, with why (#2377).
+    // A member in another repository would build in that repository's worktree: shown last, with why (#2377). Opus is the
+    // strong tier's model: this medium task's slot on remote-1 offers Sonnet (task #3163).
     expect(r.shown.map(s => s.title)).toEqual([
       'New agent · Claude sonnet medium · mac',
       'Multiply · Claude sonnet medium · remote-1',
-      'New agent · Claude opus high · remote-1',
       'New agent · Claude sonnet medium · remote-1',
       'Elsewhere · Claude sonnet medium · remote-1',
     ])
-    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4'])
-    expect(r.shown[4]!.label).toContain(OTHER_REPOSITORY)
+    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3'])
+    expect(r.shown[3]!.label).toContain(OTHER_REPOSITORY)
   })
   // Diego, 10-30: a member in another repository tied a new agent and the title decided, so Ada took the task in her own
   // repository's worktree and Zed did not. Review of #2377: ranking it after a new agent was not enough, since what ranks
@@ -249,15 +249,16 @@ describe('strength, fit and effective cost', () => {
   it('3. low, small: the account nearly spent for the week costs more in effect than the one with room', () => {
     const A = windows([80, 4 * H], [2, 5 * D], 'A'), B = windows([60, 4 * H], [70, 5 * D], 'B')
     const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
-    expect(row(r, 'opus', 'a').fit.effectiveCost).toBeGreaterThan(row(r, 'opus', 'b').fit.effectiveCost)
+    // Small work is offered on Sonnet, not Opus (task #3163): the accounts compare the same on either.
+    expect(row(r, 'sonnet', 'a').fit.effectiveCost).toBeGreaterThan(row(r, 'sonnet', 'b').fit.effectiveCost)
     // A's weekly budget is 0.4% a day; Haiku's 0.5% costs it 1 + 1 × 0.5 / 0.4.
     expect(r.shown.find(s => s.model === 'haiku' && s.machineName === 'a')!.fit.effectiveCost).toBe(2.25)
   })
-  it('4. low, small: Opus high on the account whose 5-hour window resets in 20 minutes costs less in effect: it would otherwise go unused', () => {
+  it('4. low, small: Sonnet on the account whose 5-hour window resets in 20 minutes costs less in effect: it would otherwise go unused', () => {
     const A = windows([60, 20 * M], [60, 2 * D], 'A'), B = windows([90, 4 * H], [80, 5 * D], 'B')
     const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
-    expect(row(r, 'opus', 'a').fit.expiring).toBeGreaterThan(0)
-    expect(row(r, 'opus', 'a').fit.effectiveCost).toBeLessThan(row(r, 'opus', 'b').fit.effectiveCost)
+    expect(row(r, 'sonnet', 'a').fit.expiring).toBeGreaterThan(0)
+    expect(row(r, 'sonnet', 'a').fit.effectiveCost).toBeLessThan(row(r, 'sonnet', 'b').fit.effectiveCost)
   })
   it('5. a second high, medium route a minute after the first sees what the first one holds on its account', () => {
     const probes = [on(OPUS, 'a', windows([60, 3 * H], [80, 5 * D], 'A')), on(OPUS, 'b', windows([58, 3 * H], [80, 5 * D], 'B'))]
@@ -466,7 +467,8 @@ describe('verdict and record', () => {
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: v.why }
     const { pick: _pick, ...unpicked } = v1
     expect(recordOf(c, v, a())).toEqual({ ...unpicked, via: 'instructions', assessment: { ...v1.assessment, size: 'medium' },
-      candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude' } })) })
+      candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude',
+        left: 50, resetsAt: 1000 } })) })
     // The server stamps the instructions' revision; the route sends none (phase 4, decision 12).
     expect(recordOf(c, v, a())).not.toHaveProperty('instructionsRevision')
     // For a backend from before sizes and fit.
@@ -486,10 +488,10 @@ describe('edges', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'urgent', why: 'x' })).toContain('risk')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 7 })).toContain('why')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: null }))
-      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: [] } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', unsized: true, why: 'x', needs: { tools: [], devices: [] } })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { tools: 'git', devices: [1], cwd: 5 } })).toContain('absolute')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { devices: ['cam'], cwd: '/work' } }))
-      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', unsized: true, why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
   })
   it('keeps the tightest window whatever its order and drops an unusable reset', () => {
     expect(quotaOf2({ known: true, windows: [{ usedPercent: 70, resetsAt: 1_800_000_000 }, { usedPercent: 20, resetsAt: null }] }))
@@ -988,10 +990,10 @@ describe('routing plug-ins', () => {
       on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 }),
     ] }
     const r = ok(choose(given, policy, a(), NOW, [], [], [], [sneaky]))
-    // By machine, as without plug-ins.
-    expect(r.shown.map(s => s.title)).toEqual(['New agent · Claude opus high · a', 'New agent · Claude sonnet medium · a', 'Kai · Claude opus high · k'])
+    // By machine, as without plug-ins; the added Sonnet is the model this medium task's slot on a offers (task #3163).
+    expect(r.shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · a', 'Kai · Claude opus high · k'])
     // The added Sonnet on a keeps a's note and quota reading, not its own.
-    expect(r.shown[1]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
+    expect(r.shown[0]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
     expect(r.excluded).toEqual([
       { title: 'New agent · Claude opus high · b', reason: 'Machine is offline.', machine: 'b' },
       { title: 'New agent · Claude sonnet medium · b', reason: 'Machine is offline.', machine: 'b' },
@@ -1022,7 +1024,8 @@ describe('routing plug-ins', () => {
       on('x', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
     const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => `${p.model} on ${p.machineId}`)); return [] } }
     const r = ok(route(given, [extra, watch]))
-    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'opus on x', 'sonnet on x'])
+    // On x the slot offers Sonnet, this medium task's model, over the added Opus (task #3163).
+    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'sonnet on x'])
     expect(seen).toEqual([['opus on a', 'sonnet on x', 'opus on x', 'haiku on x']])
     // A person naming a model still considers that model alone.
     expect(titles(route(given, [extra], { model: 'haiku' }))).toEqual(['x'])
@@ -1071,5 +1074,143 @@ describe('routing plug-ins', () => {
     expect(JSON.stringify(r)).not.toContain('secret')
     // Nothing can run: the warning still goes with the answer.
     expect(route([on('a', { refusals: ['Machine is offline.'] })], [broken])).toMatchObject({ error: 'NO_CANDIDATE', warnings: [expect.stringContaining('"Broken"')] })
+  })
+})
+
+/** Task #3163 (Ken, 2026-11-05, production): each slot kept whichever candidate's title sorted first, so for small work Astra
+ *  xhigh was offered 2,010 times against Sol high 67, and Opus high 2,356 against Sonnet high 127. The Routing rules call for
+ *  Sonnet high or Sol high for small, low or medium work, and Opus high or Astra xhigh for big, hard, risky, security or review
+ *  work. These run on the catalog's rows as served (backend superTabs/catalog.ts). */
+describe('the model the task\'s size calls for', () => {
+  const served: Catalog = { grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] }, models: [
+    { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
+    { engine: 'claude', model: 'opus', effort: 'xhigh', strength: 3, cost: 4, offered: true },
+    { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true, engineDefault: true },
+    { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true },
+    { engine: 'claude', model: 'sonnet', effort: 'high', strength: 2, cost: 2, offered: true },
+    { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false },
+  ] }
+  /** Every row of the catalog as a new agent on [machine], one per engine it runs, as routeCommand.ts probes them. */
+  const rows = (machine: string, engines: Array<'claude' | 'codex'> = ['claude', 'codex']) => served.models.filter(m => engines.includes(m.engine))
+    .map(m => probe({ machineId: machine, machineName: machine, engine: m.engine, model: m.model, effort: m.effort, quality: m.strength, cost: m.cost,
+      quota: windows([80, 3 * H], [70, 4 * D], `${machine}-${m.engine}`) }))
+  const offers = (r: ReturnType<typeof choose>, kind: Probe['kind'] = 'new') => ok(r).shown.filter(s => s.kind === kind && !s.gridModel)
+  const models = (r: ReturnType<typeof choose>) => [...new Set(offers(r).map(s => `${s.engine} ${s.model} ${s.effort}`))].sort()
+  const machines = ['Gray.local', 'daniel-pc', 'Kay.local']
+
+  it('offers Sonnet high and Sol high for small, low or medium work, never Opus or Astra', () => {
+    for (const patch of [{ size: 'small', difficulty: 'low' }, { size: 'small', difficulty: 'medium', risk: 'medium' }, { size: 'medium', difficulty: 'medium' }] as const) {
+      const r = choose(machines.flatMap(m => rows(m)), served, a(patch), NOW)
+      expect(models(r), JSON.stringify(patch)).toEqual(['claude sonnet high', 'codex gpt-6.1-sol high'])
+      // Every machine keeps its row of each engine.
+      for (const m of machines) expect(offers(r).filter(s => s.machineName === m).map(s => s.engine).sort()).toEqual(['claude', 'codex'])
+    }
+  })
+  it('offers Opus high and Astra xhigh for big, hard, risky, security or review work', () => {
+    for (const patch of [{ size: 'large' }, { size: 'small', difficulty: 'high' }, { size: 'small', risk: 'high' }, { size: 'small', kind: 'security' }, { size: 'small', kind: 'review' }] as const) {
+      const r = choose(machines.flatMap(m => rows(m)), served, a({ difficulty: 'low', ...patch }), NOW)
+      // Under 12 rows the route fills with more rows of the same tier (Opus xhigh), never with Sonnet or Sol.
+      expect(models(r).filter(m => /sonnet|sol/.test(m)), JSON.stringify(patch)).toEqual([])
+      for (const m of machines) {
+        expect(offers(r).filter(s => s.machineName === m).map(s => `${s.engine} ${s.model} ${s.effort}`))
+          .toEqual(expect.arrayContaining(['claude opus high', 'codex gpt-6-astra xhigh']))
+      }
+    }
+  })
+  it('keeps both models of each slot when the task gives no size', () => {
+    const unsized = parseAssessment({ difficulty: 'low', risk: 'low', why: 'Older agent.' }) as Assessment
+    expect(unsized).toMatchObject({ size: 'medium', unsized: true })
+    // The marker is the route's own: the record sends the size as before.
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', size: 'small', why: 'x' })).not.toHaveProperty('unsized')
+    const r = choose(machines.flatMap(m => rows(m)), served, unsized, NOW)
+    for (const m of machines) {
+      const here = offers(r).filter(s => s.machineName === m).map(s => `${s.engine} ${s.model} ${s.effort}`)
+      expect(here).toEqual(expect.arrayContaining(['claude opus high', 'claude sonnet high', 'codex gpt-6-astra xhigh', 'codex gpt-6.1-sol high']))
+    }
+    // An unsized task that is hard is still strong work.
+    expect(models(choose(machines.flatMap(m => rows(m)), served, { ...unsized, difficulty: 'high' }, NOW))).toEqual(['claude opus high', 'codex gpt-6-astra xhigh'])
+  })
+  // Review of #3117: the Routing rules move small work to Sonnet or Sol after a failed review, and to Opus or Astra after a
+  // second. The route counts the task's ended attempts (routeCommand.ts); one it could not read keeps both models.
+  it('offers Opus high and Astra xhigh to small work on its third attempt, and both when its attempts could not be read', () => {
+    const small = (ended: number | null) => models(choose(machines.flatMap(m => rows(m)), served, a({ size: 'small', difficulty: 'low', ended }), NOW))
+    expect(small(1)).toEqual(['claude sonnet high', 'codex gpt-6.1-sol high'])
+    expect(small(2)).toEqual(['claude opus high', 'codex gpt-6-astra xhigh'])
+    expect(small(null)).toEqual(['claude opus high', 'claude sonnet high', 'codex gpt-6-astra xhigh', 'codex gpt-6.1-sol high'])
+    expect([tierOf(a({ size: 'small', ended: 0 })), tierOf(a({ size: 'small', ended: 3 })), tierOf(a({ size: 'small', ended: null }))]).toEqual(['standard', 'strong', null])
+  })
+  it('keeps a slot whose machine offers neither model of the tier, on its first row', () => {
+    const only = served.models.filter(m => m.model === 'opus' && m.effort === 'xhigh')
+      .map(m => probe({ machineId: 'x', machineName: 'x', engine: m.engine, model: m.model, effort: m.effort, quality: m.strength, cost: m.cost }))
+    expect(offers(choose(only, served, a({ size: 'small', difficulty: 'low' }), NOW)).map(s => s.title)).toEqual(['New agent · Claude opus xhigh · x'])
+  })
+  it('prefers the idle member on the tier\'s model, reading a member\'s reported model through the catalog', () => {
+    const member = (agentId: string, model: string, effort: string) => probe({ kind: 'member', agentId, name: agentId, machineId: 'Gray.local', machineName: 'Gray.local',
+      engine: 'claude', model, effort, activity: 'idle' })
+    const members = [member('Cedar', 'claude-opus-4-7', 'high'), member('Ash', 'claude-sonnet-4-5', 'high')]
+    const small = choose([...rows('Gray.local'), ...members], served, a({ size: 'small', difficulty: 'low' }), NOW)
+    expect(offers(small, 'member').map(s => s.name)).toEqual(['Ash'])
+    const large = choose([...rows('Gray.local'), ...members], served, a({ size: 'large' }), NOW)
+    expect(offers(large, 'member').map(s => s.name)).toEqual(['Cedar'])
+  })
+  // The shape of an 11-05 route on production: 22 machines by their real names, some with Claude only, idle members on Opus,
+  // Sonnet and Astra, and a grid model on one.
+  it('over a real-shaped list, offers per model what the size calls for, on every machine', () => {
+    const names = ['2Apple-MK1-A3s-MacBook-Pro.local', 'daniel-pc', 'Darren-MacBook.local', 'Diego\'s Mac', 'Elvis-MacBook-Pro.local', 'Gray.local', 'Kay.local',
+      'Mac 3', 'MacBook-Pro-TD.local', 'MacbookPro.local', 'MacBookPro2021.local', 'Mac-Studio.local', 'Mini-1.local', 'Mini-2.local', 'nam-mbp.local',
+      'Phong-MacBook.local', 'remote-1', 'Tony-MacBook-Pro.local', 'tri-mac.local', 'Vinh-Air.local', 'Win-Rig', 'zeta-linux']
+    const claudeOnly = new Set(['Diego\'s Mac', 'Win-Rig'])
+    const fresh = names.flatMap(n => rows(n, claudeOnly.has(n) ? ['claude'] : ['claude', 'codex']))
+    const member = (agentId: string, machine: string, engine: 'claude' | 'codex', model: string, effort: string) =>
+      probe({ kind: 'member', agentId, name: agentId, machineId: machine, machineName: machine, engine, model, effort, activity: 'idle' })
+    const members = [member('Fir', 'daniel-pc', 'claude', 'claude-opus-4-7', 'high'), member('Cedar', 'Gray.local', 'claude', 'opus', 'medium'),
+      member('Guide', 'Gray.local', 'codex', 'gpt-6-astra', 'xhigh'), member('Rowan3', 'Elvis-MacBook-Pro.local', 'claude', 'opus', 'high'),
+      member('Elm', 'MacbookPro.local', 'claude', 'sonnet', 'high'), member('Ginkgo', 'MacBookPro2021.local', 'claude', 'opus', 'high'),
+      member('Wren', 'MacBookPro2021.local', 'claude', 'sonnet', 'high')]
+    const grid = probe({ machineId: 'Kay.local', machineName: 'Kay.local', engine: 'codex', model: 'default', effort: 'default', quality: 2, cost: 0,
+      gridModel: 'kimi-k3', gridName: 'Kimi K3', gridKind: 'local' })
+    const all = [...members, ...fresh, grid].reverse()
+    const count = (r: ReturnType<typeof choose>) => {
+      const by: Record<string, number> = {}
+      for (const s of offers(r)) by[`${s.model} ${s.effort}`] = (by[`${s.model} ${s.effort}`] ?? 0) + 1
+      return by
+    }
+    const codexMachines = names.length - claudeOnly.size
+    const small = choose(all, served, a({ size: 'small', difficulty: 'low' }), NOW)
+    expect(count(small)).toEqual({ 'sonnet high': names.length, 'gpt-6.1-sol high': codexMachines })
+    expect(ok(small).shown.length).toBeLessThanOrEqual(64)
+    // Members stay, one per machine and engine, on the tier's model where one is idle there.
+    expect(offers(small, 'member').map(s => s.name).sort()).toEqual(['Cedar', 'Elm', 'Fir', 'Guide', 'Rowan3', 'Wren'])
+    expect(ok(small).shown.filter(s => s.gridModel).map(s => s.machineName)).toEqual(['Kay.local'])
+    const big = choose(all, served, a({ size: 'large', difficulty: 'high' }), NOW)
+    expect(count(big)).toEqual({ 'opus high': names.length, 'gpt-6-astra xhigh': codexMachines })
+    expect(offers(big, 'member').map(s => s.name).sort()).toEqual(['Cedar', 'Elm', 'Fir', 'Ginkgo', 'Guide', 'Rowan3'])
+  })
+})
+
+/** Task #3163: since the record without a pick (#3010) only each candidate's account and spend were kept, so 3,905 of 3,915
+ *  Codex candidates on production had no fit status, and quota at route time could not be measured. */
+describe('each candidate\'s quota in the record', () => {
+  const c = () => ok(choose([probe({ machineId: 'a', machineName: 'a', quota: windows([60, 2 * H], [42, 3 * D], 'A') }),
+    probe({ machineId: 'b', machineName: 'b', quota: { known: false, leftPercent: null, resetsAt: null } }),
+    probe({ machineId: 'c', machineName: 'c', quota: { known: true, leftPercent: 30, resetsAt: NOW + D } })], policy, a(), NOW))
+  const fits = (record: Record<string, unknown>) => (record.candidates as Array<{ fit?: Record<string, unknown> }>).map(x => x.fit)
+  it('records each candidate\'s fit status, weekly % left and reset', () => {
+    const choice = c()
+    expect(fits(recordOf(choice, decide(choice), a()))).toEqual([
+      expect.objectContaining({ status: 'fits', left: 42, resetsAt: NOW + 3 * D }),
+      expect.objectContaining({ status: 'unknown', left: null, resetsAt: null }),
+      // A reading with no windows named: its tightest, as quotaBrief reads it.
+      expect.objectContaining({ left: 30, resetsAt: NOW + D }),
+    ])
+  })
+  it('leaves them out for a backend from before them, which refuses them', () => {
+    const choice = c(), v = decide(choice)
+    const unquoted = recordOf(choice, v, a(), 'unquoted')
+    expect(unquoted).not.toHaveProperty('pick')
+    expect(unquoted.via).toBe('instructions')
+    for (const fit of fits(unquoted)) expect(Object.keys(fit!)).toEqual(['status', 'coverage', 'effectiveCost', 'expiring', 'spend', 'account'])
+    for (const fit of fits(recordOf(choice, v, a(), 'picked'))) expect(fit).not.toHaveProperty('left')
+    for (const fit of fits(recordOf(choice, v, a(), 'unkinded'))) expect(fit).not.toHaveProperty('resetsAt')
   })
 })

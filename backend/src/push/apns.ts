@@ -1,6 +1,6 @@
 import { sign } from 'node:crypto'
 import http2 from 'node:http2'
-import type { ApnsKeys } from './keys.js'
+import type { ApnsKey, ApnsKeys } from './keys.js'
 import type { PushDevice } from './devices.js'
 import { SEND_TIMEOUT_MS, SWARM_CHANNEL, withTimeout, type PhoneNotice, type Sender, type SendResult } from './sender.js'
 
@@ -17,23 +17,26 @@ const GONE = new Set(['Unregistered', 'DeviceTokenNotForTopic', 'BadDeviceToken'
 const base64url = (value: string | Buffer) => Buffer.from(value).toString('base64url')
 
 /**
- * Sends to iPhones through Apple's HTTP/2 API with a token signed by the team's key (task #2905). An Xcode build's token is
- * known only to the sandbox host: production calls it bad, so it is tried there once, and the device is marked (`sandbox`).
+ * Sends to iPhones through Apple's HTTP/2 API (task #2905), each host with a token signed by its own environment's key: Apple
+ * refuses the production key on the sandbox host and the other way round (Ken, 11-05). An Xcode build's token is known only to
+ * the sandbox host: production calls it bad, so it is tried there once, and the device is marked (`sandbox`). With no sandbox
+ * key, nothing goes to the sandbox host: such a push is skipped (`unconfigured`) and the token kept.
  */
 export function apnsSender(keys: ApnsKeys, options: { transport?: ApnsTransport; now?: () => number; timeoutMs?: number } = {}): Sender {
   const transport = options.transport ?? http2Transport(), now = options.now ?? Date.now, timeoutMs = options.timeoutMs ?? SEND_TIMEOUT_MS
-  let jwt: { value: string; at: number } | null = null
-  const bearer = () => {
-    const at = now()
-    if (!jwt || at - jwt.at >= JWT_RENEW_MS) {
-      const signed = `${base64url(JSON.stringify({ alg: 'ES256', kid: keys.keyId }))}.${base64url(JSON.stringify({ iss: keys.teamId, iat: Math.floor(at / 1000) }))}`
-      jwt = { value: `${signed}.${base64url(sign('sha256', Buffer.from(signed), { key: keys.privateKey, dsaEncoding: 'ieee-p1363' }))}`, at }
-    }
-    return jwt.value
+  const jwts = new Map<ApnsKey, { value: string; at: number }>()
+  const bearer = (key: ApnsKey) => {
+    const at = now(), jwt = jwts.get(key)
+    if (jwt && at - jwt.at < JWT_RENEW_MS) return jwt.value
+    const signed = `${base64url(JSON.stringify({ alg: 'ES256', kid: key.keyId }))}.${base64url(JSON.stringify({ iss: keys.teamId, iat: Math.floor(at / 1000) }))}`
+    const value = `${signed}.${base64url(sign('sha256', Buffer.from(signed), { key: key.privateKey, dsaEncoding: 'ieee-p1363' }))}`
+    jwts.set(key, { value, at })
+    return value
   }
+  const noSandboxKey: SendResult = { outcome: 'unconfigured', reason: 'no APNs sandbox key' }
   const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(transport({
     sandbox, path: `/3/device/${device.token}`,
-    headers: { authorization: `bearer ${bearer()}`, 'apns-topic': keys.topic, 'apns-push-type': 'alert', 'apns-priority': '10',
+    headers: { authorization: `bearer ${bearer(sandbox ? keys.sandbox! : keys.production)}`, 'apns-topic': keys.topic, 'apns-push-type': 'alert', 'apns-priority': '10',
       'apns-expiration': String(Math.floor(now() / 1000) + 24 * 60 * 60) },
     body: JSON.stringify({ aps: { alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, sound: 'default',
       'thread-id': SWARM_CHANNEL, category: SWARM_CHANNEL }, key: notice.key, link: notice.link }),
@@ -46,8 +49,11 @@ export function apnsSender(keys: ApnsKeys, options: { transport?: ApnsTransport;
   return {
     async send(device, notice) {
       try {
+        if (device.sandbox && !keys.sandbox) return noSandboxKey
         const answer = await ask(device, notice, device.sandbox)
         if (device.sandbox || answer.status !== 400 || answer.reason !== 'BadDeviceToken') return judged(answer, false)
+        // Perhaps an Xcode build's token: only the sandbox host can say, with the sandbox key.
+        if (!keys.sandbox) return noSandboxKey
         return judged(await ask(device, notice, true), true)
       } catch (error) {
         return { outcome: 'failed', reason: (error as Error).message === 'timeout' ? 'timeout' : (error as NodeJS.ErrnoException).code ?? (error as Error).message }
