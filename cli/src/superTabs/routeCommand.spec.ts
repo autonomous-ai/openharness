@@ -3,6 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
 import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
@@ -242,6 +243,18 @@ describe('routeTask', () => {
     expect(request.heavy).toEqual(['build'])
     expect(placedHeavyWork([{ request, requestedAt: Date.now() }], Date.now()).get('m1')).toMatchObject({ agents: 1, memoryBytes: 8e9 })
   })
+  // Ken, 11-05: a PM put work on the account another project's PM ran on; the row now says whose PM it keeps running.
+  it('notes on each candidate whose account a project\'s PM runs on which project and PM that is', async () => {
+    const project = { id: 'p1', name: 'openharness', leadConversationId: 'lead' }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents, conversations: conversations(), projects: [project] } },
+      policy: { policy, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where as never, opener(), () => 'op') as { candidates: Array<{ machineId: string; engine?: string; title: string; notes?: string[] }> }
+    const onPm = answer.candidates.filter(c => c.machineId === 'm1' && c.title.includes('Claude'))
+    expect(onPm.length).toBeGreaterThan(0)
+    for (const row of onPm) expect(row.notes).toContain(PM_ACCOUNT_NOTE(['openharness (Lead)']))
+    expect(answer.candidates.filter(c => !(c.machineId === 'm1' && c.title.includes('Claude'))).every(c => !(c.notes ?? []).some(n => n.startsWith('This account runs the PM')))).toBe(true)
+  })
+
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })
     const s = scoped({ tab: state })
@@ -312,7 +325,8 @@ describe('routeTask', () => {
       const { result, candidates } = await route([...marked, healthy],
         [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
       expect(lineOf(candidates, 'Multiply')).toContain(note)
-      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note] })]) })
+      // a1 shares the Lead's account (m1, Claude), so the PM-account note sits beside it (pmAccounts.ts).
+      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note, PM_ACCOUNT_NOTE(['lead (Lead)'])] })]) })
     })
     it('carries no note once it finished a new task, which clears its mark', async () => {
       const { candidates } = await route([...agents, healthy],
