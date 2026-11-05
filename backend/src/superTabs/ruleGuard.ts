@@ -45,10 +45,14 @@ const WHY: Record<DroppedRule['why'], string> = {
  * request merged on GitHub. A task that went
  * quiet is in the state only when the save names it (tasks), which loads it.
  */
-function rulePlaces(state: SuperTabState, project: SwarmProject): RulePlace[] {
-  // Merged only as the Swarm itself read it on GitHub (Conversation.mergeSeen), never by the task's own merge record, which
-  // any agent of the project writes with any link (River, review of #3220).
-  const seenMerged = (c: Conversation) => Object.keys(c.mergeSeen ?? {}).length > 0
+function rulePlaces(state: SuperTabState, project: SwarmProject, merges: Readonly<Record<string, number | null>>): RulePlace[] {
+  // Merged only as GitHub itself says, read by the store before this save ([merges]), never by the task's own merge record,
+  // which any agent of the project writes with any link (River, review of #3220); and only after the rule went into its brief
+  // (briefAt): an older merge never carried it (#3463). A task from before briefAt counts any merge, as it did.
+  const seenMerged = (c: Conversation) => (c.pullRequestUrls ?? []).some(url => {
+    const at = merges[url]
+    return typeof at === 'number' && (c.briefAt === undefined || at > c.briefAt)
+  })
   const records = projectRules(state, project.id).map(r => ({ text: r.text, people: [r.askedBy], where: 'the rules record', open: false }))
   const tasks = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind
     && !c.reviewOf && !c.step && !c.audience && c.brief && (seenMerged(c) || c.assignment?.status !== 'cancelled'))
@@ -64,12 +68,12 @@ function rulePlaces(state: SuperTabState, project: SwarmProject): RulePlace[] {
  * several people needs each of them. A name that is no member is the project owner's to allow.
  */
 export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[], since: number): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
+  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
   const told = new Map<string, DroppedRule[]>()
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
   // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
-  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`, rulePlaces(state, project))
+  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`, rulePlaces(state, project, merges))
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
