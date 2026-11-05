@@ -43,12 +43,10 @@ export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', m
 export const PULL_PATCH_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
-/** The most files GitHub lists for a pull request (GET /pulls/{number}/files). */
-export const PULL_FILES_MAX = 3000
 /** The most files GitHub gives for a comparison of two commits (GET /compare/{base}...{head}). */
 export const COMPARE_FILES_MAX = 300
 const PUSH_ORIGINS_KEPT = 1000
-/** GitHub's files of a pull request or a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
+/** GitHub's files of a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
 function filesOf(body: unknown[]): PullRequestFile[] | null {
   const text = (value: unknown) => typeof value === 'string' ? value : undefined
   const files: PullRequestFile[] = []
@@ -668,32 +666,10 @@ export class GitHubApp {
     }
   }
 
-  /** A pull request's files with their patches (GET /repos/{owner}/{repo}/pulls/{number}/files), read with a token of
-   *  [PULL_WATCH_PERMISSIONS]: what it changes now. Null when GitHub cannot say, or lists as many as it ever lists
-   *  ([PULL_FILES_MAX]), as it may then have left some out. Never a head's patch: a push between pages mixes heads, and a
-   *  removed file's link names the base, which ties it to no head (pullRequestPatchFiles). */
-  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<PullRequestFile[] | null> {
-    const files: PullRequestFile[] = []
-    try {
-      for (let page = 1; files.length < PULL_FILES_MAX; page++) {
-        const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
-        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
-        const listed = filesOf(answer.body)
-        if (!listed) return null
-        files.push(...listed)
-        if (answer.body.length < 100) return files
-      }
-      return null
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
-    }
-  }
-
   /** The files of a pull request at [head], for its patch id (superTabs/pullRequestPatch.ts, #3394), read with a token of
    *  [PULL_PATCH_PERMISSIONS]: the comparison of the base and head commits the pull request names in one answer
    *  (GET /pulls/{number}, then GET /compare/{base}...{head}), two fixed commits no push changes (review of #3218, round 3:
-   *  a listing's removed files tie it to no head). Null unless the pull request still names [head], and when GitHub cannot
+   *  a listing of the pull request's files ties removed ones to no head, and pages to no single head). Null unless the pull request still names [head], and when GitHub cannot
    *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. With the branch it
    *  merges into from the same answer, which the patch id names (security review of #3218, round 3). */
   async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; files: PullRequestFile[] } | null> {

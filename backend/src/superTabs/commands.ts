@@ -4041,7 +4041,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         message(task.id, `${task.assignment!.reopened!.why} ${BACK_WITH_YOU}`, [task.assignment!.agentId], null, SYSTEM_ROW)
         recordTaskState(state, task, context.now)
       }
-      if (!command.passed && !byAssignee) reopen(group)
+      // Only a failure that counts (#3394, review of #3218 round 4): one for a head the pull request moved past reopens nothing.
+      if (counts && !command.passed && !byAssignee) reopen(group)
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
       if (counts && !command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set

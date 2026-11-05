@@ -622,22 +622,6 @@ describe('watching a pull request', () => {
     expect((await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)).toContain(251)
   })
 
-  // Dee, #3394: a pull request's files, for its patch id (superTabs/pullRequestPatch.ts), every page, read once per new head.
-  it('reads a pull request\'s files, every page, with the watch\'s read-only token', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
-    seed(github)
-    const at = (name: string, head = HEAD) => `https://api.github.com/repos/acme/app/contents/${name}?ref=${head}`
-    github.files.set('acme/app#12', Array.from({ length: 150 }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified', sha: `s${i}`, patch: `@@ -1 +1 @@\n-${i}\n+${i + 1}`,
-      contents_url: at(`f${i}.ts`) })))
-    github.files.get('acme/app#12')!.push({ filename: 'logo.png', status: 'renamed', sha: 'png', previous_filename: 'old.png', contents_url: at('logo.png') })
-    const files = await app.pullRequestFiles(repo, 12, token)
-    expect(files).toHaveLength(151)
-    expect(files![0]).toEqual({ filename: 'f0.ts', status: 'modified', sha: 's0', patch: '@@ -1 +1 @@\n-0\n+1' })
-    expect(files![150]).toEqual({ filename: 'logo.png', status: 'renamed', sha: 'png', previousFilename: 'old.png' })
-    expect(github.calls.filter(c => c.path === '/repos/acme/app/pulls/12/files')).toHaveLength(2)
-  })
-
   // Review of #3218 (Ledger, round 3), Important 3: listed files, removed ones above all, cannot be tied to a head (a push and a
   // push back between reads). A head's patch is read from the comparison of the base and head commits the pull request named
   // in one answer: two fixed commits, which no push changes.
@@ -670,15 +654,6 @@ describe('watching a pull request', () => {
     expect((await app.pullRequestPatchFiles(repo, 12, token, head))?.files).toHaveLength(1)
     github.compares.set(`acme/app@${base}...${head}`, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
     expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
-  })
-
-  it('answers no files when GitHub cannot list them, or lists as many as it ever lists (it may have left some out)', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
-    expect(await app.pullRequestFiles(repo, 99, token)).toBeNull()
-    seed(github)
-    github.files.set('acme/app#12', Array.from({ length: 3000 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
-    expect(await app.pullRequestFiles(repo, 12, token)).toBeNull()
   })
 
   it('answers null when GitHub cannot say', async () => {

@@ -33,8 +33,6 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
   /** The files of a comparison, by `owner/name@BASE...HEAD`, lower case: GET /compare/{base}...{head}. */
   const compares = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string }>>()
-  /** A pull request's files, by `owner/name#number`, lower case: GET /pulls/{number}/files. */
-  const files = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string; contents_url?: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
@@ -154,11 +152,10 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
         const listed = compares.get(`${repoKey}@${compared[1]}...${compared[2]}`)
         return listed ? json(200, { status: 'ahead', files: listed }) : json(404, { message: 'Not Found' })
       }
-      const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments|files)$/.exec(repoPath[3] ?? '')
+      const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments)$/.exec(repoPath[3] ?? '')
       if (talk) {
-        if (talk[3] === 'files' && !files.has(`${repoKey}#${talk[2]}`)) return json(404, { message: 'Not Found' })
         // Oldest first, a page at a time, with a Link to the last page as GitHub sends it.
-        const all: unknown[] = (talk[3] === 'reviews' ? reviews : talk[3] === 'files' ? files : comments).get(`${repoKey}#${talk[2]}`) ?? []
+        const all: unknown[] = (talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? []
         const size = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1), last = Math.max(1, Math.ceil(all.length / size))
         const answer = tagged(all.slice((page - 1) * size, page * size))
         if (last > 1) answer.headers.set('link', `<${FAKE_API}${url.pathname}?per_page=${size}&page=${last}>; rel="last"`)
@@ -169,7 +166,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, compares, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */
