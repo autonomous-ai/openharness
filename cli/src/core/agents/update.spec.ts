@@ -19,6 +19,7 @@ function setup(over: Partial<AgentUpdateDeps> = {}, agent: RegisteredSession | n
       rename: vi.fn((_id: string, name: string) => row({ ...agent, defaultName: name })),
       markOpened: vi.fn(() => row({ ...agent, lastOpenedAt: NOW })),
       terminalAvailable: vi.fn(() => true),
+      setLaunchModel: vi.fn(() => true),
     },
     onRuntimeProfileUpdate: vi.fn(async () => {}),
     onAgentRename: vi.fn(),
@@ -62,6 +63,26 @@ describe('a model and effort', () => {
     expect(deps.onRuntimeProfileUpdate).toHaveBeenCalledWith('a1', 'runtime-v1:s1:claude:opus@high')
     expect(heard).toEqual([['reply', { agent: { id: 'a1', name: 'Agent', lastOpenedAt: null } }]])
     expect(Object.keys(heard[0][1] as object)).toEqual(['agent'])
+  })
+
+  // Task #3395: a person's pick is what the session relaunches with (lib/launchOverrides.ts), not the model it was first
+  // launched with, which a reopen would otherwise put back.
+  it('records the pick as the model its session relaunches with, its effort only where the engine takes it', async () => {
+    const { ask, deps } = setup()
+    await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:sonnet@high' })
+    expect(deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', { model: 'sonnet', effort: 'high' })
+    await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:opus@ultracode' })
+    expect(deps.registry.setLaunchModel).toHaveBeenLastCalledWith('a1', { model: 'opus', effort: null })
+    const codex = setup({}, row({ engine: 'codex' }))
+    await codex.ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:codex:gpt-6@high' })
+    expect(codex.deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', null)
+    // A pick the wire cannot read was the controller's to judge; nothing is recorded for it.
+    const unread = setup()
+    await unread.ask({ agentId: 'a1', selectedModel: 'runtime-v1:x' })
+    expect(unread.deps.registry.setLaunchModel).not.toHaveBeenCalled()
+    const failed = setup({ onRuntimeProfileUpdate: async () => { throw new RuntimeProfileControlError('BUSY') } })
+    await failed.ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:sonnet@high' })
+    expect(failed.deps.registry.setLaunchModel).not.toHaveBeenCalled()
   })
 
   it('refuses a profile that is not one, or with nothing to apply it, and says why a move failed', async () => {

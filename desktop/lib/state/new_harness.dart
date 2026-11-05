@@ -24,6 +24,7 @@ import '../core/git_worktree.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
+import '../super_tabs/new_repository.dart';
 import '../core/ssh_hosts.dart';
 import '../core/test_run.dart';
 import '../finder/finder_availability.dart';
@@ -64,8 +65,8 @@ enum NewHarnessField {
   profile,
 }
 
-/// What Project holds: a folder that exists, a project to make, or a
-/// GitHub repository to clone.
+/// What Project holds: a folder that exists, a project to make, a GitHub
+/// repository to clone, or one to create on GitHub first (New Project).
 @immutable
 class NewHarnessProject {
   /// A new project, named by the person or (null) after the agent and the time.
@@ -73,26 +74,40 @@ class NewHarnessProject {
     : folder = null,
       repository = null,
       generated = null,
+      newRepository = null,
       exact = false;
   NewHarnessProject.generated(ProjectFolderRequest request)
     : name = request.name,
       generated = request,
       folder = null,
       repository = null,
+      newRepository = null,
       exact = false;
   const NewHarnessProject.folder(String this.folder, {this.exact = false})
     : name = null,
       repository = null,
-      generated = null;
+      generated = null,
+      newRepository = null;
   const NewHarnessProject.clone(GitHubRepository this.repository)
     : name = null,
       folder = null,
+      generated = null,
+      newRepository = null,
+      exact = false;
+
+  /// New Project's New Repository (task #3374): created on GitHub at Start,
+  /// then cloned as [NewHarnessProject.clone] is.
+  const NewHarnessProject.newRepository(NewRepositoryAsk this.newRepository)
+    : name = null,
+      folder = null,
+      repository = null,
       generated = null,
       exact = false;
   final String? name;
   final String? folder;
   final GitHubRepository? repository;
   final ProjectFolderRequest? generated;
+  final NewRepositoryAsk? newRepository;
 
   /// The person picked this very folder (browsed or typed): a worktree stays
   /// itself instead of showing as its repository.
@@ -107,13 +122,15 @@ class NewHarnessProject {
       other.generated?.generatedLabel == generated?.generatedLabel &&
       other.folder == folder &&
       other.exact == exact &&
-      other.repository?.url == repository?.url;
+      other.repository?.url == repository?.url &&
+      other.newRepository == newRepository;
   @override
   int get hashCode => Object.hash(
     name,
     folder,
     exact,
     repository?.url,
+    newRepository,
     generated?.generatedAt,
     generated?.generatedLabel,
   );
@@ -1649,14 +1666,21 @@ class NewHarnessController extends ChangeNotifier {
 
   /// The address the Swarm clones the chosen repo from, or null when it is
   /// not known.
-  String? get leadRepositoryUrl => switch (_remoteOf(_machineId, _project)) {
-    final String remote when remote.startsWith('github.com/') =>
-      'https://$remote',
-    final remote => remote,
-  };
+  String? get leadRepositoryUrl {
+    // Not made yet: its address once it is, never a remote to keep.
+    if (_project.newRepository case final ask?) {
+      return 'https://github.com/${ask.slug}';
+    }
+    return switch (_remoteOf(_machineId, _project)) {
+      final String remote when remote.startsWith('github.com/') =>
+        'https://$remote',
+      final remote => remote,
+    };
+  }
 
   String? get _leadRepositoryName =>
       _project.repository?.name ??
+      _project.newRepository?.name ??
       switch (_project.folder) {
         final String folder => _pathsFor(_machineId, folder).basename(folder),
         null => null,
@@ -1908,6 +1932,7 @@ class NewHarnessController extends ChangeNotifier {
       !isCloud &&
       _project.folder == null &&
       _project.repository == null &&
+      _project.newRepository == null &&
       projectFolderSlug(_project.name ?? '') == null;
 
   /// A missing or ambiguous saved value stays visible until the person
@@ -2377,6 +2402,7 @@ class NewHarnessController extends ChangeNotifier {
   static const pasteBrowseId = 'project:paste:browse';
   static const pasteInvalidId = 'project:paste:invalid';
   static const cloneId = 'project:clone';
+  static const newRepositoryId = 'project:new-repository';
   static const _pasteIds = {
     pasteOpenId,
     pasteBrowseId,
@@ -2481,6 +2507,13 @@ class NewHarnessController extends ChangeNotifier {
           title: 'GitHub',
           detail: 'Clone a GitHub repository',
         ),
+      if (_desktopChoices && offersNewRepository)
+        const NewHarnessOption(
+          id: newRepositoryId,
+          synthetic: true,
+          title: 'New Repository',
+          detail: 'Create one on GitHub',
+        ),
       ...recent,
     ];
   }
@@ -2522,6 +2555,13 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (option?.id == repositoryId) {
       focusField(NewHarnessField.projectRepository);
+      return;
+    }
+    if (option?.id == newRepositoryId) {
+      field = NewHarnessField.launch;
+      query = '';
+      _refresh(resetCursor: true);
+      onNewRepository?.call();
       return;
     }
     if (option?.id == browseId) return;
@@ -2593,7 +2633,8 @@ class NewHarnessController extends ChangeNotifier {
             selected?.id == permissionsId ||
             selected?.id == profileId ||
             selected?.id == changeMachineId ||
-            selected?.id == newProjectId)) {
+            selected?.id == newProjectId ||
+            selected?.id == newRepositoryId)) {
       accept();
       return Future.value(NewHarnessOutcome.failed);
     }
@@ -4294,7 +4335,84 @@ class NewHarnessController extends ChangeNotifier {
   /// what happened to THAT request rather than start a second harness.
   AgentCreationAttempt? _attempt;
   final HarnessLaunchIntegration? integration;
-  String get actionLabel => integration?.actionLabel ?? 'New Harness';
+  String get actionLabel => _project.newRepository == null
+      ? integration?.actionLabel ?? 'New Harness'
+      : _repositoryFailed
+      ? 'Try again'
+      : 'Create and continue in GitHub';
+
+  // ---- New Repository (task #3374) ---------------------------------------
+
+  /// New Project in a Swarm whose server can create repositories.
+  bool get offersNewRepository =>
+      placesLead &&
+      integration?.createRepository != null &&
+      integration?.newRepositoryOwners != null;
+
+  /// Opens New Repository's prompt; the form sets it.
+  VoidCallback? onNewRepository;
+
+  /// The last create made nothing: Start reads Try again.
+  bool _repositoryFailed = false;
+
+  /// GitHub's sign-in is out in the browser: Check again reads the Swarm.
+  bool repositoryWaiting = false;
+
+  /// The repository named in New Repository's prompt, to create at Start.
+  void chooseNewRepository(NewRepositoryAsk ask) {
+    if (locked) return;
+    _project = NewHarnessProject.newRepository(ask);
+    _repositoryFailed = false;
+    error = null;
+    field = NewHarnessField.launch;
+    query = '';
+    _cycle = null;
+    _refresh(resetCursor: true);
+  }
+
+  /// Under the composer: what Start does with a repository to create.
+  String? get newRepositoryNote => switch (_project.newRepository) {
+    final ask? =>
+      'Creates ${ask.slug} on GitHub, then clones it on '
+          '${leadMachine?.name ?? machineLabel}',
+    null => null,
+  };
+
+  /// Creates [ask] through the person's GitHub sign-in, then starts as for
+  /// the repository it made; nothing starts when nothing was made.
+  Future<NewHarnessOutcome> _createRepository(NewRepositoryAsk ask) async {
+    final make = integration?.createRepository;
+    if (make == null) {
+      return _fail('Update Harness to create a repository here.');
+    }
+    busy = true;
+    error = null;
+    repositoryWaiting = true;
+    status = 'Creating ${ask.slug}…';
+    notifyListeners();
+    final NewRepositoryCreated made;
+    try {
+      made = await make(ask, task.trim());
+    } catch (failure) {
+      repositoryWaiting = false;
+      _repositoryFailed = true;
+      return _fail(failure.toString());
+    }
+    repositoryWaiting = false;
+    if (_disposed) return NewHarnessOutcome.failed;
+    final repository = GitHubRepository.parse(made.repositoryUrl);
+    if (repository == null) {
+      _repositoryFailed = true;
+      return _fail('GitHub gave an address Harness can’t read.');
+    }
+    busy = false;
+    status = null;
+    _repositoryFailed = false;
+    _project = NewHarnessProject.clone(repository);
+    notifyListeners();
+    return create();
+  }
+
   bool get needsAttachmentReview =>
       integration?.needsAttachmentReview?.call() == true;
   String get pendingActionLabel =>
@@ -4512,6 +4630,7 @@ class NewHarnessController extends ChangeNotifier {
     if (placesLead) {
       if (leadBlocked case final why?) return _fail(why);
     }
+    if (_project.newRepository case final ask?) return _createRepository(ask);
     if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
