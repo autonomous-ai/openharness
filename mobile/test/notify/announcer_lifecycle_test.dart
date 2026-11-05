@@ -54,11 +54,14 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(state);
     }
     expect(announcer.inFront, isFalse);
+    // Pocketed, even on the agent last on screen: the notice is posted. The
+    // first one is still up, unseen, so this one replaces it quietly (task #3248).
     expect(
       announcer.turnEnded(agent, news, watching: () => true),
-      AgentNotice.alert,
+      AgentNotice.quiet,
     );
     expect(system.shown, hasLength(2));
+    expect(system.shown.last.quiet, isTrue);
     expect(system.shown.last.body, 'Fixed the login screen.');
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
