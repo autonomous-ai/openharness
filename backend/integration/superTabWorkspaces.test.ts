@@ -253,6 +253,43 @@ describe('removing someone from a Workspace', () => {
     expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, peer, {})).statusCode).toBe(200)
     expect((await call('POST', `/api/super-tabs/${tab}/join`, peer, { operationId: randomUUID(), token })).statusCode).toBe(200)
   })
+
+  it('withdraws their pending invitation, so accepting it afterwards finds none and they stay removed', async () => {
+    const workspaceId = await workspace('Final')
+    // Sent before the removal, and never accepted: today it would bring them back as an admin.
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/invitations`, owner, { email: member.email, role: 'admin' })).statusCode).toBe(200)
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/members/${member.sub}/remove`, owner, {})).statusCode).toBe(200)
+    expect(await db.swarmWorkspaceInvitation.findUnique({ where: { id: `${workspaceId}:${member.email}` } })).toBeNull()
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, member, {})).statusCode).toBe(404)
+    expect((await db.swarmWorkspaceMember.findUniqueOrThrow({ where: { id: `${workspaceId}:${member.sub}` } })).removedAt).not.toBeNull()
+    expect((await workspacesOf(member)).map(o => o.id)).not.toContain(workspaceId)
+  })
+
+  it('refuses an invitation sent before their latest removal, and accepts one sent after it', async () => {
+    const workspaceId = await workspace('Stale')
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/members/${member.sub}/remove`, owner, {})).statusCode).toBe(200)
+    // As a removal before this fix left it: an admin invitation sent a minute before the removal, still pending.
+    const removal = await db.swarmWorkspaceRemoval.findFirstOrThrow({ where: { workspaceId, userId: member.sub } })
+    const sentAt = removal.removedAt.getTime() - 60_000
+    await db.swarmWorkspaceInvitation.create({ data: { id: `${workspaceId}:${member.email}`, workspaceId, email: member.email, role: 'admin',
+      invitedBy: owner.sub, expiresAt: new Date(sentAt + 14 * 24 * 60 * 60 * 1000) } })
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, member, {})).statusCode).toBe(404)
+    expect((await db.swarmWorkspaceMember.findUniqueOrThrow({ where: { id: `${workspaceId}:${member.sub}` } })).removedAt).not.toBeNull()
+    // A new invitation, sent after the removal, brings them back with its role.
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/invitations`, owner, { email: member.email, role: 'guest' })).statusCode).toBe(200)
+    const accepted = await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, member, {})
+    expect(accepted.statusCode).toBe(200)
+    expect(accepted.json().data.role).toBe('guest')
+  })
+
+  it('accepts an invitation for someone never removed as today', async () => {
+    const workspaceId = await workspace('Never removed')
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/invitations`, admin, { email: newcomer.email, role: 'member' })).statusCode).toBe(200)
+    const accepted = await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, newcomer, {})
+    expect(accepted.statusCode).toBe(200)
+    expect(accepted.json().data).toEqual({ workspaceId, role: 'member' })
+    expect(await roleOf(workspaceId, newcomer)).toBe('member')
+  })
 })
 
 describe('a machine contributed to Swarms of two Workspaces', () => {
