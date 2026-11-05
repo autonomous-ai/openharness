@@ -85,8 +85,8 @@ import UserNotifications
   }
 }
 
-/// `harness/push` — this phone's push address, and the pushes the person tapped (Dart:
-/// `lib/notify/push_channel.dart`).
+/// `harness/push` — this phone's push address, the pushes the person tapped, and the pushes still shown
+/// (Dart: `lib/notify/push_channel.dart`).
 ///
 /// `address` asks iOS for the APNs device token, which comes back to the app delegate; every call
 /// waiting then hears it. `forget` stops iOS delivering to it: the phone signed out. `changed` tells
@@ -122,6 +122,15 @@ final class PushChannel {
       case "take":
         result(self.waiting)
         self.waiting.removeAll()
+      case "shown":
+        // The keys of our pushes still in the notification centre: the app does not post them again
+        // (Dart: `PushChannel.shown`). The server keys a push as the app keys its own notice.
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+          let keys = delivered
+            .filter { $0.request.trigger is UNPushNotificationTrigger }
+            .compactMap { $0.request.content.userInfo["key"] as? String }
+          DispatchQueue.main.async { result(keys) }
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
