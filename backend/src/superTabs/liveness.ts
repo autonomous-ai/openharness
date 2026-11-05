@@ -1,3 +1,4 @@
+import { markIdle } from './pulse.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
 import { failedSessionStart } from './buddySessions.js'
@@ -430,7 +431,10 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
  *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
  *  loads only running work and must write no group (read/host.ts). */
 export function sweepForLead(state: SuperTabState, now: number): MessageDraft[] {
-  return [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+  const drafts = [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+  // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
+  markIdle(state, now)
+  return drafts
 }
 
 /** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act

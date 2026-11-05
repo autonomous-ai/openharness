@@ -57,7 +57,10 @@ export function reassemble(store: PartsStore): Json {
   if (projects) {
     state.projects = projects.map(project => {
       const stored = progress.get(String(project.id))
-      return stored ? { ...project, progress: progressOf(stored, project.id, project.leadConversationId, groups) } : project
+      // The board's pulse (task #3384): what the PM owes and who works, shown by status on its project.
+      const pulse = derived.pulse?.[String(project.id)]
+      const withPulse = pulse ? { ...project, pulse } : project
+      return stored ? { ...withPulse, progress: progressOf(stored, project.id, project.leadConversationId, groups) } : withPulse
     })
   }
   if (derived.otherProjectsWork !== undefined) state.otherProjectsWork = derived.otherProjectsWork

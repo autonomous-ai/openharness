@@ -1,3 +1,4 @@
+import { markIdle, owe, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
@@ -888,6 +889,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
+  // Every open group is loaded for a command (parts/load.ts): the board's idle mark is decided on it (pulse.ts).
+  markIdle(effects.state, context.now)
   return effects
 }
 
@@ -2282,6 +2285,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
       }
       const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
+      if (request) settleRequest(state, project, request.messageId)
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
         : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       const number = nextConversationNumber(state)
@@ -3324,6 +3328,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
       result.changed = react(group, command.messageId, command.on, context.reaction)
+      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.emoji, command.on)
       break
     }
     case 'message.edit':
@@ -3503,6 +3508,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its project on the row itself, so the row hides once its person loses that project (buddySessions.ts lostProjectRow).
       if (session?.inSession) Object.assign(effects.messages.at(-1)!, { buddySession: true, ...(session.project ? { buddyProject: session.project } : {}) })
       recordPost(state, group, actor, { replyTo: command.replyTo ?? command.answers ?? null, text, reply: context.reply, openTags: context.openTags }, context.now)
+      // What the PM owes (pulse.ts): a person's message that reached it, settled by its answer in the message's place.
+      if (!command.agentOnly) {
+        const sent = effects.messages.find(m => m.id === operationId)!
+        const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
+        if (actor.kind === 'person') owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
+        else settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+      }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
       if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)

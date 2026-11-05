@@ -60,6 +60,8 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
+  /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
+  pulse?: Record<string, import('../pulse.js').Pulse>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>

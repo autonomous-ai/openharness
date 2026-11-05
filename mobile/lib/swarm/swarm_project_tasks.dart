@@ -15,6 +15,7 @@ import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart' show swarmProjectWork;
+import 'swarm_pulse.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -114,7 +115,9 @@ String? _projectOf(SuperTabSnapshot snapshot, SwarmNeed need) => switch (need) {
 /// each need with Approve (a decision's recommended answer, held for Undo as
 /// everywhere) or Reply, which opens where it was asked; "Working" with its
 /// count, each task with its agent and its line; and "Done today", folded in
-/// one row. A row opens its chat ([onOpen]); a pull reads the Swarm again.
+/// one row. On top, the project's board pulse ([SwarmPulseStrip]) where the
+/// server sends one. A row opens its chat ([onOpen]); a pull reads the Swarm
+/// again.
 class SwarmProjectTasks extends StatefulWidget {
   const SwarmProjectTasks({
     super.key,
@@ -167,6 +170,8 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
           onTap: () => widget.onOpen(g.id),
         );
         final done = tasks.doneToday.length;
+        // The board pulse on top, from a server that sends it.
+        final pulse = snapshot.pulseOf(widget.projectId) != null;
         return RefreshIndicator(
           onRefresh: reader.refresh,
           child: ListView(
@@ -179,11 +184,17 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
               MediaQuery.paddingOf(context).bottom + AppSpace.xl,
             ),
             children: [
+              if (pulse)
+                SwarmPulseStrip(
+                  reader: reader,
+                  projectId: widget.projectId,
+                  onOpen: widget.onOpen,
+                ),
               if (tasks.waiting.isNotEmpty) ...[
                 SwarmCaption(
                   'Waiting on you',
                   count: tasks.waiting.length,
-                  first: true,
+                  first: !pulse,
                 ),
                 SwarmGroup(
                   children: [
@@ -205,7 +216,7 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
                 count: tasks.working.length,
                 countColor: AppColors.success,
                 countKey: const ValueKey('swarm-working-count'),
-                first: tasks.waiting.isEmpty,
+                first: !pulse && tasks.waiting.isEmpty,
               ),
               if (tasks.working.isEmpty)
                 Padding(

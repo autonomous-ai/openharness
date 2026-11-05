@@ -29,9 +29,12 @@ typedef _View = ({
 
 /// [parts] as [accountId] reads them: whose Buddies are whose depends on who
 /// reads. Each conversation carries when it last changed, which the state
-/// leaves out ([SuperTabConversation.changedAt]).
+/// leaves out ([SuperTabConversation.changedAt]), and each project's board
+/// pulse, from a server that sends it in `derived` ([SuperTabSnapshot.pulses];
+/// parts.dart stays the desktop's copy).
 _View _viewOf(SuperTabParts parts, String accountId) {
   final state = parts.state;
+  if (parts.derived['pulse'] case final Map pulse) state['pulse'] = pulse;
   for (final conversation in state['conversations'] as List) {
     if (conversation case {'id': final String id} && final Map row) {
       row['changedAt'] = parts.groupChangedAt(id);
