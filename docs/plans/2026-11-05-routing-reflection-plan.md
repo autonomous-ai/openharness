@@ -14,7 +14,7 @@
 
 - No new settings; existing messages remain untouched.
 - Keep owner/audience checks, proposal limits, expiry, deduplication and approval semantics.
-- No production reads or writes, schema changes, new collections or query changes.
+- No production reads or writes, schema changes, new collections or changed query shapes. Remove the unused evidence read with the report renderer.
 - Run affected tests locally; backend unit and Super Tab integration suites are automatic PR CI evidence.
 - PR body starts with “Requested by dee through Harness.”
 
@@ -45,9 +45,9 @@
 
 **Interfaces:** Preserve `postReflection` result keys and stable Decision IDs. `posted` counts fresh Decision writes, not chat posts; `empty` means no fresh proposal.
 
-- [ ] Commit regression tests for no chat writes with/without proposals, owner wording, preserved costs/history, and lifecycle/isolation.
-- [ ] Run focused tests and record the expected failures before production changes.
-- [ ] Remove report-message creation and rendering from the store path; retain owner Decision writes and serialization.
-- [ ] Simplify proposal wording to one change line and one reason line while retaining recognizable titles and approval routing lines.
-- [ ] Run focused unit/integration tests and backend typecheck; record red/green evidence in the PR.
+- [x] Commit regression tests for no chat writes with/without proposals, owner wording, preserved costs/history, and lifecycle/isolation.
+- [x] Run focused tests and record the expected failures before production changes.
+- [x] Remove report-message creation and rendering from the store path; retain owner Decision writes and serialization.
+- [x] Simplify proposal wording to one change line and one reason line while retaining recognizable titles and approval routing lines.
+- [x] Run focused unit/integration tests and backend typecheck; record red/green evidence in the PR.
 - [ ] Mark ready for automatic component CI; request an independent review step, then report evidence through task status.

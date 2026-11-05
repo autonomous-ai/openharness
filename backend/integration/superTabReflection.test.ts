@@ -15,8 +15,6 @@ import { reflectNightly } from '../src/lib/routingReflection.js'
 import { proposalTitle, reflectionMessageId } from '../src/superTabs/costs/reflection.js'
 import { poolRows } from './hostRows.test-support.js'
 
-// The nightly routing reflection (Scholes's roadmap, piece 2, 10-30): at 23:00 in the project's zone the worker posts what its
-// routed work cost and how it went, and asks its owner about routing changes. A fresh loopback replica set, created here.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '310000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -123,7 +121,6 @@ describe('the nightly routing reflection', () => {
     await reflectNightly(db, f.store, f.clock.now)
     expect(await f.reports()).toEqual([])
     f.clock.now = NIGHT
-    // Two passes at once, as two workers in a rolling deploy: one report.
     await Promise.all([reflectNightly(db, f.store, NIGHT), reflectNightly(db, f.store, NIGHT)])
     await reflectNightly(db, f.store, NIGHT + 15 * MINUTE)
     expect(await f.reports()).toEqual([])
@@ -148,14 +145,11 @@ describe('the nightly routing reflection', () => {
     expect((await f.store.costSummary(host, f.tab, 7, f.lead)).totals).toMatchObject({ attempts: 7, shipped: 1 })
   })
 
-  // Project instructions, phase 4 (decision 21): a Yes is a line the coordinator writes into the instructions. No approved
-  // list, no nightly reminder to the coordinator; the reflection reads the instructions instead.
   it('suppresses answered and written proposals without posting approval reminders', async () => {
     const f = await swarm()
     await f.ship()
     for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
     const GRID_TITLE = 'Start parser work on a subscription model instead of the grid'
-    /** The report [days] after the first night, with an attempt in its last day. */
     const night = async (on: string, days: number) => {
       f.clock.now = NIGHT + days * DAY
       await f.seed(f.group, { at: f.clock.now - HOUR })
@@ -179,7 +173,6 @@ describe('the nightly routing reflection', () => {
     await f.execute({ type: 'decision.answer', decisionId: again[0]!.id, choice: 0 })
     const approved = await night('2026-11-02', 3)
     expect(approved).toBe('empty')
-    // Until its line is in the instructions, each report says so: a Yes is never lost silently (final review of the branch).
     const line = 'Parser work starts on a subscription model, not on the grid.'
     expect((await db.superTabMessage.findMany({ where: { tabId: f.tab, recipientIds: { has: f.lead } } }))
       .filter(m => (m.source as { kind?: string } | null)?.kind === 'routing-reflection')).toEqual([])
@@ -188,17 +181,15 @@ describe('the nightly routing reflection', () => {
     const doc = await f.store.instructions(owner, f.tab, 'lead')
     await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: doc.revision, text: `${doc.text.trimEnd()}\n- ${line}\n`,
       summary: `Routing: ${line}`, askedBy: owner.sub }, host, f.lead)
-    // Approved lately and in the instructions: reported as there, not as missing.
     const written = await night('2026-11-03', 4)
     expect(written).toBe('empty')
-    // Answered over 14 days ago: the instructions alone keep it from being asked again, and the report says how the week ran.
     await db.superTabDecision.update({ where: { id: again[0]!.id }, data: { answeredAt: new Date(NIGHT - 28 * DAY) } })
     const later = await night('2026-11-04', 5)
     expect(later).toBe('empty')
     expect(await db.superTabDecision.count({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } })).toBe(0)
   })
 
-  it('keeps at most three proposals open, says when one was not asked, and lets one unanswered for 7 days expire (review of #2276)', async () => {
+  it('keeps at most three proposals open without notices, and expires them after 7 unanswered days', async () => {
     const f = await swarm()
     await f.ship()
     for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
@@ -268,7 +259,7 @@ describe('the nightly routing reflection', () => {
     }
   })
 
-  it('counts only its own project: never another project’s tasks, a private chat or the Leads conversation, and posts each where its people read it', async () => {
+  it('asks only about its own project, never another project, a private chat or the Leads conversation', async () => {
     const f = await swarm()
     await f.ship()
     // A private project of the owner's alone, with its own Lead and a stepped-up task.
@@ -291,7 +282,6 @@ describe('the nightly routing reflection', () => {
       projectId: hidden.projectId, conversationId: hidden.conversationId, personId: owner.sub, askerAgentId: hiddenLead,
       question: expect.stringContaining('3 of 3 parser tasks'),
     })])
-    // Someone outside the private project reads neither its chat nor its report; asking by another Swarm's id finds nothing.
     await expect(f.store.messages(host, f.tab, hidden.conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect((await f.store.decisions(host, f.tab, 'open')).decisions).toEqual([])
     const other = await swarm()
@@ -300,7 +290,7 @@ describe('the nightly routing reflection', () => {
     expect(await other.reports(hidden.conversationId)).toEqual([])
   })
 
-  it('tries a failed report again on the next pass, and the other projects still get theirs', async () => {
+  it('retries a failed reflection while other projects still receive their Decisions without reports', async () => {
     const f = await swarm()
     await f.ship()
     // A second project of the same Swarm, with its own Lead and a day of routed work.

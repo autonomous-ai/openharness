@@ -48,7 +48,7 @@ function seededWeek(): ReflectionInput {
     groups.push(group(g, [{ assignmentId: `d${i}`, firstReview: false }], { by: `d${i}b`, at: at(daysAgo) + 3 * HOUR }))
   })
   const failed: FailedStart = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: at(0.2) }
-  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], evidence: [], truncated: false, document: '# Project instructions\n\n## Routing\n\n- Opus builds.\n' }
+  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], document: '# Project instructions\n\n## Routing\n\n- Opus builds.\n' }
 }
 /** [n] more first reviews of a kind on a model, all as [passed], each shipped at $[cost]. */
 function more(week: ReflectionInput, kind: string, engine: string, model: string, effort: string, n: number, passed: boolean) {
@@ -124,8 +124,6 @@ describe('the nightly routing reflection', () => {
     expect(routingReflection({ ...week, decided: ['Stop routing test work to codex gpt-6.1-sol xhigh'] })!.proposals.map(p => p.title)).toEqual([UI, PARSER, DOCS])
   })
 
-  // Project instructions, phase 4 (decision 21): the approved list, its nightly reminder and the recall of a lapsed approval
-  // are gone; a proposal whose line the instructions hold is reported with how the last 7 days ran, never asked again.
   it('reads the instructions instead of an approved list', () => {
     const week = seededWeek()
     const [ui, parser] = routingReflection(week)!.proposals
