@@ -1,8 +1,11 @@
+import { execFileSync } from 'node:child_process'
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
-import { PrepareRetryError, prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
+import { PrepareRetryError, prepareEmptyProjectFolder, prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
 import { SuperTabHostError } from './wire.js'
 
 function fixture() {
@@ -13,8 +16,9 @@ function fixture() {
     projects: [{ id: 'project-a', repository, conversationIds: ['work'] }] }
   const start = { dispatched: false, request: { conversationId: 'work', cwd: join(root, 'project-a') } }
   const prepare = vi.fn(async () => start.request.cwd)
-  return { core, root, repository, row, start, prepare,
-    run: () => prepareSwarmProject(core, row, start, prepare) }
+  const empty = vi.fn(async (folderRoot: string, projectId: string) => join(folderRoot, projectId))
+  return { core, root, repository, row, start, prepare, empty,
+    run: () => prepareSwarmProject(core, row, start, prepare, undefined, undefined, empty) }
 }
 
 describe('per-project checkouts on a contributed swarm machine', () => {
@@ -59,11 +63,35 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     f.start.request.conversationId = 'unknown'
     await expect(f.run()).rejects.toThrow('no authorized project')
   })
-  it('tells the lead how to share a project recorded without a repository address', async () => {
+  // Task #3211: a project recorded without a repository address has nothing to clone; its work runs here in its own empty folder.
+  it('starts a project with no repository in its own empty folder here, without cloning anything', async () => {
     const f = fixture()
     f.repository.repositoryUrl = null as unknown as string
-    await expect(f.run()).rejects.toThrow(/Share a GitHub repository.*project\.repository command/)
+    await f.run()
+    expect(f.empty).toHaveBeenCalledExactlyOnceWith(f.root, 'project-a')
     expect(f.prepare).not.toHaveBeenCalled()
+  })
+  it('refuses a worktree start of a project with no repository, and a folder that is not the project\'s', async () => {
+    const f = fixture()
+    f.repository.repositoryUrl = null as unknown as string
+    Object.assign(f.start.request, { worktree: true })
+    await expect(f.run()).rejects.toThrow(/no repository.*without a worktree/)
+    Object.assign(f.start.request, { worktree: false, cwd: join(f.root, 'project-b') })
+    await expect(f.run()).rejects.toThrow('outside this project')
+    Object.assign(f.start.request, { cwd: join(f.root, 'project-a') })
+    f.empty.mockResolvedValueOnce('/elsewhere')
+    await expect(f.run()).rejects.toThrow('does not match')
+    expect(f.empty).toHaveBeenCalledOnce()
+    expect(f.prepare).not.toHaveBeenCalled()
+  })
+  it('keeps cloning a project with a repository, and says to move aside a folder left from before it was shared', async () => {
+    const f = fixture()
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledOnce()
+    expect(f.empty).not.toHaveBeenCalled()
+    f.prepare.mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“project-a” already exists. Select that folder from your projects.'))
+    await expect(f.run()).rejects.toMatchObject({ code: 'PROJECT_EXISTS',
+      message: expect.stringMatching(/already has a folder for this project.*before its repository was shared.*Move it aside/) })
   })
   it('clones over SSH when GitHub refuses this machine over the shared HTTPS address, and the reverse', async () => {
     const refused = () => new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.')
@@ -106,7 +134,7 @@ describe('per-project checkouts on a contributed swarm machine', () => {
   })
   it('refuses missing or unsafe repositories and a mismatched prepared checkout', async () => {
     const f = fixture()
-    for (const url of [undefined, 'file:///private/repo', 'https://secret@github.com/example/project', 'ext::command']) {
+    for (const url of ['file:///private/repo', 'https://secret@github.com/example/project', 'ext::command']) {
       f.repository.repositoryUrl = url as string
       await expect(f.run()).rejects.toThrow()
     }
@@ -264,7 +292,9 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     await expect(f.ready()).rejects.toThrow("could not clone the project repository with the Harness GitHub App's token")
     expect(f.prepare).toHaveBeenCalledTimes(1)
     f.prepare.mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', 'taken'))
-    await expect(f.ready()).rejects.toThrow('taken')
+    // A folder already in the clone's place is named, with what to do (#3211), and not tried again either.
+    await expect(f.ready()).rejects.toMatchObject({ code: 'PROJECT_EXISTS', message: expect.stringContaining('Move it aside') })
+    expect(f.prepare).toHaveBeenCalledTimes(2)
   })
 
   // 11-05: six first starts on four machines failed on one failed or stalled clone, which GitHub or the network often serves seconds later.
@@ -334,5 +364,55 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
   it('startGitHub reads nothing it need not', async () => {
     const f = hosted()
     expect(await startGitHub(f.core, f.row, f.start, { backend: f.backend, team: false })).toEqual({ token: TOKEN, repository: 'example/project', requester: 'olive@example.com' })
+  })
+})
+
+describe('a project\'s own empty folder, for a project with no repository (#3211)', () => {
+  const withRoot = async (body: (root: string) => Promise<void>) => {
+    const scratch = await realpath(await mkdtemp(join(tmpdir(), 'swarm-empty-folder-')))
+    try { await body(join(scratch, 'swarm-projects', 'tab')) } finally { await rm(scratch, { recursive: true, force: true }) }
+  }
+  it('makes it once, its owner\'s alone, as a git folder with no remote and no commit, and finds it again', async () => withRoot(async root => {
+    const folder = await prepareEmptyProjectFolder(root, 'project-a')
+    expect(folder).toBe(join(root, 'project-a'))
+    // Its owner's alone, as the work in it is (security review 1 of #3137, Minor).
+    expect((await lstat(folder)).mode & 0o777).toBe(0o700)
+    expect((await lstat(join(folder, '.git'))).isDirectory()).toBe(true)
+    expect(execFileSync('git', ['remote'], { cwd: folder, encoding: 'utf8' })).toBe('')
+    await writeFile(join(folder, 'notes.md'), 'kept')
+    expect(await prepareEmptyProjectFolder(root, 'project-a')).toBe(folder)
+    expect((await lstat(join(folder, 'notes.md'))).isFile()).toBe(true)
+  }))
+  it('refuses a link or a file where the folder goes, and never follows a link out of the Swarm\'s folder', async () => withRoot(async root => {
+    await mkdir(root, { recursive: true })
+    const outside = await mkdtemp(join(tmpdir(), 'swarm-outside-'))
+    try {
+      await symlink(outside, join(root, 'project-a'))
+      await expect(prepareEmptyProjectFolder(root, 'project-a')).rejects.toThrow(/not this project's own folder/)
+      await expect(lstat(join(outside, '.git'))).rejects.toMatchObject({ code: 'ENOENT' })
+      await writeFile(join(root, 'project-b'), 'a file')
+      await expect(prepareEmptyProjectFolder(root, 'project-b')).rejects.toThrow(/not this project's own folder/)
+    } finally { await rm(outside, { recursive: true, force: true }) }
+  }))
+})
+
+describe('preparing a start of a project with no repository (#3211)', () => {
+  it('asks for no GitHub token, on the owner\'s account or a Team account, as there is nothing to clone', async () => {
+    for (const team of [false, true]) {
+      const f = hosted()
+      f.repository.repositoryUrl = null as unknown as string
+      f.start.request.worktree = false
+      f.prepare.mockImplementation(async () => { throw new Error('nothing to clone') })
+      expect(await prepareSwarmStart(f.core, f.row, f.start, { backend: f.backend, team, prepare: f.prepare, fetch: f.fetch, revoke: f.revoke, empty: f.empty })).toBeNull()
+      expect(f.backend).not.toHaveBeenCalled()
+      expect(f.empty).toHaveBeenCalledExactlyOnceWith(f.root, 'project-a')
+      expect(f.fetch).not.toHaveBeenCalled()
+    }
+  })
+  it('still asks for a project with a repository', async () => {
+    const f = hosted()
+    await f.ready()
+    expect(f.backend).toHaveBeenCalledOnce()
+    expect(f.empty).not.toHaveBeenCalled()
   })
 })
