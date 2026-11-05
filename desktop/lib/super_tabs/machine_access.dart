@@ -296,7 +296,7 @@ class _SuperTabMachineAccessSettingState
         children: [
           if (entries.isEmpty)
             Text(
-              'Nothing listed yet. Add what this Mac can reach, like Fusion 360 or Lamp, so tasks that need it run here.',
+              'Nothing listed yet. Add what this machine can reach, like Fusion 360 or Lamp, so tasks that need it run here.',
               style: DesktopChrome.metadata(),
             ),
           if (own.isNotEmpty) heading('Your account'),
