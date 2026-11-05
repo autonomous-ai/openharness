@@ -2323,3 +2323,25 @@ model GitHubApprovalRefusal {
   @@unique([autonomousEnv, tabId, repository, projectId, userId])
   @@index([tabId])
 }
+
+/// A phone's push token (task #2905): where the server sends a thread reply or a tag for its person while the app is closed
+/// (push/devices.ts). One row per token, `_id` the SHA-256 of platform and token, so a phone signed in as someone else moves
+/// to them. Removed: by the phone at sign-out, when Apple or Google call the token dead, past the 10 newest of a person, and by
+/// the TTL index 90 days after `seenAt` (push_device_expiry); a signed-in phone registers again at every launch. About 300 bytes
+/// a row, at most 10 a person.
+model PushDevice {
+  id       String   @id @map("_id")
+  userId   String
+  /// ios | android
+  platform String
+  token    String
+  /// An iOS token from a development build, which only Apple's sandbox host accepts (push/apns.ts).
+  sandbox  Boolean  @default(false)
+  seenAt   DateTime
+
+  /// A command's told people's phones (devicesOf), and a person's newest ten.
+  @@index([userId])
+  /// Expires these rows (push/devices.ts ensurePushDeviceExpiry, made before the push). Declared so db push keeps it.
+  @@index([seenAt], map: "push_device_expiry")
+  @@map("push_devices")
+}
