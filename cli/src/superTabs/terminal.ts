@@ -324,8 +324,9 @@ export class TerminalHost {
       // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
       // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
       state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
-      // Failing now, on this read: the model alert's episode outlasts the retries by ten minutes, a restart's by as long.
-      await this.relay?.seen(agent.harnessId, this.core.agents.byAgent(agent.harnessId)?.engine,
+      // Failing now, on this read: the model alert's episode outlasts the retries by ten minutes, a restart's by as long. Not
+      // waited on: a restart takes up to a minute, and the other agents' reads and alerts must not wait behind it.
+      void this.relay?.seen(agent.harnessId, this.core.agents.byAgent(agent.harnessId)?.engine,
         { failingSince: modelFailing(read.text) && state.model ? state.model.since : null, waiting: read.hold !== null && WAITING.has(read.hold) })
         .catch(error => this.log(`relay recovery: ${error instanceof Error ? error.message : String(error)}`))
     }
