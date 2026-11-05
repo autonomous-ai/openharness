@@ -17,6 +17,7 @@ import { agentTmpEnv, buddyTmpEnv } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
+import { launchModelArgs, type LaunchModel } from './launchModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import { profileEnvironment } from './engineHomes.js'
@@ -140,6 +141,12 @@ export interface LaunchSource extends NativeLaunchSource {
    * engine decide", which is what happens for an engine with no cited mechanism.
    */
   subscriptionModel?: string | null
+  /**
+   * The model and effort the session was launched with, or a person moved it onto since — the registry row's
+   * `launchModel`. Passed again on every relaunch on the engine's own login, after a model remembered off a grid, which
+   * names the model the session is coming back to.
+   */
+  launchModel?: LaunchModel
   /** The DSH the agent was created as; its env rides on every relaunch (`HARNESS_DSH` included). */
   dsh?: string | null
   /** The session-scoped runtime bundle. Older rows use their stable agent id. */
@@ -352,7 +359,11 @@ async function prepareBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    const remembered = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    // The flags it was launched with hold for that launch alone: reopened without them, a Product Manager launched on Opus at
+    // xhigh ran its engine's own default, the machine's last-used Claude Code model (task #3395, anh Dee 11-05).
+    const launched = !remembered && source.launchModel ? launchModelArgs(engine, source.launchModel) : []
+    const restored = remembered ?? (launched.length ? { env: {}, args: launched } : null)
     // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
     // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
     // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).

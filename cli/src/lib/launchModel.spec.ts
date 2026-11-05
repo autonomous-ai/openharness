@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { launchModelArgs, launchModelEngines, parseLaunchModel } from './launchModel.js'
+import { launchModelArgs, launchModelEngines, parseLaunchModel, pickedLaunchModel, storedLaunchModel } from './launchModel.js'
 
 describe('parseLaunchModel', () => {
   it('is absent when neither field is sent, or both are null', () => {
@@ -64,4 +64,22 @@ describe('launchModelArgs', () => {
 
 it('names the engines that take a launch model', () => {
   expect(launchModelEngines()).toStrictEqual(['claude'])
+})
+
+// Task #3395: what a registry row keeps, and what a person's pick relaunches with.
+describe('storedLaunchModel and pickedLaunchModel', () => {
+  it('keeps only the shape a launch takes, so a hand-edited row is never launched with', () => {
+    expect(storedLaunchModel({ model: 'opus', effort: 'xhigh' })).toEqual({ model: 'opus', effort: 'xhigh' })
+    expect(storedLaunchModel({ model: 'opus', effort: null })).toEqual({ model: 'opus', effort: null })
+    for (const raw of [null, 'opus', {}, { model: null, effort: null }, { model: '--dangerously', effort: 'high' }, { model: 'opus', effort: 'X H' }, { model: 7, effort: 'high' }]) {
+      expect(storedLaunchModel(raw)).toBeUndefined()
+    }
+  })
+
+  it('takes the effort where the engine has a flag for it, else the model alone, and nothing for an engine with no flags', () => {
+    expect(pickedLaunchModel('claude', 'sonnet', 'high')).toEqual({ model: 'sonnet', effort: 'high' })
+    expect(pickedLaunchModel('claude', 'opus', 'ultracode')).toEqual({ model: 'opus', effort: null })
+    expect(pickedLaunchModel('claude', 'opus', 'auto')).toEqual({ model: 'opus', effort: null })
+    expect(pickedLaunchModel('codex', 'gpt-6', 'high')).toBeNull()
+  })
 })

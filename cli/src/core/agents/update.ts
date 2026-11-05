@@ -11,6 +11,8 @@ import type { CloseAgentService } from '../../lib/closeAgentService.js'
 import { preview, sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../lib/runtimeControl.js'
+import { pickedLaunchModel } from '../../lib/launchModel.js'
+import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 
 /** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
  *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at
@@ -18,7 +20,7 @@ import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../
 export const AGENT_OPENED_THROTTLE_MS = 3_000
 
 export interface AgentUpdateDeps {
-  registry: Pick<typeof registry, 'resolve' | 'rename' | 'markOpened' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'resolve' | 'rename' | 'markOpened' | 'terminalAvailable' | 'setLaunchModel'>
   /** Moves an agent onto a model and effort (lib/runtimeProfileController.ts), or null while nothing can. */
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null
   /** Names the agent's pane after it, or null while nothing does. */
@@ -61,6 +63,10 @@ export function createAgentUpdate({
       }
       try {
         await onRuntimeProfileUpdate(projectId, payload.selectedModel)
+        // The person's pick is what its session relaunches with from now on, not the model it was launched with, which
+        // a reopen would otherwise put back (lib/launchOverrides.ts, task #3395).
+        const picked = parseRuntimeProfile(payload.selectedModel)
+        if (picked) registry.setLaunchModel(s.agentId, pickedLaunchModel(s.engine, picked.model, picked.effort))
       } catch (error) {
         if (!(error instanceof RuntimeProfileControlError)) {
           const name = error instanceof Error ? preview(error.name, 80) : 'UnknownError'

@@ -1911,6 +1911,36 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
+  // Task #3395 (anh Dee, 11-05): a Product Manager launched on Opus at xhigh came back on its engine's own default once
+  // its session was reopened, since the launch's flags were for the first launch alone.
+  it('keeps the launch model across a reload and a hook bind, replaced by its setter and gone with its engine', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({
+      engine: 'claude',
+      runtimes: [{ backend: 'tmux', paneId: '%31' }],
+      cwd: '/tmp/demo',
+      launchModel: { model: 'opus', effort: 'xhigh' },
+    })!
+    expect(pending.launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
+    const transcriptPath = join(dataDir, 'session-launch.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const bound = reloaded.register({ sessionId: 'session-launch', transcriptPath, tmuxPane: '%31', cwd: '/tmp/demo' })
+    expect(bound?.entry.agentId).toBe(pending.agentId)
+    expect(bound?.entry.launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
+    expect(reloaded.setLaunchModel(pending.agentId, { model: 'sonnet', effort: 'high' })).toBe(true)
+    expect(reloaded.setLaunchModel('nobody', null)).toBe(false)
+    const { registry: again } = await loadRegistryModule()
+    again.load()
+    expect(again.byAgent(pending.agentId)?.launchModel).toEqual({ model: 'sonnet', effort: 'high' })
+    // A hand-edited record is dropped, never launched with.
+    const plain = again.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%32' }], cwd: '/tmp/demo' })!
+    expect(plain.launchModel).toBeUndefined()
+  })
+
   // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
   it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
     const { registry } = await loadRegistryModule()

@@ -49,6 +49,7 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js
 import type { GridAssignment } from './gridAssignment.js'
 import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
 import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
+import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
@@ -174,6 +175,14 @@ export interface RegisteredSession {
    * model when it did.
    */
   subscriptionModel?: string | null
+  /**
+   * The model and effort this session was launched with as flags (`agent_create`'s launch model, lib/launchModel.ts),
+   * or the one a person moved it onto through Harness since (`agent_update`). Every relaunch passes them again
+   * (lib/launchOverrides.ts): the flags hold for one launch only, and a Product Manager launched on Opus at xhigh came
+   * back on its engine's own default, the machine's last-used Claude Code model, once reopened (task #3395, anh Dee
+   * 11-05). Absent for a session launched with none.
+   */
+  launchModel?: LaunchModel
   /**
    * The conversation this agent was in on its own login when a fresh move took it onto a grid
    * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
@@ -677,10 +686,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
+  const launchModel = storedLaunchModel(rawLaunchModel)
   // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
   // review), and is kept as this release keeps it (project instructions, phase 4).
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
@@ -688,6 +698,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
+    ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
@@ -1373,6 +1384,7 @@ class Registry {
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
+          ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
           // disk and then silently dropped by the next load — which is exactly what happened, and
@@ -1682,6 +1694,8 @@ class Registry {
     gridLaunchRecord?: GridLaunchRecord | null
     /** What the prepared workspace's SCM needs on every relaunch — see RegisteredSession.scmLaunch. */
     scmLaunchRecord?: ScmLaunchRecord | null
+    /** The model and effort it was launched with as flags — see RegisteredSession.launchModel. */
+    launchModel?: LaunchModel | null
     codexHome?: string | null
     claudeHome?: string | null
     dsh?: string | null
@@ -1729,6 +1743,7 @@ class Registry {
       gridLaunch: input.gridLaunchRecord?.override ?? null,
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
+      ...(storedLaunchModel(input.launchModel) ? { launchModel: storedLaunchModel(input.launchModel) } : {}),
       codexHome: input.codexHome ?? null,
       claudeHome: input.claudeHome ?? null,
       // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
@@ -2061,6 +2076,9 @@ class Registry {
       // memory the moment the engine reports in. The symptom is a move back to the engine's own
       // login landing on a house default — the remembered model was there, then a hook bind ate it.
       ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
+      // And the model it launches with, for the same reason: a hook bind that forgot it reopened a Product Manager on its
+      // engine's own default (task #3395).
+      ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
       // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
       ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
       defaultName: existing?.defaultName,
@@ -2263,6 +2281,7 @@ class Registry {
     entry.gateway = null
     entry.grid = null
     entry.subscriptionModel = null
+    delete entry.launchModel
     entry.model = null
     entry.title = null
     entry.touchedAt = Date.now()
@@ -2562,6 +2581,18 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session) return false
     session.subscriptionModel = model
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
+  setLaunchModel(agentId: string, launchModel: LaunchModel | null): boolean {
+    const session = this.agents.get(agentId)
+    if (!session) return false
+    const stored = storedLaunchModel(launchModel)
+    if (stored) session.launchModel = stored
+    else delete session.launchModel
     session.touchedAt = Date.now()
     this.save()
     return true

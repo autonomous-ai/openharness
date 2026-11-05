@@ -453,6 +453,7 @@ export function createAgentCreator({
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       scmLaunchRecord: scmLaunchRecord ?? null,
+      ...(launchModel ? { launchModel } : {}),
       codexHome,
       claudeHome,
       dsh,

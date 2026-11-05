@@ -1722,8 +1722,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
-      // At high effort or above (leadStart.ts leadEffort), before anything is placed.
-      const { type: _type, projectId: _projectId, ...asked } = leadEffort(command, name)
+      // At high effort or above (leadStart.ts leadEffort), before anything is placed. Its person named no model (Switch
+      // PM's "Default"): the coordinator's built-in default on its engine, as lead.start gives, never the engine's own
+      // last-used model (task #3395, anh Dee 11-05: a PM came back on Sonnet medium).
+      const { type: _type, projectId: _projectId, ...asked } = leadEffort(withRoleDefaults(command, BUILT_IN_ROLE_DEFAULTS.lead), name)
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
