@@ -2612,19 +2612,10 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
     final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
     if (_decisionsOf(group).isNotEmpty) {
-      _openActivity();
+      _openPage(SwarmPage.decisions);
       return;
     }
-    final message = asks != null
-        ? null
-        : _ownShown(group.id)
-              .where(
-                (m) =>
-                    m.author['kind'] == 'agent' &&
-                    m.author['id'] == agent.id &&
-                    !m.isTaskLine,
-              )
-              .lastOrNull;
+    final message = asks != null ? null : _askedIn(group, agent);
     if (message != null) {
       _showMessage(group.id, message);
       return;
@@ -2640,6 +2631,26 @@ class _SuperTabViewState extends State<SuperTabView>
       return;
     }
     _openAgent(agent);
+  }
+
+  /// The message where [agent] asked [group]'s question: the one that says
+  /// what the assignment's result says, else the agent's latest in the chat
+  /// (a line of the task itself is never it).
+  SuperTabMessage? _askedIn(SuperTabConversation group, SuperTabAgent agent) {
+    final said = [
+      for (final m in _ownShown(group.id))
+        if (m.author['kind'] == 'agent' &&
+            m.author['id'] == agent.id &&
+            !m.isTaskLine)
+          m,
+    ];
+    final ask = (group.assignment?['result'] as String?)?.trim();
+    if (ask != null && ask.isNotEmpty) {
+      for (final m in said.reversed) {
+        if (m.text.contains(ask)) return m;
+      }
+    }
+    return said.lastOrNull;
   }
 
   /// Brings [message] of chat [id] into view, lit, from the chat's own view.

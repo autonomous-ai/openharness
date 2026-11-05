@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions_page.dart';
 import 'package:harness/super_tabs/message_row.dart'
     show SuperTabMessageHighlight;
 import 'package:harness/super_tabs/model.dart';
@@ -71,14 +71,14 @@ ConversationServer server({
 
 /// The agent's own question as a message, then enough chat after it that
 /// opening it has to scroll.
-void asked(ConversationServer server) {
+void asked(ConversationServer server, {int notes = 60}) {
   server.append('Which device should I test?', conversationId: 'offline');
   server.messages.last['author'] = {
     'kind': 'agent',
     'id': 'builder',
     'name': 'Builder',
   };
-  for (var i = 0; i < 60; i++) {
+  for (var i = 0; i < notes; i++) {
     server.append('Note $i', conversationId: 'offline');
   }
 }
@@ -88,6 +88,7 @@ Future<SuperTabController> show(
   ConversationServer server, {
   ValueChanged<SuperTabAgent>? onOpenTerminal,
   Brightness brightness = Brightness.light,
+  bool terminalsVisible = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -107,6 +108,10 @@ Future<SuperTabController> show(
           onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: onOpenTerminal ?? (_) {},
+          terminalsVisible: terminalsVisible,
+          terminal: terminalsVisible
+              ? const ColoredBox(color: Colors.black, child: SizedBox.expand())
+              : null,
           machineName: (_) => 'Team Mac',
         ),
       ),
@@ -203,6 +208,59 @@ void main() {
       expect(opened, isEmpty);
     });
 
+    testWidgets('lights the message that says the question, not the agent’s '
+        'later ones', (tester) async {
+      final s = server(askedOf: 'owner');
+      asked(s, notes: 30);
+      // The agent goes on talking after it asked.
+      s.append('Still working on the build.', conversationId: 'offline');
+      s.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'builder',
+        'name': 'Builder',
+      };
+      for (var i = 0; i < 25; i++) {
+        s.append('More $i', conversationId: 'offline');
+      }
+      await show(tester, s);
+      await tester.tap(bar());
+      await tester.pumpAndSettle();
+      expect(row('message-1').hitTestable(), findsOneWidget);
+      expect(
+        tester
+            .widget<SuperTabMessageHighlight>(
+              find.ancestor(
+                of: row('message-1'),
+                matching: find.byType(SuperTabMessageHighlight),
+              ),
+            )
+            .on,
+        isTrue,
+      );
+    });
+
+    testWidgets('a terminal already open says where the question is', (
+      tester,
+    ) async {
+      final opened = <String>[];
+      await show(
+        tester,
+        server(askedOf: 'owner'),
+        onOpenTerminal: (a) => opened.add(a.id),
+        terminalsVisible: true,
+      );
+      await tester.tap(bar());
+      await tester.pumpAndSettle();
+      expect(opened, isEmpty);
+      expect(
+        find.descendant(
+          of: find.byType(SnackBar),
+          matching: find.textContaining('question is in its terminal'),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a decision opens where decisions are answered', (
       tester,
     ) async {
@@ -211,7 +269,7 @@ void main() {
       await show(tester, s);
       await tester.tap(bar());
       await tester.pumpAndSettle();
-      expect(find.byType(SuperTabActivityView), findsOneWidget);
+      expect(find.byType(SuperTabDecisionsPage), findsOneWidget);
       expect(find.text('Ship how?'), findsWidgets);
     });
 
