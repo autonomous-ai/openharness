@@ -138,9 +138,13 @@ describe('a guest\'s account, through the helper', () => {
   it('keeps guests\' homes under one root per platform, a workspace in each', () => {
     expect(guestHomeRoot('darwin')).toBe('/Users/Shared/HarnessGuests')
     expect(guestHomeRoot('linux')).toBe('/home/harness-guests')
+    expect(guestHomeRoot('win32')).toBe('C:\\ProgramData\\HarnessGuests')
     expect(guestHomeRoot()).toBe(guestHomeRoot(process.platform))
     expect(guestWorkspaceFor('Ann@Example.com', 'darwin')).toBe(`/Users/Shared/HarnessGuests/${USER}/work`)
-    expect(guestWorkspaceFor('ann@example.com')).toBe(`${guestHomeRoot()}/${USER}/work`)
+    // Windows guests have ordinary profiles, made by the setup task (`C:\Users\hg_<12 hex>\work`).
+    expect(guestWorkspaceFor('ann@example.com', 'win32')).toBe(`C:\\Users\\${USER}\\work`)
+    expect(guestWorkspaceFor('ann@example.com')).toBe(
+      process.platform === 'win32' ? `C:\\Users\\${USER}\\work` : `${guestHomeRoot()}/${USER}/work`)
   })
 
   it('runs a command and hears its lines; a command that is not there is code null', async () => {

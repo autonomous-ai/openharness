@@ -693,9 +693,13 @@ export interface GuestLaunchInput { email: string; engine: string; bypassPermiss
 /** A guest's harness as shared machines builds it (services/guestLaunches.ts): the pane's command, which runs
  *  the engine as the guest's own OS user on the owner's subscription, the variables to set on the pane, and
  *  `workspace`, where it starts (the guest's workspace or a folder the owner shares). The core opens it and
- *  records whose it is (core/agents/guestCreate.ts). */
+ *  records whose it is (core/agents/guestCreate.ts).
+ *
+ *  `guestHostUser` is set where the pane must be made by the guest's own host rather than this account (Windows:
+ *  lib/windows/guestHostBackend.ts), whose panes already run as that user; its absence means the owner's backend
+ *  starts the pane and a helper hands it to the guest (macOS, Linux). */
 export type GuestLaunch =
-  | { ok: true; workspace: string; argv: string[]; env: Record<string, string> }
+  | { ok: true; workspace: string; argv: string[]; env: Record<string, string>; guestHostUser?: string }
   | { ok: false; error: string; detail?: string }
 
 /** The core's call into shared machines: a guest's launch (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */

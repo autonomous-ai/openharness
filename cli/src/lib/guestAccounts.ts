@@ -11,9 +11,12 @@ import { isAbsolute } from 'node:path'
 
 export const GUEST_HELPER_PATH = '/usr/local/libexec/harness/guest-helper'
 
-/** Where guests' homes are (the helper's HOME_ROOT): never the owner's own home or `staff`'s reach. */
+/** Where guests' homes are (the helper's HOME_ROOT): never the owner's own home or `staff`'s reach. On Windows the
+ *  guests' own tree (lib/windows/guestRequests.ts `WINDOWS_GUEST_ROOT`); their profiles are `C:\Users\hg_<12 hex>`. */
 export function guestHomeRoot(platform: NodeJS.Platform = process.platform): string {
-  return platform === 'darwin' ? '/Users/Shared/HarnessGuests' : '/home/harness-guests'
+  if (platform === 'darwin') return '/Users/Shared/HarnessGuests'
+  if (platform === 'win32') return 'C:\\ProgramData\\HarnessGuests'
+  return '/home/harness-guests'
 }
 
 /** A folder of the owner's shared with every guest (docs/plans/2026-10-19-guest-machine-sharing-plan.md,
@@ -93,9 +96,11 @@ export function guestUserFor(email: string): string {
   return `hg_${createHash('sha256').update(email.trim().toLowerCase()).digest('hex').slice(0, 12)}`
 }
 
-/** Where a guest's harnesses start unless it picks a shared folder: `<home>/work`, as the helper makes it. */
+/** Where a guest's harnesses start unless it picks a shared folder: `<home>/work`, as the helper makes it. Windows
+ *  guests have an ordinary profile (`C:\Users\hg_<12 hex>\work`), made by the setup task. */
 export function guestWorkspaceFor(email: string, platform: NodeJS.Platform = process.platform): string {
-  return `${guestHomeRoot(platform)}/${guestUserFor(email)}/work`
+  const user = guestUserFor(email)
+  return platform === 'win32' ? `C:\\Users\\${user}\\work` : `${guestHomeRoot(platform)}/${user}/work`
 }
 
 export function isGuestUser(user: string): boolean {
