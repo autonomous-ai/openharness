@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 
@@ -335,6 +336,106 @@ void main() {
       expect(silent.opened.value, isNull);
     });
   });
+
+  group('pushes', () {
+    test('allowing notices is told, so pushes can start reaching the person', () async {
+      var told = 0;
+      notices.onAllowed = () => told++;
+      await notices.requestPermission();
+      expect(told, 1);
+    });
+
+    test('refusing them is not', () async {
+      var told = 0;
+      notices.onAllowed = () => told++;
+      plugin.ios.allow = false;
+      await notices.requestPermission();
+      plugin.ios.fail = true;
+      await notices.requestPermission();
+      expect(told, 0);
+    });
+
+    test('a tapped Swarm push opens the conversation, at its message and thread', () {
+      openPushed({
+        'kind': 'swarm',
+        'swarm': 's1',
+        'conversation': 'c1',
+        'message': 'm1',
+        'thread': 't1',
+        'decision': 'd1',
+      }, notices);
+      expect(notices.openedSwarm.value, (
+        swarmId: 's1',
+        conversationId: 'c1',
+        messageId: 'm1',
+        decisionId: null,
+        threadId: 't1',
+      ));
+      expect(notices.opened.value, isNull);
+    });
+
+    test('a tapped decision push opens that decision', () {
+      openPushed({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1', 'decision': 'd1', 'thread': 't1'}, notices);
+      expect(notices.openedSwarm.value, (
+        swarmId: 's1',
+        conversationId: 'c1',
+        messageId: null,
+        decisionId: 'd1',
+        threadId: null,
+      ));
+    });
+
+    test('a tapped agent push opens that agent, whether it asks or finished', () {
+      openPushed({'kind': 'agent_question', 'machine': 'machine-1', 'agent': 'agent-7'}, notices);
+      expect(notices.opened.value, ref);
+      notices.opened.value = null;
+      openPushed({'kind': 'agent_done', 'machine': 'machine-1', 'agent': 'agent-7'}, notices);
+      expect(notices.opened.value, ref);
+    });
+
+    test('a push naming nothing it knows only opened the app', () {
+      for (final data in <Map<String, String>>[
+        {},
+        {'kind': 'billing', 'swarm': 's1', 'conversation': 'c1'},
+        {'kind': 'swarm', 'swarm': 's1'},
+        {'kind': 'swarm', 'swarm': '', 'conversation': 'c1'},
+        {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c\n1'},
+        {'kind': 'swarm', 'swarm': 's' * 201, 'conversation': 'c1'},
+        {'kind': 'agent_done', 'machine': 'machine-1'},
+      ]) {
+        openPushed(data, notices);
+      }
+      expect(notices.openedSwarm.value, isNull);
+      expect(notices.opened.value, isNull);
+    });
+
+    test('a centre without Swarm notices still opens agents', () {
+      final silent = _AgentsOnly();
+      openPushed({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'}, silent);
+      openPushed({'kind': 'agent_done', 'machine': 'machine-1', 'agent': 'agent-7'}, silent);
+      expect(silent.opened.value, ref);
+    });
+
+    // A push and the notice the running app posts for the same news share an id, so one replaces
+    // the other: Android's PushService.noticeId computes these too, and the backend sets the same as
+    // `apns-collapse-id` (docs/design/2026-11-05-phone-push.md lists them).
+    test('the ids a push shares with the app’s own notices', () {
+      expect(swarmNoticeIdFor('mention:m1'), 1161357565);
+      expect(swarmNoticeIdFor('decision:d1'), 15921470);
+      expect(swarmNoticeIdFor('work:s1:c1:a1:needs_human'), 701122187);
+      expect(swarmNoticeIdFor('mention:é✓'), 1555091707);
+      expect(noticeIdFor(ref), 1081005959);
+    });
+  });
+}
+
+/// A centre with no Swarm side: what [openPushed] must not assume.
+class _AgentsOnly implements SystemNotices {
+  @override
+  final opened = ValueNotifier<AgentRef?>(null);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 typedef _Shown = ({
@@ -421,6 +522,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
 class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
   final asked = <({bool alert, bool sound, bool badge})>[];
   bool fail = false;
+  bool? allow = true;
 
   @override
   Future<bool?> requestPermissions({
@@ -434,7 +536,7 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
   }) async {
     if (fail) throw PlatformException(code: 'permission');
     asked.add((alert: alert, sound: sound, badge: badge));
-    return true;
+    return allow;
   }
 
   @override

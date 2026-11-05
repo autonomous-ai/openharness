@@ -177,6 +177,51 @@ void main() {
     });
   });
 
+  group('where to push to this phone (docs/design/2026-11-05-phone-push.md)', () {
+    test('PUTs the address, its gateway and the device key, signed as the phone', () async {
+      await client(_Tokens(['phone-token'])).registerPushToken(
+        (token: 'apns-1', platform: 'ios', environment: 'sandbox'),
+        device: 'pub-1',
+      );
+      final request = backend.requests.single;
+      expect(request.method, 'PUT');
+      expect(request.path, '/api/push-tokens');
+      expect(request.headers.value('authorization'), 'Bearer phone-token');
+      expect(jsonDecode(utf8.decode(request.body)), {
+        'token': 'apns-1',
+        'platform': 'ios',
+        'environment': 'sandbox',
+        'device': 'pub-1',
+      });
+    });
+
+    test('an Android address with no device key sends neither', () async {
+      await client(_Tokens(['t'])).registerPushToken(
+        (token: 'fcm-1', platform: 'android', environment: null),
+      );
+      expect(jsonDecode(utf8.decode(backend.requests.single.body)), {
+        'token': 'fcm-1',
+        'platform': 'android',
+      });
+    });
+
+    test('DELETEs it with the token in the body, never in the path', () async {
+      await client(_Tokens(['t'])).forgetPushToken('apns-1');
+      final request = backend.requests.single;
+      expect(request.method, 'DELETE');
+      expect(request.path, '/api/push-tokens');
+      expect(jsonDecode(utf8.decode(request.body)), {'token': 'apns-1'});
+    });
+
+    test('a backend from before push answers 404, which throws with its status', () async {
+      backend.answer = (_, _) => (status: 404, body: {'success': false, 'error': {'code': 'NOT_FOUND', 'message': 'Not found'}});
+      await expectLater(
+        client(_Tokens(['t'])).registerPushToken((token: 'a', platform: 'android', environment: null)),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 404)),
+      );
+    });
+  });
+
   group('a Swarm read', () {
     test('answers the value, signed with this sign-in, its query kept', () async {
       backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));

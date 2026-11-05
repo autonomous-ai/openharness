@@ -9,6 +9,8 @@ import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/app_log.dart';
 import '../logging/http_log.dart';
+import '../notify/push_channel.dart' show PushAddress;
+import '../notify/push_tokens.dart' show PushTokenApi;
 import '../swarm/swarm_outgoing_files.dart';
 import '../swarm/swarm_request.dart' show SuperTabFailure;
 import '../viewer/device_ack.dart';
@@ -20,7 +22,7 @@ import 'bearer_auth_interceptor.dart';
 import 'multipart_body.dart';
 
 /// Authenticated control-plane REST client for the phone.
-class ApiClient {
+class ApiClient implements PushTokenApi {
   Future<Map<String, dynamic>> productUsageReport(
     Map<String, dynamic> report,
   ) async {
@@ -141,6 +143,29 @@ class ApiClient {
       '/api/machines/$machineId',
       options: Options(headers: {'x-adapter-local': '1'}),
     );
+    unwrapApiResponse(res);
+  }
+
+  // -- where to push to this phone (notify/push_tokens.dart) --
+
+  @override
+  Future<void> registerPushToken(PushAddress address, {String? device}) async {
+    final res = await _dio.put(
+      '/api/push-tokens',
+      data: {
+        'token': address.token,
+        'platform': address.platform,
+        'environment': ?address.environment,
+        'device': ?device,
+      },
+    );
+    unwrapApiResponse(res);
+  }
+
+  @override
+  Future<void> forgetPushToken(String token) async {
+    // In the body, not the path: a path lands in access logs.
+    final res = await _dio.delete('/api/push-tokens', data: {'token': token});
     unwrapApiResponse(res);
   }
 

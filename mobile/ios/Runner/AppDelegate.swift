@@ -19,6 +19,57 @@ import UserNotifications
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
+  // The push address comes back here, not to whoever asked for it (`PushChannel` below). Flutter's
+  // own delegate still passes it on to plugins.
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    PushChannel.shared.registered(deviceToken)
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    PushChannel.shared.failed(error)
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
+
+  // A push that lands while Harness is in front is not drawn: the app is up, and says what it has to
+  // with its own notices, which know what the person is looking at.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if notification.request.trigger is UNPushNotificationTrigger {
+      completionHandler([])
+      return
+    }
+    super.userNotificationCenter(
+      center, willPresent: notification, withCompletionHandler: completionHandler)
+  }
+
+  // A tapped push goes to Dart over `harness/push`; a tapped local notice stays with
+  // flutter_local_notifications, as before.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    if response.notification.request.trigger is UNPushNotificationTrigger {
+      if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+        PushChannel.shared.opened(response.notification.request.content.userInfo)
+      }
+      completionHandler()
+      return
+    }
+    super.userNotificationCenter(
+      center, didReceive: response, withCompletionHandler: completionHandler)
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     DeviceNameChannel.register(with: engineBridge.pluginRegistry)
@@ -30,7 +81,100 @@ import UserNotifications
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
     LinkChannel.register(with: engineBridge.pluginRegistry)
     SetupWifiChannel.register(with: engineBridge.pluginRegistry)
+    PushChannel.shared.attach(to: engineBridge.pluginRegistry)
   }
+}
+
+/// `harness/push` — this phone's push address, and the pushes the person tapped (Dart:
+/// `lib/notify/push_channel.dart`).
+///
+/// `address` asks iOS for the APNs device token, which comes back to the app delegate; every call
+/// waiting then hears it, with the APNs gateway it belongs to. `forget` stops iOS delivering to it:
+/// the phone signed out. `changed` tells Dart that iOS handed over another token while the app ran.
+///
+/// A tapped push's data waits here until Dart's `take` answers it, as `LinkChannel`'s links do: the
+/// push that launched the app is tapped before the engine is up. At most 20 wait, the newest kept;
+/// `arrived` tells a listening Dart that more wait. Everything here runs on the main thread.
+final class PushChannel {
+  static let shared = PushChannel()
+
+  private var channel: FlutterMethodChannel?
+  private var asking: [FlutterResult] = []
+  private var waiting: [[String: String]] = []
+  private var token: String?
+
+  func attach(to registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessPush")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/push", binaryMessenger: messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      switch call.method {
+      case "address":
+        self.asking.append(result)
+        UIApplication.shared.registerForRemoteNotifications()
+      case "forget":
+        UIApplication.shared.unregisterForRemoteNotifications()
+        self.token = nil
+        result(nil)
+      case "take":
+        result(self.waiting)
+        self.waiting.removeAll()
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.channel = channel
+  }
+
+  func registered(_ deviceToken: Data) {
+    let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+    let moved = token != nil && token != hex
+    token = hex
+    let answer: [String: Any] = ["token": hex, "platform": "ios", "environment": Self.environment]
+    let answering = asking
+    asking.removeAll()
+    answering.forEach { $0(answer) }
+    if moved && answering.isEmpty { channel?.invokeMethod("changed", arguments: nil) }
+  }
+
+  func failed(_ error: Error) {
+    let answering = asking
+    asking.removeAll()
+    answering.forEach {
+      $0(FlutterError(code: "unregistered", message: error.localizedDescription, details: nil))
+    }
+  }
+
+  /// Keeps the string keys only: `aps` is iOS's, and Dart reads what Harness put beside it.
+  func opened(_ userInfo: [AnyHashable: Any]) {
+    var data: [String: String] = [:]
+    for (key, value) in userInfo {
+      if let key = key as? String, let value = value as? String { data[key] = value }
+    }
+    waiting = Array((waiting + [data]).suffix(20))
+    channel?.invokeMethod("arrived", arguments: nil)
+  }
+
+  /// The APNs gateway this build's token belongs to: a build Xcode signed for development carries a
+  /// profile saying `development`, and its token works on the sandbox only; the App Store and
+  /// TestFlight strip the profile, and theirs is production's. The simulator's is the sandbox's.
+  static let environment: String = {
+    #if targetEnvironment(simulator)
+      return "sandbox"
+    #else
+      guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+        let data = try? Data(contentsOf: url),
+        let text = String(data: data, encoding: .isoLatin1),
+        let key = text.range(of: "<key>aps-environment</key>"),
+        let open = text.range(of: "<string>", range: key.upperBound..<text.endIndex),
+        let close = text.range(of: "</string>", range: open.upperBound..<text.endIndex)
+      else { return "production" }
+      return text[open.upperBound..<close.lowerBound] == "development" ? "sandbox" : "production"
+    #endif
+  }()
 }
 
 /// `harness/setup_wifi` — joining a new device's setup hotspot (Dart: `lib/phone/add_device/setup_hotspot.dart`),
