@@ -65,6 +65,7 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
+import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
@@ -360,6 +361,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
+    // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
+    // one, else right below it, and refused when it was answered already. Only with `answers`.
+    answer: z.literal(true).optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
     notice: z.literal('skills').optional(),
@@ -894,11 +898,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   return effects
 }
 
+/** An answer (answers.ts) to a reply inside a thread goes in that thread: a reply to it, never right below it in the main chat.
+ *  Worked out before anything reads where the post goes, so it routes, settles and threads as that reply would. */
+function placeAnswer(command: Command, context: CommandContext): Command {
+  if (command.type !== 'message.send' || !command.answer) return command
+  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
+  const reply = context.reply
+  return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
+}
+
 function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = withoutCredentials(commandSchema.parse(input), removed)
+  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)
@@ -3411,6 +3424,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
         fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
       }
+      // A second answer to a message the PM answered is refused with where the first is; a plain post is not (answers.ts).
+      if (command.answer) requireUnanswered(group, (command.answers ?? command.replyTo)!)
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
       // An agent's post reaches the agents it names, by --to or by @Name, the agent whose message it answers, and, when it names
       // no one in a task or step, that conversation's current assignee, who owns the room (River's ruling on #2963). Nothing
@@ -3513,7 +3528,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const sent = effects.messages.find(m => m.id === operationId)!
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
         if (actor.kind === 'person') owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
-        else settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+        else {
+          const owedBefore = group.owed ?? []
+          settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+          const settled = owedBefore.filter(ask => !group.owed?.some(left => left.id === ask.id))
+          // The PM's answer is recorded for the asks it settled, and for the message `answer` names though nobody owed it.
+          const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []
+          recordAnswered(group, [...settled, ...asked.filter(a => !settled.some(s => s.id === a.id))], sent.id, root, context.now)
+        }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).

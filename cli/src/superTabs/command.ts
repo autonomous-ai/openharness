@@ -29,11 +29,11 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON [--full-instructions] [--instructions-read REVISION] | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON [--full-instructions] [--instructions-read REVISION] | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
-const BUDDY_USAGE = USAGE.replace('post GROUP TEXT|- OPERATION_ID', 'post GROUP TEXT OPERATION_ID')
+const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID')
 /** The actions that take an id and then one JSON argument, and what that id names. */
 const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID', route: 'GROUP' }
 const JSON_STDIN = (action: string) => `${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
@@ -237,6 +237,19 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text.trim() && !attach.length) throw usageError()
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
+  } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
+    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it, and
+    // refuses a second answer saying where the first is.
+    const to: string[] = []
+    for (let i = 5; i < positional.length; i += 2) {
+      const [flag, value] = [positional[i], positional[i + 1]]
+      if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
+      else throw usageError()
+    }
+    const text = third === '-' ? postStdin(stdin, terminal) : third
+    if (!text.trim()) throw usageError()
+    Object.assign(payload, { action: 'command', operationId: positional[4],
+      command: { type: 'message.send', conversationId: first, text, replyTo: null, answers: second, answer: true, recipientIds: to } })
   } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
     && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
     // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.

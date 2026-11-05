@@ -414,6 +414,9 @@ export interface Conversation {
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]
+  /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
+   *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
+  answered?: import('./answers.js').AnsweredAsk[]
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */

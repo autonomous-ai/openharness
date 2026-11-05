@@ -67,7 +67,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
