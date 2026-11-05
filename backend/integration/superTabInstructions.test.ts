@@ -112,7 +112,8 @@ describe('project instructions storage', () => {
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
     // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
     expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
-      'peer changed the instructions: Tests run on the Mac.\n\nAdded: Tests run on the Mac.'])
+      // Its text adds a line to the same paragraph (no blank line), so the paragraph shows whole, as it was and as it is.
+      'peer changed the instructions: Tests run on the Mac.\n\nRemoved: Reviews run on Opus.\nAdded: Reviews run on Opus. Tests run on the Mac.'])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
