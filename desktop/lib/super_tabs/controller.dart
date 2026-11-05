@@ -5526,6 +5526,20 @@ class SuperTabController extends ChangeNotifier {
     return result;
   }
 
+  /// Sends [message], which names a box's files already [uploaded], as
+  /// [send] sends its own: they leave their box only once the server takes
+  /// the message, so a refused or unanswered one keeps them there, and a
+  /// refusal of the files themselves sends them up again next time.
+  Future<Map<String, dynamic>?> sendWithUploads(
+    Map<String, dynamic> message,
+    Map<HarnessAttachment, String> uploaded,
+  ) async {
+    _uploaded.addAll(uploaded);
+    final result = await command(message);
+    _forgetRefusedUploads(result);
+    return result;
+  }
+
   /// A refusal of the files themselves sends them up once more; one of the
   /// message (a mention, a recipient) leaves them uploaded.
   void _forgetRefusedUploads(Map<String, dynamic>? result) {

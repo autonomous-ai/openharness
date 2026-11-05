@@ -993,7 +993,7 @@ class SwarmConversation extends ChangeNotifier
 
   String? _startedRoot;
 
-  /// Sends [take] as a voice message, alone, as a reply to [replyingTo] when
+  /// Sends [take] as a voice message with attached files, as a reply to [replyingTo] when
   /// there is one: its clip goes up, the backend reads it once in [lang], and
   /// the post names that file. What is typed stays in the box. Not sent, the
   /// take is the voice row's to keep; a post whose answer was lost is the
@@ -1003,14 +1003,22 @@ class SwarmConversation extends ChangeNotifier
     if (uploading || _disposed || !canPost || group == null) {
       return (sent: false, notice: null);
     }
+    final attached = files.files;
+    if (attached.length >= swarmAttachmentMaxFiles) {
+      return (
+        sent: false,
+        notice: 'Attach at most 9 files with a voice message.',
+      );
+    }
     final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    final outgoing = [...attached, clip];
     // A failure says itself in the chat, as a file's does.
-    final ids = await _uploadAll([clip]);
+    final ids = await _uploadAll(outgoing);
     if (ids == null || _disposed) return (sent: false, notice: null);
     final read = await swarmReadVoice(
       reader.request,
       tabId: reader.tabId,
-      attachmentId: ids.single,
+      attachmentId: ids.last,
       lang: lang,
     );
     final voice = read.voice;
@@ -1034,11 +1042,15 @@ class SwarmConversation extends ChangeNotifier
         accountId: reader.accountId,
         operationId: operationId,
       ),
-      files: [clip],
+      files: outgoing,
       voice: voice,
+      held: (voiceFiles: attached),
     );
     _replyingTo = null;
     error = null;
+    for (final file in attached) {
+      files.remove(file);
+    }
     final outcome = await _outbox.add(post);
     _answered(post, outcome);
     final sent =
@@ -1629,6 +1641,13 @@ class SwarmConversation extends ChangeNotifier
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore(SwarmPost post) {
+    if (post.held case (voiceFiles: final List<SwarmOutgoingFile> attached)) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...attached, ...since]);
+      return;
+    }
     final sent = post.held;
     if (sent
         is! ({
