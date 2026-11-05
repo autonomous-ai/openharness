@@ -105,9 +105,11 @@ export const shipped = (entry: PendingRelease): boolean => !!entry.components &&
 
 /** Puts [group]'s merge of [url] at [mergedAt] on [project]'s release list, in the merge record's own write. The same merge
  *  recorded again adds nothing; a later merge of the same task waits on its own. Returns the entries the cap pushed out. */
-export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id'>, url: string, mergedAt: number): PendingRelease[] {
+export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing'>, url: string, mergedAt: number): PendingRelease[] {
   const ledger = project.releases ??= { pending: [] }
   if (ledger.pending.some(e => e.groupId === group.id && e.url === url)) return []
+  // Releasing from its merge on; its parts are known once the worker reads its pull request's files.
+  group.releasing ??= []
   ledger.pending.push({ groupId: group.id, url, mergedAt })
   ledger.pending.sort((a, b) => a.mergedAt - b.mergedAt)
   return ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
@@ -175,6 +177,7 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   const fresh = ledger.pending.filter(e => e.mergedAt > now - PENDING_MS)
   outcome.dropped = ledger.pending.filter(e => !fresh.includes(e))
   ledger.pending = fresh
+  const left = new Set<string>(outcome.dropped.map(e => e.groupId))
 
   for (const component of RELEASE_COMPONENTS) {
     const read = facts.releases[component.id]
@@ -206,8 +209,23 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
       group.released = { at, tags }
       outcome.shipped.push(group.id)
     }
+    left.add(entry.groupId)
     return false
   })
+  // What each task still waits for, across its merges still on the list; none left, and it is releasing no more.
+  const waits = new Map<string, Set<ReleaseComponentId>>()
+  for (const entry of ledger.pending) {
+    const parts = waits.get(entry.groupId) ?? new Set<ReleaseComponentId>()
+    for (const c of entry.components ?? []) if (!entry.shippedIn?.[c]) parts.add(c)
+    waits.set(entry.groupId, parts)
+  }
+  for (const groupId of new Set([...left, ...waits.keys()])) {
+    const group = state.conversations.find(c => c.id === groupId)
+    const parts = waits.get(groupId)
+    if (!group) continue
+    if (parts) group.releasing = RELEASE_COMPONENTS.filter(c => parts.has(c.id)).map(c => c.id)
+    else delete group.releasing
+  }
 
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]
