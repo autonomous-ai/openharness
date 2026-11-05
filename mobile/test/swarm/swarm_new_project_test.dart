@@ -1367,6 +1367,72 @@ void main() {
       });
     }
 
+    // River, from the Desktop security review: the phone opens only GitHub's
+    // own sign-in, and takes only the repository it asked for.
+    for (final link in [
+      'https://evil.example/login/oauth/authorize?state=s',
+      'http://github.com/login/oauth/authorize?state=s',
+      'https://github.com.evil.example/login',
+      'https://user@github.com/login',
+    ]) {
+      test('a sign-in link that is not GitHub\'s ($link) is never opened, '
+          'and nothing was created', () async {
+        swarm.authorizeUrlFor = (_) => link;
+        final steps = SwarmNewProjectSteps.of(reader);
+        await expectLater(
+          run(steps),
+          throwsA(
+            isA<SwarmRepositoryFailure>().having(
+              (f) => f.line,
+              'line',
+              swarmRepositoryNotCreated,
+            ),
+          ),
+        );
+        expect(opened, isEmpty);
+        expect(steps.creationAt, isNull);
+      });
+    }
+
+    for (final (url, takes) in [
+      ('https://github.com/autonomous-ai/other', false),
+      ('https://github.com/someone-else/notes-app', false),
+      ('https://github.com/autonomous-ai/notes-app/extra', false),
+      ('https://gitlab.com/autonomous-ai/notes-app', false),
+      ('https://github.com/Autonomous-AI/Notes-App', true),
+    ]) {
+      test(
+        'made as $url: ${takes ? 'taken, GitHub names ignore case' : 'not '
+                  'the repository asked for, so nothing starts'}',
+        () async {
+          final steps = SwarmNewProjectSteps.of(reader);
+          await expectLater(run(steps), throwsA(isA<SwarmRepositoryWaiting>()));
+          swarm.finishCreation(
+            made(),
+            'created',
+            repositoryUrl: url,
+            reachable: true,
+          );
+          if (takes) {
+            await run(steps);
+            expect(swarm.commands('lead.start'), hasLength(1));
+            return;
+          }
+          await expectLater(
+            run(steps),
+            throwsA(
+              isA<SwarmRepositoryFailure>().having(
+                (f) => f.line,
+                'line',
+                swarmRepositoryNotCreated,
+              ),
+            ),
+          );
+          expect(swarm.commands('lead.start'), isEmpty);
+        },
+      );
+    }
+
     test(
       'GitHub that did not open is said, and opens again on asking',
       () async {
@@ -3065,6 +3131,21 @@ void main() {
         expect(on(tester, 'swarm-new-repo-use'), isFalse);
         await tap(tester, 'swarm-new-repo-install');
         expect(opened, [Uri.parse(swarm.installUrl!)]);
+      });
+
+      testWidgets('an install link that is not GitHub\'s is not offered', (
+        tester,
+      ) async {
+        await pump(tester, [
+          NewProjectSwarm()
+            ..ownerState = 'not-installed'
+            ..installUrl = 'https://evil.example/install',
+        ]);
+        await openNewProject(tester);
+        await toNewRepository(tester);
+        await name(tester, 'notes-app');
+        expect(find.text(swarmRepositoryNotInstalled(owner)), findsOneWidget);
+        expect(key('swarm-new-repo-install'), findsNothing);
       });
 
       testWidgets('an organization that has not accepted the permission '

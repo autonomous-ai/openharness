@@ -164,6 +164,11 @@ class NewProjectSwarm {
   /// sheet going meanwhile, say.
   void Function()? whileAsking;
 
+  /// The sign-in link the server answers with, for the request at [at]:
+  /// GitHub's by default.
+  String Function(int at) authorizeUrlFor = (at) =>
+      'https://github.com/login/oauth/authorize?state=s$at';
+
   /// Answers New repository's request in place of the server when set:
   /// throws to refuse it.
   FutureOr<Object?> Function(Map<String, dynamic> body)? refuseRepository;
@@ -304,10 +309,7 @@ class NewProjectSwarm {
         'at': at,
         'state': 'waiting',
       };
-      return {
-        'authorizeUrl': 'https://github.com/login/oauth/authorize?state=s$at',
-        'at': at,
-      };
+      return {'authorizeUrl': authorizeUrlFor(at), 'at': at};
     };
     fake.routes['/api/super-tabs/$id/commands'] = (body) async {
       sent.add(body!);
