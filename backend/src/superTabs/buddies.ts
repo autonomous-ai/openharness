@@ -244,21 +244,21 @@ const ownerLines = (said: string): string[] => {
   return [said, ...lead ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
 }
 
-/** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
+/** The skill's marker before the quoted line a Buddy shows its owner (swarmSkills.ts): I'll post this as you: "…". */
 const SHOWN_MARKER = /post this as you\s*:/giu
 
-/** The line a Buddy's message showed to post, or null with no marker. Only what follows its last marker counts (security
- *  review 2 of #3024): what comes before is the Buddy's own talk, which may quote any project. If it opens with a quote, only
- *  that first quoted line counts (task #2989): after the closing quote comes the Buddy's talk again ("OK?", another quote).
- *  Otherwise all of it counts, whole. */
+/** The quoted line a Buddy showed to post, or null with no marker. Only its last marker counts (security review 2 of #3024).
+ *  Unquoted offers exposed private sentences after the intended line (task #3322), so only a complete leading quote counts.
+ *  A marker with no valid quote replaces older consent with nothing; null would incorrectly revive an older offer. */
 const shownLine = (said: string): string | null => {
   const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
   if (!marker) return null
   const after = said.slice(marker.index! + marker[0].length)
-  // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote is part of the
-  // line the owner read, so it never ends it early; with no such pair, all of it counts whole.
-  const quoted = /^\s*(?:“([^“”]*)”|"([^"]*)")/u.exec(after)
-  return comparable(quoted ? quoted[1] ?? quoted[2]! : unquoted(after))
+  // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote must not end
+  // the line early. A missing closing quote must not consume later private lines when another quote appears there.
+  // Anything after the closing quote is the Buddy's private talk, never part of the consent.
+  const quoted = /^\s*(?:“([^“”\r\n\u0085\u2028\u2029]*)”|"([^"\r\n\u0085\u2028\u2029]*)")/u.exec(after)
+  return quoted ? comparable(quoted[1] ?? quoted[2]!) : ''
 }
 
 /** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or the line

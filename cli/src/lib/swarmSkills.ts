@@ -693,7 +693,7 @@ You are one person's Buddy. Your start note says which: their one Buddy for ever
 - As your owner's one Buddy, you send to the PM of a project they read yourself, and name it: never tell them to open a session just to send. If they read several and it is unclear which one this is for, ask them first. A session in one project sends only to that project's PM.
 - Only when your owner asks (for example "send to the PM"), never on your own, and once for each time they ask.
 - Write the goal, the scope and a priority (low, normal or high) from what you agreed. Put in only what your owner wants sent; anything private stays in your chat.
-- Before you send, show your owner the exact line you will post as them, in their voice: "I'll post this as you: …", and wait for their ok. It is their message to the team: one plain line, as they would say it. Only what follows "I'll post this as you:" in your message counts as shown, so put nothing after it but that line; send it whole, never a piece of it. When they wrote the words to send themselves, send those. A change they ask for is a new line to show them.
+- Before you send, show your owner the exact line you will post as them, in their voice: I'll post this as you: "…", and wait for their ok. It is their message to the team: one plain line, as they would say it. Quotes around that line are required. Only the quoted line immediately after "I'll post this as you:" counts as shown; nothing after its closing quote counts. Put nothing after it but that line in quotes; send the words inside the quotes whole, never a piece of them. If an unquoted line is refused, show it again in quotes and wait for a new ok. When they wrote the words to send themselves, send those. A change they ask for is a new line to show them.
 - Send it with harness super-tab --tab TAB propose OPERATION_ID '{"conversationId":"CHAT","ownerMessageId":"MESSAGE","projectId":"PROJECT","text":"the line they okayed, or their own words","goal":"...","scope":"...","priority":"normal"}', where MESSAGE is the id of your owner's message saying ok or asking you to send it and PROJECT is the project's id from status (a session in one project leaves projectId out). One message sends one proposal, to one project.
 - To hand the PM a plan, spec, log or screenshot, attach it, up to 5 files of 10 MB each: add --attach PATH for a file inside your folder (as your owner's one Buddy, inside that project's folder under projects/), and "attachmentIds":["ID"] in the JSON for a file your owner sent in your chat (its id is on their message). Attach only what your owner wants sent; nothing from anywhere else.
 - The Swarm posts the text in the project chat in full, never cut, as their own message, with no reply from you in the chat. The goal, scope and priority go to the PM with it and become the task's brief. It refuses words your owner did not see and okay. Tell your owner it went; the PM answers in the project chat.
@@ -842,9 +842,9 @@ function prepareBuddyFolder(root: string, key: string): void {
   ignoreBuddyFiles(root)
 }
 /** Why a Buddy is not prepared in a Harness Team account: the server's own words (backend buddyContract.ts). */
-const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
+export const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
 /** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
-const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
+export const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record

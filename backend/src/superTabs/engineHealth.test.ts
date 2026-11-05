@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from './machines.js'
 import type { AgentStart, SuperTabState } from './model.js'
 import { ABANDONED, MACHINE_REMOVED } from './startFailure.js'
-import { engineUnusable, noteStartFailed, noteStartSucceeded, readingClearsSuspensions, resumeEngine, SUSPENSION_MS, suspendedEngines } from './engineHealth.js'
+import { engineUnusable, noteStartFailed, noteStartSucceeded, readingClearsSuspensions, resumeEngine, suspendedEngines } from './engineHealth.js'
 
 const NOW = 10_000_000
 const fine = { quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 40, resetsAt: null }] }],
@@ -20,6 +20,47 @@ const start = (extra: Partial<AgentStart['request']> = {}, error = 'Codex could 
   request: { conversationId: 'g1', machineId: 'm1', engine: 'codex', name: 'Builder', cwd: '/x', ...extra } }) as unknown as AgentStart
 
 describe('an engine whose starts fail on a machine', () => {
+  it.each([
+    'The Harness server answered without a GitHub token for this project.',
+    'This start has no authorized project.',
+    'This project repository is unavailable.',
+    'The project folder does not exist.',
+    'Cannot create a worktree: the repository has no commits.',
+    'Required tool gh is not installed.',
+    'spawn gh ENOENT',
+    "This machine's ChatGPT account (plus) does not offer gpt-6-astra; choose another model.",
+    "This machine held the agent's launch for 3 minutes and stopped it: Waiting to confirm the selected executable’s permission flags.",
+    'This agent does not support that permission mode.',
+    'Its machine is signed in to another account now.',
+    'Request refused by this account.',
+    'Authentication failed while fetching the project.',
+    'Unknown native preparation failure.',
+  ])('does not penalize an engine for setup or an unclassified failure: %s', error => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({}, error), NOW)
+    expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    // Ignoring setup failures must not erase a real engine failure already counted.
+    noteStartFailed(state, start(), NOW)
+    noteStartFailed(state, start({}, error), NOW)
+    expect(noteStartFailed(state, start(), NOW)).not.toBeNull()
+  })
+
+  it.each([
+    'Codex could not launch.',
+    'codex exited before its engine process became ready. See the terminal output for details.',
+    'Its engine stopped on a question that nobody here can answer.',
+    'Its engine stopped on a sign-in screen that nobody here can answer.',
+    'Codex sign-in failed.',
+    'Codex is installed but cannot run: it exited with status 1',
+    'The agent was created and has since stopped. Create a new start request to continue.',
+  ])('counts the engine’s own failure: %s', error => {
+    const pool = machine(), state = stateWith(pool)
+    expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
+    expect(noteStartFailed(state, start({}, error), NOW)).toContain('Codex is suspended')
+    expect(engineUnusable(pool, 'claude', NOW)).toBeNull()
+  })
+
   it('is suspended there by its second failed start in a row, with one sentence for the notice', () => {
     const pool = machine(), state = stateWith(pool)
     expect(noteStartFailed(state, start(), NOW)).toBeNull()
@@ -93,32 +134,87 @@ describe('an engine whose starts fail on a machine', () => {
     expect(suspendedEngines(pool, NOW)).toEqual({})
   })
 
-  it('ends after 6 hours', () => {
+  it('backs off 30m, 1h, 2h, 4h, 8h and at most 12h, retaining the level after expiry', () => {
     const pool = machine(), state = stateWith(pool)
-    noteStartFailed(state, start(), NOW); noteStartFailed(state, start(), NOW)
-    expect(suspendedEngines(pool, NOW + SUSPENSION_MS - 1)).not.toEqual({})
-    expect(suspendedEngines(pool, NOW + SUSPENSION_MS)).toEqual({})
-    expect(engineUnusable(pool, 'codex', NOW + SUSPENSION_MS)).toBeNull()
+    let now = NOW
+    for (const minutes of [30, 60, 120, 240, 480, 720, 720]) {
+      expect(noteStartFailed(state, start(), now)).toBeNull()
+      expect(noteStartFailed(state, start(), now)).toContain('suspended')
+      expect(engineUnusable(pool, 'codex', now + minutes * 60_000 - 1)).not.toBeNull()
+      expect(engineUnusable(pool, 'codex', now + minutes * 60_000)).toBeNull()
+      now += minutes * 60_000
+      readingClearsSuspensions(pool, now)
+    }
+    noteStartSucceeded(state, start({}, ''))
+    noteStartFailed(state, start(), now)
+    noteStartFailed(state, start(), now)
+    expect(engineUnusable(pool, 'codex', now + 30 * 60_000)).toBeNull()
   })
 
-  it('ends on the next reading that shows it signed in with quota left, when it did not read so as it was suspended', () => {
-    const pool = machine(exhausted), state = stateWith(pool)
-    noteStartFailed(state, start(), NOW); noteStartFailed(state, start(), NOW)
+  it('a successful start clears an active cooldown and resets its engine alone', () => {
+    const pool = machine(), state = stateWith(pool)
+    for (const engine of ['codex', 'claude']) {
+      noteStartFailed(state, start({ engine }), NOW)
+      noteStartFailed(state, start({ engine }), NOW)
+    }
+    noteStartSucceeded(state, start({}, ''))
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    expect(engineUnusable(pool, 'claude', NOW)).not.toBeNull()
+    noteStartFailed(state, start(), NOW)
+    noteStartFailed(state, start(), NOW)
+    expect(engineUnusable(pool, 'codex', NOW + 30 * 60_000)).toBeNull()
+  })
+
+  it('clears a sign-in suspension on a signed-in reading with unknown quota, but not unknown sign-in', () => {
+    const pool = machine(), state = stateWith(pool)
+    const failed = () => start({}, 'Its engine stopped on a sign-in screen that nobody here can answer.')
+    noteStartFailed(state, failed(), NOW); noteStartFailed(state, failed(), NOW)
+    Object.assign(pool.observation!, { quotas: [{ engine: 'codex', known: false, windows: [] }],
+      readiness: { engines: [{ engine: 'codex', installed: true, signedIn: null }] } })
     readingClearsSuspensions(pool, NOW + 1)
     expect(suspendedEngines(pool, NOW + 1)).toHaveProperty('codex')
-    Object.assign(pool.observation!, fine)
+    pool.observation!.readiness!.engines![0]!.signedIn = true
     readingClearsSuspensions(pool, NOW + 2)
     expect(suspendedEngines(pool, NOW + 2)).toEqual({})
   })
 
-  it('stands through readings that already read fine as it was suspended, since its starts failed anyway', () => {
-    const pool = machine(fine), state = stateWith(pool)
-    noteStartFailed(state, start(), NOW); noteStartFailed(state, start(), NOW)
-    const reason = suspendedEngines(pool, NOW).codex
-    expect(reason).toContain('within 6 hours')
-    expect(reason).not.toContain('reading')
+  it.each([
+    ['Codex could not launch.', 'Codex could not launch.'],
+    ['Codex could not launch.', 'Codex sign-in failed.'],
+    ['Codex sign-in failed.', 'Codex could not launch.'],
+  ])('does not clear a launch failure merely because a reading says signed in: %s then %s', (first, second) => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({}, first), NOW); noteStartFailed(state, start({}, second), NOW)
+    Object.assign(pool.observation!, fine)
     readingClearsSuspensions(pool, NOW + 1)
     expect(suspendedEngines(pool, NOW + 1)).toHaveProperty('codex')
+    expect(suspendedEngines(pool, NOW + 1).codex).toContain('30 minutes')
+  })
+
+  it('keeps legacy six-hour expiry and reading recovery when no cause or duration was stored', () => {
+    const pool = machine()
+    pool.engineSuspensions = { codex: { at: NOW, fine: false }, claude: { at: NOW, fine: true } }
+    expect(engineUnusable(pool, 'claude', NOW + 6 * 3_600_000 - 1)).not.toBeNull()
+    expect(engineUnusable(pool, 'claude', NOW + 6 * 3_600_000)).toBeNull()
+    Object.assign(pool.observation!, fine)
+    readingClearsSuspensions(pool, NOW + 1)
+    expect(suspendedEngines(pool, NOW + 1)).not.toHaveProperty('codex')
+    expect(suspendedEngines(pool, NOW + 1)).toHaveProperty('claude')
+  })
+
+  it('does not combine an unclassified legacy failure counter with a new engine failure', () => {
+    const pool = machine(), state = stateWith(pool)
+    pool.engineFailures = { codex: 1 }
+    expect(noteStartFailed(state, start(), NOW)).toBeNull()
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    expect(noteStartFailed(state, start(), NOW)).toContain('Codex is suspended')
+  })
+
+  it('does not let a successful grid start reset the subscription engine cooldown', () => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start(), NOW); noteStartFailed(state, start(), NOW)
+    noteStartSucceeded(state, start({ gridModel: 'qwen3' }, ''))
+    expect(engineUnusable(pool, 'codex', NOW)).not.toBeNull()
   })
 
   it('ends when its owner resumes it', () => {
@@ -152,5 +248,62 @@ describe('an engine a machine cannot run', () => {
     expect(engineUnusable(machine(), 'codex', NOW)).toBeNull()
     const none = machine(); delete none.observation
     expect(engineUnusable(none, 'codex', NOW)).toBeNull()
+  })
+})
+
+
+describe('a machine that does not pick up starts', () => {
+  const timeout = (engine: string) => start({ engine }, 'Worker Mac did not start it within 3 minutes')
+  it('combines timeouts across engines, blocks all engines and never penalizes either engine', () => {
+    const pool = machine(), state = stateWith(pool)
+    expect(noteStartFailed(state, timeout('codex'), NOW)).toBeNull()
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
+    expect(pool.engineFailures ?? {}).toEqual({})
+    expect(pool.engineSuspensions ?? {}).toEqual({})
+    for (const engine of ['codex', 'claude']) expect(engineUnusable(pool, engine, NOW)).toContain('This machine is suspended')
+    expect(suspendedEngines(pool, NOW)).toEqual({ codex: expect.stringContaining('This machine is suspended'), claude: expect.stringContaining('This machine is suspended') })
+    expect(noteStartFailed(state, timeout('codex'), NOW + 1)).toBeNull()
+  })
+
+  it('backs off the machine across readings and resets after a successful grid start', () => {
+    const pool = machine(fine), state = stateWith(pool)
+    let now = NOW
+    for (const minutes of [30, 60, 120, 240, 480, 720, 720]) {
+      noteStartFailed(state, timeout('codex'), now)
+      expect(noteStartFailed(state, timeout('claude'), now)).toContain('This machine is suspended')
+      readingClearsSuspensions(pool, now + 1)
+      expect(engineUnusable(pool, 'codex', now + minutes * 60_000 - 1)).not.toBeNull()
+      now += minutes * 60_000
+      expect(engineUnusable(pool, 'codex', now)).toBeNull()
+      readingClearsSuspensions(pool, now)
+    }
+    noteStartFailed(state, timeout('codex'), now)
+    noteStartFailed(state, timeout('claude'), now)
+    noteStartSucceeded(state, start({ gridModel: 'qwen3' }, ''))
+    expect(engineUnusable(pool, 'claude', now)).toBeNull()
+    noteStartFailed(state, timeout('codex'), now)
+    noteStartFailed(state, timeout('claude'), now)
+    expect(engineUnusable(pool, 'claude', now + 30 * 60_000)).toBeNull()
+  })
+
+  it('lets the owner resume a machine and reset its backoff without clearing another engine suspension', () => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({ engine: 'claude' }), NOW); noteStartFailed(state, start({ engine: 'claude' }), NOW)
+    noteStartFailed(state, timeout('codex'), NOW); noteStartFailed(state, timeout('claude'), NOW)
+    expect(resumeEngine(pool, 'codex')).toBe(true)
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    expect(engineUnusable(pool, 'claude', NOW)).toContain('Claude Code is suspended')
+    expect(noteStartFailed(state, timeout('codex'), NOW)).toBeNull()
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
+    expect(engineUnusable(pool, 'codex', NOW + 30 * 60_000)).toBeNull()
+    noteStartFailed(state, timeout('codex'), NOW + 30 * 60_000)
+    resumeEngine(pool, 'codex')
+    expect(noteStartFailed(state, timeout('codex'), NOW + 30 * 60_000)).toBeNull()
+  })
+
+  it('counts a grid pickup timeout against the machine too', () => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({ gridModel: 'qwen3' }, 'Worker Mac did not start it within 3 minutes'), NOW)
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
   })
 })

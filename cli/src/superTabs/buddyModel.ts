@@ -13,6 +13,7 @@ import { existsSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Daemon } from '../agentClient/daemon.js'
 import { readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
+import { BUDDY_NOT_HERE, BUDDY_START_AGAIN } from '../lib/swarmSkills.js'
 import { identifier, object } from './wire.js'
 
 /** A conversation this share of the model's window or more starts fresh: the rest is the room its next turns need. */
@@ -51,9 +52,14 @@ function requestOf(value: unknown): ModelRequest | null {
     ...(typeof r.reason === 'string' ? { reason: r.reason } : {}) }
 }
 
-/** Why a move was refused, in words its owner can act on: never the daemon's detail, which can name paths on this machine. */
-function refusal(code: string, request: ModelRequest): string {
+/** Why a move was refused, in words its owner can act on: never the daemon's detail, which can name paths on this machine.
+ *  The detail is only read for the Buddy guard's two holds (lib/swarmSkills.ts prepareBuddyFolder), which every relaunch runs
+ *  and the launch reports as SWARM_SKILL_FAILED with the guard's own sentence (lib/launchOverrides.ts). Task #3256: Scholes's
+ *  switch to his saved API, on a Buddy started before its owner was recorded, said only the code. */
+function refusal(code: string, request: ModelRequest, detail?: string): string {
   if (code === 'AGENT_BUSY') return 'Your Buddy is answering. Try again when it has finished'
+  if (code === 'SWARM_SKILL_FAILED' && detail?.includes(BUDDY_START_AGAIN)) return 'Start your Buddy again to switch its model'
+  if (code === 'SWARM_SKILL_FAILED' && detail?.includes(BUDDY_NOT_HERE)) return 'Your Buddy runs only on your own computer, signed in as you'
   if ((code === 'GRID_UNAVAILABLE' || code === 'API_UNAVAILABLE') && request.gridModel) {
     const name = request.name ?? request.gridModel
     return request.servedBy?.length ? `${request.servedBy.join(', ')} isn't serving ${name} now` : `Nobody serves ${name} now`
@@ -101,23 +107,24 @@ export class BuddyModelRequests {
   private async carryOut(row: BuddyModelRow, sessions: readonly BuddyModelRow[], request: ModelRequest): Promise<Outcome | 'wait'> {
     const daemon = await this.deps.open()
     try {
-      const move = async (harnessId: string): Promise<{ error?: string; fresh: boolean }> => {
+      const move = async (harnessId: string): Promise<{ error?: string; detail?: string; fresh: boolean }> => {
         const fresh = await this.tooLong(harnessId, request)
         const frame = request.gridModel === null ? { agentId: harnessId, clearGrid: true }
           : { agentId: harnessId, gridModel: request.gridModel, gridName: request.gridName, ...(fresh ? { fresh: true } : {}) }
-        const reply = await daemon.request('agent_retarget', frame, MOVE_TIMEOUT_MS).catch(() => ({ error: 'TIMEOUT' }))
-        return { ...(typeof reply.error === 'string' ? { error: reply.error } : {}), fresh }
+        const reply = await daemon.request('agent_retarget', frame, MOVE_TIMEOUT_MS).catch((): Record<string, unknown> => ({ error: 'TIMEOUT' }))
+        return { ...(typeof reply.error === 'string' ? { error: reply.error } : {}),
+          ...(typeof reply.detail === 'string' ? { detail: reply.detail } : {}), fresh }
       }
       const moved = await move(row.agent.harnessId)
       if (moved.error) {
         // Sent home by the Swarm (a limit, a model gone) while it answers: moved once the turn ends, within the request's lease.
         if (moved.error === 'AGENT_BUSY' && request.reason) return 'wait'
-        return { ok: false, error: refusal(moved.error, request) }
+        return { ok: false, error: refusal(moved.error, request, moved.detail) }
       }
       const stayed: string[] = []
       for (const session of sessions) {
         const result = await move(session.agent.harnessId)
-        if (result.error) stayed.push(result.error === 'AGENT_BUSY' ? 'it was answering' : refusal(result.error, request))
+        if (result.error) stayed.push(result.error === 'AGENT_BUSY' ? 'it was answering' : refusal(result.error, request, result.detail))
       }
       return { ok: true, ...(moved.fresh ? { fresh: true as const } : {}),
         ...(stayed.length === 1 ? { error: `A thread session stayed where it was: ${stayed[0]}` }

@@ -688,7 +688,7 @@ class SwarmThread extends ChangeNotifier
     }
   }
 
-  /// Sends [take] as a voice message in the thread, alone, as the chat's
+  /// Sends [take] as a voice message with attached files in the thread, as the chat's
   /// [SwarmConversation.sendVoice] does: what is typed stays in the box.
   Future<SwarmVoicePosted> sendVoice(VoiceTake take, String lang) async {
     if (uploading || _disposed || !canPost || chat.conversation == null) {
@@ -696,13 +696,21 @@ class SwarmThread extends ChangeNotifier
     }
     final epoch = _epoch;
     bool current() => !_disposed && epoch == _epoch;
+    final attached = files.files;
+    if (attached.length >= swarmAttachmentMaxFiles) {
+      return (
+        sent: false,
+        notice: 'Attach at most 9 files with a voice message.',
+      );
+    }
     final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    final outgoing = [...attached, clip];
     error = null;
-    final up = await _uploads.upload([clip]);
+    final up = await _uploads.upload(outgoing);
     if (!current()) return (sent: false, notice: null);
     if (up.failure case final failure?) {
       if (failure is! SuperTabFailure || !_refusedChat(failure)) {
-        error = swarmUploadError(failure, 1);
+        error = swarmUploadError(failure, outgoing.length);
         _tell();
       }
       return (sent: false, notice: null);
@@ -712,7 +720,7 @@ class SwarmThread extends ChangeNotifier
     final read = await swarmReadVoice(
       reader.request,
       tabId: reader.tabId,
-      attachmentId: ids.single,
+      attachmentId: ids.last,
       lang: lang,
     );
     final voice = read.voice;
@@ -736,14 +744,20 @@ class SwarmThread extends ChangeNotifier
         accountId: reader.accountId,
         operationId: operationId,
       ),
-      files: [clip],
+      files: outgoing,
       voice: voice,
+      held: (voiceFiles: attached),
     );
+    for (final file in attached) {
+      files.remove(file);
+    }
     final outcome = await _outbox.add(post);
     _answered(post, outcome, current);
     final sent =
         outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
-    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+    // It says nothing once sent: a voice message plays only, and never
+    // has words to go without (anh Dee, 2026-11-04).
+    return (sent: sent, notice: null);
   }
 
   /// Sends the draft to the thread's root, to the agents it names and tagging
@@ -902,6 +916,13 @@ class SwarmThread extends ChangeNotifier
   /// A refused reply's text and files back in the box, before anything
   /// typed or added since.
   void _restore(SwarmPost post) {
+    if (post.held case (voiceFiles: final List<SwarmOutgoingFile> attached)) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...attached, ...since]);
+      return;
+    }
     final sent = post.held;
     if (sent
         is! ({

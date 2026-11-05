@@ -433,7 +433,13 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ],
   );
 
+  /// A voice message's text is its words, which are never shown or handed
+  /// over: it plays only (anh Dee, 2026-11-04). It has no Copy, no ⌘C and
+  /// no Edit.
+  bool get _voice => superTabVoiceOf(widget.message) != null;
+
   Future<void> _copy() async {
+    if (_voice) return;
     await Clipboard.setData(ClipboardData(text: widget.message.text));
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -474,7 +480,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   /// The author's own changes, under the menu's rule.
   List<SuperTabMoreChange> get _changes => [
-    if (widget.onEdit != null)
+    if (widget.onEdit != null && !_voice)
       (
         label: 'Edit message',
         icon: AppIcons.pencil,
@@ -656,7 +662,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
             }
             if (event.logicalKey == LogicalKeyboardKey.keyC &&
                 (keys.isMetaPressed || keys.isControlPressed) &&
-                !keys.isAltPressed) {
+                !keys.isAltPressed &&
+                !_voice) {
               _copy();
               return KeyEventResult.handled;
             }
@@ -828,8 +835,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                   child: _editor(context, editing),
                                 )
-                              // A voice message's text is its words, shown
-                              // under its bubble from →A.
+                              // A voice message's text is its words, never
+                              // shown: it plays only (anh Dee, 2026-11-04).
                               else if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
@@ -872,7 +879,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       message.attachments,
                                       conversationId: message.conversationId,
                                       messageId: message.id,
-                                      words: message.text,
                                     ),
                                   ),
                                 ),
@@ -949,14 +955,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     onPressed: widget.onReply,
                                   ),
                                 ),
-                              fingerTarget(
-                                enabled: phone,
-                                AppIconButton(
-                                  icon: AppIcons.copy,
-                                  tooltip: 'Copy message',
-                                  onPressed: _copy,
+                              if (!voiceMessage)
+                                fingerTarget(
+                                  enabled: phone,
+                                  AppIconButton(
+                                    icon: AppIcons.copy,
+                                    tooltip: 'Copy message',
+                                    onPressed: _copy,
+                                  ),
                                 ),
-                              ),
                               if ((_moreActions, _changes)
                                   case (final actions, final changes)
                                   when actions.isNotEmpty || changes.isNotEmpty)

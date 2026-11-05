@@ -1366,6 +1366,9 @@ class AppNotifier extends ChangeNotifier {
     this.cliLogin = cliLogin ?? this.viewer.login;
     this.peerLinks = peerLinks ?? this.viewer.links;
     _groupSyncOverride = groupSync;
+    // A teammate's agent in a Harness Team account on this person's Mac is not their news.
+    agentNotices.inTeamAccount = (ref) =>
+        stateOf(ref.machineId)?.machine.sessionKind == 'team';
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
     this.productMeasurement =
@@ -3635,10 +3638,17 @@ class AppNotifier extends ChangeNotifier {
     );
     if (agentNotices.system case final LocalSystemNotices notices) {
       notices.onAllowed = _syncPush;
+      // Android: the channels a push is drawn on, before the first can arrive (task #3248).
+      unawaited(notices.preparePush());
     }
     // Back from the phone's Settings, where notices may have been turned on or off.
     _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
   }
+
+  /// The keys of this app's pushes still in the notification centre (notify/push_channel.dart):
+  /// none where there is no push.
+  Future<Set<String>> pushesShown() async =>
+      await _push?.channel.shown() ?? const {};
 
   /// Tells the backend where to push to this phone while signed in: once the account is known, when
   /// notices are allowed, when the OS hands over a new address, and back in the app.

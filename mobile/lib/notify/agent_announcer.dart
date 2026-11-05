@@ -53,6 +53,7 @@ class AgentAnnouncer {
     this.questionGrace = const Duration(seconds: 15),
     this.alertCooldown = const Duration(minutes: 5),
     this.reopenWindow = const Duration(minutes: 10),
+    this.inTeamAccount,
     DateTime Function()? now,
   }) : _chime = chime ?? _haptic,
        _inFront = inFront ?? _appInFront,
@@ -61,6 +62,19 @@ class AgentAnnouncer {
   }
 
   final SystemNotices system;
+
+  /// Whether an agent runs in a Harness Team account: a teammate's Swarm work
+  /// on this person's Mac. Its turns and questions are not this person's news
+  /// — it reaches them only through the Swarm rule (tags, decisions asked of
+  /// them, replies in their threads) — so none is announced: no chime, no
+  /// mark, no notice (2026-11-05: Dee's phone showed a banner for a teammate's
+  /// tester in a task she was not part of). Null counts every agent as the
+  /// person's own. Set after construction by the app, which knows the
+  /// machines; read at each turn and question, never remembered.
+  bool Function(AgentRef agent)? inTeamAccount;
+
+  bool _teams(AgentRef ref) => inTeamAccount?.call(ref) ?? false;
+
   final unread = AgentUnread();
   final _asked = AskedQuestions();
 
@@ -111,6 +125,10 @@ class AgentAnnouncer {
   /// second thing to dismiss by hand — without asking the OS for one that was
   /// never posted.
   final _posted = <AgentRef>{};
+
+  /// Of [_posted], the agents whose notice up tells of a finished turn: the
+  /// next turn's end replaces it quietly (task #3248).
+  final _doneUp = <AgentRef>{};
   final Future<void> Function() _chime;
   final bool Function() _inFront;
 
@@ -149,6 +167,7 @@ class AgentAnnouncer {
     // Whatever it was asking, the turn it asked in is over — and a turn that
     // ends with nothing to say must not leave the question's mark standing.
     questionClosed(agent.ref);
+    if (_teams(agent.ref)) return AgentNotice.none;
     return _announceEnd(agent, end, watching: watching);
   }
 
@@ -163,6 +182,7 @@ class AgentAnnouncer {
   }) {
     questionClosed(agent.ref);
     _awaitingTier.remove(agent.ref)?.timer.cancel();
+    if (_teams(agent.ref)) return;
     if (!isNewsEnd(end)) {
       appLog.debug('notify', 'turn end · ${_short(agent.ref)} · not news');
       return;
@@ -204,7 +224,13 @@ class AgentAnnouncer {
   }) {
     final front = inFront;
     final seen = front && watching();
-    final notice = decideDoneNotice(end, inFront: front, watching: seen);
+    var notice = decideDoneNotice(end, inFront: front, watching: seen);
+    // Sounds once until the person goes to the agent (task #3248, the rule
+    // Tony approved): a turn that ends while the last one's notice is still up
+    // replaces it quietly.
+    if (notice == AgentNotice.alert && _doneUp.contains(agent.ref)) {
+      notice = AgentNotice.quiet;
+    }
     // Ids and decisions only: what the turn said stays out of the log.
     appLog.debug('notify', 'done · ${_short(agent.ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''} · ${notice.name}');
     _deliver(agent, notice, NoticeKind.done, () => noticeBody(end.reply!));
@@ -223,6 +249,7 @@ class AgentAnnouncer {
     required bool Function() watching,
   }) {
     final ref = agent.ref;
+    if (_teams(ref)) return AgentNotice.none;
     final now = _now();
     // Before hearing it: heard first, this very request would read as open,
     // and be kept however long ago it was last told.
@@ -410,6 +437,7 @@ class AgentAnnouncer {
   }
 
   void _withdraw(AgentRef ref) {
+    _doneUp.remove(ref);
     if (_posted.remove(ref)) system.cancel(ref);
   }
 
@@ -423,6 +451,13 @@ class AgentAnnouncer {
     if (notice.marks) unread.mark(agent.ref, kind);
     if (!notice.alerts) return;
     _posted.add(agent.ref);
+    // The agent's one notice now tells of this kind: a question over a
+    // finished turn leaves the next turn's end free to sound.
+    if (kind == NoticeKind.done) {
+      _doneUp.add(agent.ref);
+    } else {
+      _doneUp.remove(agent.ref);
+    }
     system.show((
       agent: agent.ref,
       kind: kind,

@@ -168,6 +168,10 @@ class SuperTabView extends StatefulWidget {
 class _SuperTabViewState extends State<SuperTabView>
     with WidgetsBindingObserver {
   final _composer = TextEditingController();
+
+  /// The app's own writes into [_composer], held while an input method
+  /// composes in it.
+  late final _composerWrites = SuperTabComposerWrites(_composer);
   final _focus = FocusNode(debugLabel: 'Swarm message');
   final _pullRequestsFocus = FocusNode(debugLabel: 'Project pull requests');
   final _scroll = <String, SuperTabChatScroll>{};
@@ -334,6 +338,7 @@ class _SuperTabViewState extends State<SuperTabView>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
+    _composerWrites; // listening before anything is composed
     c.addListener(_changed);
     c.addListener(_holdVoiceAway);
     c.buddyChatOpener = _openBuddyChat;
@@ -529,10 +534,21 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _dial.cancel(); // a fling from the last conversation never scrolls this one
     }
-    if (_selected != id || _composer.text != draft) {
+    if (_selected != id) {
+      _composerWrites.cancel();
       _composer.value = TextEditingValue(
         text: draft,
         selection: TextSelection.collapsed(offset: draft.length),
+      );
+    } else if (_composer.text != draft) {
+      // The draft changed under the box: shown at once, or once an input
+      // method has finished composing, from the draft held then.
+      _composerWrites.write(
+        (_) => c.accessRevoked
+            ? ''
+            : c.selectedId == id
+            ? c.draft(id)
+            : null,
       );
     }
     _selected = id;
@@ -1091,6 +1107,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ..dispose();
     _findFocus.dispose();
     _historyRetry?.cancel();
+    _composerWrites.dispose();
     _composer.dispose();
     _mentionIndex.dispose();
     _dismissedMention.dispose();
@@ -1363,23 +1380,30 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final MapEntry(key: folder, value: bytes) in zipped.entries)
         if (files.files.any((file) => identical(file.bytes, bytes))) folder,
     ];
-    final shown = c.selectedId == id;
-    var text = shown ? _composer.text : c.draft(id);
-    for (final folder in attached) {
-      final path = _pathText(folder);
-      text = text.contains('$path ')
-          ? text.replaceFirst('$path ', '')
-          : text.contains(' $path')
-          ? text.replaceFirst(' $path', '')
-          : text.replaceFirst(path, '');
+    String withoutPaths(String text) {
+      for (final folder in attached) {
+        final path = _pathText(folder);
+        text = text.contains('$path ')
+            ? text.replaceFirst('$path ', '')
+            : text.contains(' $path')
+            ? text.replaceFirst(' $path', '')
+            : text.replaceFirst(path, '');
+      }
+      return text;
     }
+
+    final shown = c.selectedId == id;
     dropped.removeWhere(attached.contains);
-    c.setDraft(id, text);
-    if (shown && _composer.text != text) {
-      _composer.value = TextEditingValue(
-        text: text,
-        selection: TextSelection.collapsed(offset: text.length),
-      );
+    c.setDraft(id, withoutPaths(shown ? _composer.text : c.draft(id)));
+    if (shown) {
+      // From the box's text when it is written: what was composed meanwhile
+      // stays, the paths go.
+      _composerWrites.write((current) {
+        if (c.selectedId != id) return null;
+        final text = withoutPaths(current);
+        if (text != current) c.setDraft(id, text);
+        return text;
+      });
     }
     setState(() {});
     reportAttachProblem(
@@ -4267,7 +4291,7 @@ class _SuperTabViewState extends State<SuperTabView>
       onEdit: c.canChange(message)
           ? (text) => _editMessage(message, text)
           : null,
-      onDelete: c.canChange(message)
+      onDelete: c.canDelete(message)
           ? () => unawaited(_deleteMessage(message))
           : null,
       // A message with a thread is answered there; one from before threads
@@ -4405,11 +4429,11 @@ class _SuperTabViewState extends State<SuperTabView>
             textAlign: TextAlign.center,
             style: DesktopChrome.text(color: DesktopChrome.muted),
           ),
-          if (!c.accessRevoked && !c.updateRequired) ...[
+          if (!c.accessRevoked) ...[
             const SizedBox(height: 12),
             TextButton(
               style: _thumb,
-              onPressed: () => unawaited(c.refresh()),
+              onPressed: () => unawaited(c.retryRead()),
               child: const Text('Retry'),
             ),
           ],
@@ -4797,9 +4821,9 @@ class _SuperTabViewState extends State<SuperTabView>
                         )
                       : Text(c.error!, style: DesktopChrome.control()),
                 ),
-                if (!c.accessRevoked && !c.updateRequired)
+                if (!c.accessRevoked)
                   TextButton(
-                    onPressed: () => unawaited(c.refresh()),
+                    onPressed: () => unawaited(c.retryRead()),
                     child: const Text('Retry'),
                   ),
               ],

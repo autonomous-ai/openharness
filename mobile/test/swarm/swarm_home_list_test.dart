@@ -209,8 +209,47 @@ void main() {
       for (final p in projects) p.project.id,
     ];
 
-    test('newest first; one with no time known after them, in the order '
-        'read, and never folded', () {
+    test('default A to Z ignores # and case, not activity or unread', () {
+      SwarmHomeProject named(
+        String id,
+        String name,
+        int minutes, {
+        SwarmProjectNews news = swarmNoProjectNews,
+      }) => SwarmHomeProject(
+        swarmId: tab,
+        project: SuperTabProject.fromJson({
+          'id': id,
+          'name': name,
+          'ownerId': me,
+          'leadConversationId': 'lead-$id',
+        }),
+        active: at(ago(minutes)),
+        news: news,
+      );
+      for (final updated in [false, true]) {
+        final lists = swarmHomeLists(
+          [
+            named(
+              'z',
+              '# Zebra',
+              updated ? 0 : 10,
+              news: updated
+                  ? (bold: true, tags: 1, hasWaitingTag: true)
+                  : swarmNoProjectNews,
+            ),
+            named('b', 'beta', 1),
+            named('a2', '# ALPHA', 3),
+            named('a1', 'alpha', 5),
+          ],
+          pins: const {},
+          now: now,
+        );
+        expect(ids(lists.recent), ['a1', 'a2', 'b', 'z']);
+        expect(lists.recent.last.news.bold, updated);
+      }
+    });
+
+    test('default alphabetical order includes projects with no activity', () {
       final lists = swarmHomeLists(
         [
           project('a', minutes: 40),
@@ -224,11 +263,11 @@ void main() {
       );
 
       expect(ids(lists.pinned), isEmpty);
-      expect(ids(lists.recent), ['c', 'e', 'a', 'b', 'd']);
+      expect(ids(lists.recent), ['a', 'b', 'c', 'd', 'e']);
       expect(lists.quiet, isEmpty);
     });
 
-    test('quiet for more than a day: folded under Other projects, newest '
+    test('quiet for more than a day: folded under Other projects, alphabetical '
         'first', () {
       final lists = swarmHomeLists(
         [
@@ -242,10 +281,10 @@ void main() {
       );
 
       expect(ids(lists.recent), ['b']);
-      expect(ids(lists.quiet), ['a', 'd', 'c']);
+      expect(ids(lists.quiet), ['a', 'c', 'd']);
     });
 
-    test('pinned: at the top in a group of their own, newest first, quiet '
+    test('pinned: at the top in a group of their own, alphabetical, quiet '
         'or not, and out of Projects', () {
       final lists = swarmHomeLists(
         [
@@ -259,8 +298,8 @@ void main() {
         now: now,
       );
 
-      expect(ids(lists.pinned), ['d', 'b']);
-      expect(ids(lists.recent), ['c', 'a']);
+      expect(ids(lists.pinned), ['b', 'd']);
+      expect(ids(lists.recent), ['a', 'c']);
       expect(ids(lists.quiet), ['e']);
     });
 
@@ -291,12 +330,17 @@ void main() {
             news: (bold: true, tags: 0, hasWaitingTag: false),
           ),
           project('d', minutes: 60 * 32),
+          project(
+            'task-tag',
+            minutes: 60 * 33,
+            news: (bold: false, tags: 0, hasWaitingTag: true),
+          ),
         ],
         pins: const {},
         now: now,
       );
 
-      expect(ids(lists.recent), ['a', 'b', 'c']);
+      expect(ids(lists.recent), ['a', 'b', 'c', 'task-tag']);
       expect(ids(lists.quiet), ['d']);
     });
 

@@ -2,11 +2,15 @@
 // second contribution, its pool naming the Mac as `hostMachineId`, and the Swarm shows the Mac alone. Its agents read as
 // on the Mac; teammates read the account's availability, which runs while the owner is away from the Mac; the only new
 // words are one line when teammates' agents cannot run there.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
 
+import 'support/capture.dart';
 import 'support/rename_connection.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -25,6 +29,10 @@ class _TeamDaemon extends RenameConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) {
+    if (type == 'super_tabs' && payload['action'] == 'teamSetup') {
+      asked.add(Map.of(payload));
+      return Future.value({'ok': true, 'state': 'exists'});
+    }
     if (type == 'super_tabs' && payload['action'] == 'teamSetupStatus') {
       asked.add(Map.of(payload));
       return Future.value(status);
@@ -114,6 +122,7 @@ String? _problemText(WidgetTester tester, String id) =>
     tester.widget<Text>(_problem(id)).data;
 
 void main() {
+  setUpAll(() => loadCaptureFonts(Platform.environment['TEAM_RESTART_SHOTS']));
   testWidgets(
     'a Mac and its Harness Team account are one row, with every agent of both under it',
     (tester) async {
@@ -144,9 +153,15 @@ void main() {
         find.byKey(const ValueKey('super-machine-agent-mac-a2')),
         findsOneWidget,
       );
-      // The agent in the team account is on the Mac, wherever its machine is named.
+      // The agent in the team account is on the Mac, and says it runs in the Mac's Harness Team account wherever its
+      // machine is named (roster, card, Agent details): task #3060, both read 'Gray.local' and a start picked the wrong one.
       final river = c.snapshot!.agent('a2')!;
-      expect(SuperTabAgentInfo(c, null, river).machine, 'MacBook Pro');
+      expect(
+        SuperTabAgentInfo(c, null, river).machine,
+        'MacBook Pro · Team account',
+      );
+      final own = c.snapshot!.agent('a1')!;
+      expect(SuperTabAgentInfo(c, null, own).machine, 'MacBook Pro');
       expect(c.snapshot!.placeOf('mac-team'), 'mac');
       await _unmount(tester, c);
     },
@@ -313,6 +328,90 @@ void main() {
       expect(await button(code: 'PRIVACY_CHECK_FAILED'), isFalse);
       app.teamAccountHereForTest = false;
       expect(await button(), isFalse);
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'an offline Team account offers its local owner Restart through the standard setup flow',
+    (tester) async {
+      final shots = Platform.environment['TEAM_RESTART_SHOTS'];
+      final previousBrightness = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = previousBrightness);
+      final daemon = _TeamDaemon()..status = {'ok': true, 'state': 'exists'};
+      final app = createApp(connectionForTest: (_) => daemon, connected: true)
+        ..teamAccountHereForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      Future<void> mount({
+        String account = 'owner',
+        String id = 'm',
+        bool hostOffline = false,
+        Brightness brightness = Brightness.light,
+      }) async {
+        grid.AppTheme.brightness.value = brightness;
+        final server = _swarm();
+        server.state['machines'] = [
+          _pool(id, contributor: 'owner', age: hostOffline ? _offlineAge : 0),
+          _pool(
+            '$id-team',
+            contributor: 'owner',
+            host: id,
+            age: _offlineAge,
+            teamWork: _refused('MACHINE_OFFLINE'),
+          ),
+        ];
+        final c = server.controller(account: account);
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final button = find.byKey(ValueKey('super-machine-team-setup-$id'));
+        if (account == 'owner' && id == 'm' && !hostOffline) {
+          expect(
+            _problemText(tester, id),
+            "Teammates' agents paused: Harness Team account offline",
+          );
+          expect(
+            find.descendant(of: button, matching: find.text('Restart')),
+            findsOneWidget,
+          );
+          expect(tester.widget(button), isA<OutlinedButton>());
+          await captureWindow(tester, shots, 'team-offline-${brightness.name}');
+          await tester.tap(button);
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const Key('team-account-setup-continue')),
+          );
+          await tester.pumpAndSettle();
+          expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {
+            'action': 'teamSetup',
+            'reason': 'manual',
+            'restart': true,
+          });
+          await tester.tap(find.byKey(const Key('team-account-setup-done')));
+          await tester.pumpAndSettle();
+        } else {
+          expect(button, findsNothing);
+        }
+        await _unmount(tester, c);
+      }
+
+      await mount();
+      await mount(brightness: Brightness.dark);
+      await mount(account: 'peer');
+      await mount(id: 'remote');
+      await mount(hostOffline: true);
       app.dispose();
     },
   );

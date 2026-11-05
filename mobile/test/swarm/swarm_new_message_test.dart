@@ -915,6 +915,32 @@ void main() {
       expect(find.byType(SwarmNewMessageSheet), findsNothing);
     });
 
+    testWidgets('a picked file and recording leave the sheet in one message', (
+      tester,
+    ) async {
+      final fake = await talking(tester);
+      pickSwarmFiles = () async => [
+        XFile.fromData(
+          Uint8List.fromList([1, 2, 3]),
+          name: 'picture.png',
+          path: '/copies/picture.png',
+        ),
+      ];
+      await tester.tap(key('swarm-new-message-attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-attach-files'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-outgoing-picture.png'), findsOneWidget);
+      await tapIn(tester, 'swarm-mic');
+      await tapIn(tester, 'swarm-voice-send');
+      await tester.pumpAndSettle();
+      expect(sends(fake).single['command']['attachmentIds'], [
+        'id-picture.png',
+        'id-Voice message.wav',
+      ]);
+      expect(find.byType(SwarmNewMessageSheet), findsNothing);
+    });
+
     testWidgets("with no chat picked the row's Send is off", (tester) async {
       final fake = await talking(tester, pick: false);
       await tapIn(tester, 'swarm-mic');

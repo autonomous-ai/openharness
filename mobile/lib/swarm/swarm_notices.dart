@@ -51,8 +51,15 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
       // A tag in a reply only in its thread opens that thread.
       threadId: need is SwarmMentionNeed ? need.mention.threadId : null,
     ),
+    quiet: false,
   );
 }
+
+/// The notification a thread's replies share, the server's push for them too
+/// (task #3248; backend `push/notices.ts` threadSlot): a newer reply replaces
+/// the one shown.
+String threadSlot(String swarmId, String conversationId, String threadId) =>
+    'thread:$swarmId:$conversationId:$threadId';
 
 /// Posts a notice for each need that arrives ([SwarmInbox.onArrived]) unless
 /// the person is already looking at it ([quiet]), and takes it down once the
@@ -163,6 +170,9 @@ class SwarmAnnouncer {
   }) {
     if (quiet(null)) return;
     final key = 'chat:$swarmId:$chatId';
+    // Sounds once until the person reads the chat; a newer message only
+    // replaces it (task #3248).
+    final up = _chats.containsKey(key);
     _chats[key] = (swarmId: swarmId, chatId: chatId, sequence: sequence);
     unawaited(
       notices.showSwarm((
@@ -177,6 +187,7 @@ class SwarmAnnouncer {
           decisionId: null,
           threadId: null,
         ),
+        quiet: up,
       )),
     );
   }
@@ -196,13 +207,18 @@ class SwarmAnnouncer {
     }
   }
 
-  /// The notices of replies in threads the person is in: each key's Swarm
-  /// and Activity row.
-  final _replies = <String, ({String swarmId, String rowId})>{};
+  /// The notifications of threads the person is in, by [threadSlot]: each
+  /// one's Swarm and the unread Activity rows it tells of.
+  final _replies = <String, ({String swarmId, Set<String> rows})>{};
 
   /// Posts [entry]'s notice, once: a reply in a thread of Swarm [swarmId]'s
   /// project [project] that the person is in ([SwarmActivityFeed.onReply]).
   /// Names who replied and the project only, as [swarmNotice] does.
+  ///
+  /// One notification per thread, which the server's push for it shares
+  /// (task #3248, the rule Tony approved): it sounds when nothing of that
+  /// thread was unread; a newer reply only replaces it quietly. A thread a
+  /// push still shows gets nothing: that push says so already.
   void announceReply({
     required String swarmId,
     required SwarmActivityEntry entry,
@@ -211,11 +227,17 @@ class SwarmAnnouncer {
     if (quiet(null)) return;
     final key = 'reply:$swarmId:${entry.id}';
     if (!told.add(key)) return;
-    _replies[key] = (swarmId: swarmId, rowId: entry.id);
+    final thread = entry.threadId;
+    final slot = thread == null
+        ? key
+        : threadSlot(swarmId, entry.conversationId, thread);
+    final earlier = _replies[slot];
+    _replies[slot] = (swarmId: swarmId, rows: {...?earlier?.rows, entry.id});
+    if (told.pushed(slot)) return;
     final who = entry.actorName.isEmpty ? 'Someone' : entry.actorName;
     unawaited(
       notices.showSwarm((
-        key: key,
+        key: slot,
         title: '$who replied in a thread',
         subtitle: project,
         body: 'Open Harness to read it.',
@@ -227,26 +249,33 @@ class SwarmAnnouncer {
           // A reply only in its thread is found there, not in the chat.
           threadId: entry.threadId,
         ),
+        quiet: earlier != null,
       )),
     );
   }
 
-  /// Swarm [swarmId]'s Activity was read and lists [rows]: a reply's notice
-  /// whose row is read now, or no longer listed, is taken down.
+  /// Swarm [swarmId]'s Activity was read and lists [rows]: a thread's
+  /// notification none of whose rows is unread now, or listed, is taken down,
+  /// with the push it shares, and the thread's next reply sounds again.
   void repliesRead(String swarmId, Iterable<SwarmActivityEntry> rows) {
     final unread = {
       for (final row in rows)
         if (!row.read) row.id,
     };
     for (final MapEntry(:key, :value) in _replies.entries.toList()) {
-      if (value.swarmId == swarmId && !unread.contains(value.rowId)) {
+      if (value.swarmId != swarmId) continue;
+      final left = value.rows.intersection(unread);
+      if (left.isEmpty) {
         _takeDownReply(key);
+      } else {
+        _replies[key] = (swarmId: swarmId, rows: left);
       }
     }
   }
 
   void _takeDownReply(String key) {
     _replies.remove(key);
+    told.pushGone(key);
     unawaited(notices.cancelSwarm(key));
   }
 
@@ -303,12 +332,38 @@ class SwarmTold {
     return true;
   }
 
+  /// Records [keys] as told somewhere else: pushes already in the
+  /// notification centre (task #2905).
+  void addAll(Iterable<String> keys) => keys.forEach(add);
+
+  /// The keys and notification slots of the pushes in the notification centre
+  /// as the app last came back ([SwarmHost.toldElsewhere]).
+  Set<String> _pushes = const {};
+
+  /// The pushes in the notification centre now, by their keys and the slots
+  /// they show in (task #3248: Android gives the slot alone). Each is told
+  /// ([addAll]); [pushed] holds for each until the next call.
+  void pushesShown(Iterable<String> keys) {
+    final shown = {...keys};
+    addAll(shown);
+    _pushes = shown;
+  }
+
+  /// Whether a push still shows notification [slot].
+  bool pushed(String slot) => _pushes.contains(slot);
+
+  /// The app took notification [slot] down, and the push in it with it.
+  void pushGone(String slot) {
+    if (_pushes.contains(slot)) _pushes = {..._pushes}..remove(slot);
+  }
+
   /// Whose notices these are: another account, or none (Swarm turned off),
   /// forgets every key.
   set account(String? id) {
     if (id == _account) return;
     _account = id;
     _keys.clear();
+    _pushes = const {};
   }
 
   @visibleForTesting

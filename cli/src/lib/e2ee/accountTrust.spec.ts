@@ -43,6 +43,26 @@ describe('trust stores kept per account', () => {
     expect(read(dir, 'identity.json')).toEqual({ pub: 'me' })
   })
 
+  it('discards the departing Team owner stash and never restores it on a later switch', () => {
+    const dir = e2e()
+    write(dir, 'paired.json', [web('a-web'), device])
+    write(dir, 'group.json', { members: ['a'], removed: [] })
+    write(dir, 'group-blocked.json', ['a-blocked'])
+    write(dir, 'machinePeers.json', [{ machineId: 'ma', pub: 'a-box' }])
+    // A previous switch left a stash too: it must not remain accessible to the next owner's agents.
+    mkdirSync(join(dir, 'accounts', A), { recursive: true })
+    write(join(dir, 'accounts', A), 'old.json', { label: 'previous owner' })
+    switchAccountTrust(A, B, dir, { forgetPrevious: true })
+    expect(existsSync(join(dir, 'accounts', A))).toBe(false)
+    expect(read(dir, 'paired.json')).toEqual([device])
+    for (const name of ['group.json', 'group-blocked.json', 'machinePeers.json']) expect(read(dir, name)).toBeUndefined()
+    write(dir, 'paired.json', [device, web('b-web')])
+    switchAccountTrust(B, A, dir, { forgetPrevious: true })
+    expect(read(dir, 'paired.json')).toEqual([device])
+    expect(existsSync(join(dir, 'accounts', B))).toBe(false)
+    expect(read(dir, 'identity.json')).toEqual({ pub: 'me' })
+  })
+
   it('a stash cut short after its copy keeps the keys in both places, and a second run finishes it', () => {
     const dir = e2e()
     // The copy was written, the live file not yet cut.

@@ -156,7 +156,7 @@ class MainActivity : FlutterActivity() {
     }
     receiveLink(intent)
 
-    // `harness/push` — this phone's push address, and the pushes tapped (Dart:
+    // `harness/push` — this phone's push address, the pushes tapped, and those still shown (Dart:
     // `lib/notify/push_channel.dart`; drawn by Android itself). `address` turns pushes on and answers
     // the FCM token; `forget` turns them off and deletes the token, so a phone signed out is reached
     // by nothing. A tapped push's data waits here until `take`, as a link does; `arrived` says more
@@ -170,6 +170,14 @@ class MainActivity : FlutterActivity() {
             result.success(ArrayList(waitingPushes))
             waitingPushes.clear()
           }
+          // The slots of our pushes still shown: the app does not post them again. The server tags each
+          // push with the slot the app gives its own notice for the same thing: a thread's, a tag's, a
+          // decision's (task #3248); an older server tagged a reply's push with its own key.
+          "shown" -> result.success(
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) emptyList()
+            else getSystemService(android.app.NotificationManager::class.java).activeNotifications
+              .mapNotNull { shown -> shown.tag?.takeIf { tag -> PUSH_SLOTS.any { tag.startsWith(it) } } }
+          )
           else -> result.notImplemented()
         }
       }
@@ -354,6 +362,9 @@ class MainActivity : FlutterActivity() {
   }
 
   private companion object {
+    /** How the server tags a push's notification (backend `push/fcm.ts`, the notice's slot). */
+    val PUSH_SLOTS = listOf("thread:", "mention:", "decision:", "reply:")
+
     /** The long edge a clipboard image leaves here at, at most: `_preferredMaxEdge` in Dart's
      *  `lib/terminal/image_transcode.dart`, which every picture is scaled to before it is sent. */
     const val MAX_EDGE = 1600

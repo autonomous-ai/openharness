@@ -1,8 +1,9 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
+import 'package:harness_mobile/swarm/swarm_file_picker.dart';
+import 'package:harness_mobile/swarm/swarm_voice_bubble.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -165,6 +166,54 @@ void main() {
     expect(field(tester).controller!.text, 'typed first');
   });
 
+  testWidgets('a pending image and clip retain the voice bubble', (
+    tester,
+  ) async {
+    final originalPicker = pickSwarmFiles;
+    final originalFolders = swarmPickerCopyFolders;
+    swarmPickerCopyFolders = () async => const [];
+    addTearDown(() {
+      pickSwarmFiles = originalPicker;
+      swarmPickerCopyFolders = originalFolders;
+    });
+    pickSwarmFiles = () async => [
+      XFile.fromData(
+        Uint8List.fromList([1, 2, 3]),
+        name: 'picture.png',
+        path: '/copies/picture.png',
+      ),
+    ];
+    await pump(tester);
+    await tester.tap(key('swarm-attach'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('swarm-attach-files'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-outgoing-picture.png'), findsOneWidget);
+    await tapMic(tester);
+    await tester.tap(key('swarm-voice-send'));
+    await frames(tester);
+    await tester.pump(const Duration(milliseconds: 100));
+    await frames(tester);
+    expect(fake.commands.single['attachmentIds'], [
+      'id-picture.png',
+      'id-Voice message.wav',
+    ]);
+    expect(
+      find.descendant(
+        of: key('swarm-pending'),
+        matching: find.byType(SwarmVoiceBubble),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: key('swarm-pending'),
+        matching: find.text('picture.png'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('X throws the take away and sends nothing', (tester) async {
     await pump(tester);
     await tapMic(tester);
@@ -194,7 +243,7 @@ void main() {
     expect(fake.commands, isEmpty);
   });
 
-  testWidgets('a voice message draws its bubble, its words behind →A', (
+  testWidgets('a voice message draws its bubble, which plays only', (
     tester,
   ) async {
     fake.routes[messages] = (_) => {
@@ -230,9 +279,8 @@ void main() {
     expect(find.text('1:21'), findsOneWidget);
     expect(find.text('Ship the parser today.'), findsNothing);
     expect(find.text('Voice message.wav'), findsNothing, reason: 'no chip');
-    await tester.tap(key('swarm-voice-words-toggle'));
-    await tester.pump();
-    expect(find.text('Ship the parser today.'), findsOneWidget);
+    expect(find.text('→A'), findsNothing);
+    expect(key('swarm-voice-words-toggle'), findsNothing);
   });
 
   testWidgets('no mic where none can be heard', (tester) async {

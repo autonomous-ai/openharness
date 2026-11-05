@@ -599,7 +599,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
-    // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
+    // Counted as a host's failure is (commands.ts agent.startFailed); a pickup timeout suspends the machine, not its engine.
     return failedStartNotices(state, start, now, noteStartFailed(state, start, now))
   })
 }

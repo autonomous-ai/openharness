@@ -1574,6 +1574,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
     }
     final line = _teammatesLine(shared, team, contributor);
+    final restartTeam =
+        team != null &&
+        (team['teamWork'] as Map?)?['code'] == 'MACHINE_OFFLINE' &&
+        contributor == c.accountId &&
+        app != null &&
+        app.canSetUpTeamAccount &&
+        app.stateOf(id)?.isLocalMachine == true &&
+        (status == SuperTabMachineStatus.live ||
+            status == SuperTabMachineStatus.late);
     final setUpTeam =
         line != null &&
         team == null &&
@@ -1598,7 +1607,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // While setup runs, its step and the time left, and that the person may
     // go on working (#3169); otherwise its own person reads why: they
     // cancelled, or setup failed and why.
-    final progress = setUpTeam ? _setupWatch?.line : null;
+    final progress = (setUpTeam || restartTeam) ? _setupWatch?.line : null;
     final problem = progress != null
         ? '$progress\nKeep working. We\'ll tell you when it\'s ready.'
         : setUpTeam
@@ -1612,10 +1621,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       problem: problem,
       history: superTabMachineHistory(shared, snapshot.people),
       // Set up would ask for the password again while one setup runs.
-      setUpTeam: (setUpTeam && progress == null) || joinLine != null,
+      setUpTeam:
+          ((setUpTeam || restartTeam) && progress == null) || joinLine != null,
       retryJoin: joinLine != null,
       setUpTeamLabel: joinLine != null
           ? 'Retry'
+          : restartTeam
+          ? 'Restart'
           : superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
@@ -2276,10 +2288,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             await showTeamAccountSetup(
                               context,
                               widget.app!,
-                              missing: _teamSetup?.state == 'incomplete'
+                              restart: view.setUpTeamLabel == 'Restart',
+                              missing: view.setUpTeamLabel == 'Restart'
+                                  ? 'Harness Team account offline'
+                                  : _teamSetup?.state == 'incomplete'
                                   ? _teamSetup?.detail ?? ''
                                   : null,
-                              signInAgain: _teamSetup?.state == 'exists',
+                              signInAgain:
+                                  view.setUpTeamLabel != 'Restart' &&
+                                  _teamSetup?.state == 'exists',
                             );
                             await _readTeamSetup();
                           }

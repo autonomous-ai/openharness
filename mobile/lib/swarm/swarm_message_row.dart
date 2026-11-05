@@ -388,19 +388,15 @@ class SwarmMessageRow extends StatelessWidget {
       messageId: message.id,
       reader: SwarmFiles.of(context),
     );
-    // A voice message's clip is its bubble, its words behind →A.
+    // A voice message's clip is its bubble, which plays only.
     if (file.voice case final voice?) {
-      return SwarmVoiceBubble(
-        file: file,
-        voice: voice,
-        words: message.text,
-        fileRef: ref,
-      );
+      return SwarmVoiceBubble(file: file, voice: voice, fileRef: ref);
     }
     final link = ref.current;
     return SwarmAttachment(
       file: file,
       link: link,
+      thumb: ref.currentThumb,
       fileRef: ref,
       chip: SwarmFileChip(file: file, link: link, fileRef: ref),
     );
@@ -489,7 +485,8 @@ class SwarmMessageRow extends StatelessWidget {
               SizedBox(key: ValueKey('swarm-match-${message.id}')),
             ?quote,
             ?swarmTerminalNote(message),
-            // A voice message's text is its words: under its bubble, on →A.
+            // A voice message's text is its words, never shown: it plays only
+            // (anh Dee, 2026-11-04).
             if (!message.attachments.any((file) => file.voice != null))
               for (final part in swarmTextParts(message.text))
                 if (part.code)
@@ -543,7 +540,10 @@ class SwarmMessageRow extends StatelessWidget {
                         label: inThread ? 'Reply in thread' : 'Reply',
                         onTap: reply,
                       ),
-                    SwarmCopyButton(text: message.text),
+                    // A voice message's text is its words, never handed
+                    // over: it plays only (anh Dee, 2026-11-04).
+                    if (!message.attachments.any((file) => file.voice != null))
+                      SwarmCopyButton(text: message.text),
                   ],
                 ),
               ),
